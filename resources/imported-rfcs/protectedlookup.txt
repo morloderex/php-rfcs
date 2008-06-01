@@ -2,23 +2,19 @@
   * Version: 0.1
   * Date: 2008-06-01
   * Author: Robin Fernandes <robinf@php.net>
-  * First Published at: http://wiki.php.net/rfc/protectedlookup
-  * Status: Draft (Inactive)
-
-
-
+  * Status: in the works
 
 ===== Introduction =====
 
 This RFC proposes to eliminate an inconsistency in the way protected class members are resolved.
 
-The fix to [[http://bugs.php.net/bug.php?id=37632|bug 37632]] introduced a new visibility rule for protected methods. Prior to this fix, protected methods were visible only from their declaring class, ancestor classes and descendant classes. Subsequent to this fix, protected methods may be visible from sibling classes. Specifically, a protected method ''f'' declared in class ''C1'' can be invoked from a context ''C2'' if there is a class ''P'' which is an ancestor to both ''C1'' and ''C2'', and ''P'' declares a prototype of ''f''. See the first code sample below for an illustration.
+The fix to [[http://bugs.php.net/bug.php?id=37632|bug 37632]] introduced a new visibility rule for protected methods. Prior to this fix, protected methods were visible only from ancestor and descendant classes. Since the fix, protected methods may be visible from sibling classes. Specifically, a protected method ''f'' declared in class ''C1'' can be invoked from a context ''C2'' if there is a class ''P'' which is an ancestor to both ''C1'' and ''C2'', and ''P'' declares a prototype of ''f''. See first code snippets below for an illustration.
 
 However, this rule is not applied consistently for all types of method invocation. For example, a method that is visible when invoked directly may become invisible when invoked as a callback. Furthermore, it does not apply at all to protected property lookups. 
 
 This RFC investigates 3 alternatives to improve consistency:
   * Option 1: Remove the new lookup rule.
-  * Option 2: Ensure the new lookup rule is followed consistently.
+  * Option 2: Change all cases to match the new lookup rule.
   * Option 3: Modify the new lookup rule to better match the intuitive/documented meaning of 'protected', and ensure it is followed consistently.
 
 
@@ -158,10 +154,9 @@ C2::test();
 ?> 
 </code>
 
-
 ===== Some Details =====
 
-The new lookup rule is implemented by using ''zend_get_function_root_class(function)'' when invoking ''zend_check_protected(class, context)'', e.g.:
+The new lookup rule is implemented using by ''zend_get_function_root_class(function)'' when invoking ''zend_check_protected(class, context)'', e.g.:
 <code c>
    zend_check_protected(zend_get_function_root_class(fbc), EG(scope))
 </code>
@@ -176,8 +171,7 @@ Properties do not keep pointers to the inherited properties that they shadow, so
 ==== Option 1 ====
 Remove new rule: remove calls to zend_get_function_root_class().
 === Patch ===
-  * [[http://thread.gmane.org/gmane.comp.php.devel/48176/focus=48179|Patch from Felipe Pena]]
-  * [[http://www.soal.org/php/protectedrfc/protected_opt1_tests.zip|Tests]]
+[[http://thread.gmane.org/gmane.comp.php.devel/48176/focus=48179|Patch from Felipe Pena]]
 === Pros ===
   * Simple code change
   * Intuitive/documented meaning of protected is preserved: protected members are visible only from ancestor and descendant classes (not siblings).
@@ -211,15 +205,13 @@ Removing the new rule causes a fatal error on the second invocation of C2::test(
 ==== Option 2 ====
 If option 1 is dismissed due to the violation of LSP, it follows that the current rules for property access, callbacks, ''clone()'' and ''destruct()'' are also violations of LSP and should be fixed. This option ensures that ''zend_get_function_root_class()'' is used consistently for all protected method checks, and implements equivalent functionality for protected property checks.
 === Patch ===
-  * [[http://www.soal.org/php/protectedrfc/protected_opt2.txt|Patch]]
-  * [[http://www.soal.org/php/protectedrfc/protected_opt2_tests.zip|Tests]]
+ To do.
 === Pros ===
   * Respects the Liskov Substitution Principle.
 === Cons ===
   * Non-trivial code change: requires that properties keep track of their root declaring class.
   * The protected modifier loses its intuitive/documented meaning, since protected members may be accessible from siblings.
   
-
 ==== Option 3 ====
 This approach is similar to option 2, but modifies the new rule slightly so as to preserve the intuitive meaning of the protected modifier. Lookups of protected members on sibling classes fall back to the declaration from the common ancestor class, if available. To illustrate:
 <code php>
@@ -245,88 +237,10 @@ class C2 extends P {
 ?>
 </code>
 === Patch ===
-  * Patch to do.
-  * [[http://www.soal.org/php/protectedrfc/protected_opt3_tests.zip|Tests]]
+ To do.
 === Pros ===
   * Respects the Liskov Substitution Principle.
   * Intuitive/documented meaning of protected is preserved: protected members are visible only from ancestor and descendent classes (not siblings).
 === Cons ===
   * Non-trivial code change
-  * Possibly confusing at first, as code that reads C1::f() may in fact result in an invocation of P::f(). However, this behaviour would be comparable to existing behaviour when accessing re-declared private members of child classes. For example:
-<code php>
-<?php
-// Class P declares some private members.
-class P {
-  private function f() { echo 'P::f()'; }
-  public static function test() {
-    $c = new C;
-    $c->f();  // falls back to P::f() prints P::f()
-  }
-}
- 
-// Class C1 re-declares the "inherited" private members.
-class C extends P {
-  private function f() { echo 'C::f()'; }
-}
-
-P::test();
-?>
-</code>
-
-
-
-
-===== Appendix =====
-==== Other potential LSP violations ====
-If Option 1 is rejected on the grounds of a breach of LSP, then other arguable violations of LSP should be reviewed too. 
-Below is a list of examples to be considered.
-=== Private static methods ===
-<code php>
-<?php
-class P {
-   private function f() { echo "In " . __METHOD__ . "\n"; }
-   private static function sf() { echo "In " . __METHOD__ . "\n"; }
-   
-   static function test(P $liskov) {
-      $class = get_class($liskov);
-      echo "Instance method call on instance of $class: ";
-      $liskov->f(); // if $liskov instanceof C, falls back to P::f()
-      echo "Static method call on $class: ";
-      $class::sf(); // if $liskov instanceof C, does not fall back to P::f() - fatal error.
-   }
-}
-
-class C extends P {
-   private function f() { echo "In " . __METHOD__ . "\n"; }
-   private static function sf() { echo "In " . __METHOD__ . "\n"; }
-}
-
-P::test(new P);
-P::test(new C); // Valid Liskov substitution - should this fail?
-?>
-</code>
-=== Private static properties ===
-<code php>
-<?php
-class P {
-   private $a = 'P::$a';
-   private static $sa = 'P::$sa';
-   
-   static function test(P $liskov) {
-      $class = get_class($liskov);
-      echo "Instance property access on instance of $class: ";
-      echo $liskov->a . "\n"; // if $liskov instanceof C, falls back to P::$a
-      echo "Static property access call on $class: ";
-      echo $class::$sa . "\n"; // if $liskov instanceof C, does not fall back to P::$sa - fatal error.
-   }
-}
-
-class C extends P {
-   private $a = 'C::$a';
-   private static $sa = 'C::$sa';
-}
-
-P::test(new P);
-P::test(new C); // Valid Liskov substitution - should this fail?
-?>
-</code>
+  * Possibly confusing at first, as code that reads C1::f() may in fact result in an invocation of P::f().
