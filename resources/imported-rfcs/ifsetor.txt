@@ -2,14 +2,15 @@
   * Version: 0.9
   * Date: 2008-06-21
   * Author: Lukas Smith <smith@pooteeweet.org>
-  * Status: Declined
+  * Status: Under Discussion
 
-This RFC proposes an operator that efficiently implements (isset($foo) ? $foo : $bar) as ifsetor($foo, $bar). However this proposal has not been accepted, mainly due to the existance of the userland implementation #2. Of course once a true COALESCE() with any number of parameters could be supported, the situation would be different, since obviously using the "hack" of a pass by reference variable would require hardcoding the number of optional parameters.
+This RFC proposes an operator that efficiently implements (isset($foo) ? $foo : $bar) as ifsetor($foo, $bar). Actually ifsetor() is supposed to allow any number of parameters and it will return the first non null parameter (or null if there is none). This is analogues to the SQL function [[http://en.wikipedia.org/wiki/Null_%28SQL%29#COALESCE|COALESCE()]].
 
 ===== Introduction =====
 
 Frequently PHP developers need to initialize some variable that is passed in via the outside to some value. This leads to repeated code, that is needlessly prone to typos as well as some performance overhead.
-==== Why do we need ifsetor()? ====
+
+==== Why do we need RFCs? ====
 
 Frequently developers need to use the following code constructs:
 
@@ -23,6 +24,18 @@ The proposal is that this could be written in a much more concise manner:
 <code php>
 $var = ifsetor($var, "admin");
 $var2 = ifsetor($var, "admin");
+</code>
+
+In some situations code like the following will even be necessary to take into account multiple sources for a default
+
+<code php>
+$var = isset($var) ? $var : (isset($var2) ? $var2 : "admin");
+</code>
+
+The proposal is that this could be written in a much more concise manner:
+
+<code php>
+$var = ifsetor($var, $var2, "admin");
 </code>
 
 One key point is that ifsetor(), will behave like isset() or empty() in that it will not throw a notice if the variable is not yet defined. This will become very handy in case one is trying to read some value out of a deepy nested array. Both examples below would not throw a notice for an undefined variable or array index.
@@ -39,12 +52,11 @@ $var = array();
 $var = ifsetor($var['foo']['bar'], "admin");
 </code>
 
-Furthermore ifsetor() would support expressions in the second parameter, that would only be evaluated if all of the previous parameter were either null or evaluated to null. In the following example the really_expensive_function() should not get called in most cases.
+Furthermore ifsetor() would support expressions in all but the first parameter, that would only be evaluated if all of the previous parameters were either null or evaluated to null. In the following example the really_expensive_function() should not get called in most cases.
 
 <code php>
 function foo() { return (rand(0, 100) < 100 ? true : null); }
-$foo = foo();
-$var = ifsetor($foo, really_expensive_function());
+$var = ifsetor($var, foo(), really_expensive_function());
 </code>
 
 ===== Common Misconceptions =====
@@ -92,7 +104,8 @@ $var2 = (int)(ifsetor($var));
 </code>
 
 This however is a deviation of the implementation of COALESCE() for example in SQLite, where at least [[http://www.sqlite.org/lang_corefunc.html|2 parameters are required]].
-==== userland #1 ====
+
+==== userland alternatives ====
 
 Another misconception is that the functionality could be implemented in userland. This would prevent several key advantages of ifsetor().
 
@@ -107,9 +120,7 @@ The obvious issue is that in the userland case a notice would be thrown for an u
     }
 </code>
 
-==== userland #2 ====
-
-A more flexible approach would make it possible to handle non arrays as well. The below is a simple implementation [[http://marc.info/?l=php-internals&m=108940007627089&w=2|proposed on the list]]. The use of pass by reference would prevent the notice from being thrown for the first parameter only. It also has some minor [[http://marc.info/?l=php-internals&m=111875921829669&w=2|implications on memory management]], since the below example would create a variable $foo with the value null in the current namespace (unless of course $x would be replaced with $foo in the below example).
+A more flexible approach would make it possible to handle non arrays as well. The below is a simple implementation [[http://marc.info/?l=php-internals&m=108940007627089&w=2|proposed on the list]]. Obviously it should be possible to implement a solution that could work with any number of parameters, all of which could be expressions. The use of pass by reference would prevent the notice from being thrown for the first parameter only. Obviously pass by reference variables cannot be optional or even dynamic. So this userland limitation would require hardcoding the number of parameters that would have no notices thrown for non existence. It also has some minor [[http://marc.info/?l=php-internals&m=111875921829669&w=2|implications on memory management]], since the below example would create a variable $foo with the value null in the current namespace (unless of course $x would be replaced with $foo in the below example).
 
 <code php>
     function ifsetor(&$variable, $default = null) {
@@ -127,34 +138,11 @@ The obvious problem is that all expressions would always be evaluated, even if t
 
 ===== Proposal and Patch =====
 
-Synopsis: "ifsetor" "(" value "," default ")"
 
-  Returns the value if it exists or a given default value.
-
-Syntax:   "ifsetor" "(" variable [ "," expression ] ")"
-
-Semantic:
-  - The value in question must be a variable.
-  - The default value can be any expression.
-  - The default value can be omitted in which case NULL will be used.
-
-http://php.net/~helly/ze2-ifsetor-20040901.diff.txt
 
 ===== Rejected Features =====
 
-Actually ifsetor() is supposed to allow any number of parameters and it will return the first non null parameter (or null if there is none). This is analogues to the SQL function [[http://en.wikipedia.org/wiki/Null_%28SQL%29#COALESCE|COALESCE()]]. In some situations code like the following will even be necessary to take into account multiple sources for a default.
 
-<code php>
-$var = isset($var) ? $var : (isset($var2) ? $var2 : "admin");
-</code>
-
-The proposal is that this could be written in a much more concise manner:
-
-<code php>
-$var = ifsetor($var, $var2, "admin");
-</code>
-
-However this is [[http://marc.info/?l=php-internals&m=108931281901389&w=2|currently not possible]] to be implemented without major slowdowns to the engine.
 
 ===== Changelog =====
 
@@ -175,6 +163,3 @@ However this is [[http://marc.info/?l=php-internals&m=108931281901389&w=2|curren
   * [[http://marc.info/?l=php-internals&m=111834043422491&w=2|Suggestion to leave an empty() variant out of the picture]] since this feature can be implemented in userland, though this of course not provide the full functionality of empty() which does not trigger notices for missing variables
   * [[http://marc.info/?l=php-internals&m=111872386430805&w=2|Request to also add a custom callback to ifsetor()]] to increase the flexibility
   * [[http://www.php.net/~derick/meeting-notes.html#ifsetor-as-replacement-for-foo-isset-foo-foo-something-else|Decision at the PHP6 planning meeting to only implement ?: and not ifsetor]]
-  * Suggestion to add [[http://marc.info/?l=php-internals&m=113210592810849&w=2|macro]] [[http://marc.info/?l=php-internals&m=116361059402342&w=2|support]] to make it easier to reuse complex userland code pieces to keep the code more readable when handling some of the above aspects in userland
-  * [[http://marc.info/?l=php-internals&m=118946242013246&w=2|Request to add a native function to handle the limited case of a single dimensional array]] 
-  * [[http://marc.info/?l=php-internals&m=108955534724882&w=2|Suggestion to fo with the ifsetor() as is]] and later try to find a way to implement a true coalesce() with the name "coalesce()"
