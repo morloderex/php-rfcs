@@ -1,36 +1,39 @@
 ====== SPL Namespace ======
   * Version: 1.0
   * Date: 2008-07-19
-  * Author: Baptiste <fjas.at.free.fr>
-  * Status: Abandonned
+  * Author: Baptiste Autin <baptiste.autin.at.free.fr>
+  * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/spl-namespace
   * Other formats ..
 
 
 ==== Introduction ====
 
-The present RFC suggests a new namespacing system, based on the association of a namespace to a physical path.
+''spl_autoload()'' is probably the first PHP instruction to make an assumption on how a logical element (a class) is bound to its source code (a file).
+The default association being: Class Foo -> Foo.php
+
+Why not implementing a similar association between namespaces and paths?
+The present RFC suggests a new namespacing system, based on that association.
 
 ==== A new instruction: spl_namespace ====
 
-''spl_namespace($namespace, $path)'' declares the association of a namespace to a physical path.
+''spl_namespace($namespace, $path)'' binds a namespace to a physical path.
 
+E.g.:
 <code php>
-spl_namespace ('PEAR::HTML') // links PEAR::HTML to PEAR/HTML
-spl_namespace ('PEAR::HTML','some/where/else') // links PEAR::HTML to some/where/else
+spl_namespace('PEAR::HTML') // links PEAR::HTML to PEAR/HTML
+spl_namespace('PEAR::HTML','some/where/else') // links PEAR::HTML to some/where/else
 </code>
 
-=== Use with spl_autoload ===
+After a ''spl_namespace($namespace, $path)'', all subsequent ''spl_autoload($class)'' can refer to the namespace that has been defined in spl_namespace.
 
-After a ''spl_namespace($namespace, $path)'', all subsequent ''spl_autoload(...)'' that refer to $namespace will include the class file by changing directory to $path.
-
+E.g.:
 <code php>
 spl_namespace('Foo1::Foo2', 'some/where');
-...
-spl_autoload('Foo1::Foo2::MyClass');    // this will include some/where/MyClass.php
+spl_autoload('Foo1::Foo2::MyClass');  // PHP will include some/where/MyClass.php
 </code>
 
-But ''spl_autoload'' will then not only require the file, it will also **prefix** all the user classes/interfaces inside, with the namespace provided (''Foo1::Foo2::'').
+But ''spl_autoload'' will not only require the code, it will ALSO prefix all the inside user classes/interfaces with the namespace provided (Foo::Foo2).
 
 So, taking the example above, if MyClass.php contains:
 <code php>
@@ -41,7 +44,7 @@ Class MyClass {
   }
 }
 </code>
-then PHP will silently parse it as:
+PHP will silently parse it as:
 <code php>
 Class Foo1::Foo2::MyClass {
   function compute(Foo1::Foo2::MyOtherClass $x)
@@ -51,64 +54,26 @@ Class Foo1::Foo2::MyClass {
 }
 </code>
 
-Note that PHP internal classes and absolute-namespaced classes (''$x = new ::Foo3'') are not affected.
-
-=== Use with spl_autoload_register ===
-
-The behaviour is the same, except that, just before executing the callback function, the parser changes directory to the physical path of the namespace.
-
-<code php>
-spl_namespace("Foo1::Foo2", "some/where");
-(...)
-spl_autoload_register(array("Foo1::Foo2::Autoloader", "autoload"));
-// When Foo1::Foo2::Autoloader::autoload() is called, PHP has CD to /some/where 
-</code>
-
-In the example above, every class succesfully autoloaded by ''Foo1::Foo2::Autoloader'' will be prefixed by ''Foo1::Foo2::'', as well as all the code inside that class.
+Note that PHP internal classes and absolute-namespaced classes ($x = new ::Foo3) are not affected.
 
 ==== Benefits ====
 
-* The namespacing system becomes more consistent. It does no longer belong to the class (or the interface) to define its full qualifying name. It belongs to the element that requires it to assign its final position in the namespace.
-
 * It becomes possible to namespace old existing code without even modifying it. No need to add a ''namespace'' at the beginning of every file.
 
+* The namespacing system becomes more consistent. It does no longer belong to the class (or the interface) to define its qualifying name. It belongs to the element that  autoloads it to assign its position in the namespace.
 
 ==== Drawbacks  ====
 
-  * If an autoloader, for a given classname, includes a different file depending on the value of a global variable, there's no longer unicity
+* You must use spl_autoload() for every class that you intend to use. This may result in a long list of spl_autoload().
 
-  * spl_autoload_register() will generally be present in the same file as the autoloader class, so changing directory is not really usefull, since we'll already be positionned in the correct directory.
+To address that, an option could be added, in spl_autoload or in spl_namespace, to let PHP silently autoload all PHP files found in the corresponding physical folder of a namespace, eventually by filtering on some provided file extensions.
 
-==== Practical usage ====
-
-A large OO application generaly requires multiple librairies, present in different parts of the filesystem.
-Hence, a typical PHP file of a large app using SPL namespaces could be structured that way:
-
-<code php>
-spl_namespace(...);          //
-spl_namespace(..., ...);     // Definitions of all the namespaces used in the application
-...                          // (this could form a common include file)
-spl_namespace(..., ...);     //
-
-spl_autoload(...);      // 
-spl_autoload(...);      // All the classes to autoload
-...                     // (or include files of autoloader classes)
-spl_autoload(...);      //
-
-use PEAR::HTTP::Request;      // A couple of namespace imports required by the file
-use Foo1;
-(...)
-
-Class MyClass {
-  (...)
-}
-</code>
 
 ==== What if? ====
 
 === What if the autoloaded file contains a require or an include? ===
 
-The code is treated exactly the same way as the code in the autoloaded file (it is required and all its user-class-code is automatically prefixed).
+The code is treated exactly the same way as the code in the autoloaded file (it is required and all the user-code is automatically prefixed).
 
 === What if the autoloaded file contains a spl_namespace() ? ===
 
@@ -162,17 +127,16 @@ Then the full qualifying name for ''HTML_AJAX_Server'' would remain:
 
 === What if the autoloaded file contains a namespaced class? ===
 
-Let's take the above example again.
+Let's take our above example again.
 
-''ClassA'' autoloads ''Foo::ClassB'' with an ''spl_autoload("Foo::ClassB")''
-
-And here is /foo/ClassB.php :
+ClassA autoloads ''Foo::ClassB'' with an spl_autoload('Foo::ClassB')
+/foo/ClassB.php :
 <code php>
 Class ClassB extends PEAR::MDB2::Driver::Common {
    ...
 }
 </code>
-Then ''PEAR::MDB2::Driver::Common'' will silently be prefixed, to become ''Foo::PEAR::MDB2::Driver::Common''.
+Then PEAR::MDB2::Diver::Common will silently be prefixed, and become Foo::PEAR::MDB2::Diver::Common.
 
 However an absolute namespace is never prefixed, under any circumstances:
 <code php>
