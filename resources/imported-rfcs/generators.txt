@@ -1,7 +1,7 @@
 ====== Request for Comments: Generators ======
-  * Date: 2012-06-05
-  * Author: Nikita Popov <nikic@php.net>
-  * Status: Implemented
+  * Date: 2012-05-28
+  * Author: Niktia Popov <nikic@php.net>
+  * Status: In Draft
 
 ===== Introduction =====
 
@@ -47,7 +47,7 @@ class LineIterator implements Iterator {
     
     public function __construct($fileName) {
         if (!$this->fileHandle = fopen($fileName, 'r')) {
-            throw new RuntimeException('Couldn\'t open file "' . $fileName . '"');
+            throw new RuntimeException('Couldn't open file "' . $fileName . '"');
         }
     }
     
@@ -92,7 +92,7 @@ iterator. Generators solve this problem and allow you to implement iterators in 
 manner:
 
 <code php>
-function getLinesFromFile($fileName) {
+function *getLinesFromFile($fileName) {
     if (!$fileHandle = fopen($fileName, 'r')) {
         return;
     }
@@ -134,7 +134,7 @@ class Test implements IteratorAggregate {
         $this->data = $data;
     }
     
-    public function getIterator() {
+    public function *getIterator() {
         foreach ($this->data as $key => $value) {
             yield $key => $value;
         }
@@ -151,30 +151,82 @@ foreach ($test as $k => $v) {
 Generators can also be used the other way around, i.e. instead of producing values they can also consume them. When
 used in this way they are often referred to as enhanced generators, reverse generators or coroutines.
 
-Coroutines are a rather advanced concept, so it very hard to come up with not too contrived an short examples.
-For an introduction see an example [[https://gist.github.com/3111288|on how to parse streaming XML using coroutines]].
-If you want to know more, I highly recommend checking out [[http://www.dabeaz.com/coroutines/Coroutines.pdf|a presentation
-on this subject]].
+As coroutines are a rather advanced concept it is very hard to come up with not too contrived and short examples
+for them. Common applications are state machines and concurrent programming (in particular cooperative multitasking).
+Examples for those are rather large and as such not listed here. See http://www.dabeaz.com/coroutines/Coroutines.pdf
+for a very nice presentation on the subject.
+
+But to show some code at least, here is how coroutines work in principle:
+
+<code php>
+function *someCoroutine() {
+    while (true) {
+        // receive some data, typically in a loop
+        $data = yield;
+        
+        doSomethingCoolWithData($data);
+        
+        // one can obviously also add another receive loop
+        // within the outer loop (this would be one form of
+        // "state" in the state machine use case)
+        while (true) {
+            $moreData = yield;
+            
+            doSomethingCoolWithMoreData($moreData);
+        }
+        
+        // It's also possible to send data back
+        yield $xyz;
+        // or send an receive in one go
+        $data = yield $xyz;
+        
+        // or pass the result on to another coroutine
+        // (thus building a coroutine pipeline)
+        $coroutine2->send($result);
+    }
+}
+
+$coroutine = someCoroutine();
+$echo->send('foo');
+$echo->send('bar');
+</code>
+
+Values are sent into the generator using the ''send($value)'' method. The sent value will then be the return value of
+the ''yield'' expression.
 
 ===== Specification =====
 
 ==== Recognition of generator functions ====
 
-Any function which contains a ''yield'' statement is automatically a generator function.
+In Python any function which contains a ''yield'' statement is automatically a generator function and does not have
+to be marked in some special way. In JavaScript (Harmony) generator functions use the ''function*'' keyword (''function''
+with an asterix).
 
-The initial implementation required that generator functions are marked with an asterix modifier (''function*''). This method has
-the advantage that generators are more explicit and also allows for yield-less coroutines.
+It's unclear which of the approaches is better. It seems strange that a function can completely change its behavior
+based on what kind of statements it contains. Explicitely marking generator functions seems more obvious. On the other
+hand, as the use of ''yield'' is enough to clearly identify a generator, the use of some special modiefer like ''*'' seems
+redundant.
 
-The automatic detection was chosen over the asterix modifier for the following reasons:
+Furthermore using a special modifier would allow ''yield''-less generators. This by itself doesn't sound particularly useful,
+but has use cases in the context of coroutines (in particular when seen in conjunction with ''yield*'' delegation). Quoting from
+PEP 3152: "Finally, sometimes there is a need for a function to be a coroutine even though it does not yield anything, and in
+these cases it is necessary to resort to kludges such as if 0: yield to force it to be a generator."
 
-  * There is an existing generator implementation in HipHop PHP, which uses automatic-detection. Using the asterix modifier would break compatibility.
-  * All existing generator implementations in other language (that I know of) also use automatic detection. This includes Python, JavaScript 1.7 and C#. The only exception to this is the generator support as defined by ECMAScript Harmony, but I know no browser that actually implements it in the defined way.
-  * The syntax for by-reference yielding looks very ugly: ''function *&gen()''
-  * yield-less coroutines are a very narrow use case and are also possible with automatic-detection using a code like ''if (false) yield;''.
+Thus I think that it makes sense to have some kind of marker. One option is the aforementioned asterix modifer, another one
+would be a ''generator'' keyword (e.g. ''generator function range()'' or just ''generator range()''). This would have the problem
+of introducing a new keyword, which I think could be already in use by people. (''yield'' on the other hand seems rather exotic).
+Also the keyword would prevent the use of the class name ''Generator'' for the iterators returned by generator functions.
+
+The use of the asterix seems somewhat consistent with the use of the ampersand ''&'' reference modifier. Similarly to how
+''function &foo()'' means that the function returns by-reference, ''function *foo()'' would mean that the function "returns"
+multiple values.
+
+The only oddity that could arise is if it were allowed to specify both modifiers: ''function *&foo()'' (or ''function* &foo()''?).
+It is unclear though whether that should actually be possible (see "Yield by reference" section).
 
 ==== Basic behavior ====
 
-When a generator function is called the execution is suspended immediately after parameter binding and a ''Generator'' object
+When a generator function is called the execution is suspended immidiately after parameter binding and a ''Generator'' object
 is returned.
 
 The ''Generator'' object implements the following interface:
@@ -188,24 +240,24 @@ final class Generator implements Iterator {
     void  next();
     
     mixed send(mixed $value);
-    mixed throw(Exception $exception);
+    void close();
 }
 </code>
 
-If the generator is not yet at a ''yield'' statement (i.e. was just created and not yet used as an iterator), then any call to
+If the generator is not yet at a ''yield'' statement (i.e. was just created and not yet used as an interator), then any call to
 ''rewind'', ''valid'', ''current'', ''key'', ''next'' or ''send'' will resume the generator until the next ''yield'' statement is
 hit.
 
 Consider this example:
 
 <code php>
-function gen() {
+function *gen() {
     echo 'start';
     yield 'middle';
     echo 'end';
 }
 
-// Initial call does not output anything
+// Intial call does not output anything
 $gen = gen();
 
 // Call to current() resumes the generator, thus "start" is echo'd.
@@ -217,90 +269,68 @@ echo $gen->current();
 $gen->next();
 </code>
 
-A nice side-effect of this behavior is that coroutines do not have to be primed with a ''next()'' call before they can be used. (This is
-required in Python and also the reason why coroutines in Python usually use some kind of decorator that automatically primes the coroutine.)
+A nice side-effect of this behavior is that coroutines do not have to be primed with a ''next()'' call before they can be used (as
+it is required in Python, where for which reason any use of a coroutine requires the use of a decorator which automatically performs
+this ''next'' call.)
 
-Apart from the above the ''Generator'' methods behave as follows:
+Apart from the behavior described above the behavior of the ''Generator'' methods is as follows:
 
-  * ''rewind'': Throws an exception if the generator is currently after the first yield. (More in the "Rewinding a generator" section.)
+  * ''rewind'': Generators are not rewindable, so this is just a no-op. (More in the "Rewinding a generator" section.)
   * ''valid'': Returns ''false'' if the generator has been closed, ''true'' otherwise. (More in the "Closing a generator" section.)
   * ''current'': Returns whatever was passed to ''yield'' or ''null'' if nothing was passed or the generator is already closed.
-  * ''key'': Returns the yielded key or, if none was specified, an auto-incrementing key or ''null'' if the generator is already closed. (More in the "Yielding keys" section.)
+  * ''key'': Returns the yielded key or, if none was specified, an auto-incrementing key or ''null'' if the generator is already closed.
+    (More in the "Yielding keys" section.)
   * ''next'': Resumes the generator (unless the generator is already closed).
-  * ''send'': Sets the return value of the ''yield'' expression and resumes the generator (unless the generator is already closed). (More in the "Sending values" section.)
-  * ''throw'': Throws an exception at the current suspension point in the generator. (More in the "Throwing into the generator" section.)
-
-==== Yield syntax ====
-
-The newly introduced ''yield'' keyword (''T_YIELD'') is used both for sending and receiving values inside the generator. There are three basic forms of the ''yield'' expression:
-
-  * ''%%yield $key => $value%%'': Yields the value ''$value'' with key ''$key''.
-  * ''yield $value'': Yields the value ''$value'' with an auto-incrementing integer key.
-  * ''yield'': Yields the value ''null'' with an auto-incrementing integer key.
-
-The return value of the ''yield'' expression is whatever was sent to the generator using ''send()''. If nothing was sent (e.g. during ''foreach'' iteration) ''null'' is returned.
-
-To avoid ambiguities the first two ''yield'' expression types have to be surrounded by parenthesis when used in expression-context. Some examples when parentheses are necessary and when they aren't:
-
-<code php>
-// these three are statements, so they don't need parenthesis
-yield $key => $value;
-yield $value;
-yield;
-
-// these are expressions, so they require parenthesis
-$data = (yield $key => $value);
-$data = (yield $value);
-
-// to avoid strange (yield) syntax the parenthesis are not required here
-$data = yield;
-</code>
-
-If ''yield'' is used inside a language construct that already has native parentheses, then they don't have to be duplicated:
-
-<code php>
-call(yield $value);
-// instead of
-call((yield $value));
-
-if (yield $value) { ... }
-// instead of
-if ((yield $value)) { ... }
-</code>
-
-The only exception is the ''array()'' structure. Not requiring parenthesis would be ambiguous here:
-
-<code php>
-array(yield $key => $value)
-// can be either
-array((yield $key) => $value)
-// or
-array((yield $key => $value))
-</code>
-
-Python also has parentheses requirements for expression-use of ''yield''. The only difference is that Python also requires parentheses for a value-less ''yield'' (because the language does not use semicolons).
-
-See also the [[#alternative_yield_syntax_considerations|"Alternative yield syntax considerations" section]].
+  * ''send'': Sets the return value of the ''yield'' expression and resumes the generator (unless the generator is already closed).
+    (More in the "Sending values" section.)
+  * ''close'': Closes the generator. (More in the "Closing a generator" section.)
 
 ==== Yielding keys ====
 
-The languages that currently implement generators don't have support for yielding keys (only values). This though is just a side-effect
+The languages that currently implement generators don't have support for yielding keys (only values). This though is just a sideeffect
 as these languages don't support keys in iterators in general. 
 
-In PHP on the other hand keys are explicitly part of the iteration process and it thus does not make sense to not add
-key-yielding support. The syntax could be analogous to that of ''foreach'' loops and ''array'' declarations:
+In PHP on the other hand keys are explicitely part of the iteration process and it thus does not make sense to not add
+key-yielding support. The syntax could be anonolgeaus to that of ''foreach'' loops and ''array'' declarations:
 
 <code php>
 yield $key => $value;
 </code>
+    
+The problem with this syntax that it would be ambiguous in array declarations and nested ''yield'' expressions:
 
-Furthermore generators need to generate keys even if no key was explicitly yielded. In this case it seems reasonable to behave
+<code php>
+array(
+    yield $key => $value
+)
+// could be
+array(
+    (yield $key) => $value
+)
+// or
+array(
+    (yield $key => $value)
+)
+
+yield yield $a => $b;
+// could be
+yield (yield $a) => $b
+// or
+yield (yield $a => $b)
+</code>
+
+Even though this is an absolute edge-case, the grammar still shouldn't be ambiguous in this case. It's not clear how this can
+be solved. In the current implementation the ''yield $key => $value'' syntax is simply implemented as a statement instead of
+an expression. This obviously is a rather bad solution to the problem and it would be preferable to find some other way to deal
+with it.
+
+Furthermore generators need to generate keys even if no key was explicitely yielded. In this case it seems reasonable to behave
 the same as arrays do: Start with the key ''0'' and always increment by one. If in between an integer key which is larger than the
-current auto-key is explicitly yielded, then that will be used as the starting point for new auto-keys. All other yielded keys
+current auto-key is explicitely yielded, then that will be used as the starting point for new auto-keys. All other yielded keys
 do not affect the auto-key mechanism.
 
 <code php>
-function gen() {
+function *gen() {
     yield 'a';
     yield 'b';
     yield 'key' => 'c';
@@ -326,102 +356,6 @@ This is the same behavior that arrays have (i.e. if ''gen()'' instead simply ret
 be same). The only difference occurs when the generator yield non-integer, but numeric keys. For arrays they are cast, for generators
 the are not.
 
-==== Yield by reference ====
-
-Generators can also yield by values by reference. To do so the ''&'' modifier is added before the function name, just like it is done
-for return by reference.
-
-This for example allows you to create classes with by-ref iteration behavior (which is something that is completely impossible with
-normal iterators):
-
-<code php>
-class DataContainer implements IteratorAggregate {
-    protected $data;
-    
-    public function __construct(array $data) {
-        $this->data = $data;
-    }
-    
-    public function &getIterator() {
-        foreach ($this->data as $key => &$value) {
-            yield $key => $value;
-        }
-    }
-}
-</code>
-
-The class can then be iterated using by-ref ''foreach'':
-
-<code php>
-$dataContainer = new DataContainer([1, 2, 3]);
-foreach ($dataContainer as &$value) {
-    $value *= -1;
-}
-
-// $this->data is now [-1, -2, -3]
-</code>
-
-Only generators specifying the ''&'' modifier can be iterated by ref. If you try to iterate a non-ref generator by-ref an ''E_ERROR'' is thrown.
-
-==== Sending values ====
-
-Values can be sent into a generator using the ''send()'' method. ''send($value)'' will set ''$value'' as the return value
-of the current ''yield'' expression and resume the generator. When the generator hits another ''yield'' expression the yielded value will be
-the return value of ''send()''. This is just a convenience feature to save an additional call to ''current()''.
-
-Values are always sent by-value. The reference modifier ''&'' only affects yielded values, not the ones sent back to the coroutine.
-
-A simple example of sending values: Two (interchangeable) logging implementations:
-
-<code php>
-function echoLogger() {
-    while (true) {
-        echo 'Log: ' . yield . "\n";
-    }
-}
-
-function fileLogger($fileName) {
-    $fileHandle = fopen($fileName, 'a');
-    while (true) {
-        fwrite($fileHandle, yield . "\n");
-    }
-}
-
-$logger = echoLogger();
-// or
-$logger = fileLogger(__DIR__ . '/log');
-
-$logger->send('Foo');
-$logger->send('Bar');
-</code>
-
-==== Throwing into the generator ====
-
-Exceptions can be thrown into the generator using the ''Generator::throw()'' method. This will throw an exception in the generator's execution
-context and then resume the generator. It is roughly equivalent to replacing the current ''yield'' expression with a ''throw'' statement and
-resuming then. If the generator is already closed the exception will be thrown in the callers context instead (which is equivalent to replacing
-the ''throw()'' call with a ''throw'' statement). The ''throw()'' method will return the next yielded value (if the exception is caught and no
-other exception is thrown).
-
-An example of the functionality:
-
-<code php>
-function gen() {
-    echo "Foo\n";
-    try {
-        yield;
-    } catch (Exception $e) {
-        echo "Exception: {$e->getMessage()}\n";
-    }
-    echo "Bar\n";
-}
-
-$gen = gen();
-$gen->rewind();                     // echos "Foo"
-$gen->throw(new Exception('Test')); // echos "Exception: Test"
-                                    // and "Bar"
-</code>
-
 ==== Rewinding a generator ====
 
 Rewinding to some degree goes against the concept of generators, as they are mainly intended as one-time data sources that are not
@@ -431,7 +365,7 @@ calculation). Allowing it to rewind would look like it is a cheap operation, jus
 back to the execution context state at the initial call to the generator) can lead to unexpected behavior, e.g. in the following case:
 
 <code php>
-function getSomeStuff(PDOStatement $stmt) {
+function *getSomeStuff(PDOStatement $stmt) {
     foreach ($stmt as $row) {
         yield doSomethingWith($row);
     }
@@ -440,219 +374,102 @@ function getSomeStuff(PDOStatement $stmt) {
     
 Here rewinding would simply result in an empty iterator as the result set is already depleted.
 
-For the above reasons generators will not support rewinding. The ''rewind'' method will throw an exception, unless the generator is currently before or at the first yield. This results in the following behavior:
+One solution thus could be to allow explicitely marking generators to be rewindable. E.g. one could add a ''rewindable'' function,
+which makes a generator rewindable:
 
 <code php>
-$gen = createSomeGenerator();
-
-// the rewind() call foreach is doing here is okay, because
-// the generator is before the first yield
-foreach ($gen as $val) { ... }
-
-// the rewind() call of a second foreach loop on the other hand
-// throws an exception
-foreach ($gen as $val) { ... }
+$gen = rewindable(gen());
 </code>
-
-So basically calling ''rewind'' is only allowed if it wouldn't do anything (because the generator is already at its initial state). After that an exception is thrown, so accidentally reused generators are easy to find.
+    
+This function is actually already implementable in userland code (see "Cloning a generator" section.)
 
 ==== Cloning a generator ====
 
-Generators cannot be cloned.
-
-Support for cloning was included in the initial version, but removed in PHP 5.5 Beta 3 due to implementational difficulties, unclear semantics and no particularly convincing use cases.
-
-==== Closing a generator ====
-
-When a generator is closed it frees the suspended execution context (as well as all other held variables). After it has been closed
-''valid'' will return ''false'' and both ''current'' and ''key'' will return ''null''.
-
-A generator can be closed in two ways:
-
-  * Reaching a ''return'' statement (or the end of the function) in a generator or throwing an exception from it (without catching it inside the generator).
-  * Removing all references to the generator object. In this case the generator will be closed as part of the garbage collection process.
-
-If the generator contains (relevant) ''finally'' blocks those will be run. If the generator is force-closed (i.e. by removing all references) then it is not
-allowed to use ''yield'' in the ''finally'' clause (a fatal error will be thrown). In all other cases ''yield'' is allowed in ''finally'' blocks.
-
-The following resources are destructed while closing a generator:
-
-  * The current execution context (''execute_data'')
-  * Stack arguments for the generator call, and the additional execution context which is used to manage them.
-  * The currently active symbol table (or the compiled variables if no symbol table is in use).
-  * The current ''$this'' object.
-  * If the generator is closed during a method call, the object which the method is invoked on (''EX(object)'').
-  * If the generator is closed during a call, the arguments pushed to the stack.
-  * Any ''foreach'' loop variables which are still alive (taken from ''brk_cont_array'').
-  * The current generator key and value
-
-Currently it can happen that temporary variables are not cleaned up properly in edge-case situations. Exceptions are also subject to
-this problem: https://bugs.php.net/bug.php?id=62210. If that bug could be fixed for exceptions, then it would also be fixed for generators.
-
-==== Error conditions ====
-
-This is a list of generators-related error conditions:
-
-  * Using ''yield'' outside a function: ''E_COMPILE_ERROR''
-  * Using ''return'' with a value inside a generator: ''E_COMPILE_ERROR''
-  * Manual construction of ''Generator'' class: ''E_RECOVERABLE_ERROR'' (analogous to ''Closure'' behavior)
-  * Yielding a key that isn't an integer or a key: ''E_ERROR'' (this is just a placeholder until Etienne's arbitrary-keys patch lands)
-  * Trying to iterate a non-ref generator by-ref: ''Exception''
-  * Trying to traverse an already closed generator: ''Exception''
-  * Trying to rewind a generator after the first yield: ''Exception''
-  * Yielding a temp/const value by-ref: ''E_NOTICE'' (analogous to ''return'' behavior)
-  * Yielding a string offset by-ref: ''E_ERROR'' (analogous to ''return'' behavior)
-  * Yielding a by-val function return value by-ref: ''E_NOTICE'' (analogous to ''return'' behavior)
-
-This list might not be exhaustive.
-
-===== Performance =====
-
-You can find a small micro benchmark at https://gist.github.com/2975796. It compares several ways of iterating ranges:
-
-  * Using generators (''xrange'')
-  * Using iterators (''RangeIterator'')
-  * Using arrays implemented in userland (''urange'')
-  * Using arrays implemented internally (''range'')
-
-For large ranges generators are consistently faster; about four times faster than an iterator implementation and even 40% faster than the native ''range'' implementation.
-
-For small ranges (around one hundred elements) the variance of the results is rather high, but from multiple runs it seems that in this case generators are slightly slower
-than the native implementation, but still faster than the iterator variant.
-
-The tests were run on a Ubuntu VM, so I'm not exactly sure how representative they are.
-
-===== Some points from the discussion =====
-
-==== Why not just use callback functions? ====
-
-A question that has come up a few times during discussion: Why not use callback functions, instead of generators? For example the above ''getLinesFromFile'' function could
-be rewritten using a callback:
+Generators can be cloned, thus leaving two independent ''Generator'' objects with the same state. This behavior can for example be
+used to create the aforementioned ''rewindable'' function:
 
 <code php>
-function processLinesFromFile($fileName, callable $callback) {
-    if (!$fileHandle = fopen($fileName, 'r')) {
-        return;
+class RewindableGenerator implements Iterator {
+    protected $original;
+    protected $current;
+    
+    public function __construct(Generator $generator) {
+        $this->original = $generator;
+        $this->current = null;
     }
     
-    while (false !== $line = fgets($fileHandle)) {
-        $callback($line);
+    public function rewind() {
+        if ($this->current) { $this->current->close(); }
+        $this->current = clone $this->original;
+        $this->current->rewind();
     }
     
-    fclose($fileHandle);
-}
-
-processLinesFromFile($fileName, function($line) {
-    // do something
-});
-</code>
-
-This approach has two main disadvantages:
-
-Firstly, callbacks integrate badly into the existing PHP coding paradigms. Having quadruply-nested closures is something very normal in languages like JavaScript, but
-rather rare in PHP. Many things in PHP are based on iteration and generators can nicely integrate with this.
-
-A concrete example, which was actually my initial motivation to write the generators patch:
-
-<code php>
-protected function getTests($directory, $fileExtension) {
-    $it = new RecursiveDirectoryIterator($directory);
-    $it = new RecursiveIteratorIterator($it, RecursiveIteratorIterator::LEAVES_ONLY);
-    $it = new RegexIterator($it, '(\.' . preg_quote($fileExtension) . '$)');
-
-    $tests = array();
-    foreach ($it as $file) {
-        // read file
-        $fileContents = file_get_contents($file);
-
-        // parse sections
-        $parts = array_map('trim', explode('-----', $fileContents));
-
-        // first part is the name
-        $name = array_shift($parts);
-
-        // multiple sections possible with always two forming a pair
-        foreach (array_chunk($parts, 2) as $chunk) {
-            $tests[] = array($name, $chunk[0], $chunk[1]);
+    public function valid() {
+        if (!$this->current) { $this->current = clone $this->original; }
+        return $this->current->valid();
+    }
+    
+    public function current() {
+        if (!$this->current) { $this->current = clone $this->original; }
+        return $this->current->current();
+    }
+    
+    public function key() {
+        if (!$this->current) { $this->current = clone $this->original; }
+        return $this->current->key();
+    }
+    
+    public function next() {
+        if (!$this->current) { $this->current = clone $this->original; }
+        $this->current->next();
+    }
+    
+    public function send($value) {
+        if (!$this->current) { $this->current = clone $this->original; }
+        return $this->current->send($value);
+    }
+    
+    public function close() {
+        $this->original->close();
+        if ($this->current) {
+            $this->current->close();
         }
     }
+}
 
-    return $tests;
+function rewindable(Generator $generator) {
+    return new RewindableGenerator($generator);
 }
 </code>
 
-This is a function which I use to provide test vectors to PHPUnit. I point it to a directory containing test files and then split up those test files into individual tests
-+ expected output. I can then use the result of the function to feed some test function via ''@dataProvider''.
+It can be then used as follows:
 
-The problem with the above implementation obviously is that I have to read all tests into memory at once (instead of one-by-one).
+<code php>
+function *xrange($start, $end, $step = 1) {
+    for ($i = $start; $i <= $end; $i += $step) {
+        yield $i;
+    }
+}
 
-How can I solve this problem? By turning it into an iterator obviously! But if you look closer, this isn't actually that easy, because I'm adding new tests in a nested loop.
-So I would have to implement some kind of complex push-back mechanism to solve the problem. And - getting back on topic - I can't use callbacks here either, because I need
-a traversable for use with ''@dataProvider''. Generators on the other hand solve this problem very elegantly. Actually, all you have to do to turn it into a lazy generator
-is replace ''$tests[] ='' with ''yield''.
+$range = rewindable(xrange(0, 5));
+foreach ($range as $i) {
+    echo $i, "\n";
+}
+foreach ($range as $i) {
+    echo $i, "\n";
+}
+</code>
 
-The second, more general problem with callbacks is that it's very hard to manage state across calls. The classic example is a lexer + parser system. If you implement the
-lexer using a callback (i.e. ''lex(string $sourceCode, callable $tokenConsumer)'') you would have to figure out some way to keep state between subsequent calls. You'd have
-to build some kind of state machine, which can quickly get really ugly, even for simple problems (just look at the hundreds of states that a typical LALR parser has). Again,
-generators solve this problem elegantly, because they maintain state implicitly, in the execution state.
+This will correctly output the 0..5 range twice.
 
-==== Alternative yield syntax considerations ====
+==== Patch ====
 
-Andrew proposed to use a function-like syntax for ''yield'' instead of the keyword notation. The three ''yield'' variants would then look as follows:
+A working, but not yet complete implementation can be found at https://github.com/nikic/php-src/tree/addGeneratorsSupport.
 
-  * ''yield()''
-  * ''yield($value)''
-  * ''%%yield($key => $value)%%''
+==== TODO ====
 
-The main advantage of this syntax is that it would avoid the strange parentheses requirements for the ''yield $value'' syntax.
-
-One of the main issues with the pseudo-function syntax is that it makes the semantics of ''yield'' less clear. Currently the ''yield'' syntax looks very similar to the ''return''
-syntax. Both are very similar in a function, so it is desirable to keep them similar in syntax too.
-
-Generally PHP uses the ''keyword $expr'' syntax instead of the ''keyword($expr)'' syntax in all places where the statement-use is more common than the expression-use. E.g.
-''include $file;'' is usually used as a statement and only very rarely as an expression. ''isset($var)'' on the other hand is normally used as an expression (a statement use
-wouldn't make any sense, actually).
-
-As ''yield'' will be used as a statement in the vast majority of cases the ''yield $expr'' syntax thus seems more appropriate. Furthermore the most common expression-use of
-''yield'' is value-less, in which case the parentheses requirements don't apply (i.e. you can write just ''$data = yield;'').
-
-So the function-like ''yield($value)'' syntax would optimize a very rare use case (namely ''$recv = yield($send);''), at the same time making the common use cases less clear.
-
-===== Patch =====
-
-The current implementation can be found in this branch: https://github.com/nikic/php-src/tree/addGeneratorsSupport.
-
-I also created a PR so that the diff can be viewed more easily: https://github.com/php/php-src/pull/177
-
-===== Vote =====
-
-<doodle title="Should generators be merged into master?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-===== Further resources =====
-
-Implementation in Python:
-
-  * [[http://wiki.python.org/moin/Generators|Documentation]]
-  * [[http://www.python.org/dev/peps/pep-0255/|PEP 255]]
-  * [[http://www.python.org/dev/peps/pep-0289/|PEP 289]]
-  * [[http://www.python.org/dev/peps/pep-0342/|PEP 342]]
-  * [[http://www.python.org/dev/peps/pep-0380/|PEP 380]]
-  * [[http://www.python.org/dev/peps/pep-3152/|PEP 3152]]
-
-Implementation in JavaScript:
-
-  * [[http://wiki.ecmascript.org/doku.php?id=harmony:generators|Generators in ECMAScript Harmony]]
-  * [[https://developer.mozilla.org/en/JavaScript/Guide/Iterators_and_Generators#Generators:_a_better_way_to_build_Iterators|Implementation in SpiderMonkey (not conforming with Harmony)]]
-
-Implementation in C#:
-
-  * [[http://msdn.microsoft.com/en-us/library/dscyy5s0.aspx|Documentation in MSDN]]
-  * [[http://csharpindepth.com/articles/chapter6/iteratorblockimplementation.aspx|Implementation details]]
-
-Extensive introductions into the topic:
-
-  * [[http://www.dabeaz.com/generators/|Generators presentation by David Beazley]]
-  * [[http://www.dabeaz.com/coroutines/|Coroutines presentation by David Beazley]]
+  * ''Generator::throw'' method
+  * Decide whether closing a generator show be done by throwing an exception into the generator (like ''GeneratorExit''
+    in Python)
+  * Implement ''yield*'' expression and generator return values
+  * Some more stuff
