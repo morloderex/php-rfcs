@@ -1,24 +1,24 @@
 ====== Request for Comments: array_column ======
 
-  * Version: 2.4
-  * Date: 2013-01-11
+  * Version: 1.0
+  * Date: 2012-06-21
   * Author: Ben Ramsey <ramsey@php.net>
-  * Status: Implemented in PHP 5.5
+  * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/array_column
 
 ===== Introduction =====
 
 This RFC proposes a new array function that returns the values of the specified column from a multi-dimensional array. Inspired by database methods like ''PDOStatement::fetchColumn()'', ''array_column()'' moves useful functionality into the core that once had to be implemented in userland code with sometimes complex loops.
 
-This has been submitted as a [[https://github.com/php/php-src/pull/257|pull request on GitHub]], where there has already been a significant amount of discussion.
+This has been submitted as a [[https://github.com/php/php-src/pull/56|pull request on GitHub]], where there has already been a significant amount of discussion.
 
 ===== Specification =====
 
 ==== Description ====
 
-  array array_column(array $input, mixed $columnKey[, mixed $indexKey])
+  array array_column(array $input, mixed $key)
 
-''array_column()'' returns the values from a single column of the //**input**// array, identified by the //**columnKey**//. Optionally, you may provide an //**indexKey**// to index the values in the returned array by the values from the //**indexKey**// column in the //**input**// array.
+''array_column()'' returns the values from a single column of the //**input**// array, identified by the //**key**//.
 
 ==== Parameters ====
 
@@ -26,13 +26,9 @@ This has been submitted as a [[https://github.com/php/php-src/pull/257|pull requ
 
 > A multi-dimensional array (record set) from which to pull a column of values.
 
-**columnKey**
+**key**
 
-> The column of values to return. This value may be the integer key of the column you wish to retrieve, or it may be the string key name for an associative array.
-
-**indexKey**
-
-> (Optional.) The column to use as the index/keys for the returned array. This value may be the integer key of the column, or it may be the string key name.
+> The column of values to return. This value may be the 0-indexed number of the column you wish to retrieve, or it may be the string key name for an associative array.
 
 ==== Return Values ====
 
@@ -47,24 +43,19 @@ Returns an array of values representing a single column from the input array.
 // Array representing a possible record set returned from a database
 $records = array(
     array(
-        'id' => 2135,
+        'id' => 1,
         'first_name' => 'John',
         'last_name' => 'Doe'
     ),
     array(
-        'id' => 3245,
+        'id' => 2,
         'first_name' => 'Sally',
         'last_name' => 'Smith'
     ),
     array(
-        'id' => 5342,
+        'id' => 3,
         'first_name' => 'Jane',
         'last_name' => 'Jones'
-    ),
-    array(
-        'id' => 5623,
-        'first_name' => 'Peter',
-        'last_name' => 'Doe'
     )
 );
 
@@ -80,7 +71,6 @@ Array
     [0] => John
     [1] => Sally
     [2] => Jane
-    [3] => Peter
 )
 </code>
 
@@ -94,8 +84,8 @@ $records = array(
     array(3, 'Jane', 'Jones')
 );
 
-$lastNames = array_column($records, 2);
-print_r($lastNames);
+$firstNames = array_column($records, 2);
+print_r($firstNames);
 </code>
 
 The above example will output:
@@ -109,140 +99,11 @@ Array
 )
 </code>
 
-=== Example #3: Get column of last names from recordset, indexed by the "id" column ===
-
-<code php>
-<?php
-// Using the $records array from Example #1
-$lastNames = array_column($records, 'last_name', 'id');
-print_r($lastNames);
-</code>
-
-The above example will output:
-
-<code>
-Array
-(
-    [2135] => Doe
-    [3245] => Smith
-    [5342] => Jones
-    [5623] => Doe
-)
-</code>
-
-=== Example #4: Mismatched columns ===
-
-With ''array_column()'' the relationship in finding the values of //**columnKey**// to //**indexKey**// is much like that of a SQL left join. All values of the //**columnKey**// are returned. When a corresponding //**indexKey**// cannot be found, the value will be keyed with an integer, starting from zero.
-
-The following examples will all use the same **$mismatchedColumns** array defined here:
-
-<code php>
-<?php
-$mismatchedColumns = array(
-    array(
-        'a' => 'foo',
-        'b' => 'bar',
-        'e' => 'baz'
-    ),
-    array(
-        'a' => 'qux',
-        'c' => 'quux',
-        'd' => 'corge'
-    ),
-    array(
-        'a' => 'grault',
-        'b' => 'garply',
-        'e' => 'waldo'
-    ),
-);
-</code>
-
-In this example, all rows contain an "a" key, but only two contain a "b" key. If we want to retrieve all "a" values and key them by "b" values, then ''array_column()'' behaves like this:
-
-<code php>
-<?php
-$foo = array_column($mismatchedColumns, 'a', 'b');
-$bar = array('bar' => 'foo', 'qux', 'garply' => 'grault');
-
-/*
-Both $foo and $bar contain values that look like this:
-
-Array
-(
-    [bar] => foo
-    [0] => qux
-    [garply] => grault
-)
-*/
-</code>
-
-However, if we want to retrieve all "b" values and key them by "a" values, we will only have two elements in the resulting array, since only two rows contain "b" values.
-
-<code php>
-// There is a corresponding "a" value for each "b" value
-print_r(array_column($mismatchedColumns, 'b', 'a'));
-
-/*
-Array
-(
-    [foo] => bar
-    [grault] => garply
-)
-*/
-
-// There are no corresponding "c" values for either "b" value
-print_r(array_column($mismatchedColumns, 'b', 'c'));
-
-/*
-Array
-(
-    [0] => bar
-    [1] => garply
-)
-*/
-</code>
-
-=== Example #5: indexKey Collisions ===
-
-In the event that more than one row contains the same value for //**indexKey**//, then the last //**columnKey**// value for that //**indexKey**// will overwrite the previous value.
-
-<code php>
-// Using the $records array from Example #1
-$firstNames = array_column($records, 'first_name', 'last_name');
-print_r($firstNames);
-
-/*
-Array
-(
-    [Doe] => Peter
-    [Smith] => Sally
-    [Jones] => Jane
-)
-*/
-</code>
-
 ===== Proposal and Patch =====
 
-The patch (including tests) for this proposal is available in [[https://github.com/php/php-src/pull/257|GitHub Pull Request #257]].
-
-===== Mailing list discussion =====
-
-The mailing list discussion is available [[http://grokbase.com/t/php/php-internals/126nxxa80p/draft-rfc-array-column-function|here]].
-
-===== Voting =====
-
-Voting ends not before Friday, January 18, 2013. The PHP language is not changed, so a 50% + 1 majority is required.
-
-<doodle title="Accept array_column() for inclusion in PHP?" auth="user" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+The patch (including tests) for this proposal is available in [[https://github.com/php/php-src/pull/56|GitHub Pull Request #56]].
 
 ===== Changelog =====
 
   * 1.0 (2012-06-21): Initial draft, following discussion on on [[https://github.com/php/php-src/pull/56|GitHub Pull Request #56]]
-  * 2.0 (2013-01-11): Updated to reflect mailing list and pull request feedback.
-  * 2.1 (2013-01-11): Adding link to new pull request: https://github.com/php/php-src/pull/257
-  * 2.2 (2013-01-11): Opened voting
-  * 2.3 (2013-01-12): Updates to the RFC (new examples, etc.), based on mailing list feedback
-  * 2.4 (2013-01-14): Removed array_pluck() alias
+
