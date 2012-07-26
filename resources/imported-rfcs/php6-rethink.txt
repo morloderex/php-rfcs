@@ -1,4 +1,4 @@
-====== Request for Comments: PHP6 rethink ======
+====== Request for Comments: How to write RFCs ======
   * Version: 1.0
   * Date: 2012-07-26
   * Author: Levi Morrison <levim@php.net>
@@ -23,10 +23,10 @@ This is not a comprehensive list.
   * **Variables cannot typed.** Dynamic typing helps alleviate development headache because you don't have to worry about types.  Once the project matures, though, not having declared types becomes a grievance.  Class properties get the same treatment as function return methods: people use docblocks to alleviate the problem.
   * **Type hints do not work for primitive (scalar) values.** If some property of class needs to be an integer, you can't simply type-hint it with `int`.  To do it properly you should use `filter_var` and `FILTER_VALIDATE_INT` and if it isn't an integer you throw an Exception.  This is much clunkier and takes significantly more work than a type-hint.
   * **Implementing best-practice visibility is verbose.** Generally class members should not be publicly visible and should be accessed through methods. Besides preventing foreign code from messing with the class's behavior, it also future-proofs your code because later on you can add logic when you set and retrieve class members. This adds a lot of boilerplate code.  IDE's can generate the code, but it's there.
-  * **Writing 'function' over and over in a class again gets annoying.** It could be inferred from context that it is defining a method.
-===== An example: What is wrong/inconvenient =====
 
-Consider the following class that holds two properties, id and name.  The class follows fairly conventional practices; its variables are not public and provides read / write access through get and set functions in order to future-proof code.
+===== How we can improve: An Example =====
+
+Consider the following class that follows fairly conventional practices.   It's variables are not public and provides read access through getters:
 <code php>
 class Person {
     /**
@@ -43,7 +43,7 @@ class Person {
      * @param int $id
      * @param string $name
      */
-    function __construct($id, $name) {
+    public function __construct($id, $name) {
         $this->id = $id;
         $this->name = $name;
     }
@@ -51,58 +51,64 @@ class Person {
     /**
      * @return int
      */
-    function getId() {
+    public function getId() {
         return $this->id;
     }
 
     /**
      * @return string
      */
-    function getName() {
+    public function getName() {
         return $this->name;
-    }
-    
-    /**
-     * @param int $id
-     */
-    function setId($id) {
-        $this->id = $id;
-    }
-    
-    /**
-     * @param string $id
-     */
-    function setName($name) {
-        $this->id = $name;
     }
 
 }
 
 </code>
 
-There is nothing in this code that prevents people from specifying incorrect types.  If catching these errors is important enough, you have to introduce type checking with something like this:
+There is nothing in this code that prevents people from specifying incorrect types.  If catching these errors is important enough, you have to write something like this:
 
 <code php>
 class Person {
-    // properties
+    /**
+     * @var int
+     */
+    protected $id;
+
+    /**
+     * @var string
+     */
+    protected $name;
 
     /**
      * @param int $id
      * @param string $name
      * @throws InvalidArgumentException
      */
-    function __construct($id, $name) {
+    public function __construct($id, $name) {
         $this->setId($id);
         $this->setName($name);
     }
-    
-    // getters
-    
+
+    /**
+     * @return int
+     */
+    public function getId() {
+        return $this->id;
+    }
+
+    /**
+     * @return string
+     */
+    public function getName() {
+        return $this->name;
+    }
+
     /**
      * @param int $id
      * @throws InvalidArgumentException
      */
-    function setId($id) {
+    protected function setId($id) {
         if (filter_var($id, FILTER_VALIDATE_INT) === FALSE) {
             throw new InvalidArgumentException();
         }
@@ -113,7 +119,7 @@ class Person {
      * @param string $name
      * @throws InvalidArgumentException
      */
-    function setName($name) {
+    protected function setName($name) {
 
         if (is_bool($name) || !is_scalar($name)) {
             throw new InvalidArgumentException();
@@ -124,7 +130,7 @@ class Person {
 }
 </code>
 
-That's not even the end of it, though.  What if our class really needs to have an interface? We end up with something like this:
+That is a lot of typing for properly storing two variables inside of a class.  That's not even the end of it, though.  What if our class really needs to be an interface? We then end up with something like this:
 
 <code php>
 interface Person {
@@ -132,13 +138,13 @@ interface Person {
     /**
      * @return int
      */
-    function getId();
+    public function getId();
 
     /**
      * @return string
      */
-    function getName();
-
+    public function getName();
+    
 }
 
 class PersonImpl implements Person {
@@ -153,7 +159,7 @@ class PersonImpl implements Person {
      * @param int $id
      * @param string $name
      */
-    function __construct($id, $name) {
+    public function __construct($id, $name) {
         $this->id = $id;
         $this->name = $name;
     }
@@ -161,14 +167,14 @@ class PersonImpl implements Person {
     /**
      * @return int
      */
-     function getId() {
+    public function getId() {
         return $this->id;
     }
 
     /**
      * @return string
      */
-    function getName() {
+    public function getName() {
         return $this->name;
     }
 
@@ -176,7 +182,7 @@ class PersonImpl implements Person {
      * @param int $id
      * @throws InvalidArgumentException
      */
-    function setId($id) {
+    protected function setId($id) {
         if (filter_var($id, FILTER_VALIDATE_INT) === FALSE) {
             throw new InvalidArgumentException();
         }
@@ -187,7 +193,7 @@ class PersonImpl implements Person {
      * @param string $name
      * @throws InvalidArgumentException
      */
-    function setName($name) {
+    protected function setName($name) {
 
         if (is_bool($name) || !is_scalar($name)) {
             throw new InvalidArgumentException();
@@ -198,9 +204,9 @@ class PersonImpl implements Person {
 }
 </code>
 
-Note that I've left off public visibility modifiers so there is less to look at, but it would not be abnormal to see them in the wild.
-===== An example: How things might be done =====
-I feel like we can improve this by changing how types and more specifically objects work.  By adding static types as an option (and supporting them with type-hints), creating automatic getters and setters, and reducing the need for some keywords, we can cut out most of that code. An example is worth a thousand words:
+So what can we do?
+
+I feel like we can improve this by changing how objects work in PHP.  By adding static types as an option (and supporting them with type-hints) and creating automatic getters and setters we can cut out most of that code. A picture is worth a thousand words (but I'll write some after the example anyway):
 
 <code php>
 
@@ -214,88 +220,16 @@ interface Person {
 
 class PersonImpl implements Person {
 
-    int $id; // creates get and set methods for id
+    int $id;
 
-    string $name;  // creates get and set methods for name
+    string $name;
 
-    __construct(int $id, string $name) {
-        $this->id = $id; // calls the set id method
-        $this->name = $name; // calls the set name method
+    public function __construct(int $id, string $name) {
+        $this->id = $id;
+        $this->name = $name;
     }
 
 }
-</code>
-
-The class definition would be exactly equivalent to this PHP 6 syntax:
-
-<code php>
-class PersonImpl implements Person {
-
-    private int $__id;
-
-    private string $__name;
-
-    public __construct(int $id, string $name) {
-        $this->id = $id; // calls the set id method
-        $this->name = $name; // calls the set name method
-    }
-    
-    public int get id() {
-        return $this->__id;
-    }
-    
-    public string get name() {
-        return $this->__name;
-    }
-    
-    public void set id(int $id) {
-        $this->__id = $id;
-    }
-    
-    public void set name(string $name) {
-        $this->__name = $name;
-    }
-
-}
-</code>
-
-Notes:
-
-  * Get and set methods are generated for public and protected variables, but **get and set methods are not generated for private variables**.
-  * A get method can have a different visibility than the set method in the same class but you can't downgrade visibility when inheriting/implementing another class/interface.
-
-===== FAQ =====
-
-**Q:** Why do we want the syntax `$object->property;` to trigger a get method and `$object->property = 'prop';` to trigger a set method?
-
-**A:** 
-  - **Implementation details can be change later.**  What if you need to change what happens when you set a variable later on?  I'll use the real-world example of upper-casing the string (used often to make things case-insensitive).  If you use simple assignment you can't do this without changing the calling code:<code php>
-class Object {
-    var $property;
-}
-$object = new Object();
-$object->property = 'name';
-
-// Later on I need to upper-case the value when it is set, so I modify the class:
-class Object {
-    private var $property;
-    
-    function getProperty() {
-        return $this->property;
-    }
-    
-    function setProperty($property) {
-        $this->property = touppercase($property;) 
-    }
-}
-
-// code like the following will now break:
-$object->property = 'name';
-</code>  You could use `_get` and `_set` magic but they are really a poor-man's get and set implementation.  They are also very hard to build tools for.
-  - **It is clear that you are accessing or modifying an object property when you use the traditional syntax.**  When you use the old-style getter and setter methods, it's not as clear. <code php>
-$object = new Object();
-$object->property = 'foo'; //obviously accessing a property
-$object->setProperty('foo'); // argue about clarity if you want, but it's less obvious to me
 </code>
 
 ===== Changelog =====
