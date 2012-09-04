@@ -1,13 +1,9 @@
-====== Request for Comments: Moving to an AST-based parsing/compilation process (obsolete) ======
+====== Request for Comments: Moving to an AST-based parsing/compilation process ======
   * Date: 2012-09-04
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Obsolete
-  * [[http://markmail.org/message/trt5oz5uioxe3fdv|Mailing list discussion]]
-  * Superseded by: [[rfc:abstract_syntax_tree|Abstract Syntax Tree RFC]]
+  * Status: Under Discussion
 
 ===== Introduction =====
-
-**Note: This RFC has been superseded by another [[rfc:abstract_syntax_tree|Abstract Syntax Tree RFC]].**
 
 Currently PHP uses a single-pass compilation process, i.e. the parser directly invokes opcode compilation routines. Most other languages on the other hand use an intermediary structure to separate those two phases: The parser only emits an abstract syntax tree (AST), which is then used by a separate compiler to emit instructions. The use of an AST decouples the two phases and as such allows for greater flexibility and deeper analysis.
   
@@ -27,11 +23,13 @@ Generally I'd say that the potential for optimizations is the least important re
 
 ==== Elimination of various quirks ====
 
-Currently there are various quirks in the emitted opcodes which can be attributed to the use of a single-pass compiler. Some examples:
+Currently there is various quirks in the emitted opcodes which can be attributed to the use of a single-pass compiler. The simplest (and least important) example are the NOP opcodes that the compiler inserts at several places.
 
-  * The NOP opcodes that are inserted in several places. (Yes, this point isn't particularly important)
-  * Access of static variables using ''Foo::$bar'' creates an unused compiled variable for ''$bar'' (because the compiler thinks that it is a normal variable).
-  * ''$foo'' and ''($foo)'' behave differently in several places (the first can act as a reference, the second can not). For more info see http://stackoverflow.com/questions/6726589/parentheses-altering-semantics-of-function-call-result/6732876#6732876. (Some people claim that this is a feature, not a bug.)
+A more interesting example is the fact that whenever you access a static member like ''Foo::$bar'' an unused compiled-variable for ''$bar'' is emitted. The compiler thinks that ''$bar'' is a normal variable and as such creates an
+unnecessary and unused CV for it.
+
+Other quirks (which actually influences the behavior) is caused by the separation of ''variable'' and ''expr_without_variable'' in the grammar. For example parentheses may cause subtle changes in behavior (''func($foo)''
+and ''func(($foo))'' have different behavior).
 
 All these can be eliminated when an AST is used.
 
@@ -43,19 +41,13 @@ Using an AST the compiler can be written in a much cleaner way. This would make 
 
 ==== Decoupling syntax decisions from technical issues ====
 
-With the current single-pass compiler some things are very hard / near impossible to implement. This actively influences syntax decisions.
+With the current single-pass compiler some things are very hard / near impossible to implement. This actively influences syntax descisions.
 
-A few examples of syntax that is currently not possible, but would be possible with a syntax tree:
+One example of syntax that is currently impossible is array destructuring without a special ''list()'' construct. The syntax ''[$a, $b] = [$b, $a]'' that is common in other languages is not possible to implement in PHP due to parser limitations.
 
-  * Array destructuring using something like ''[$a, $b, $c] = $array'' instead of a dedicated ''list()'' syntax. This is common in other languages, but not possible in PHP.
-  * List comprehensions / generator expressions where the result expression comes first, e.g. ''[x * x for x in list]'' in Python. In PHP only the reverse syntax is possible: ''[foreach ($list as $x) yield $x * $x]''
-  * C#-style expression trees (which form the basis for LINQ)
+Another example are list comprehensions / generator expressions where the result expression comes first (e.g. ''[x * x for x in list]'' in Python). In PHP only the reversed syntax is possible (''foreach ($list as $x) yield $x * $x'').
 
-Apart from larger syntax limitations the current system commonly also affects smaller syntax decisions. One example here are the strange parentheses requirements for the ''yield'' expression. Those requirements exist solely for technical reasons and would not be required with an AST-generating parser.
-
-==== Better error messages ====
-
-Currently many things are directly enforced in the grammar which should really be checked during compilation (or a completely separate pass). E.g. if you try to initialize a class property with a non-static value, you'll get a rather unintelligible parse error message, instead of something like ''Cannot initialize property with non-static value''. (And then you obviously go to StackOverflow, ask the question for the five hundredth time and annoy the heck out of me!)
+Those are two examples of larger limitations, but smaller syntax decisions are often driven by parser limitations too. An AST allows implementing many syntax elements that would otherwise be impossible. (One of the main reasons for this is that an AST based parser does not require mid-rule semantic action reduction.)
 
 ===== Disadvantages =====
 
