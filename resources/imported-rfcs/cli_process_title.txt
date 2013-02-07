@@ -1,22 +1,15 @@
 ====== Request for Comments: PHP CLI changing process title support ======
 
-  * Version: 1.3
+  * Version: 1.0
   * Date: 2013-02-06
   * Author: Keyur Govande <kgovande@gmail.com>
-  * Status: Implemented (in PHP 5.5)
+  * Status: Voting
   * First Published at: http://wiki.php.net/rfc/cli_process_title
 
 ===== Introduction =====
 
 This RFC proposes a new way of setting a PHP CLI process's title that's visible in top or ps. The implementation is based based off the one in [[http://www.postgresql.org/docs/9.2/static/monitoring-ps.html|PostgreSQL]]. 
 
-This is very helpful when using PHP as a daemon, for example: [[https://github.com/brianlmoon/GearmanManager|GearmanManager]]. Otherwise, all job workers look the same in top and ps:
-
-''php -d display_errors=1 -d display_startup_errors=1 -d error_log=/var/log/gearman/php.log /var/code/bin/GearmanManager/run-gearman.php -c /var/code/bin/GearmanManager/config.php -p JobWorker_ -P /var/run/gearman_manager/gearman_manager.pid -d -x 86400 -w /var/code/phplib/JobWorker/ -l /var/log/gearman/gearman_manager.log -vvv''
-
-Currently, there are 2 ways to debug what job a process is doing: attach gdb and introspect the appropriate data structure. Or log the process-pid to a file at job start-up and match it up. 
-
-Both are doable, but time consuming and having functionality in the language to set the title would solve the problem nicely.
 ===== Implementation =====
 
 There already exists a PECL extension [[http://pecl.php.net/package/proctitle|proctitle]] that does something similar, but it is incomplete and might lead to memory corruption on Linux (or any OS which does not support [[http://www.unix.com/man-page/FreeBSD/3/setproctitle/|setproctitle]]. 
@@ -26,78 +19,46 @@ The reason is the extension only has access to original argv[0] (that comes from
 The proposed patch does not suffer from the same issue. It works by hooking into PHP CLI's main(). An init method is the first function call made in main(). 
    * On Linux: The init method deep-copies argv and environ and these copies are returned to main() for use during the program. The original argv and environ are saved by init. This contiguous block is then used to store the the new title. The OS reads from argv[0] onwards when ps(1) or top(1) or /proc/<pid>/cmdline is called. An explanation is [[http://stupefydeveloper.blogspot.com/2008/10/linux-change-process-name.html| here]]
    * On BSD without [[http://www.unix.com/man-page/FreeBSD/3/setproctitle/|setproctitle]] support: Similar to Linux. A deep copy of argv is made and returned to main() for further use. The original argv[0] is pointed to a 256 character array block into which the title is copied over. argv[1] is set to NULL to indicate the 'end' of the argv array.
-   * On systems with support for [[http://www.unix.com/man-page/FreeBSD/3/setproctitle/|setproctitle]] OR pstat PSTAT_SETCMD or PS_STRINGS, we use these instead.
-   * On Windows: the title is for the 'parent' console window using [[http://msdn.microsoft.com/en-us/library/windows/desktop/ms686050(v=vs.85).aspx|SetConsoleTitleset]]. It is visible on the parent window, and in TaskManager's Applications tab.
+   * On systems with support for [[http://www.unix.com/man-page/FreeBSD/3/setproctitle/|setproctitle]] OR pstat PSTAT_SETCMD OR PS_STRINGS, we use these instead.
+   * On Windows: the title is set as an Windows [[http://msdn.microsoft.com/en-us/library/windows/desktop/ms682396(v=vs.85).aspx|Event]]
 
 Support for setting the title is also built into the cli-server SAPI.
 
 Note that it is not possible to use similar logic for other web-servers like Apache because we'd need to deep-copy and replace argv and environ before any real code has executed and such low-level access isn't possible there.
+
 ==== Example ====
 
 <code php>
 <?php
 
 $title = "This is a test title";
-if (!cli_set_process_title($title)) {
-    echo "Unable to set title\n";
+if (!is_cli_ps_title_available()) {
+    echo "Not supported on this OS\n";
     exit(1);
 }
 
+if (!set_cli_ps_title($title)) {
+    echo "Unable to set title\n";
+    exit(2);
+}
+
 sleep(15);
-echo cli_get_process_title() . "\n";
 </code>
 
 The above example will output:
 
   * Linux: {{:rfc:linux_ps_title.png?200|}}
   * FreeBSD 9.0: {{:rfc:fbsd_ps_title.png?200|}}
-  * Windows 7: {{:rfc:windows_ps_title_console.png?200|}}
-  * OS X Lion: {{:rfc:osx_ps_title.png?200|}}
+  * Windows 7: {{:rfc:windows_ps_title.png?200|}}
 
+===== Proposal and Patch =====
 
-===== Specification =====
+The patch (including tests) is [[https://gist.github.com/keyurdg/4728770#file-php_ps-patch|here]].
 
-==== Description ====
-
-  bool cli_set_process_title(string $title)
-
-''cli_set_process_title()'' sets title of the process to //**title**// and returns TRUE if the operation succeeded. Or FALSE if it fails. On failure, a WARNING is emitted with details as to why it failed, the most common cause being the operating system is not supported.
-
-==== Parameters ====
-
-**title**
-
-==== Description ====
-
-  string cli_get_process_title()
-
-''cli_get_process_title()'' returns a string containing the title that was set using ''cli_set_process_title''. 
-
-Note that this returned string may not match what ps/top would show; for example on FreeBSD in ps, you would see the process name as "php: title (php)" where //**title**// is what was passed to ''cli_set_process_title''. 
-
-If the method fails for any reason, a WARNING is emitted and NULL is returned; the most common cause of failure being the operating system is not supported.
-
-==== Parameters ====
-
-None
-
-===== Patch =====
-
-The pull request (including tests) based on PHP-5.5 is [[https://github.com/php/php-src/pull/280|here]].
 ===== Voting =====
 
 The PHP language is not changed, so a 50% + 1 majority is required.
 
-Voting ends March 4th, 2013.
-
-<doodle title="Accept modifying CLI process title in PHP?" auth="user" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
 ===== Changelog =====
 
   * 1.0 (2012-02-06): Initial draft
-  * 1.1 (2012-02-07): Updated the introduction with more justification for why this is needed
-  * 1.2 (2012-02-21): Added in method specifications
-  * 1.3 (2012-02-26): Changed the Windows implementation from Events to SetConsoleTitle
