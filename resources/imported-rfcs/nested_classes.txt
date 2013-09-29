@@ -1,9 +1,9 @@
 
 ====== PHP RFC: Nested Classes ======
-  * Version: 0.2
+  * Version: 0.1
   * Date: 2013-09-29
   * Author: Joe Watkins, krakjoe@php.net
-  * Status: Withdrawn
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/nested_classes
 
 ===== Introduction =====
@@ -12,284 +12,57 @@ Following on from anonymous classes, this RFC proposes we support nested classes
 
 ===== Proposal =====
 
-A nested class is a class declared in the virtual namespace of another class:
+I propose that we have the simplest version of class nesting that is useful, rather than creating new access checking routines and declaring public/private/protected, we have the following, simple to enforce and understand rule:
 
-<code php>
-class foo {
-    class bar {
-    
-    }
-}
-</code>
+   * A nested class is only directly available to the class that declares it.
+   
+This makes nested classes implicitly private; which is the best use case of a nested class anyway.
 
-''foo\bar'' is a nested class in the virtual namespace of ''foo''. 
-
-A nested class has the ability to declare it's accessibility to other classes in the same way as class members:
-
-<code php>
-class foo {
-    public class bar {
-    
-    }
-}
-</code>
-
-The first and second examples given here are therefore the same, by default classes are public, just like class members.
-
-The following describes the functionality of access modifiers for nested classes:
-
-  * public - the class is accessible everywhere
-  * private - the class may be accessed by any class declared in the //outer// class
-  * protected - the class may be access by any class in the same virtual namespace
-
-===== Private Classes =====
-
-The following example shows how to blackbox some of your functionality in a private nested class:
+The following is a //use-case-by-example//, it is clearly not the only use case for nested classes; what it shows is the pattern that nesting would allow, the functionality of the example is completely irrelevant:
 
 <code php>
 <?php
-/*
-* \foo
-* @package \foo
-*/
-class foo 
-{
-    /*
-    * \foo\bar supporting class for foo
-    * @subpackage \foo\bar
-    * @private
-    */
-    private class bar
-    {
-        public function __construct() {
-            /* ... */
-        }
-    }
+namespace io {
+    interface IOBuffer {}
     
-    /* PUBLIC API METHODS HERE */
-    
-    public function __construct() 
-    {
-        $this->bar = new \foo\bar();
-    }
-}
-
-var_dump(new \foo());
-?>
-</code>
-
-In the example ''\foo'' is the public facing API, ''\foo\bar'' contains supporting logic never to be exposed outside of ''\foo'', any class declared in the virtual namespace ''\foo'' will be able to access the ''\foo\bar'' class.
-
-Attempting:
-
-<code php>
-var_dump(new \foo\bar());
-</code>
-
-will result in
-
-<code>
-Fatal error: Cannot access private class foo\bar from an unknown scope in %s on line %d
-</code>
-
-Private classes are very private, the following example demonstrates this:
-
-<code php>
-<?php
-/*
-* foo
-* @package foo
-*/
-class foo 
-{
-    /*
-    * foo\bar supporting class for foo
-    * @subpackage foo\bar
-    * @private
-    */
-    private class bar
-    {
-        
-        /*
-        * \foo\bar\baz supporting class for foo\bar
-        * @subpackage foo\bar\baz
-        * @private
-        */
-        private class baz 
-        {
-            
-            public function __construct() {
+    class FileReader {
+        class ZipFileReader {
+            class Buffer implements IOBuffer {
                 
-            }    
+            }
+        }
+        
+        class GzFileReader {
+            class Buffer implements IOBuffer {
+                
+            }
         }
         
         public function __construct() {
-            $this->baz = new foo\bar\baz();
+            /* no this is private */
+            new FileReader\ZipFileReader\Buffer();
         }
-    }
-    
-    /* PUBLIC API METHODS HERE */
-    
-    public function __construct() 
-    {
-        $this->bar = new \foo\bar();
-        $this->baz = new \foo\bar\baz(); /* line 39 */
     }
 }
 
-new \foo();
+namespace {
+    var_dump(new io\FileReader());
+}
 ?>
 </code>
 
-Output:
+The example above will output:
 
-<code>
-Fatal error: Cannot access private class foo\bar\baz from foo in %s on line 39
-</code>
+''Fatal error: Cannot use private class io\FileReader\ZipFileReader\Buffer from io\FileReader in /usr/src/php-src/nest.php on line 20''
 
-===== Protecting bits of your Privates =====
+The public API in the example above is io\FileReader, the nested classes are required for FileReader to support multiple different compression types. The compression type classes in turn must define a Buffer object, none of the nested classes are relevant to anything outside of FileReader, therefore it makes sense to nest them and implicitly restrict access to them.
 
-The following example shows how protected and private classes can be used in conjunction to provide versatile encapsulation:
+The above is just an example, but this is the general use case of nested classes, shown best with an example.
 
-<code php>
-<?php
-/*
-* foo
-* @package foo
-*/
-class foo
-{
-    /*
-    * foo\bar supporting class for foo
-    * @subpackage foo\bar
-    * @private
-    */
-    private class bar
-    {
- 
-        /*
-        * \foo\bar\baz supporting class for foo\bar
-        * @subpackage foo\bar\baz
-        * @protected
-        */
-        protected class baz
-        {
- 
-            public function __construct() {
- 
-            }
-        }
- 
-        public function __construct() {
-            $this->baz = new foo\bar\baz();
-        }
-    }
- 
-    /* PUBLIC API METHODS HERE */
- 
-    public function __construct()
-    {
-        $this->bar = new \foo\bar();
-        $this->baz = new \foo\bar\baz();
-    }
-}
+Note that only direct access to a nested class is prohibited by this patch, you can however extend a nested class outside of the scope it was nested in.
 
-var_dump(new \foo());
-</code>
+Before you make up your mind, look at the patch, as I mentioned this is the **simplest** version of nesting that is useful, the patch is very simple indeed.
 
-Output:
-
-<code>
-object(foo)#1 (2) {
-  ["bar"]=>
-  object(foo\bar)#2 (1) {
-    ["baz"]=>
-    object(foo\bar\baz)#3 (0) {
-    }
-  }
-  ["baz"]=>
-  object(foo\bar\baz)#4 (0) {
-  }
-}
-</code>
-
-The protected class ''\foo\bar\baz'' can now be used in ''\foo'', for example:
-
-<code php>
-<?php
-/*
-* foo
-* @package foo
-*/
-class foo
-{
-    /*
-    * foo\bar supporting class for foo
-    * @subpackage foo\bar
-    * @private
-    */
-    private class bar
-    {
- 
-        /*
-        * \foo\bar\baz supporting class for foo\bar
-        * @subpackage foo\bar\baz
-        * @protected
-        */
-        protected class baz
-        {
- 
-            public function __construct() {
- 
-            }
-        }
- 
-        public function __construct() {
-            $this->baz = new foo\bar\baz();
-        }
-    }
-    
-    /*
-    * \foo\qux supporting class for foo
-    */
-    private class qux extends foo\bar\baz
-    {
-        public function __construct() {
-            
-        }
-    }
- 
-    /* PUBLIC API METHODS HERE */
- 
-    public function __construct()
-    {
-        $this->bar = new \foo\bar();
-        $this->baz = new \foo\bar\baz();
-        $this->qux = new \foo\qux();
-    }
-}
- 
-var_dump(new \foo());
-</code>
-
-Output:
-
-<code>
-object(foo)#1 (3) {
-  ["bar"]=>
-  object(foo\bar)#2 (1) {
-    ["baz"]=>
-    object(foo\bar\baz)#3 (0) {
-    }
-  }
-  ["baz"]=>
-  object(foo\bar\baz)#4 (0) {
-  }
-  ["qux"]=>
-  object(foo\qux)#5 (0) {
-  }
-}
-</code>
 ===== Backward Incompatible Changes =====
 
 A single test that was defined in Zend/tests to check that an error is emitted when you declare a nested class; in reality, nothing core is broken.
@@ -308,11 +81,11 @@ Existing libraries that work directly with zend_class_entry structures will need
 
 Such an update should not cause any real inconvenience.
 
-Reflection requires patching to be able to report information about outer classes and access levels.
-
 ===== Open Issues =====
 
-Access to private statics members in outer classes (access to methods requires some adjustment too).
+Is this the right route to take, should we consider it at all, should we pursue more complex support of nested classes.
+
+By more complex I mean; the use and enforcement of private/protected/public, where those keywords have the definition currently used for those keywords (but not yet applied to classes in any case).
 
 ===== Proposed Voting Choices =====
 
@@ -320,7 +93,7 @@ We are not there yet ...
 
 ===== Implementation =====
 
-[[https://github.com/krakjoe/php-src/compare/anon_class_objects...nesting_complex
+[[https://github.com/krakjoe/php-src/compare/anon_class_objects...nesting
 ]]
 
 ===== References =====
