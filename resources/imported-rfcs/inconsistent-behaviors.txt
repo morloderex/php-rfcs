@@ -3,9 +3,9 @@
   * Version: 0.1
   * Date: 2014-01-08
   * Author: Yasuo Ohgaki <yohgaki@php.net>
-  * Status: Inactive
+  * Status: Draft (or Under Discussion or Accepted or Declined)
   * First Published at: http://wiki.php.net/rfc/comparison_inconsistency
-  * Renamed to: https://wiki.php.net/rfc/inconsistent-behaviors
+  * Renamed to: https://wiki.php.net/rfc/inconsiste-behaviors
 
 This RFC is to discuss comparison and conversion inconsistencies in PHP. 
 
@@ -24,19 +24,6 @@ Purpose of this RFC is fix inconsistency where it's feasible, otherwise document
 ==== Conversion/comparison ====
 
 Type juggling only works for INTEGER or HEX like strings.
-
-Most problematic is HEX like strings being auto-coerced during
-comparison, but using //different rules// from manual casting. That
-is, ( 0x0A == "0x0A" ) is not treated as ( 0x0A == (int)"0x0A" ),
-although "0x0A" //is// translated to a number.
-
-This despite http://us2.php.net/manual/en/language.operators.comparison.php, which
-states clearly that for number-string comparison, we "Translate
-strings and resources to numbers." While it is feasible that some
-string patterns cannot be "translated" (OCTAL and BINARY) at all, once
-a "translation" is attempted, it should follow the same rules as (int)
-casting for the same string. It is hard to view it is anything but a
-bug that it does not.
 
 === HEX ===
 Code
@@ -170,58 +157,6 @@ PHP converts "integer like string to integer".
 
 https://bugs.php.net/bug.php?id=66211
 
-Not only is this not a bug, it isn't even exceptional behavior on the
-modern web. Users who find this behavior surprising are likely
-inexperienced with MySQL -- clearly PHP's partner in server-side
-ubiquity as part of the dominant *AMP stack -- which has the exact
-same rules for auto-coercion of "numeroalphabetic" strings in a
-comparison context. 
-
-In MySQL (all supported versions):
-
-<code sql>
-SELECT CASE WHEN '-45herearesomeletters' = -45 THEN 'true' ELSE 'false' END
-</code>
-
-prints 'true'
-
-There are other popular languages that follow the same
-casting/coercion rule, though they do not automatically perform the
-coercion during comparison. For example, JavaScript
-parseInt('-45herearesomeletters') results in the integer -45. In
-SQLite, the ubiquitous embedded SQL database, also CAST(
-'-45herearesomeletters' AS SIGNED ) produces the integer -45.
-
-The SQLite documentation explains the logic well: 
-
-> When casting a TEXT value to INTEGER, the longest possible prefix of
-> the value that can be interpreted as an integer number is extracted
-> from the TEXT value and the remainder ignored. Any leading spaces in
-> the TEXT value when converting from TEXT to INTEGER are ignored. If
-> there is no prefix that can be interpreted as an integer number, the
-> result of the conversion is 0. (http://www.sqlite.org/lang_expr.html#castexpr)
-
-And this behavior is not considered particularly "distinctive". (http://sqlite.org/different.html)
-
-Since the ubiquity of MySQL has been used to support the expectations
-users should have of PHP, it's fair to note Oracle, SQL Server, and
-PostgreSQL will not allow the above comparison to be performed: the
-statement produces a fatal error. It's a runtime casting error: these
-languages do not prohibit comparing values of different datatypes, as
-long as the engine can cast the runtime contents of the value. Yet
-such implementations, arguably, violate the "least astonishment"
-concept, since a errant letter modifier like '1A' will cause a fatal
-error where the expectation might be to either have a '1A' compare
-equal to 1 (as in MySQL) or fail gracefully (as in SQLite). In this
-respect, the SQLite behavior is more balanced than that of
-Oracle/MSSQL/PGSQL, and PHP and MySQL's behavior is graceful,
-generous, and reasonable.
-
-With PHP and MySQL agreeing on this behavior, it is clear that
-automatically coercing a "numeroalphabetic" string (for want of a
-better term) to a number via truncation is common practice on the web,
-even if it is news to the inexperienced user.
-
 ==== String decrements ====
 
 String decrements is inconsistent
@@ -280,60 +215,27 @@ https://bugs.php.net/bug.php?id=66173
 
 ===== Function/Method =====
 
-==== assert ====
-
-assert() does not accept closure while it accepts functions.
-
-<code>
-php > function f() {return FALSE;}
-php > assert(f());
-
-Warning: assert(): Assertion failed in php shell code on line 1
-php > assert(function() {return FALSE;});
-</code>
-
-https://wiki.php.net/rfc/expectations
-
-==== base_convert ====
-
-https://wiki.php.net/rfc/base-convert
-
-
-
-==== filter_var ====
-
-https://bugs.php.net/bug.php?id=66682
-
-<code php>
-var_dump(filter_var('01', FILTER_VALIDATE_INT));
-var_dump(filter_var('01', FILTER_VALIDATE_FLOAT));
-</code>
-
-<code>
-bool(false)
-double(1)
-</code>
-
-
 ==== is_numeric ====
 
 https://bugs.php.net/bug.php?id=66399
 
 
+==== base_convert ====
 
-==== min ====
+https://wiki.php.net/rfc/base-convert
+
+==== assert ====
+
+assert() does not accept closure while it accepts functions.
+
+https://wiki.php.net/rfc/expectations
+
+
+==== min() function ====
 
 https://bugs.php.net/bug.php?id=53104
 
 This is not a bug. If one of operand is BOOL(or NULL), both operands are converted to BOOL and evaluated as BOOL. It may be good idea that document this behavior in min() manual.
-
-**Status**
-Documented.
-
-http://jp2.php.net/min
-
-
-
 
 ==== Return value of wrong internal function/method parameters ====
 
