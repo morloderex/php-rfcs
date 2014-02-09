@@ -1,15 +1,15 @@
 
 ====== PHP RFC: 64 bit platform improvements for string length and integer in zval ======
-  * Version: 2.3
-  * Date: 2014-05-06
+  * Version: 2.1
+  * Date: 2014-02-09
   * Authors: Anatol Belski <ab@php.net>, Matt Ficken <mattficken@php.net>, Stephen A. Zarkos <szarkos@php.net>
-  * Status: Accepted
+  * Status: Draft
   * First published at: https://wiki.php.net/rfc/size_t_and_int64
 
 
 ===== Introduction =====
 
-Current PHP //zval// datatype implementation uses //long// datatype to handle signed integer and //int// datatype to handle string length. The most 64 bit capable platforms PHP is used on are **LP64** (Linux/most Unix-like), **LLP64** (Windows), **ILP64** (SPARC64). The data model used in PHP for the relevant datatypes on those platforms looks as follows
+Current PHP //zval// datatype implementation uses //long// datatype to handle signed integer and //int// datatype to handle string length. The most 64 bit capable platforms PHP is used on are **LP64** (Linux/most Unix-like), **LLP64** (Windows), **ILP64** (SPARC64). The data model used for the relevant datatypes on those platforms looks as follows
 
 ^  ^ string size ^ signed integer ^
 ^ Platform ^ //int// ^ //long// ^
@@ -45,7 +45,7 @@ For the consistent LFS support, a set of portable datatypes and macros was inven
 
 For consistent 64 bit numeric hash keys support, the appropriate 64 bit //unsigned// was integrated.
 
-The usage of //long// datatype continues on 32 bit platforms. The only change there is the usage of //size_t// for the string length (which is effectively a 32 bit //unsigned//).
+The usage of //long// datatype continues on 32 bit platforms, the only change there is the usage of //unsigned// for the string length.
 
 No further configure options are needed, the platform and compiler will be automatically recognized and an appropriate set of datatypes and macros will be activated.
 \\
@@ -80,17 +80,17 @@ No further configure options are needed, the platform and compiler will be autom
 ^ function(s) ^ Alias ^ Comment ^ 
 | snprintf with "%ld" or "%lld", _ltoa_s, _i64toa_s | ZEND_ITOA | for use with //zend_int_t//|
 | atol, atoll, _atoi64 | ZEND_ATOI | for use with //zend_int_t// |
-| strtol, strtoll, _strtoi64 | ZEND_STRTOI| for use with //zend_int_t// |
-| strtoul, strtoull, _strtoui64 | ZEND_STRTOUI|for use with //zend_int_t// |
+| strtol, strtoll, _strtoi64 | ZEND_STRTOL| for use with //zend_int_t// |
+| strtoul, strtoull, _strtoui64 | ZEND_STRTOUL|for use with //zend_int_t// |
 | abs, llabs, _abs64 | ZEND_ABS |for use with //zend_int_t// |
 | - | ZEND_INT_MAX | Aliased with PHP_INT_MAX in php.h, replaces LONG_MAX where appropriate |
-| - | ZEND_INT_MIN | Aliased with PHP_INT_MIN in php.h, replaces LONG_MIN where appropriate |
+| - | ZEND_INT_MIN | Aliased with PHP_INT_IN in php.h, replaces LONG_MIN where appropriate |
 | - | ZEND_UINT_MAX | ULONG_MAX |
 | - | SIZEOF_ZEND_INT | Replaces SIZEOF_ZEND_LONG where appropriate | 
 | - | ZEND_SIZE_MAX | Max value of //zend_size_t// |
 \\
 
-==== Semantical macro renamings ====
+==== Semantical macro renamings (Vote 2)====
 
 ^ Old ^ New ^ Comment ^
 | Z_STRLEN | Z_STRSIZE | as well the whole Z_STRLEN_* family |
@@ -106,9 +106,12 @@ No further configure options are needed, the platform and compiler will be autom
 
 Generally speaking, every occurence mentioning "long" in macros or function names should be replaced with a corresponding neutral keyword, suggested "int", in further like "lval" with "ival", etc.
 
+**NOTE**: the macro renamings change is up to the vote (Vote 2). Depending on the vote results, the macro renamings can be reverted and will become a topic of the later cleanup RFC.
+
+
 \\
 
-==== Accepting values with zend_parse_parameters() ====
+==== Accepting values with zend_parse_parameters() (Vote 3) ====
 
 ^ Old ^ New ^ Comment ^
 | "s" | "S" | accept string argument, the length has to be declared as //php_size_t// (or //zend_size_t//) |
@@ -116,12 +119,7 @@ Generally speaking, every occurence mentioning "long" in macros or function name
 | "l" | "i" | to accept integer argument, the internal var has to be declared as //php_int_t// (inside PHP) or //zend_int_t// (inside Zend) |
 | "L" | "I" | to accept integer argument with range check, the internal var has to be declared as //php_int_t// (inside PHP) or //zend_int_t// (inside Zend)|
 
-\\
-
-=== Clang PHP checker ===
-
-Johannes Schlüter did a great work on developing a [[https://github.com/johannes/clang-php-checker | clang plugin]] allowing static analyze of the zpp calls. Steps was undertaken to make it [[http://windows.php.net/downloads/snaps/ostc/clang_checker | available on windows]] as well.
-
+**NOTE**: please take in account the voting option for retaining compatibility with old specs (Vote 3). Should the availability of the older specs be voted positive, the patch will be extended with them as aliases. The actual removal will be then the subject of the later cleanup RFC.
 \\
 
 ==== spprintf formats ====
@@ -132,7 +130,7 @@ New spprintf modifier 'p' was implemented to platform independently output //php
 
 ^ Format spec ^ Macros ^ Comment ^ 
 | %I64d, "%" PRId64, %ld | ZEND_INT_FMT | for use with //zend_int_t// |
-| %I64u, "%" PRIu64, %lu | ZEND_UINT_FMT | for use with //zend_uint_t// |
+| %I64u, %lu | ZEND_UINT_FMT | for use with //zend_uint_t// |
 
 This modifier is of course available in all the spprintf/snprintf derivatives. Any of the introduced new datatypes can be used with the appropriate format spec.
 
@@ -145,12 +143,15 @@ This modifier is of course available in all the spprintf/snprintf derivatives. A
   * code working with hashes and arrays has to use //php_uint_t//
   * code working with filesystem objects has to use appropriate portable macros and datatypes
   * code working with string lengths has to predominatly use php_size_t
+
+**NOTE** the items below are to be considered in the vote (Vote 2 and 3), depending on it the patch might change. The essential part about the usage of new datatypes (Vote 1) will remain unaffected, the votes 2 and 3 are merely about the semantic changes.
+ 
   * 'l', 'L', 's', 'p' parameter formats aren't available anymore
   * Z_STRLEN*, *LONG*, etc. older macros aren't available anymore
 
 ===== Proposed PHP Version =====
 
-PHP6 (or whatever next major is called)
+PHP 5.6
 
 
 ===== Impacts =====
@@ -169,11 +170,7 @@ Some dead SAPIs are present in the core. They was not ported. A decision based o
 
 It has to do with squeezing anything possible from the 64 bit platforms, for maximal PHP benefit. No real features are going to be changed, removed or added to the PHP language.
 
-===== Performance =====
-
-Performance test done on the base of master and str_size_and_int64 can be found here [[http://windows.php.net/downloads/snaps/ostc/pftt/perf/results-20140411-masterr6c2f7bc-str_size_and_int64raa0c920.html]]. There is no performance difference between two (between 0-2%).
-
-/*===== Some performance comparsion =====
+===== Some performance comparsion =====
 
 
 ^ PHP Version                   ^ Wordpress            ^ Drupal	           ^ Joomla ^
@@ -190,7 +187,7 @@ Performance test done on the base of master and str_size_and_int64 can be found 
 The numbers here are the test scores one already might have seen in the other [[http://windows.php.net/downloads/snaps/ostc/pftt/perf/ | performance tests]].\\
 \\
 <nowiki>*, **</nowiki> Some issues with the x64 versions of 5.5.8 and str_size_and_int64 when testing with opcache enabled. However issues of this kind are well known on windows (for instance [[https://bugs.php.net/bug.php?id=64926 | #64926]]) and are due to some unluckily choosen memory address. So the cause persists in the mainstream and is not because of this patch.
-\\*/
+\\
 
 ===== Migration path for PECL extensions =====
 
@@ -213,7 +210,7 @@ The numbers here are the test scores one already might have seen in the other [[
 <code c>
 	php_int_t i0;
 
-	if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "i", &i0) == FAILURE) {
+	if(zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "i"), &i0) == FAILURE) {
 		return;
 	}
 
@@ -287,26 +284,37 @@ char *dup_substr(zval *s, zval *i)
 
 ===== Vote =====
 
+The Vote 1 is the main vote for this patch. The both Votes 2 and 3 are merely to decide about the semantical replacements choosen for the patch. Should the Votes 2 and 3 result in reverting of that semantical changes, the essential patch part about the 64 bit support will not be hurt. Fixing the macro names or zpp specs is only the naming issue.
 
-<doodle title="Accept this RFC for PHP6 (or whatever next major is called)" auth="user" voteType="single" closed="true">
+The vote begins Monday, 27 January 2014, 21:30 CET and ends Monday, 03 February 2014, 21:30 CET.
+
+==== Vote 1 ====
+
+<doodle 
+title="Merge this RFC into PHP-5.6 having regard to Vote 2 and 3" auth="ab" voteType="single" closed="true">
    * Yes
    * No
-</doodle>
-\\
-<doodle title="Merge strategy" auth="user" voteType="multi" closed="true">
-   * after the vote, master
-   * phpng
-</doodle>
-\\
-The RFC is considered approved with 50%+1 acceptance.
-\\
-The vote starts on May 13th 2014 and ends <del>on May 20th 2014</del> **due to the issues with the mailing lists, the vote period is extended till May 26th 2014**.
+</doodle>\\
 
+==== Vote 2 ====
+
+<doodle 
+title="Keep the old macro names for LONG vs. INT, STRLEN vs. STRSIZE, etc." auth="ab" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>\\
+
+==== Vote 3 ====
+
+<doodle 
+title="Keep zpp specs l, L, s, p as aliases to i, I, S, P" auth="ab" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>\\
 
 ===== Patches and Tests =====
 
-[[http://git.php.net/?p=php-src.git;a=shortlog;h=refs/heads/str_size_and_int64 | Feature branch]]\\
-[[http://git.php.net/?p=php-src.git;a=shortlog;h=refs/heads/str_size_and_int64_56_backport | Backport branch of PHP 5.6]] (for comparisons only)\\
+[[http://git.php.net/?p=php-src.git;a=shortlog;h=refs/heads/str_size_and_int64 | Feature branch]]\\ 
 [[http://windows.php.net/downloads/snaps/str_size_and_int64/ | Windows builds]]\\
 [[http://131.107.220.66/PFTT-Results/STR_SIZE_AND_INT64/ | Test reports]]\\
 
@@ -317,7 +325,6 @@ The vote starts on May 13th 2014 and ends <del>on May 20th 2014</del> **due to t
 \\
 [[http://grokbase.com/t/php/php-internals/135z59f0kz/5-next-integer-and-string-type-modifications | Initial discussion brought up by Anthony Ferrara]]\\
 [[http://grokbase.com/p/php/php-internals/137354x7hf/string-size-refactor-progress| Discussion after implementation start]]\\
-[[http://grokbase.com/t/php/php-internals/141a4gns13/rfc-64-bit-platform-improvements-for-string-length-and-integer | Discussions of the previous RFC version]]\\
 
 ===== Implementation =====
 
