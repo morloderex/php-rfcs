@@ -2,7 +2,7 @@
   * Version: 0.9
   * Date: 2014-05-23
   * Author: Dmitry Stogov <dmitry@zend.com>, Bob Weinand <bobwei9@hotmail.com>
-  * Status: Implemented (PHP 7.0)
+  * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/fast_zpp
 
 ===== Introduction =====
@@ -15,8 +15,6 @@ For some really simple function like is_string() or ord() the overhead of zend_p
 
 ===== Proposal =====
 We propose an additional fast API for parameter parsing, that should be used for the most useful functions. The API is based on C macros that lead to inlining of optimized code directly into the body of internal function.
-
-**We don't propose to remove the existing API, and would suggest to use fast API only for most often used functions to get performance boost.**
 
 I'll explain API on the following example:
 
@@ -37,13 +35,13 @@ ZEND_PARSE_PARAMETERS_END();
 
 The first code fragment is just taken from PHP_FUNCTION(array_slice), the second is its replacement using new API. The code is actually self explainable.
 
-ZEND_PARSE_PARAMETERS_START() takes two arguments minimal and maximal parameters count.
+ZEND_PARSE_PARAMETERS_START() takes two arguments minimal and maximal parameters count. (In general, it's possible to avoid these arguments, but not for free. I'll explain it separate "Simpler Variation" section).
 
 Z_PARAM_ARRAY() - takes the next argument as array, Z_PARAM_LONG - as long, Z_PARAM_OPTIONAL - tells that the remaining arguments are optional.
 
 The new API covers all possibilities of the existing API. The following table shows the correspondence between old specifiers and new macros.
 
-^ specifier ^ Fast ZPP API macro                ^ args ^
+^ specifier ^ Fast ZPP API macro                ^^
 | ''|''     | Z_PARAM_OPTIONAL                  ||                 
 | a         | Z_PARAM_ARRAY(dest)               | dest - zval* |
 | A         | Z_PARAM_ARRAY_OR_OBJECT(dest)     | dest - zval* |
@@ -68,40 +66,51 @@ The new API covers all possibilities of the existing API. The following table sh
 | *         | Z_PARAM_VARIADIC('*', dest, num)  | dest - zval*, num int |
 
 
-The effect of **!** and reference modifiers may be achieved using extended version of the same macros e.g. Z_PARAM_ZVAL_EX(dest, check_null, separate).
+The effect of **!** and **/** modifiers may be achieved using extended version of the same macros e.g. Z_PARAM_ZVAL(dest, check_null, separate).
+
+==== Simpler Variation ====
+
+It's possible not to specify minimal and maximal arguments in  ZEND_PARSE_PARAMETERS_START() macro, but it leads to some small performance degradation and possible inconsistent error messages when few constraint are broken at same time. For example the following code ''strlen(array(), 1)'' would emit different warning:
+
+''Warning: strlen() expects parameter 1 to be string''
+
+however the original PHP would emit
+
+''Warning: strlen() expects exactly 1 parameter, 2 given''
+
+This is not a common case. Actually, it breaks just 2 PHPT tests.
+So the penalties may be accepted in cost of usability.
+On the other hand these number need to be written just once...
 
 ==== Performance Evaluation ====
 
-The following numbers collected for 100 and 1000 requests to wordpress home page.
+The following numers collected for 100 and 1000 requests to wordpress home page.
 
 ^                          ^ # of CPU instructions ^ time [sec] ^
 | phpng                    |          5,132,181,672|       18.90|
 | phpng + fast_zpp         |          4,901,907,204|       18.40|
+| phpng + simple variation |          4,906,486,678|       18.40|
 
 
 So the proposal provides 4.5% improvement in terms of CPU instructions and 2.5% in terms of time.
 
-The effect of code size increase is negligible. Just ~20KB for ~70 function (that's below 0.1%) 
+The effect of code size increase is negligible - Jist ~20KB for ~70 function (that's about 0.1%) 
 
 ===== Backward Incompatible Changes =====
 The new API provides exactly the same behavior.  Also, we don't propose to remove the old API. So there must not be any compatibility problems.
 
 ===== Proposed PHP Version(s) =====
-This proposal is targeted to php-7
+This proposal is targeted to phpng
 
-===== Vote =====
+===== Proposed Voting Choices =====
 
-State whether this project requires 50%+1 majority (see [[voting]]). The vote is a straight Yes/No vote. 
+  * no
+  * yes
+  * yes for simpler variation
 
-<doodle title="Should PHP 7 have Fast Parameter Parsing API?" auth="dmitry" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
- The vote concluded on January 27th. 
+State whether this project requires 50%+1 majority (see [[voting]])
 
 ===== Patches and Tests =====
 
   * Original Proposal: https://gist.github.com/dstogov/1131691470a4c37540a6
-
-The patch is already included into PHP-7 and wrapped with ifdef/ifndef FAST_ZPP.
+  * Simpler Variation: https://gist.github.com/dstogov/843a3df3149761a59f21
