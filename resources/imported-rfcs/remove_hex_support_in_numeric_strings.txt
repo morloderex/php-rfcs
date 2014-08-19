@@ -1,15 +1,16 @@
 ====== PHP RFC: Remove hex support in numeric strings ======
   * Date: 2014-08-19
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Implemented (in PHP 7)
+  * Status: Draft
+  * Target version: PHP 7
 
 ===== Introduction =====
 
-This RFC proposes to remove support for hexadecimal numers in ''is_numeric_string''. Support for hex in this function is inconsistent with behavior in other places - in particular PHP does not detect hex numbers when performing integer or float casts.
+This RFC proposes to remove support for hexadecimal numers in ''is_numeric_string''. Support for hex in this function is inconsistent with normal PHP behavior - in particular PHP does not detect hex numbers when performing integer casts.
 
 PHP internally has two primary methods from converting strings into numbers:
 
-The first, and most commonly used, are direct casts to the integer or float types (''convert_to_long'' and ''convert_to_double''). These casts do **NOT** support hexadecimal numbers:
+The first, and most commonly used, are direct casts to the integer or float types (''convert_to_long'' and ''convert_to_double''). These casts to **NOT** support hexadecimal decimals:
 
 <code php>
 var_dump((int)   "0x123"); // int(0)
@@ -18,9 +19,9 @@ var_dump((float) "0x123"); // float(0)
 
 The second possibility is the ''is_numeric_string'' function, which will convert a string to either an integer or a float, whichever is more appropriate. This function //does// support hexadecimal numbers.
 
-This leads to a discrepancy in behavior between type casts and behavior when ''is_numeric_string'' is used. Two examples of how this manifests:
+This leads to a discrepancy in behavior between usual numeric string handling and behavior when ''is_numeric_string'' is used. Two examples of how this manifests:
 
-=== is_numeric() function ===
+=== is_numeric function ===
 
 <code php>
 $str = '0x123';
@@ -28,7 +29,7 @@ if (!is_numeric($str)) {
     throw new Exception('Not a number');
 }
 
-// Exception not thrown, instead wrong result is generated here:
+// Exception not thrown, instead wrong result is taken here:
 $n = (int) $str; // 0
 </code>
 
@@ -37,39 +38,15 @@ $n = (int) $str; // 0
 <code php>
 var_dump('0x123' == '291'); // TRUE
 
-var_dump((int) '0x123' == (int) '291'); // FALSE
+var_dump((int) '0x123' == (int) '291')); // FALSE
 </code>
 
 ===== Proposal =====
 
-This RFC proposes to remove support for hexadecimal numbers in ''is_numeric_string'' to ensure consistent behavior across the language.
-
-An alternative approach would be to add hexadecimal support for integer/double casts instead. However this would also imply that we should support integers of other bases supported by PHP syntax. In particular octal numbers and binary numbers should be detected as well (which ''is_numeric_string'' currently does not accept). However supporting octal numbers is not possible, because handling the string ''%%'0123'%%'' as the number 83 would be highly unexpected for end users of an application.
-
-Generally hexadecimal strings are not often necessary and should be explicitly handled in the cases where they are. A robust way of both validating and parsing hexadecimal strings is given by ''FILTER_VALIDATE_INT'' in conjunction with ''FILTER_FLAG_ALLOW_HEX''.
 
 ===== Backward Incompatible Changes =====
 
-Hexadecimal numbers in strings are no longer supported in the following contexts:
-
-  * The ''is_numeric()'' function.
-  * Operands of the ''=='', ''+'', ''-'', ''*'', ''/'', ''%'', ''**'', ''++'' and ''%%--%%'' operators.
-  * Arguments of internal functions using ''l'', ''L'' or ''d'' type specifiers or the ''convert_scalar_to_number'' function.
-  * Probably some other fringe cases.
-
-Hex string arguments to internal functions will throw the customary "non well formed numeric string" notice.
 
 ===== Patch =====
 
-Patch available as PR: https://github.com/php/php-src/pull/780
-
 ===== Vote =====
-
-As this is a language change a 2/3 majority is required.
-
-The vote started on 2015-01-17 and ends on 2015-01-27.
-
-<doodle title="Remove hex support in numeric strings?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
