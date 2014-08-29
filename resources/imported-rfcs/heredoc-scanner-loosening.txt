@@ -1,35 +1,24 @@
-====== PHP RFC: Loosening heredoc/nowdoc scanner ======
+====== PHP RFC: Your Title Here ======
   * Version: 0.9
   * Date: 2014-08-29
   * Author: Tjerk Meesters, datibbaw@php.net
-  * Status: Obsolete
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/heredoc-scanner-loosening
 
 
 ===== Introduction =====
-Currently the rules for ending a heredoc or nowdoc are quite restrictive, requiring a newline after the closing identifier; this makes it more awkward to combine multiple quotations, such as in array declarations or with other operators. The [[http://php.net/manual/en/language.types.string.php#language.types.string.syntax.heredoc|manual entry]] for heredocs has a big pink box to explain those intricate details.
-
-For instance, this is how you would declare an array comprising a heredoc and regular string:
-
-<code php>
-$strings = [<<<EOS
-hello
-EOS
-, ' world'];
-</code>
-
-The comma that you would normally put on the same line as the previous element must now be put on the next line.
-
-Currently, this restriction also causes a parse error with code such as this:
-
-<code php>
-return <<<EOS
-Foo!
-EOS; // <-- file ends here
-</code>
+Currently the rules for ending a heredoc or nowdoc are quite restrictive, requiring a newline after the closing identifier; this proposal aims to loosen or altogether remove that restriction.
 
 ===== Proposal =====
-This proposal aims to lift the current newline restriction and make it less awkward to use heredocs and nowdocs within constructs, such as array declarations:
+A fix for the following scenario:
+
+<code php>
+eval("return <<<EOS\nfoo\nEOS;");
+</code>
+
+//The above just illustrates the issue and doesn't advocate using eval().//
+
+Allow more liberal use in array constructs:
 
 <code php>
 $strings = [<<<EOS
@@ -39,7 +28,7 @@ b
 EOS];
 </code>
 
-Or with other operators (e.g. concatenation):
+Or class constants:
 
 <code php>
 class Test
@@ -52,10 +41,8 @@ EOS;
 }
 </code>
 
-The proposal suggests two distinct ways in which this can be achieved:
-
 ==== Loosened restrictions ====
-Ends a quotation when the closing identifier is followed by something that can't be part of an identifier.
+Ends a quotation as soon as a newline is encountered as well as a few extra characters, i.e. a space, tab, period (concat), comma, ending square bracket (arrays) or null byte (end of file).
 
 ==== Removed restrictions ====
 Ends a quotation as soon as the closing identifier is encountered.
@@ -64,7 +51,7 @@ Ends a quotation as soon as the closing identifier is encountered.
 Depending on whether we choose to loosen the restrictions (defined above) or completely remove it, the following behaviour will be changed:
 
 ==== Loosened restrictions ====
-The following test code (taken from the aptly called "torture the T_END_HEREDOC rules") will not work as expected:
+The following test code (taken from the aptly called "torture the T_END_HEREDOC rules) will not work as expected:
 
 <code php>
 print <<<ENDOFHEREDOC
@@ -79,10 +66,8 @@ ENDOFHEREDOC;
 
 It emits "ENDOFHEREDOC    ;\nENDOFHEREDOC;" and then stop scanning, leading to a parse error on the next line.
 
-This is a rather extreme example of trying to break the scanner; while not entirely impossible, it's most likely not based on anything one would encounter in the wild.
-
 ==== Removed restrictions ====
-Removing the restrictions altogether will cause issues in code such as this:
+Removing the restrictions altogether will cause issues like this:
 
 <code php>
 $s = <<<EOS
@@ -92,8 +77,6 @@ EOS;
 </code>
 
 It emits "Foo bar" and then stops scanning, leading to a parse error at "BLA".
-
-Although this may seem undesirable behaviour, it should be noted that the developer is in complete control of choosing the name for their enclosures; it's important to choose an enclosure that doesn't occur naturally inside the quotation.
 
 ===== Proposed PHP Version(s) =====
 PHP 7
@@ -106,9 +89,9 @@ It doesn't impact the rules that govern the contents inside the heredoc or nowdo
 Should the heredoc and nowdoc scanner be changed?
 
 Voting choices will be:
-  - No, leave the scanner as it is.
-  - Yes, loosen the newline restriction with characters that can't be part of an identifier.
-  - Yes, remove the newline restriction altogether.
+- No, leave the scanner as it is.
+- Yes, loosen the newline restriction with a selected set of characters.
+- Yes, remove the newline restriction altogether.
 
 This proposal requires a 2/3 majority as it affects the language. 
 
