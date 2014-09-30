@@ -1,7 +1,9 @@
 ====== PHP RFC: Exceptions in the engine (for PHP 7) ======
   * Date: 2014-09-30
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Implemented (in PHP 7.0)
+  * Status: In Draft
+  * Proposed for: PHP 7
+  * Patch: https://github.com/nikic/php-src/compare/engineExceptions7
 
 ===== Introduction =====
 
@@ -10,6 +12,8 @@ This RFC proposes to allow the use of exceptions in the engine and to allow the 
 As an example of this change, consider the following code-snippet:
 
 <code php>
+<?php
+
 function call_method($obj) {
     $obj->method();
 }
@@ -17,13 +21,23 @@ function call_method($obj) {
 call_method(null); // oops!
 </code>
 
-Currently the above code will throw a fatal error ((Since [[rfc:catchable-call-to-member-of-non-object]] it throws a recoverable fatal error instead, so this particular example no longer applies in pre-release builds of PHP)):
+Currently the above code will throw a fatal error:
 
 <code>
 Fatal error: Call to a member function method() on a non-object in /path/file.php on line 4
 </code>
 
-This RFC replaces the fatal error with an ''EngineException''. As such it is now possible to catch this error condition:
+This RFC replaces the fatal error with an ''EngineException''. Unless the exception is caught this will still result in a fatal error:
+
+<code>
+Fatal error: Uncaught exception 'EngineException' with message 'Call to a member function method() on a non-object' in /path/file.php:4
+Stack trace:
+#0 /path/file.php(7): call_method(NULL)
+#1 {main}
+  thrown in /path/file.php on line 4
+</code>
+
+Of course it is also possible to catch this exception:
 
 <code php>
 try {
@@ -35,7 +49,7 @@ try {
 // Exception: Call to a member function method() on a non-object
 </code>
 
-If the exception is not caught, PHP will continue to throw the same fatal error as it currently does.
+Note: This RFC mostly matches the [[rfc:engine_exceptions|previous engine exceptions RFC]], which was originally proposed for inclusion in PHP 5.6.
 
 ===== Motivation =====
 
@@ -53,6 +67,7 @@ E_USER_ERROR
 // Recoverable fatal errors
 E_RECOVERABLE_ERROR
 // Parse error
+
 E_PARSE
 
 // Warnings
@@ -185,10 +200,6 @@ try {
 restore_error_handler();
 </code>
 
-=== Performance ===
-
-The ability to bypass recoverable fatal errors while still continuing execution in the same code path may cause performance issues in some cases. For example it is currently possible to completely ignore argument type hints with an error handler. As such a JIT compiler may not be able to make strong assumptions about the types of type hinted parameters.
-
 ==== Solution: Exceptions ====
 
 Exceptions provide an approach to error handling that does not suffer from the problems of fatal and recoverable fatal errors. In particular exceptions can be gracefully handled, they will invoke ''finally'' blocks and destructors and are easily caught using ''catch'' blocks.
@@ -207,31 +218,10 @@ This proposal introduces two new exception types:
 Additionally the following policy changes are made:
 
   * It is now allowed to use exceptions in the engine.
-  * Existing errors of type ''E_ERROR'', ''E_RECOVERABLE_ERROR'', ''E_PARSE'' or ''E_COMPILE_ERROR'' can be converted to exceptions.
+  * Existing errors of type ''E_ERROR'', ''E_RECOVERABLE_ERROR'' or ''E_PARSE'' can be converted to exceptions.
   * It is discouraged to introduce new errors of type ''E_ERROR'' or ''E_RECOVERABLE_ERROR''. Within limits of technical feasibility the use of exceptions is preferred.
 
-In order to avoid updating many tests the current error messages will be retained if the engine/parse exception is not caught. This may be changed in the future.
-
-The patch attached to this RFC already converts a large number of fatal and recoverable fatal errors to exceptions. It also converts parse errors to exceptions.
-
-==== Hierarchy ====
-
-There is some concern that by extending ''EngineException'' directly from ''Exception'', previously fatal errors may be accidentally caught by existing ''catch(Exception $e)'' blocks (aka Pokemon exception handling). To alleviate this concern it is possible to introduce a new ''BaseException'' type with the following inheritance hierarchy:
-
-<code>
-BaseException (abstract)
- +- EngineException
- +- ParseException
- +- Exception
-     +- ErrorException
-     +- RuntimeException
-         +- ...
-     +- ...
-</code>
-
-As such engine/parse exceptions will not be caught by existing ''catch(Exception $e)'' blocks.
-
-Whether such a hierarchy (with a new ''BaseException'' type) should be adopted will be subject to a secondary vote.
+The patch attached to this RFC already converts a large number of fatal and recoverable fatal errors to exceptions. It also converts parse errors to exceptions (there's only one of those).
 
 ===== Potential issues =====
 
@@ -241,36 +231,47 @@ Currently it is possible to silently ignore recoverable fatal errors with a cust
 
 I have never seen this possibility used in practice outside some weird hacks (which use ignored recoverable type constraint errors to implement scalar typehints). In most cases custom error handlers throw an ''ErrorException'', i.e. they emulate the proposed behavior with a different exception type.
 
-==== E_PARSE compatibility ====
+==== catch-all blocks in existing code ====
 
-Currently parse errors generated during ''eval()'' (but not ''require'' etc) are non-fatal. This proposal would make ''eval()'' throw an exception instead, which would require some code adjustments in cases where the developer wishes to gracefully handle ''eval()'' errors.
+As ''EngineException'' extends ''Exception'' it will be caught by catch-blocks of type ''catch (Exception)''. This may cause existing code to inadvertently catch engine exceptions.
 
-As parse errors do not invoke the error handler, handling eval errors is tricky and requires code looking roughly as follows  ((This does not handle all cases, but should give you a rough idea of how eval errors are handled)):
+==== Cluttered error messages ====
 
-<code php>
-set_error_handler(function() { return false; }, 0);
-@$undefinedVariable;
-restore_error_handler();
+Going back to the code-sample from the introduction, this is the fatal error that is currently thrown:
 
-$oldErrorReporting = error_reporting();
-error_reporting($oldErrorReporting & ~E_PARSE);
-$result = eval($code);
-error_reporting($oldErrorReporting);
-
-$error = error_get_last();
-if ($result === false && $error['type'] === E_PARSE) {
-    // Handle $error
-}
+<code>
+Fatal error: Call to a member function method() on a non-object in /path/file.php on line 4
 </code>
 
-After this RFC errors should be handled as follows instead:
+With this RFC the error changes into an uncaught exception:
 
-<code php>
-try {
-    $result = eval($code);
-} catch (\ParseException $exception) {
-    // Handle $exception
-}
+<code>
+Fatal error: Uncaught exception 'EngineException' with message 'Call to a member function method() on a non-object' in /path/file.php:4
+Stack trace:
+#0 /path/file.php(7): call_method(NULL)
+#1 {main}
+  thrown in /path/file.php on line 4
+</code>
+
+The uncaught exception message provides more information, e.g. it includes a stack-trace which is helpful when debugging the error, but it is also rather cluttered. Especially when working on the terminal the long ''Fatal error: Uncaught exception 'EngineException' with message'' prefix pushes the actual message so far to the right that it has to wrap. Things also become quite confusing when the exception message contains quotes itself.
+
+I think it would be nice to make those messages a bit cleaner (for all exceptions). The following adjustment is simple to do and seems more readable to me:
+
+<code>
+Fatal error: Uncaught EngineException: Call to a member function method() on a non-object in /path/file.php on line 4
+Stack trace:
+#0 /path/file.php(7): call_method(NULL)
+#1 {main}
+  thrown in /path/file.php on line 4
+</code>
+
+Additional improvement (like removing the ''Fatal error:'' prefix and the duplicate file/line information) would require special handling (not sure if this is feasible):
+
+<code>
+Uncaught EngineException: Call to a member function method() on a non-object in /path/file.php on line 4
+Stack trace:
+#0 /path/file.php(7): call_method(NULL)
+#1 {main}
 </code>
 
 ==== Not all errors converted ====
@@ -299,39 +300,14 @@ The ''E_ERROR'' portion of this proposal does not break backwards compatibility:
 
 The ''E_RECOVERABLE_ERROR'' part of the proposal may introduce a minor BC break, because it will no longer allow to silently ignore recoverable errors with a custom error handler. As this point is somewhat controversial I'll have a separate voting option for this.
 
-The ''E_PARSE'' part of the proposal may introduce a minor BC break, because ''E_PARSE'' exhibits non-fatal behavior when used with ''eval()''.
+The ''E_PARSE'' part of the proposal may introduce a minor BC break, because ''E_PARSE'' exhibits partially non-fatal behavior when used with ''eval()''.
 
 ===== Patch =====
 
-A patch for this RFC is available at https://github.com/php/php-src/pull/1095.
+A preliminary patch for this RFC is available at https://github.com/nikic/php-src/compare/engineExceptions7.
 
 The patch introduces basic infrastructure for this change, replaces ''E_PARSE'' with ''ParseException'' and a number of ''E_ERROR'' and ''E_RECOVERABLE_ERROR'' with ''EngineException''.
 
-To simplify porting to exceptions it is possible to throw engine exceptions by passing an additional ''E_EXCEPTION'' flag to ''zend_error'' (instead of using ''zend_throw_exception''). To free unfetched operands in the VM the ''FREE_UNFETCHED_OPn'' pseudo-macros are introduced. An example of the necessary change to port a fatal error to an exception:
-
-<code>
-- zend_error_noreturn(E_ERROR, "Cannot pass parameter %d by reference", opline->op2.num);
-+ zend_error(E_EXCEPTION | E_ERROR, "Cannot pass parameter %d by reference", opline->op2.num);
-+ FREE_UNFETCHED_OP1();
-+ HANDLE_EXCEPTION();
-</code>
-
-The current patch continues using "Recoverable fatal error" messages even for errors that are not recoverable anymore in the previous sense of the word. These messages will be adjusted afterwards. (The patch tries to separate important functional changes from cosmetic tweaks.)
+The patch does not yet contain all necessary test updates and is also not yet thoroughly tested.
 
 ===== Vote =====
-
-The primary vote decides if the proposal as outlined in the RFC is accepted and requires a 2/3 majority.
-
-<doodle title="Allow exceptions in the engine and conversion of existing fatals?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-The secondary vote decides whether or not a ''BaseException'' based hierarchy should be introduced, as described in the [[#hierarchy|Hierarchy]] section of the proposal. Whichever option has more votes wins.
-
-<doodle title="Introduce and use BaseException?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-Voting started on 2015-02-23 and ends on 2015-03-08.
