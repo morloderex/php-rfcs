@@ -1,136 +1,82 @@
 ====== PHP RFC: Nullsafe Calls ======
-  * Version: 1.0
-  * Date: 2014-12-09
+  * Version: 0.1
+  * Date: 2014-10-22
   * Author: Josh Watzman (jwatzman@fb.com), Drew Paroski
-  * Status: Obsolete
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/nullsafe_calls
 
-===== Introduction =====
-**The RFC has been returned to draft stage after discussion on internals in order to figure out how to deal with short circuiting. See the "open issues" section below. The rest of the RFC currently stands as originally submitted to internals.**
+This is a suggested template for PHP Request for Comments (RFCs). Change this template to suit your RFC.  Not all RFCs need to be tightly specified.  Not all RFCs need all the sections below.
+Read https://wiki.php.net/rfc/howto carefully!
 
-This RFC proposes a new operator, the "nullsafe" operator ''<nowiki>?-></nowiki>'', which allows safe chaining of method calls. This is useful to easily propagate errors forward to the end of a computation which should fail if any of its sub-computations should fail.
+
+Quoting [[http://news.php.net/php.internals/71525|Rasmus]]:
+
+> PHP is and should remain:
+> 1) a pragmatic web-focused language
+> 2) a loosely typed language
+> 3) a language which caters to the skill-levels and platforms of a wide range of users
+
+Your RFC should move PHP forward following his vision. As [[http://news.php.net/php.internals/66065|said by Zeev Suraski]] "Consider only features which have significant traction to a
+large chunk of our userbase, and not something that could be useful in some
+extremely specialized edge cases [...] Make sure you think about the full context, the huge audience out there, the consequences of  making the learning curve steeper with
+every new feature, and the scope of the goodness that those new features bring."
+
+===== Introduction =====
+The elevator pitch for the RFC. The first paragraph in this section will be slightly larger to give it emphasis; please write a good introduction.
 
 ===== Proposal =====
-A very common pattern is to have some a computation consisting of a series of method calls, any one of which can return null. If any of them do return null, the entire computation should fail. Right now, writing something like this in PHP requires a bunch of boilerplate checks after each call. For example:
+All the features and examples of the proposal.
 
-<PHP>
-function f($o) {
-  $o2 = $o->mayFail1();
-  if ($o2 === null) {
-    return null;
-  }
+To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain hows the proposal brings substantial value to be considered
+for inclusion in one of the world's most popular programming languages.
 
-  $o3 = $o2->mayFail2();
-  if ($o3 === null) {
-    return null;
-  }
-
-  $o4 = $o3->mayFail3();
-  if ($o4 === null) {
-    return null;
-  }
-
-  return $o4->mayFail4();
-}
-</PHP>
-
-This certainly works, but it's a lot of boilerplate for a fairly common pattern, and it's also a lot of explicit checks that the runtime must do. Instead, a new operator is added to the language: ''<nowiki>?-></nowiki>''. Calling ''$obj<nowiki>?-></nowiki>foo(..)'' behaves identically to ''$obj<nowiki>-></nowiki>foo(..)'' if ''$obj'' is not null. If ''$obj'' is null, then it returns null.
-
-This means that calls using this new operator can be chained together. For example, the code above, rewritten with the new operator:
-
-<PHP>
-function f($o) {
-  return $o?->mayFail1()?->mayFail2()?->mayFail3()?->mayFail4();
-}
-</PHP>
-
-==== Short Circuit ====
-If ''$obj'' is null, when ''$obj<nowiki>?-></nowiki>foo(..)'' executes, the arguments will still be evaluated. In other words, ''<nowiki>?-></nowiki>'' does **not** have short circuit semantics when evaluating arguments.
-
-This is done because it parallels what the ''<nowiki>-></nowiki>'' operator does. The arguments are evaluated whether or not the function being called actually consumes them.  Furthermore, ''<nowiki>?-></nowiki>'' is effectively an error suppression/propagation mechanism. This means that its usage should not affect the way arguments are evaluated; doing anything else would be very confusing for the programmer.
-
-It's worth noting that this point has deep implications for the implementation, which must at least begin to actually execute the call opcode, so that arguments can be evaluated. It cannot simply be implemented as a syntactic transform into a ternary or similar!
-
-==== Implications ====
-For the purpose of clarity, some implications of the above definition; all of these stem from consistency between ''<nowiki>-></nowiki>'' and ''<nowiki>?-></nowiki>'', and trying to avoid strange behavioral changes when the left-hand side is or is not null.
-
-  * If ''$obj'' is an object whose class does **not** define a method "foo", then ''$obj<nowiki>?-></nowiki>foo(..)'' will still raise a fatal error.
-  *  If ''$obj'' is anything other than null or object, then ''$obj<nowiki>?-></nowiki>foo(..)'' will still raise a fatal error.
-
-==== Prior Art ====
-  * C#, CoffeeScript, and Groovy all have a "safe navigation operator" which was the original inspiration for this feature.
-  * Haskell has the "maybe monad", which syntactically looks quite different but morally provides a similar mechanism to propagate any failure in a computation forward to the end of the computation.
-  * Hack has already implemented a proposal identical to this one.
+Remember that the RFC contents should be easily reusable in the PHP Documentation.
 
 ===== Backward Incompatible Changes =====
-Due to an implementation detail, this decreases the maximum number of arguments a function can be called with from ''2^32'' to ''2^31'', and adds an error when that limit is reached. (The engine would previously just wrap around, to potentially disastrous consequences.)
-
-This is just a technicality... all of my attempts to actually hit that limit put my machine into swapdeath long before I got close :-P
-
-See also "RFC Impact To Existing Extensions" below.
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
 PHP7.
 
 ===== RFC Impact =====
-==== To Existing Extensions ====
-Extensions have access to an opline's ''extended_value'', and the current implementation re-uses a single bit at the top of it for a new purpose. This is a backwards compatibility break for extensions which read the ''extended_value'' out of the "begin fcall" opcode -- though arguably extensions like RunKit which do this probably shouldn't be anyways ;)
+==== To SAPIs ====
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
-If this impact is deemed too much, there are certainly other implementation options, which I think are less attractive. We could add a new ''OP_DATA'' opcode after the begin fcall, but that seems like dramatic overkill for storing a single bit.
+==== To Existing Extensions ====
+Will existing extensions be affected?
+
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
 
 ==== New Constants ====
-Nothing accessible from outside the internals of the engine.
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
 
 ===== Open Issues =====
 Make sure there are no open issues when the vote starts!
 
-==== Short Circuit ====
-The behavior for (not) short circuiting argued for above is not clearly the right behavior. There are actually at least //three// meaningful possibilities here. I'm currently investigating implementation feasibility in both PHP7 and in HHVM, as well as generally thinking about what the right thing to do is, and will bring the discussion back up on internals once I've got my thoughts together better.
-
-As a quick preview, the three options can be seen as to how to desugar the following code. I'm not going to argue for or against any of them yet, just show what the range of possibilities are. (I also haven't extensively looked at the following examples, they might have errors or just not make sense, I need more time to put this together properly, dumping here for completeness only, please wait for the full revised proposal to internals :))
-
-<PHP>
-$r = $x?->a(f())->b(g());
-</PHP>
-
-=== Option 1: no short circuit ===
-Arguments are evaluated even if we are doing the nullsafe call on null.
-
-<PHP>
-$_tmp1 = f();
-$_tmp2 = g();
-$_tmp3 = $x === null ? null : $x->a($_tmp1);
-$r = $_tmp3->b($_tmp2);
-</PHP>
-
-=== Option 2: one-level short circuit ===
-Arguments are not evaluated if we are doing the nullsafe call on null. The nullsafe behavior only applies to the single function call where the nullsafe operator is used.
-
-<PHP>
-$_tmp1 = $x === null ? null : $x->a(f());
-$r = $_tmp1->b(g());
-</PHP>
-
-=== Option 3: full short circuit ===
-Arguments are not evaluated if we are doing the nullsafe call on null. The nullsafe behavior applies to all calls chained after the nullsafe operator.
-
-<PHP>
-$r = $x === null ? null : $x->a(f())->b(g());
-</PHP>
-
 ===== Unaffected PHP Functionality =====
-This RFC does not change any existing PHP behavior, including the ''<nowiki>-></nowiki>'' operator, the ''??'' operator, the ''@'' operator, or other error suppression mechanisms.
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-The ''<nowiki>?-></nowiki>'' operator is not valid to use for a member access, and will generate an ''E_COMPILE_ERROR'' if this is attempted. Defining such functionality is left to a further RFC.
+This sections details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 ===== Proposed Voting Choices =====
-This is pretty clearly a core language change and so requires 2/3. The vote will be a straight yes/no vote on accepting the new operator.
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+State whether this project requires a 2/3 or 50%+1 majority (see [[voting]])
 
 ===== Patches and Tests =====
-  * php-src: I have a branch at https://github.com/jwatzman/php-src/compare/nullsafe-prototype?expand=1 with a working implementation. Includes tests copied from HHVM's implementation.
-  * PHP spec: not yet, but will do if the RFC is accepted.
-  * PHP docs: import Hack's documentation when they add it: https://github.com/hhvm/hack-hhvm-docs/issues/360 (that task will get completed well before this RFC is voted on, accepted, merged, etc)
+Prototype: https://github.com/jwatzman/php-src/compare/nullsafe-scratch?expand=1
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -139,7 +85,7 @@ After the project is implemented, this section should contain
   - a link to the PHP manual entry for the feature
 
 ===== References =====
-HHVM's implementation for the Hack language is at https://github.com/facebook/hhvm/commit/8fd5a78b02d2d62538e77fcbc927df759c1722f9.
+Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
