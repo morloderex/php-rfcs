@@ -2,89 +2,94 @@
   * Version: 1.0
   * Date: 2014-11-19
   * Author: Anatol Belski, ab@php.net
-  * Status: Accepted
+  * Status: Draft /* (or Under Discussion or Accepted or Declined)*/
+  * First Published at: http://wiki.php.net/rfc/your_rfc_name
+
+This is a suggested template for PHP Request for Comments (RFCs). Change this template to suit your RFC.  Not all RFCs need to be tightly specified.  Not all RFCs need all the sections below.
+Read https://wiki.php.net/rfc/howto carefully!
+
+
+Quoting [[http://news.php.net/php.internals/71525|Rasmus]]:
+
+> PHP is and should remain:
+> 1) a pragmatic web-focused language
+> 2) a loosely typed language
+> 3) a language which caters to the skill-levels and platforms of a wide range of users
+
+Your RFC should move PHP forward following his vision. As [[http://news.php.net/php.internals/66065|said by Zeev Suraski]] "Consider only features which have significant traction to a
+large chunk of our userbase, and not something that could be useful in some
+extremely specialized edge cases [...] Make sure you think about the full context, the huge audience out there, the consequences of  making the learning curve steeper with
+every new feature, and the scope of the goodness that those new features bring."
 
 ===== Introduction =====
-Currently, to access module globals in TS mode, a global resource array is used. That array contains globals from all the threads and per thread globals are identified by the thread key. The thread key is passed to every function requiring access to the globals. Or, it has to be fetched on demand. Consequently
-
-  * many functions have to take an additional argument used only in TS mode, that makes code to be overloaded with TSRMLS_* macros
-  * forgetting to declare/pass a TS parameter wouldn't do any harm in NTS mode (as those are all macros), but may cause build breach in the TS
-  * additionally it might introduce some C89 incompatibility in NTS mode when TSRMLS_FETCH() is used before var declarations
-  * in some cases TS related code has to be explicitly conditioned with preprocessor directives (#ifdef ZTS)
-  * when the thread id isn't passed directly, TSRMLS_FETCH() has to be used, which is slow
-
-This RFC bases on https://wiki.php.net/rfc/tls , however I don't mention it under the "First Published" position. While the key points are the same, the patch and the meaning undergone some changes. Still teh base RFC contains a lot of useful info about cross platform compatibility and various TLS implementations, so I would say it is useful to briefly read through it as well.
+The elevator pitch for the RFC. The first paragraph in this section will be slightly larger to give it emphasis; please write a good introduction.
 
 ===== Proposal =====
-The technique of passing thread id explicitly should be removed where possible. Ideally, one global thread specific variable should be used to hold the thread key (while it's not possible exactly the way on every platform, see the implementation details).
+All the features and examples of the proposal.
 
-The current patch focuses on stability and code quality improvement more than on performance. Whereby the latest tests show that the patched version is at least as fast as the mainstream.
+To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain hows the proposal brings substantial value to be considered
+for inclusion in one of the world's most popular programming languages.
+
+Remember that the RFC contents should be easily reusable in the PHP Documentation.
 
 ===== Backward Incompatible Changes =====
-  * thread id will not be passed explicitly anymore, many signatures have to loose their TSRM_* parts
-  * a few places with "#ifdef ZTS" have to be reworked to fetch the thread key the new way
-
-===== Implementation details =====
-The current implementation is done by the following scheme
-
-  - all the TSRMLS_* macros was made placebo
-  - TSRMG macro which is used to access the globals now can have two variants
-    - using the tsrm_tls_cache() function which fetches the thread specific globals using the underlaying platform API (for example pthreads on linux or windows specific on windows)
-    - using a previously defined pointer which is global within a binary unit and is updated per thread
-  - core was ported to use the static per binary unit cache (the second variant above), the enablement was done step by step
-
-As also described in the base RFC, the main difficulty to make this process cross platform is that not every compiler (for instance Visual Studio) support sharing a thread specific variable between shared objects. For that reason, the function call to tsrm_get_ls_cache() is needed at least once per thread in order to work with the thread specific resources. Such an operation is needed to be done within every binary unit.
-
-In the patch, almost any macros accessing globals, like EG, CG, etc. are ported to use a local TSRMLS pointer which is static to that binary unit (i.e. shared extension or SAPI bin/dll/so). For that three steps are required
-
-  - defining a tsrmls cache holder for a binary unit (ZEND_TSRMLS_CACHE_DEFINE macro)
-  - externing that pointer in a header file so other C files can use it (ZEND_TSRMLS_CACHE_EXTERN macro)
-  - integrate a mechanism to update that pointer per thread and binary unit (ZEND_TSRMLS_CACHE_UPDATE macro)
-
-These are also the steps required to port an extension/SAPI to be compatible with the patch. The porting was done step by step and the static TSRMLS cache is only enabled when ZEND_ENABLE_STATIC_TSRMLS_CACHE macro is defined from the config.* script. Otherwise the method with dynamic cache fetching per tsrm_get_ls_cache() is used.
-
-**Currently all the ocurrencies with TSRMLS_* macros evaluate to empty but left at their places, so then the diff shows the real change done. They are going to be removed once the RFC is accepted and before it was merged**
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
-PHP7
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 5.x" or "next PHP 5.x.y".
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-Threading capable SAPIs may need to be reworked. Currently it regards only to Apache mpm_worker and mpm_winnt. See implemtation details.
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
 ==== To Existing Extensions ====
-See implementation details.
+Will existing extensions be affected?
 
-==== To operating systems ====
-A potential incompatibility to not widely used operating systems can be introduced. Any Unix (like) OS using pthreads or other threads implementation supported by the TSRM layer, or any x86/x64 Windows system, are supported. That covers good 99% of the target OSes (please read the base RFC for more details).
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
+
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
 
 ===== Open Issues =====
-The patch from the base RFC used an offset mechanism instead of the array indexing to access globals. That part wasn't ported in the current patch as it has caused too much issues. This however should be still done as using offsets would speedup the data access.
+Make sure there are no open issues when the vote starts!
 
 ===== Unaffected PHP Functionality =====
-Userland is not affected, the change is internals only.
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-  * faster data access using offsets instead of array indexes
-  * depending on compiler evolution, fetching thread id per function could be replaced with a real global variable shared across all the binary units (.so, .dll, .exe)
+This sections details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
-===== Vote =====
-<doodle title="Native TLS" auth="ab" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-\\
-The vote starts on 12/10/2014 at 21:00 CET and ends on 12/17/2014 at 21:00 CET. 50%+1 majority required.
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+State whether this project requires a 2/3 or 50%+1 majority (see [[voting]])
 
 ===== Patches and Tests =====
-  * http://windows.php.net/downloads/snaps/ostc/pftt/perf/results-20141028-master_r87c28cc-native_tls_r5747327-7146.html
+Links to any external patches and tests go here.
+
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
 
 ===== Implementation =====
-  * http://git.php.net/?p=php-src.git;a=shortlog;h=refs/heads/native-tls
-  * http://windows.php.net/downloads/snaps/native-tls/
+After the project is implemented, this section should contain 
+  - the version(s) it was merged to
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
 
 ===== References =====
-https://wiki.php.net/rfc/tls
+Links to external references, discussions or RFCs
 
-/*===== Rejected Features =====
-Keep this updated with features that were discussed on the mail lists.*/
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
