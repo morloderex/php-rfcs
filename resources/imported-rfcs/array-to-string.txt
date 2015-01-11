@@ -1,95 +1,106 @@
-====== Improve array to string conversion ======
-  * Version: 2.1
+====== Modify array to string conversion ======
+  * Version: 1.0
   * Creation date: 2015-01-10
-  * Last modification date : 2016-02-02
-  * Author: François Laupretre, <francois@tekwire.net>
-  * Status: Withdrawn
-  * First Published at: http://wiki.php.net/rfc/array-to-string
-
-This RFC is withdrawn because discussion shows that the subject is far from mature
-and potential side effects require more discussions. It will probably be revived
-in the future but potential BC breaks reserve such changes for a major release.
+  * Last modification date : 2015-01-10
+  * Author: François Laupretre, francois@tekwire.net
+  * Status: Under discussion
+  * First Published at: http://wiki.php.net/rfc/cyclic-replace
 
 ===== Introduction =====
 
-Currently, array to string zval conversion raises an E_NOTICE and returns a string
+Currently, array to string conversion raises an E_NOTICE and returns a string
 containing 'Array'.
 
-This RFC considers this behavior as non-optimal and proposes improvements.
+This RFC considers this behavior as non-optimal and proposes alternatives.
 
 ===== Proposal =====
 
 As seen above, zval conversion from array to string, implicit or explicit, gives
 E_NOTICE and 'Array'.
 
-We consider this as no more than a temporary half-backed solution : we raise a low-level error
-and we return a useless string.
+I consider this as
+a half-backed solution : we raise an error, which is not a 'real'
+error (an E_WARNING would be) and we return a useless string (anybody relying on the 'Array' value, please call me :).
+Off topic: I am personally against the existence of E_NOTICE and E_STRICT, which
+are, IMO, half-backed solutions too.
 
-Now, the release of a new major version is the occasion to make a definitve decision.
+The only possible justification I imagine for the current behavior is to have
+stopped a flame war or for (wrong) BC reasons.
 
-  Note: the RFC originally proposed, either to fully support the feature, or to deprecate it.
-  Following discussion, it was decided to only propose the option of deprecating it.
-  So the other option was removed, and can be consulted via older versions of the RFC.
+Now, the future release of a new major version may be the occasion
+to get rid of this. I know this is it a hot subject but I hope we can all
+give our opinion without starting another war.
+
+I imagine two possible alternative and opposite behaviors :
 
 ==== 1st alternative: deprecate ====
 
 Here, we consider that array-to-string conversion was never actively supported nor
-encouraged, that, it most cases, its only effect is hiding bugs, and that it is time to disable it definitely.
+encouraged and that we have been pulling this problematic behavior behind us for years.
+So, it may be time to disable it definitely.
 
-Another argument is that there never was an agreement on the 'standard' way
-to convert an array to a string.
+So, array-to-string conversion would be considered like object-to-string with no 'toString' method:
+conversion attempt generates a 'fatal catchable error'. Then,
+if the program was still alive, the conversion would return 'Array' as before.
 
-So, we propose that Array-to-string conversions are considered exactly the same
-as object-to-string with no '__toString' method:
-any conversion attempt generates an E_RECOVERABLE_ERROR. Then,
-if the program is still alive, the conversion returns 'Array' as before. The E_NOTICE
-message is suppressed.
-No more worries about hiding bugs with this logic, as masking such an error level is a strong
-user decision, definitely not the same as disabling E_NOTICE.
+It is a radical message to the developers that we don't support this feature anymore,
+and that fixing code is a pre-requisite to a PHP7 switch.
 
-We could go through a migration phase using E_DEPRECATED, but we consider
-that, since an E_NOTICE is currently generated, it may be considered as a
-deprecation notice, and we can directly switch to E_RECOVERABLE_ERROR.
+We could go through a migration phase with an E_DEPRECATED but the 5.7 was rejected
+and we already raise an E_NOTICE. So, this phase may probably be skipped.
 
-Another argument is that, while this one should not be very problematic, it is
-always better to introduce a BC break in a major version.
-
-If 5.7 is revived, it will contain an interim version, with E_NOTICE replaced by E_DEPRECATED.
+I am not favorable to this alternative as, although it is more clear than the current
+behavior, I think that the second one below is a better choice.
 
 ==== 2nd alternative: full support ====
 
-  Removed
+Here, we decide that array-to-string conversion is a valid concept. We define a
+standard algorithm to perform the conversion, fix it in stone and
+encourage C and PHP code to use it with no restriction.
+
+Of course, the first step is to remove the E_NOTICE.
+
+The 2nd step is the choice of the conversion algorithm. What I suggest is the
+most intuitive choice I would expect in this case : a
+recursive concatenation of every non-array elements of the
+array tree, each of them converted to a string (a recursive implode() with no 'glue').
+Array elements would be taken in array order, keys would be ignored.
+
+Existing rules for non-array types to string conversions would be applied to all
+non-array members of the input array. For instance, if the array
+contains an object, it would be silently converted to string if the class defines
+a 'toString' method, and would raise a fatal catchable method otherwise.
+
+I prefer this alternative as it adds a standard, meaningful way to convert an array to
+a string. There will be discussions on the algorithm to choose and I hope we won't
+paint the bike shed again, but the most important is to define
+a //standard// conversion mechanism and ensure it never changes.
 
 ===== Backward Incompatible Changes =====
 
-The potential BC breaks
-are important because a lot of PHP code runs in E_NOTICE-disabled environments and
-the 'Array' return value, while probably invalid, may easily go unnoticed.
+If we deprecate array-to-string, the potential BC break is huge as a lot of existing
+PHP code requires turning off E_NOTICE, and the 'Array' value, while useless,
+can go unnoticed for a lot of reasons.
 
-In balance of this, we can consider that raising the error level in environments
-where E_NOTICE messages are disabled, will generally help discovering bugs that had
-remained unnoticed because the error level was hidden.
-
-Actually, during the discussion, the opinions seemed to converge towards
-the position that discovering undetected bugs is probably more important than
-potential BC breaks.
+If we add full support, the removal of E_NOTICE has a negligible impact. And, as all of us
+probably agree that anybody relying on the 'Array' string should choose another profession,
+the overall BC break remains minimal.
 
 ===== Proposed PHP Version(s) =====
 
-7.0
+PHP 7
 
 ===== RFC Impact =====
 
-Touches every explicit or implicit array-to-string conversion, whether called
-from extensions or in PHP code.
+Trivial. Touches every explicit or implicit array-to-string conversions.
 
 ===== Open Issues =====
 
-None
+None (yet)
 
 ===== Unaffected PHP Functionality =====
 
-No other type conversion is impacted.
+No other zval type conversion should be impacted.
 
 ===== Future Scope =====
 
@@ -97,20 +108,13 @@ None
 
 ===== Proposed Voting Choices =====
 
-Basic Yes/No : Yes to replace E_NOTICE with E_RECOVERABLE_ERROR, No for no change.
-
-<doodle title="array-to-string" auth="francois" voteType="single" closed="false">
-   * Yes
-   * No
-</doodle>
-
-Voting will close March 6th, 00:00 (UTC).
-
-Required majority : 2/3 of voters.
+Required majority : 2/3, and even probably more :)
 
 ===== Patches and Tests =====
 
-Patch provided, fixing existing tests is under way.
+Very easy to implement.
+
+Patches and tests will be written as soon as we seem to agree on something.
 
 ===== Implementation =====
 
@@ -120,11 +124,6 @@ After the project is implemented, this section should contain
   - a link to the PHP manual entry for the feature
 
 ===== References =====
-
-PR : https://github.com/php/php-src/pull/991
-
-32 tests are broken by this change. The coresponding fixes are under way and not
-included in the PR.
 
 ===== Rejected Features =====
 
