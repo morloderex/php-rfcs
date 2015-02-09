@@ -1,180 +1,124 @@
 ====== PHP RFC: Native DbC support as definition ======
   * Version: 0.1
   * Date: 2015-02-10
-  * Author: Yasuo Ohgaki <yohgaki@ohgaki.net>, Dmitry Stogov <dmitry@zend.com>, Joe Watkins <pthreads@pthreads.org>
-  * Status: Under Discussion
+  * Author: Yasuo Ohgaki <yohgaki@ohgaki.net>
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/dbc2
 
-===== Important Note =====
+===== Important Note====
 
-This RFC is part of "Design by Contract Introduction" RFC
-  * https://wiki.php.net/rfc/introduce_design_by_contract
+This RFC is a part of "Native DbC support" RFC.
+http://wiki.php.net/rfc/dbc
 
-This RFC is an alternative approach to "Native DbC support" RFC.
-  * http://wiki.php.net/rfc/dbc
-
-Contracts can be defined without modification to the language, however, the D documentation calls the resulting implementation "clumsy and inconsistent".
-
-Other advantages of a native implementation, also taken from the D manual:
-
-  * a consistent look and feel for the contracts
-  * tool support
-  * compiler optimizations
-  * easier management and enforcement of contracts
-  * handling of contract inheritance
-
-All of the above applies to PHP.
+There are many way to achieve DbC. This RFC proposes DbC as function/method definition.
 
 ===== Introduction =====
 
-The D manual contains the following succinct definition of contracts:
+Design by Contract (DbC) or Contract Programming is powerful program design concept based on **Contracts** that
 
-> The idea of a contract is simple - it's just an expression that must evaluate to true. If it does not, the contract is broken, and by definition, the program has a bug in it. Contracts form part of the specification for a program, moving it from the documentation to the code itself. And as every programmer knows, documentation tends to be incomplete, out of date, wrong, or non-existent. Moving the contracts into the code makes them verifiable against the program.
+  - Define **precondition** contract for methods/functions. i.e. Define Parameter value specifications/conditions.
+  - Define **postcondition** contract for methods/functions. i.e. Define Return value specifications/conditions.
+  - Define **invariant** contract for methods/functions. i.e. Define class state must be true always.
 
-This should be easily comprehensible, it further validates the argument that the best implementation is a native one, so that the programmer really can "move the specification from the documentation to the code".
+These contracts are evaluated development time only. Therefore, there is **no performance penalty** with DbC.
+
+DbC changes the way program is designed.
+
+  * With modularized design without DbC, the more code is consolidated, the better code is. Therefore, parameter validity is checked deep into the code. Parameter validity check is __calleE__ responsibility.
+  * With DbC, parameter checks are done as **precondition**. Passing valid parameter to a function is __calleR__ responsibility.
+
+  * Without native DbC, return value validity cannot be checked without scattered assert() for every place function is used. i.e. Programmers has to write "$ret = func(); assert($ret > 0);" everywhere func() is used or func() must have assert() for every return.
+  * With native DbC, return value validity is checked as **postcondition** definition. It does not require scattered assert().
+
+  * With native DbC, **invariant** condition may be defined. **Invariant** allows programmers consolidate class state which must be TRUE for always. e.g. $account_balance >= 0
+
+**precondition** check can be done with assert(), but other feature requires native DbC.
+
+DbC reverses the responsibility caller and callee, ensures parameters, return value and class state validity without performance penalty. This helps PHP to achieve more efficient development by contract errors, faster execution for production.
+
+With proper use of DbC concept, it is known **programs to be more robust/secure and faster**. Languages design lately have native DbC support. e.g. D language. Almost all languages have some kind of DbC supports today. 
+
 
 ===== Proposal =====
 
-Support for the following contracts will be introduced:
+Introduce native contracts "require"(**precondition**), "return"(**postcondition**) definition to function/method and special "__invaliant()" method to class.
 
-  * precondition       "require"( **precondition-expression** [,'Error msg'])
-  * postcondition      "return"( **return_value**, **postcondition-expression** [,'Error msg'])
-  * invariant          "require"( **invariant-expression** [,'Error msg'])
+**require**, **return** behave just like assert(). (require, return accepts message. i.e. require($a > 0, '$a must be positive') )
 
-===== Pre and Post Condition =====
+Example without **invariant**
+<code php>
+class Product {
+  protected $inventory;
 
-These contracts should be defined after the function declaration, but before the function body.
+  // User is supposed to check inventory first
+  function haveEnoughInventory($quantity) 
+    require($quantity > 0)
+  {
+    return (bool) ($this->inventory - $quantity) >= 0;
+  }
 
-Multiple precondition and postcondition contracts may be used. The expressions are just a regular PHP expressions. They are evaluated in the function scope, and can access arguments and other scope variables, and return value (via a reserved name). Pre and post-conditions can't be defined for abstract methods and methods defined in interfaces.
-
-<code>
-function add(int $a, int $b) : int
-	require($a > 0)
-	require($b > 0)
-	return($ret, $ret > 0, "something wrong")
-{
-	return $a + $b;
+  // Sell inventory
+  function sell($quantity) 
+    require($quantity > 0)
+    return($ret >= 0) // We have to think of how to specify $ret. Use block? return($ret) {assert($ret >= 0);}
+  {
+    $ret = $this>amount - $quantity;
+    return $ret;
+  }
 }
 </code>
 
-this code is going to be evaluated as
+Example with **invariant**
+<code php>
+class Product {
+  protected $inventory;
 
-<code>
-function add(int $a, int $b) : int
-{
-	assert($a > 0);
-	assert($b > 0);
-	$ret = $a + $b;
-	assert($ret > 0, "something wrong");
-	return $ret;
+  // Invariants must be TRUE for this class always  - $inventory should not be negative
+  function __invariant() {
+    assert($this->inventory >= 0);
+  }
+
+  // User is supposed to check inventory first
+  function haveEnoughInventory($quantity) 
+    require($quantity > 0)
+  {
+    return (bool) ($this->inventory - $quantity) >= 0;
+  }
+
+  // Sell inventory
+  function sell($quantity) 
+    require($quantity > 0)
+  {
+    return $this>amount - $quantity;
+  }
 }
 </code>
-
-===== Invariant =====
-
-Invariant contracts are declared using **require** inside class body. Multiple invariant contracts may be used. They may access object or static properties through **$this** and **self**. Invariant contracts may be used for classes, abstract classes and traits, but not for interfaces.
-
-<code>
-class Accumulator {
-	private $sum = 0;
-	
-	function add(int $a)
-		require($a > 0)
-	{
-		$this->sum += $a;
-	}
-
-	require($this->sum > 0, "overflow detected");
-}
-</code>
-
-this code is going to be evaluated as
-
-<code>
-class Accumulator {
-	private $sum = 0;
-	
-	function add(int $a)
-	{
-		assert($a > 0);
-		assert($this->sum > 0, "overflow detected");
-		$this->sum += $a;
-		assert($this->sum > 0, "overflow detected");
-	}
-}
-</code>
-
-**Invariant contracts are not evaluated when object properties are changed from outside the class scope.**
-
-====Contracts Inheritance Rules====
-
-Contracts are constant, this has the following implications:
-
-  * a derived class must satisfy invariant contracts of it's parent
-  * a derived class overriding a method must satisfy the pre and post condition contracts of it's prototype.
-
-Thus, given the following code:
-
-<code>
-class Child {
-    require ($this->age < 18);
-    
-    public function someMethod($input) 
-        require(somethingAbout($input)) {
-        /* ... */
-    }
-
-    /* ... */
-}
-
-class Monster extends Child {
-    require ($this->odour == OBNOXIOUS);
-
-    public function someMethod($input) 
-        require(somethingElseAbout($input)) {
-        /* ... */
-    }
-
-    /* ... */
-}
-</code>
-
-//Monster// must not break **any** contract in //Child//.
 
 ====Execution Control====
 
-A new "dbc" INI switch is going to be introduced. It may get the following values:
+Introduce "dbc" INI switch, Off by default. No additional CLI option for DbC.
 
-  * dbc=on        - generate code for contracts and check them at run-time. Program, at any time, may change this settion to dbc=off through ini_set().
-  * dbc=off       - generate code for contracts but don't check them at run-time. Program, at any time, may change this settion to dbc=on through ini_set().
-  * dbc=zero_cost - don't generate code for contracts. This may be set only in php.ini and can't be changed through ini_set().
+A method/function is executed as follows
 
-  The default value is "off".
+===Development mode: dbc=On ===
 
-===Contracts Execution Order===
+  - require() conditions
+  - __invariant()
+  - method()
+  - __invariant()
+  - return() conditions
 
-If "dbc" is set to "on", the order of contracts validation is the following:
+===Production mode: dbc=Off ===
 
-  - all require() contracts (precondition) defined for this function (and prototype where applicable)
-  - all require() contracts (invariant) for this class and parents
-  - method body
-  - all require() contracts (invariant) for this class and parents
-  - all return() contracts (postcondition) defined for this function (and prototype where applicable)
-
-**Invariant and Special Methods**
-
-  * <nowiki>__constructs()/__wakeup()/__set_state()</nowiki> will NOT execute invariant before method body.
-  * <nowiki>__destruct()/__sleep()</nowiki> will NOT execute invariant after method body.
-
-**Static Call**
-
-  * Only pre and post conditions are executed.
+  - method()
+ 
 
 ===== Backward Incompatible Changes =====
 
 None
 
   * No additional keyword
+  * __invariant() is a reserved method name
 
 ===== Proposed PHP Version(s) =====
 
@@ -188,23 +132,26 @@ None
 None
 
 ==== To Opcache ====
-Opcache will have to be extended to support contracts and store them in shared memory.
+
+Dmitry, could you write impact when discussion is finished?
+
 
 ==== New Constants ====
 None
 
 ==== php.ini Defaults ====
-dbc=Off for all (INI_ALL)
+
+dbc=Off for all
 
   * hardcoded default values
   * php.ini-development values
   * php.ini-production values
 
 ===== Open Issues =====
-  * Contracts inheritance rules
-  * Consider introduction of **static require()** as class invariant for static methods
+
   * Need to discuss syntax
   * How to manage votes for 2 RFCs
+
 
 ===== Unaffected PHP Functionality =====
 
@@ -214,11 +161,10 @@ This RFC does not affect any existing features
 
 Documentation systems may adopt native DbC syntax for documentation purpose.
 
-===== Vote =====
-This project requires a 2/3 majority
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
-  * Option would be YES/NO only
-
+State whether this project requires a 2/3 or 50%+1 majority (see [[voting]])
 
 ===== Patches and Tests =====
 Links to any external patches and tests go here.
