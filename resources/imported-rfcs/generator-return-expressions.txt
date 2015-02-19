@@ -1,15 +1,14 @@
 ====== PHP RFC: Generator Return Expressions ======
-  * Version: 0.1
+  * Version: n/a
   * Date: 2015-02-18
-  * Author: Daniel Lowrey <rdlowrey@php.net>
-  * Contributors: Nikita Popov <nikic@php.net>
-  * Status: Implemented (in PHP 7.0)
+  * Author: Daniel Lowrey, rdlowrey@php.net
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/generator-return-expressions
 
 ====== Abstract ======
 
 
-PHP's generators are unequivocally useful both for iteration and cooperative multi-tasking. However, the inability of generator functions to specify return values artificially limits their usefulness for multitasking in coroutine contexts. This RFC proposes the ability to both specify and access Generator return values while laying the groundwork for future sub-generator returns. The proposal is a prerequisite for the conceptually related [[rfc:generator-delegation|Generator Delegation]] RFC.
+PHP's generators are unequivocally useful both for iteration and cooperative multi-tasking. However, the inability of generator functions to specify return values artificially limits their usefulness for multitasking in coroutine contexts. This RFC proposes the ability to both specify and access Generator return values while laying the groundwork for future sub-generator returns.
 
 
 ====== Status Quo ======
@@ -31,11 +30,11 @@ function foo() {
 ====== Proposal ======
 
 
-  * Modify generator functions to allow ''return'' expressions.
+1. Modify generator functions to allow ''return'' expressions. As in PHP's existing implementation ''return'' statements remain equivalent to ''yield'' with the caveat that they also end Generator iteration.
 
-  * Expose ''Generator::getReturn()'' to retrieve returned values.
+2. Expose ''Generator::getReturn()'' to differentiate between expressions "yielded" via ''return'' statement.
 
-  * Calling ''Generator::getReturn()'' while a generator is still valid will throw. This is consistent with the behavior seen when calling ''Generator::rewind()'' after iteration has already started. The logic behind this decision is that we should prevent calling code from mistaking a yet-to-be-computed return value (''null'') for the actual return value. This proposal's position is that invoking ''Generator::getReturn()'' on a still-valid generator (or one that has thrown) is a logic error.
+3. Calling ''Generator::getReturn()'' while a generator is still valid will throw. This is consistent with the behavior seen when calling ''Generator::rewind()'' after iteration has already started. The logic behind throwing when the generator remains valid is that we should prevent calling code from mistaking a yet-to-be-computed return value (''null'') for the actual return value. Invoking ''Generator::getReturn()'' on a valid generator generally represents a logic error and is treated as such.
 
 
 ===== Code Examples Using Proposed Behavior =====
@@ -52,36 +51,18 @@ function foo() {
 }
 
 $bar = foo();
-foreach ($bar as $element) {
-    echo $element, "\n";
-}
+do {
+    echo $bar->current(), "\n";
+    $bar->next();
+} while ($bar->valid());
 
 var_dump($bar->getReturn());
 
 // 1
 // 2
+// 42
 // int(42)
 </code>
-
-
-Calling ''Generator::getReturn()'' in the absence of a return statement:
-
-<code php>
-<?php
-function foo() {
-    yield 1;
-    yield 2;
-    yield 3;
-}
-
-$bar = foo();
-while($bar->valid()) {
-    $bar->next();
-}
-
-assert($bar->getReturn() === null);
-</code>
-
 
 Calling ''Generator::getReturn()'' while the generator is still valid:
 
@@ -103,38 +84,28 @@ assert($bar->valid());
 $returnValue = $bar->getReturn();
 </code>
 
-
-Calling ''Generator::getReturn()'' after the generator has thrown:
+Calling ''Generator::getReturn()'' in the absence of a return statement:
 
 <code php>
 <?php
 function foo() {
-    throw new Exception;
     yield 1;
     yield 2;
-    return 42;
+    yield 3;
 }
 
 $bar = foo();
+while($bar->valid()) {
+    $bar->next();
+}
 
-set_exception_handler(function($e1) use ($bar) {
-    try {
-        $bar->getReturn();
-    } catch (Exception $e2) {
-        // Generator::getReturn() threw; trying to use a return
-        // value from a generator that didn't actually complete
-        // is a logic error we want to prevent.
-    }
-});
-
-$bar->next();
-
+assert($bar->getReturn() === null);
 </code>
 
 
 ===== Use-Case: Coroutine Return Values =====
 
-Generators are particularly useful for their ability to suspend execution and resume at a later time. This capacity allows applications to cooperatively multitask discrete units of processing work. However, the inability to explicitly return values leaves coroutines in a situation where they're able to process concurrent tasks but have no standard way to access the results of those computations. Consider:
+Generators are particularly useful for their ability to pause execution and resume at a later time. This capacity allows applications to cooperatively multitask discrete units of processing work. However, the inability to explicitly return values leaves coroutines in a situation where they're able to process background tasks but have no standard way to access the results of those computations. Consider:
 
 <code php>
 <?php
@@ -169,31 +140,7 @@ $gen = function {
     $bar = yield myAsyncBar($foo);
     return $bar + 42; // unambiguous execution "result"
 };
-?>
 </code>
-
-
-===== Reference Returns =====
-
-Generators currently utilize the `&` operator to indicate values will be yielded by-reference:
-
-<code php>
-<?php
-function &gen_reference() {
-    $value = 3;
-
-    while ($value > 0) {
-        yield $value;
-    }
-}
-
-foreach (gen_reference() as &$number) {
-    echo (--$number).'... ';
-}
-?>
-</code>
-
-As ''function&'' is already in place to modify yield values we have no way to differentiate between by-reference yield values and by-reference return values. While it would be possible to use ''function&'' to mark returns as by-reference, this proposal's position is that no correlation exists between the "reference-ness" of yielded values and return values. Instead of introducing new tokens or syntax to allow by-reference returns this proposal //always// uses ''ZVAL_COPY'' on return zvals. In short: by-reference returns are not supported in generator return expressions.
 
 
 ===== Other Languages =====
@@ -242,62 +189,25 @@ PHP7
 
 ===== Unaffected PHP Functionality =====
 
-Existing generator semantics remain unmodified. Only new functionality is added to allow generators to ''return'' expressions and differentiate these expressions from standard yields via the new ''Generator::getReturn()'' method.
+Existing generator semantics remain unmodified. Only new functionality is added to allow generators to return expressions via ''return'' and differentiate such expressions from standard yields via ''Generator::getReturn()''.
 
 
 ===== Future Scope =====
 
-The proposed behavior lays the groundwork for future sub-generator functionality using ''yield from'' to break apart functional units into multiple generators. In such cases a sub-generator's return value is sent to the parent generator upon completed iteration. ''return'' expression capability is needed to implement this behavior in future PHP versions.
-
-A brief example of how ''yield from'' might be implemented in the future using the return expressions proposed in the current RFC:
-
-<code php>
-<?php
-function foo() {
-    yield 1;
-    return yield from bar();
-}
-
-function bar() {
-    yield 2;
-    yield 3;
-    return 4;
-}
-
-$baz = foo();
-foreach ($baz as $element) {
-    echo $element, "\n";
-}
-echo $baz->getReturn(), "\n";
-
-// 1
-// 2
-// 3
-// 4
-</code>
+The proposed behavior lays the groundwork for future sub-generator functionality using ''yield from'' or ''yield *'' to break apart functional units into multiple generators. In such cases a sub-generator's return value is sent to the parent generator upon completed iteration.
 
 
-===== Vote =====
+===== Proposed Voting Choices =====
+Two voting choices are proposed:
 
-Voting begins 2015-03-09 and ends on 2015-03-16.
+1. **YES**, allow Generator return expressions and ''expose Generator::getReturn()'' to access returned values in PHP 7
+
+2. **NO**, do not modify existing Generator behavior
 
 A 2/3 "Yes" vote is required to implement this proposal.
 
-
-<doodle title="Allow Generator return expressions in PHP7" auth="rdlowrey" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-. Vote closed at 14:50 UTC 2015-03-17.
-
-**NOTE:** the related [[rfc:generator-delegation|Generator Delegation]] RFC depends on the acceptance of this proposal.
-
 ===== Patches and Tests =====
-
-https://github.com/php/php-src/pull/1096
-
-The linked patch was written by Nikita Popov and is intended as "final" excepting any changes that may arise during RFC discussion.
+There is as yet no patch for the proposed functionality. Nikita Popov has offered to make the necessary changes and a link to the relevant patch will be added here once available.
 
 
 ===== Implementation =====
@@ -306,3 +216,6 @@ TBD
 ===== References =====
 
 [[https://docs.python.org/3/whatsnew/3.3.html#pep-380|New in Python 3.3: yield from]]
+
+===== Rejected Features =====
+TBD
