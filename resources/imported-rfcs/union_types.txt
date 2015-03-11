@@ -1,113 +1,40 @@
 ====== PHP RFC: Union Types ======
-  * Version: 1.1
+  * Version: 0.1
   * Date: 2015-02-14
-  * Author: Levi Morrison <levim@php.net>, Bob Weinand <bobwei9@hotmail.com>
-  * Status: Declined
+  * Author: Levi Morrison <levim@php.net>
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/union_types
 
 ===== Introduction =====
-PHP has [[http://php.net/manual/en/functions.arguments.php#functions.arguments.type-declaration|type declarations]] which can be associated with function parameters or return values. These declarations perform two useful roles:
+In PHP 5.1 the ability to provide explicit types for parameters was added to PHP. It supported classes, interfaces and arrays. In PHP 5.4 the ''callable'' pseudo-type was added. The ability to provide explicit return types was added in PHP 7 but did not allow returning something or null, a commonly requested feature. Later an RFC for adding explicit scalar types was proposed and a few people wanted to know why there isn't a ''numeric'' type to handle the case where ''int'' and ''float'' are both accepted. I have personally wanted the ability to type against both ''array'' and ''Traversable'' in some of my libraries.
 
-  * They allow the PHP engine to enforce the correct type of variable passed to or returned from a function.
-  * They make it easier to reason about what types need to be passed to or can be returned from a function. Both humans and static code analysis tools can use this information to help determine the correctness of the code.
-
-For a lot of functions in PHP each parameter will only be one type. Similarly, for the majority of functions the return value will only ever be of one type.
-
-However, for a significant number of functions, the acceptable parameters or the possible return values can be of more than one type. For example consider the ''stripos'' function where the return value varies based on:
-
-  * if the needle exists it returns an integer.
-  * if the needle is not found, false is returned.
-
-In the documentation on php.net, the two possible return types are documented as ''mixed'' - however this does not actually document what the possible return types are, only that there is more than one possible type returned.
-
-Currently in userland code when a parameter for a function can be one of multiple types, or the return value from a function can be one of multiple types, there can be no type information supplied. It is not possible for the PHP engine to enforce any types passed to/from these functions and similarly it is not easy for people using these functions to reason about the types passed to/returned from these functions.
-
-This RFC seeks to address these limitations.
+All of these requests and discussions suggest that the ability to accept multiple types for a parameter or return type could be useful. This RFC is an investigation into the feasibility of this idea and to flesh out the impact it would have on other parts of PHP. 
 
 ===== Proposal =====
-This RFC proposes the ability to define multiple possible types for parameter and return types. To define a 'union type' a single vertical bar (OR) is placed between types e.g. ''int|bool'' represents the union type of either integer or boolean. For these 'union types' a value passes the type check if the value would pass any one of the types in the union. 
+This RFC proposes the ability to define multiple types for a parameter or return type and calls them "union types". Here is an example of a parameter accepting both ''array'' and ''Traversable'' simultaneously:
 
-Additionally this RFC proposes that the values ''true'', ''false'' (see [[#truefalse|the "True/False" section]]) and ''null'' (equal to type ''null''; see [[#nullable_types|the "Nullable types" section]]) will be usable as types in both parameter types and return type definitions.
-
-There can be more than two types in the union.
-
-==== Parameter type examples ====
-A function that requires either a string or an array is passed to it as the parameter:
 <PHP>
-function print_each(array | string $in) {
-    foreach ((array) $in as $value) {
+function (array|Traversable $in) {
+    foreach ($in as $value) {
         echo $value, PHP_EOL;
     }
 }
- 
-print_each(['Bob', 'Joe', 'Levi']); // ok
-print_each('Levi'); // ok
-print_each(new stdclass()); // TypeError
-</PHP>
-For this example, it is clear to both static analysis tools and humans that passing anything other than an array or a string to this function, would be an error. (or will be weakly cast to a string if strict_types are disabled, see also [[#weak_scalar_types|the "Weak Scalar Types" section]])
-
-A class instance method that requires that either a string or a ParameterGenerator object is passed as the parameter.
-<PHP>
-// From zend-code
-class MethodGenerator extends AbstractMemberGenerator {
-     ...
-    public function setParameter(ParameterGenerator|string $parameter) {
-        ...
-    }
-}
-</PHP>
-For this example, it is clear to both static analysis tools and humans that passing anything other than a ParameterGenerator object or a string to this function, would be an error. 
-
-==== Return type example ====
-A userland definition of ''stripos'' function:
-
-<PHP>
-function stripos(string $haystack, string $needle, int $offset = 0): int|false {
-    $lowerHaystack = strtolower($haystack);
-    $lowerNeedle = strtolower($needle);
-    return strpos($lowerHaystack, $lowerNeedle, $offset);
-}
-</PHP>
-For this example, it is clear to both static analysis tools and humans this function can return either an integer or the value 'false', and so both cases need to be handled in the calling code.
-
-==== Nullable types ====
-To cover the common use-case of returning some type or ''null'', the ''null'' type needs to be permitted in a type declaration. The name is already reserved and the documentation already documents that ''null'' is both a type and a value. Previously it was not a helpful type declaration - if something is always passed ''null'' then there doesn't need to be a parameter at all, and if a function always returns ''null'' then there is no need to assign it. With the introduction of union types it becomes helpful and so this RFC proposes allowing ''null'' in unions:
-
-<PHP>
-function lookup_user(string $id): User | null;
 </PHP>
 
-This is currently possible via the short-hand nullable type support ''?Type''. However some concerns have been raised:
+Assuming that we allow a type of ''null'' we could use this feature to avoid special syntax for explicit nullable types; instead of ''?Foo'' we can use ''Foo|null''.
 
-  - ''?Foo | Bar'' is pretty weird, it reads like "(nullable Foo) or (Bar)" when the nullability is not tied to a particular type.
-  - Allowing ''Foo | null'' and ''?Foo'' is redundant.
-  - ''Foo | null'' is more explicit than ''?Foo''. Users who are not familiar with ''?'' in other languages may understand the ''|'' better.
+===== Proposed PHP Version(s) =====
+It is not yet known if this requires backwards compatibility breaks. It could theoretically target PHP 7.NEXT but possibly should wait until PHP 8 (or whatever we call it).
 
-To address some of these issues this RFC disallows ''?'' being used in combination with union types. Thus ''Foo | Bar | null'' is allowed, but not ''?Foo | Bar''.
+===== RFC Impact To Opcache =====
+There is not yet an implementation, but this will certainly necessitate changes in opcache.
 
-This RFC proposes a vote on whether ''?Foo'' shall be replaced by ''Foo | null'' in general.
-
-==== True/False ====
-It may be helpful to be able to explicitly use ''| false'' for return types as this is a common idiom in PHP's standard functions. As an example, the function signature for ''strpos'' could change:
-<PHP>
-// from
-strpos ( string $haystack , mixed $needle [, int $offset = 0 ] ): mixed
-// to
-strpos ( string $haystack , mixed $needle [, int $offset = 0 ] ): int | false
-</PHP>
-
-This now allows to perfectly forward any internal signature and allows users to be more explicit.
-
-Also ''false'' and ''true'' are not types in user-land, but they are internally.
-
-This RFC proposes a vote to decide if ''true'' and ''false'' should be supported for unions.
-
+===== Open Issues =====
 ==== Weak Scalar Types ====
-=== Problem ===
-PHP 7 allows weak scalar types. There is a question of how things will get converted in some situations when used in unions. As an example, if we have a union type of ''int'' and ''float'' and are passed the string "10" how is it converted?
+If PHP adds explicit weak scalar types there is a question of how things will get converted in some situations. As an example, if we have a union type of ''int'' and ''float'' and are passed the string "10" how is it converted?
 
 <PHP>
-function f(int | float $number) {
+function f(int|float $number) {
     return $number * 2;
 }
 f("10");
@@ -115,105 +42,35 @@ f("10");
 
 Would it be converted to ''int(10)'' or ''float(10)'', since either is acceptable? Does it matter given they are both acceptable?
 
-=== Solution ===
-Primarily, this issue is avoided if a parameter type exactly matches the input type or if PHP is in strict type mode.
+This issue would be avoided if a parameter type exactly matches the input type or if PHP has strict scalar types.
 
-With the only exception that an ''int(10)'' passed to a parameter requiring float as one of its types, but not ''int'' (e.g. ''string | float''), will be, in accordance with normal handling of integers passed to floats, coerced to ''float(10)''.
-
-Otherwise PHP's casting rules are applied in an order to be as lossless as possible. PHP's weak-type casting rules are complex, which leads to a seemingly complex set of rules for casting types, however these rules are not an invention of this proposal. This RFC applies PHP casting rules in a sane way to convert a value to a type accepted by the union whenever possible.
-
-^ Passed type ^ Union type #1 ^ #2 ^ #3 ^
-| object | string (''<nowiki>__toString()</nowiki>'') | - | - |
-| boolean | int | float | string |
-| int | float* | string | boolean |
-| float | string | int | boolean |
-| string | int/float<sup>†</sup> | boolean | - |
-* While string is more lossless than float for big values, we have to match behavior with strict types enabled here\\
-<sup>†</sup> only if ''is_numeric()'' would return true\\
-Respecting the order, for each type check if it is available in the union, else throw a ''TypeError'' if none is available.
-
-== Problems with left-to-right ==
-Left-to-right conversion has been proposed multiple times. But this is not a viable solution for the following reasons:
-  * (string|float) would convert to a string if passed an integer, which would be inconsistent with strict types converting it to a float. This type of inconsistency must be avoided.
-  * Also, in strict left-to-right, exact matches would still be cast to the first type (from the left) which they can be cast to. This would again, be inconsistent with strict types enabled.
-  * Ultimately, (float|int) would, even in strict types mode, lead to a conversion to float in any case upon passing integer; this is very counterintuitive.
-
-It might be possible to exempt exact matches, but then we have yet another rule and still the first problem in the list above. At which point it just is much simpler to have well-defined conversion order depending on the passed type.
-
-==== Variance ====
-Return types are covariant: it is possible to remove types from the union in child functions.
-
-Parameter types are contravariant: it is possible to add types to the union in child functions.
-
-<PHP>
-interface Foo {
-    function pos(string $baz): int | false;
-}
-interface Bar extends Foo {
-    function pos(string | Stringable $baz): int;
-}
-</PHP>
+==== Long Type Names ====
+Since you can create a chain of types the names can get quite lengthy. Even the fairly short union type of ''array|Traversable'' can be repetitive to type out. Should a method to provide type aliases exist? It may be helpful to look at HHVM's [[http://docs.hhvm.com/manual/en/hack.typealiasing.php|Type Aliasing]].
 
 ==== Reflection ====
-This RFC proposes the addition of a class <php>ReflectionUnionType</php> inheriting from <php>ReflectionType</php> with a single method <php>ReflectionUnionType::getTypes(): array<ReflectionType>;</php> to get the reflection classes of the individual types in the union.
+There isn't any part of our current Reflection extension that can deal with union types and I have not yet given it any thought.
 
-''ReflectionUnionType::__toString()'' will now provide a full union type as string; e.g. ''"int | float | NumberObject"''.
+==== Or False ====
+Peter Cowburn (salathe) has suggested that being able to explicitly use ''|false'' for return types could be helpful as this is a common idiom in PHP's standard functions. As an example, the function signature for ''strpos'' could change:
 
-===== Proposed PHP Version(s) =====
-This RFC targets PHP version 7.1.
+<PHP>// from
+strpos ( string $haystack , mixed $needle [, int $offset = 0 ] ): mixed
+// to
+strpos ( string $haystack , mixed $needle [, int $offset = 0 ] ): int|false</PHP>
 
-===== Vote =====
-This RFC requires that two-thirds of voters vote in favor of the RFC to pass.
-
-<doodle title="Merge union types" auth="bwoebi" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-Additionally, there are two 50%+1 votes:
-
-<doodle title="Replace ?QuestionMarkNullables by union | null" auth="bwoebi" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-​
-<doodle title="Include true/false types" auth="bwoebi" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-The vote started 14th June 2016 and will end 23th June 2016.
-
-===== Patches and Tests =====
-Bob Weinand and Joe Watkins have created a patch: https://github.com/php/php-src/pull/1887 which is needs some small polishing but implements the proposed features.
+''false'' is not currently a reserved word and can be used as a class, interface or function name which is an issue.
 
 ===== Future Scope =====
 This sections details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
-==== Long Type Expressions ====
-Since you can create a chain of types the names can get quite lengthy. Even the fairly short union type of ''Array | Traversable'' can be repetitive to type out. Should a mechanism to provide type aliases exist?
+===== Proposed Voting Choices =====
+This RFC requires that two-thirds of voters vote in favor of the RFC to pass.
 
-<PHP>
-type Iterable = Array | Traversable;
-
-function map(Callable $f, Iterable $input): Iterable {
-    foreach ($input as $key => $value) {
-        yield $key => $f($value);
-    }
-}
-
-function filter(Callable $f, Iterable $input): Iterable {
-    foreach ($input as $key => $value) {
-        if ($value) {
-            yield $key => $value;
-        }
-    }
-}
-</PHP>
-
-It may also be advantageous for implementation reasons to define a type name for an expression. 
+===== Patches and Tests =====
+Presently no patch.
 
 ===== References =====
+Links to external references, discussions or RFCs
 
-  * Original announcement on Mailing List of rationale for this feature: http://news.php.net/php.internals/92252
-  * Official Under Discussion Announcment: http://news.php.net/php.internals/92274
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
