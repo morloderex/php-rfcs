@@ -1,21 +1,19 @@
 ====== PHP RFC: Throwable Interface ======
-  * Version: 0.1.4
-  * Date: 2015-05-22
+  * Date: 2015-05-22 (use today's date here)
   * Author: Aaron Piotrowski <aaron@icicle.io>
-  * Status: Accepted
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/throwable-interface
 
 ===== Introduction =====
-PHP 7 has introduced exceptions as a replacement for fatal or recoverable fatal errors (see the [[https://wiki.php.net/rfc/engine_exceptions_for_php7|Exceptions in the Engine RFC]]). These exceptions do not extend ''Exception'', but instead extend a new class ''BaseException'' and are named ''EngineException'', ''TypeException'', and ''ParseException''. These classes have a naming scheme that is unintuitive and will lead to confusion, especially for newer users.
+PHP 7 has introduced exceptions as a replacement for fatal or recoverable fatal errors. These exceptions do not extend ''Exception'', but instead extend a new class ''BaseException'' and are named ''EngineException'', ''TypeException'', and ''ParseException''. These 
 
-**Since the decision was made to separate the exception branches, then that separation should be clear instead of obfuscated by similar class names.**
+The current exception hierarchy implemented for PHP 7 has a naming scheme that is unintuitive and will lead to confusion, especially for newer users.
 
 Example:
-
 <code php>
 function add(int $left, int $right) {
     return $left + $right;
-}
+};
 
 try {
     echo add('left', 'right');
@@ -30,23 +28,7 @@ The code above will not catch the ''TypeException'' thrown due to the mis-matche
 Fatal error: Uncaught TypeException: Argument 1 passed to add() must be of the type integer, string given
 </code>
 
-The reason an object named ''TypeException'' would not be caught by ''catch (Exception $e)'' is not obvious. The ''Exception'' suffix implies that ''TypeException'' extends ''Exception''. If the name of the thrown class was ''TypeError'' it would be much clearer that the class does not extend ''Exception'', but rather is part of a different class hierarchy that must be caught separately.
-
-To catch the ''TypeException'', the user must write code like this:
-
-<code php>
-function add(int $left, int $right) {
-    return $left + $right;
-}
-
-try {
-    echo add('left', 'right');
-} catch (Exception $e) {
-    // Handle exception
-} catch (TypeException $e) { // Appears to descend from Exception
-    // Log error and end gracefully
-}
-</code>
+The reason that an object named ''TypeException'' would not be caught by ''catch (Exception $e)'' is not obvious.
 
 ===== Proposal =====
 This RFC proposes a change to the exception hierarchy for PHP 7. This proposal is based on the [[https://github.com/php/php-src/pull/1274|Throwable pull request]] created by Sebastian Bergmann and has been fully implemented in the [[https://github.com/php/php-src/pull/1284|Throwable Interface pull request]].
@@ -57,11 +39,7 @@ This RFC proposes a change to the exception hierarchy for PHP 7. This proposal i
       * ''TypeError extends Error''
       * ''ParseError extends Error''
 
-''BaseException'' will be removed.
-
-Note that ''ParseError'' extends ''Error'', whereas ''ParseException'' extended ''BaseException''. This allows users to handle everything that used to be an error in a single catch block, while still allowing the flexibility of handling both separately if desired.
-
-Only objects that implement the ''Throwable'' interface can be thrown. The proposed patch does not allow userland classes to implement the ''Throwable'' interface. Instead all classes declared in userland must extend one of the existing exception classes.
+''BaseException'' will be removed. In order for an object to be thrown, it must implement the ''Throwable'' interface.
 
 The ''Throwable'' interface specifies the following methods:
   * ''getMessage()''
@@ -72,34 +50,13 @@ The ''Throwable'' interface specifies the following methods:
   * ''getTraceAsString()''
   * ''__toString()''
 
-While both ''Exception'' and ''Error'' are implemented using the same code in the interpreter, the ''Throwable'' interface does not preclude future classes from implementing the interface differently or from the implementation of ''Exception'' and ''Error'' to be different in the future.
+While both ''Exception'' and ''Error'' are implemented using the same code in the interpreter, the ''Throwable'' interface does not preclude future classes from implementing the interface differently.
 
-''catch (Error $e)'' and ''catch (Throwable $e)'' may be used to catch respectively ''Error'' objects or any ''Throwable'' (current or future) object. Users should generally be discouraged from catching ''Error'' objects except for logging or cleanup purposes as ''Error'' objects represent coding problems that should be fixed rather than runtime conditions that may be handled.
-
-After this proposed change, it would be clearer in the example above that another catch block is needed if the user wishes to log errors and end the script gracefully.
-
-<code php>
-function add(int $left, int $right) {
-    return $left + $right;
-}
-
-try {
-    echo add('left', 'right');
-} catch (Exception $e) {
-    // Handle exception
-} catch (Error $e) { // Clearly a different type of object
-    // Log error and end gracefully
-}
-</code>
-
+''catch (Error $e)'' and ''catch (Throwable $e)'' may respectively be used to catch ''Error'' objects or any ''Throwable'' (current or future) object. Users should be discouraged from catching ''Error'' objects object except for logging or cleanup purposes as ''Error'' objects represent coding problems that should be fixed rather than runtime conditions that may be handled.
 
 === Error Name Choice ===
 
-The name ''Error'' was chosen to correspond with PHP's other errors. Non-fatal errors detected by PHP will continue to trigger warnings and notices, while fatal errors are thrown as ''Error'' exceptions.
-
-Conceptually both of these conditions are error conditions detected by PHP. The only difference is that for some errors the execution of the script can continue from where the error occurred; for others it is not possible for execution to continue from the place where the error occurred, and so instead an exception must be thrown.
-
-While this name may also cause some confusion for users, other name choices such as ''Failure'' do not seem appropriate. It is likely that users would use the term 'Uncaught Error' when searching, minimizing overlap with with non-fatal error messages.
+The name ''Error'' was chosen to correspond with PHP's other errors. Non-fatal errors will issue warnings and notices, while fatal errors are thrown. While this may also cause some confusion for users, other name choices for the class such as ''Failure'' seem equally problematic. It is likely that users would search for 'Uncaught Error' when searching for the reason behind the problem and would minimize overlap with with warning and notice messages. Users may even wish to use ''set_error_handler()'' to throw objects extending ''Error'' in their code for any type of error.
 
 === AssertionException ===
 
@@ -109,22 +66,12 @@ If this RFC is accepted, ''AssertionException'' should instead extend ''Error'' 
 PHP 7
 
 ===== Backwards Compatibility =====
-''Throwable'', ''Error'', ''TypeError'', and ''ParseError'' will be built-in interfaces/classes and so it will no longer be possible for users to create classes with those exact names. It will still be possible for those names to be used within a non-global namespace.
+''Throwable'', ''Error'', ''TypeError'', and ''ParseError'' will no longer be available in the global namespace.
 
 ===== Patch =====
 A patch for this RFC is available at [[https://github.com/php/php-src/pull/1284]].
 
-===== Voting =====
-A majority of 50%+1 is required to approve this RFC.
-
-Please remember that this vote is not about creating separate exception branches, as that decision was made in the [[https://wiki.php.net/rfc/engine_exceptions_for_php7|Exceptions in the Engine RFC]]. This vote is about having short, concise, more intuitive names that clarify the separation rather than obfuscating it. ''Throwable'' and ''Error'' make stacked catch blocks cleaner with more obvious behavior. Voting no means keeping ''BaseException'', ''EngineException'', etc. that do not extend ''Exception'', but are named as though they do.
-
-Voting opened June 10th, 2015 and remained open until June 17th, 2015.
-
-<doodle title="Throwable Interface" auth="trowski" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+The patch prevents user classes from implementing ''Throwable'', preventing users from creating their own throwable branches, ensuring only ''Exception'' and ''Error'' instances can be thrown. ''Error'' instances can be created and extended by users, allowing users to create throwable ''Error'' objects to create their own fatal errors.
 
 ===== References =====
   * [[https://wiki.php.net/rfc/engine_exceptions_for_php7|Exceptions in the Engine RFC]]
