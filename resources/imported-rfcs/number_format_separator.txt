@@ -2,127 +2,47 @@
   * Version: 1
   * Date: 2015-12-19
   * Author: Thomas Punt, tpunt@php.net
-  * Status: Declined
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/number_format_separator
 
-
 ===== Introduction =====
-Long numerical literals can be a source of poor readability in code. Take the following examples:
+This RFC seeks to add support for using separators (underscores) in numerical literals in PHP.
 <code php>
-// what number is this?
-197823459;
-
-// which number is greater?
-97802345932 > 97802349532;
-
-// are these numbers equal?
-9803458239 === 9803457239;
-</code>
-
-These are difficult to read and difficult reason about. To ameliorate this issue, this RFC proposes the introduction of a digit separator in numerical literals. This will enable the examples above to be rewritten as:
-<code php>
-// what number is this?
-197_823_459;
-
-// which number is greater?
-97_802_345_932 > 97_802_349_532;
-
-// are these numbers equal?
-9_803_458_239 === 9_803_457_239;
+1_000_000; // versus 1000000
+3.141_592; // versus 3.141592
+0x025_612; // versus 0x025612
+0b0010_1101; // versus 0b00101101
 </code>
 
 
 ===== Proposal =====
-This RFC will add support for using the underscore character as a separator in PHP's numerical literals. The separator will be supported by all numerical types and notations in PHP.
+This feature applies to all numerical literals. It does not include stringy numerics, because of the BC breakage involved (support for these can be done in the next major version of PHP, if wanted).
 
-Example:
+The following semantics have been chosen:
+* Leading underscores are not allowed. This is due to conflicts with constant naming conventions.
 <code php>
-1_000_000; // versus 1000000
-3.141_592; // versus 3.141592
-0x02_56_12; // versus 0x025612
-0b0010_1101; // versus 0b00101101
-0267_3432; // versus 02673432
-1_123.456_7e2 // versus 1123.4567e2
+_1; // interpreted as a constant
 </code>
 
-The underscores will be stripped out during the lexing stage, and so the runtime will not be affected in any way. For example:
+* Trailing underscores are not allowed. This would be pretty useless.
 <code php>
-var_dump(1_000_000); // int(1000000)
-</code>
+1_; // PHP Parse error:  syntax error, unexpected '_' (T_STRING) in ...
 
-==== Chosen syntax ====
+* Adjacent underscores are not allowed. This would be pretty useless.
+1__000; // PHP Parse error:  syntax error, unexpected '__000' (T_STRING) in
 
-The digit separator is used to mark boundaries between digits - it is not used to separate digits from other characters. The following syntax choices are therefore based on this.
-
-=== Disallow leading underscores ===
-
-Leading underscores will not enhance readability and will conflict with constant naming conventions.
-<code php>
-_100; // a valid constant in PHP
-</code>
-
-=== Disallow trailing underscores ===
-
-Trailing underscores will not enhance readability - if anything, they will decrease it.
-<code php>
-100_<=>1_000_+_CONST_NAME; // Parse error: syntax error, unexpected '_' (T_STRING)...
-</code>
-
-=== Disallow adjacent underscores ===
-
-Allowing for two or more underscores to be placed together will provide no further readability benefits.
-<code php>
-1__000___000_000; // Parse error: syntax error, unexpected '__000___000_000' (T_STRING)...
-</code>
-
-=== Enable underscores between digits only ===
-
-Underscores are not allowed around the period for floats, around the **0x** for hexadecimal notation, around the **0b** for binary notation, or around the **e** for scientific notation. This is because readability will be negatively impacted, and it doesn't really serve the purpose of a "digit separator."
-<code php>
-100_.0; // Parse error:  syntax error, unexpected '_' (T_STRING) in...
-100._01; // Parse error:  syntax error, unexpected '_01' (T_STRING) in...
-0x_0123; // Parse error:  syntax error, unexpected 'x_0123' (T_STRING) in...
-0b_0101; // Parse error:  syntax error, unexpected 'b_0101' (T_STRING) in...
-1_e2; // Parse error: syntax error, unexpected '_e2' (T_STRING)...
-1e_2; // Parse error: syntax error, unexpected 'e_2' (T_STRING)...
-</code>
-
-=== Enable for arbitrary grouping of digits ===
-
-Underscores may be freely interspersed between arbitrary groups of digits, enabling for developers to group the digits as they see fit. One such argument for relaxing the interspersing of underscores is that not all countries group digits in sets of three [1].
-<code php>
-1_234_567; // grouped in sets of 3
-123_4567; // grouped in sets of 4 (Japan, China)
-1_00_00_00_000; // grouped according to India's numbering system
-
-0x11_22_33_44_55_66; // a number to be used as bytes, grouped by bytes
-0x1122_3344_5566; // a number to be used as 16-bit data, grouped by word
-</code>
+* Underscores are not allowed around the period (.) for floats, around the 0x for hexadecimal numbers, or around the 0b for binary numbers.
+100_.0; // PHP Parse error:  syntax error, unexpected '_' (T_STRING) in...
+100._01; // PHP Parse error:  syntax error, unexpected '_01' (T_STRING) in...
+0x_0123; // PHP Parse error:  syntax error, unexpected 'x_0123' (T_STRING) in...
+0b_0101; // PHP Parse error:  syntax error, unexpected 'b_0101' (T_STRING) in...
 
 
-==== Why the underscore character? ====
+Other than the aforementioned rules, underscores may be freely interspersed between digits:
+100_000;
+1_0_0.0_1;
+10_00_0;
 
-The underscore:
-  * Is easy to type on the majority of keyboard layouts
-  * Does not conflict with PHP's grammar
-  * Acts as a clear and unambiguous delineator between digits (unlike the comma or period)
-
-It has also been widely adopted as a digit separator in a number of other languages, including:
-  * Ada
-  * D
-  * Java
-  * Julia
-  * Perl
-  * C#
-  * Ruby
-  * Elixir
-
-Few other languages have deviated from using the underscore to separate digits. One notable exception is C++, where it could not use an underscore because of conflicts with user-defined literals (specifically in a hexadecimal context). Because PHP does not have such user-defined literals, there are no technical problems with using the underscore as a digit separator. This proposal therefore seeks to follow suite with the other languages.
-
-==== Why no support for stringy numerics? ====
-This RFC does not include stringy numerics because of the BC breakage involved. It would mean changing the coercion rules for strings to integers, which may potentially have wide-ranging impacts for PHP programs. Also, support for stringy numerics can be quite easily emulated in userland code.
-
-If formatting stringy numerical literals is desired, then support for these can be added in the next major version of PHP.
 
 ===== Backward Incompatible Changes =====
 There are no BC breaks with this feature.
@@ -132,38 +52,30 @@ PHP 7.1
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-No impact.
 
 ==== To Existing Extensions ====
-No impact.
+No impact
 
 ==== To Opcache ====
-No impact.
+No impact
 
 ==== New Constants ====
-No impact.
+No impact
 
 ==== php.ini Defaults ====
-No impact.
+No impact
 
 ===== Open Issues =====
-None so far.
+None so far
 
 ===== Future Scope =====
 Support for stringy numerics could be added in the next major version.
 
-===== Vote =====
-A simple yes/no voting option on whether to support a digit separator in PHP. A 2/3 majority is required.
-
-<doodle title="Include a Digit Separator into PHP" auth="tpunt" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-Voting starts on January 13th and ends on January 20th.
+===== Proposed Voting Choices =====
+A simple yes/no voting option. A 2/3 majority is required.
 
 ===== Patches and Tests =====
-PR: https://github.com/php/php-src/pull/1699
+A patch has been made - this part will be updated soon.
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -172,11 +84,7 @@ After the project is implemented, this section should contain
   - a link to the PHP manual entry for the feature
 
 ===== References =====
-Current discussion: https://marc.info/?l=php-internals&m=145149644624888&w=2
-
-Previous discussion on separators for numerical literals: https://marc.info/?l=php-internals&m=142431171323037&w=2
-
-[1]: http://www.statisticalconsultants.co.nz/blog/how-the-world-separates-its-digits.html
+Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
