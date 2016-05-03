@@ -2,12 +2,12 @@
   * Version: 1.0
   * Date: 2016-05-03
   * Author: Leigh T <leigh@php.net>
-  * Status: Implemented (PHP 7.1)
+  * Status: Under Discussion
   * First Published at: https://wiki.php.net/rfc/rng_fixes
 
 ===== Introduction =====
 
-There are several long standing issues with random number generation that should be addressed:
+There are several long standing issues with random number generation that need to be addressed:
 
   * Incorrect implementations
   * Platform-specific outputs
@@ -18,68 +18,31 @@ Some of these fixes alter the output of the RNG or change the behaviour of funct
 
 ===== Proposal =====
 
-There are several proposals up for discussion.
-
-  * Fix the current mt_rand() implementation, with the legacy implementation still available.
-  * Alias rand() to mt_rand().
-  * Fix RAND_RANGE for large ranges.
-  * Replace insecure uses of php_rand() with php_random_bytes()
-  * Make array_rand() more efficient
-
-== Fix mt_rand() implementation ==
+== Fix mt_rand_() output ==
 The implementation of <php>mt_rand()</php> in PHP contains a typo that makes it generate a different sequence of numbers to the original mt19937 implementation. [[https://bugs.php.net/bug.php?id=71152|See bug #71152]]
 
-[[https://gist.github.com/tom--/a12175047578b3ae9ef8|Statistical analysis]] suggests that the quality of the output is unaffected.
+It is not known if the period or the quality of the output from the RNG is negatively affected due to this typo.
 
-As <php>mt_rand()</php> can be seeded for repeatable sequences the current implementation makes it incompatible with other systems that do use correct implementations. However fixing it also means that the sequence generated for a given seed in PHP will also now be different.
-
-The legacy implementation will be preserved and be selectable with a new `mt_srand(int $seed [, int $mode])` parameter, along with new constants representing the two modes. The default will be the fixed algorithm.
-
-<doodle title="Fix mt_rand() implementation" auth="leigh" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+As <php>mt_rand()</php> can be seeded for repeatable sequences the current implementation makes it incompatible with other systems that do use correct implementations. However fixing it also means that the sequeunce for a given seed will now be different.
 
 == Alias rand() to mt_rand() ==
 <php>rand()</php> uses the system random number generator. The output of this RNG is system dependant and on many systems produces weak random numbers. ([[https://bugs.php.net/bug.php?id=45301|See bug #45301]])
 
-Aliasing it to <php>mt_rand()</php> improves the quality of the output and means the same output can be expected for a given seed regardless of platform.
+Aliasing it to <php>mt_rand()</php> improves the quality of the output and means the same output can be expected regardless of platform, for a given seed.
 
-<doodle title="Alias rand() to mt_rand()" auth="leigh" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-== Fix RAND_RANGE() ==
+== Replace RAND_RANGE() ==
 The macro used to scale the output of an RNG between two bounds is insufficient for large ranges. ([[https://bugs.php.net/bug.php?id=45184|See bug #45184]])
 
 The proposed fix is to concatenate multiple outputs for ranges exceeding 32 bits, and use rejection sampling (the same as used in <php>random_bytes()</php>) to produce unbiased outputs.
 
-<doodle title="Fix RAND_RANGE()" auth="leigh" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
 == Replace insecure uses of php_rand() with php_random_bytes() ==
-There are several instances where <php>rand()</php> is used internally in a security sensetive context
+There are several instances where rand() is used internally in a security sensetive context
 
   * <php>crypt()</php> salt generation
   * SOAP HTTP auth nonce generation
+  * <php>mcrypt_create_iv()</php> fallback
 
 These instances should all be fixed to use the secure random number generator (even mcrypt which is deprecated)
-
-<doodle title="Replace insecure uses of php_rand() with php_random_bytes()" auth="leigh" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-== Make array_rand() more efficient ==
-It has been noted that ([[http://php.net/manual/en/function.array-rand.php#117114|array_rand() produces weird and very uneven random distribution]]). As the above proposals change the output of <php>array_rand()</php> anyway, we can fix this at the same time.
-
-<doodle title="Make array_rand() more efficient" auth="leigh" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
 
 ===== Backward Incompatible Changes =====
 
@@ -90,6 +53,7 @@ A call to <php>srand()</php> or <php>mt_srand()</php> with a given seed will pro
   * <php>shuffle()</php>
   * <php>str_shuffle()</php>
   * <php>crypt()</php>
+  * <php>mcrypt_create_iv()</php>
 
 ===== Proposed PHP Version(s) =====
 7.1
@@ -105,23 +69,22 @@ This is covered in the Backward Incompatible Changes section
 None, this is a functional change, no changes to opcodes or code generation are required.
 
 ==== New Constants ====
-MT_RAND_MT19937 (correct implementation mode)
-MT_RAND_PHP (unofficial implementation mode)
+None
 
 ===== Open Issues =====
 None
 
 ===== Proposed Voting Choices =====
-Individual votes will be held for the remaining proposals, and since minor BC breaks are introduced they will require a 2/3 majority to pass.
+This will be an all or nothing vote (after discussion), and as the changes are functional, will require a 50%+1 majority to pass.
 
 ===== Patches and Tests =====
-https://github.com/php/php-src/pull/1986
+WIP
 
 ===== Implementation =====
 
-https://github.com/php/php-src/commit/ab834f4
 
 ===== References =====
+Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
 None
