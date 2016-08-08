@@ -2,85 +2,36 @@
   * Version: 0.1
   * Date: 2016-08-08
   * Author: David Walker (dave@mudsite.com)
-  * Status: Implemented (PHP 7.2)
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/socket_getaddrinfo
 
 ===== Introduction =====
-This RFC targets a reported feature request in [[https://bugs.php.net/bug.php?id=72733|#72733]].  The request is that PHP expose the C level function getaddrinfo().  This is a missing nice piece to the current socket library.  When dealing with variable networks it would be beneficial to allow libc to tell us what methods of connecting/listening would be most appropriate given a set of hints.
+This RFC targets a reported feature request in [[https://bugs.php.net/bug.php?id=72733|#72733]].  The request is that PHP expose the C level function getaddrinfo().  This is a missing nice piece to the current socket library.  When dealing with IP variable networks it would be beneficial to allow libc to tell us what methods of connecting/listening would be most appropriate given a set of hints.
 
 ===== Proposal =====
-The implementation[[https://wiki.php.net/rfc/socket_getaddrinfo#references|[1]]] I'm proposing implements 4 new functions.  ''socket_addrinfo_lookup()'' will return an array of resources, with each resource corresponding to each returned addrinfo.  The next two implemented methods ''socket_addrinfo_bind()'', and ''socket_addrinfo_connect()'', would be used to bind, or connect, to a given resource rather than make the user go through the process of creating the socket and connect/binding themselves.  The last, ``socket_addrinfo_explain`` is to convert the resource to an array for examination.
+The implementation[1] I'm proposing implements 4 new socket_* functions.  socket_getaddrinfo() will return an array of resources, with each resource corresponding to each returned addrinfo sockaddr.  The next two implemented methods socket_addrinfo_bind(), and socket_addrinfo_connect(), would be used to bind, or connect, to a given resource rather than make the user go through the process of creating the socket and connect/binding themselves.  The fourth function is a free'r if you'd want to free the resources before end of script.
 <file php>
-socket_addrinfo_lookup(string node[, mixed service, array hints]) : array
-socket_addrinfo_connect(resource $addrinfo) : resource
-socket_addrinfo_bind(resource $addrinfo) : resource
-socket_addrinfo_explain(resource $addrinfo) : array
+array    socket_getaddrinfo(string node[, mixed service, array hints])
+resource socket_addrinfo_connect(sockaddrresource sockaddr)
+resource socket_addrinfo_bind(sockaddrresource sockaddr)
+null     socket_addrinfo_close(sockaddrresource sockaddr)
 </file>
 
-IPv4 Example
 <file php>
 <?php
-$addrinfo = socket_addrinfo_lookup('localhost', 2000, array('ai_family' => AF_INET, 'ai_socktype' => SOCK_STREAM));
+$addrinfo = socket_getaddrinfo('127.0.0.1', 2000, array('ai_family' => AI_INET, 'ai_socktype' => SOCK_STREAM));
 $sockaddr = reset($addrinfo);
 if (!$sockaddr) die ("No Valid Socket Types");
 $sock = socket_addrinfo_bind($sockaddr);
 // ^^ $sock is a socket resource that is bound to 127.0.0.1:2000 using TCP/IP ready for reading
-
-var_dump(socket_addrinfo_explain($sockaddr));
-/* Outputs:
-array(5) {
-  ["ai_flags"]=>
-  int(0)
-  ["ai_family"]=>
-  int(2)
-  ["ai_socktype"]=>
-  int(1)
-  ["ai_protocol"]=>
-  int(6)
-  ["ai_addr"]=>
-  array(2) {
-    ["sin_port"]=>
-    int(2000)
-    ["sin_addr"]=>
-    string(9) "127.0.0.1"
-  }
+foreach ($addrinfo as $sockaddr) {
+    socket_addrinfo_close($sockaddr);
 }
-*/
 </file>
 
-IPv6 Example
-<file php>
-<?php
-$addrinfo = socket_addrinfo_lookup('localhost', 2000, array('ai_family' => AF_INET6, 'ai_socktype' => SOCK_STREAM));
-$sockaddr = reset($addrinfo);
-if (!$sockaddr) die ("No Valid Socket Types");
-$sock = socket_addrinfo_bind($sockaddr);
-// ^^ $sock is a socket resource that is bound to [::1]:2000 using TCP/IP ready for reading
-
-var_dump(socket_addrinfo_explain($sockaddr));
-/* Outputs:
-array(5) {
-  ["ai_flags"]=>
-  int(0)
-  ["ai_family"]=>
-  int(10)
-  ["ai_socktype"]=>
-  int(1)
-  ["ai_protocol"]=>
-  int(6)
-  ["ai_addr"]=>
-  array(2) {
-    ["sin6_port"]=>
-    int(2000)
-    ["sin6_addr"]=>
-    string(3) "::1"
-  }
-}
-*/
-</file>
 
 ===== Backward Incompatible Changes =====
-New functionality; no BC issues.
+New functionality; no BC problems here.
 
 ===== Proposed PHP Version(s) =====
 Next PHP 7.x (currently 7.2)
@@ -99,21 +50,9 @@ None
 Exposing the AI_* family of constants.
 
 ===== Proposed Voting Choices =====
-Vote to implement the new functionality, would require a 2/3 majority.
-<doodle title="Implement socket_getaddrinfo family" auth="bp1222" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-Vote Start: 2016-08-24 15:23 UTC
-
-Vote End:   2016-08-31 23:59 UTC
+Vote to implement the new functions, would require a 2/3 majority.
 
 ===== Implementation =====
 
-  - merged into master (i.e. pre 7.2)
-  - https://github.com/php/php-src/commit/d59af68f
-  - https://github.com/php/php-src/commit/750f3d3f
-  - a link to the PHP manual entry for the feature
-
 ===== References =====
-  * [1] - [[https://github.com/php/php-src/pull/2078|Proposed Implementation]]
+[1] - [[https://github.com/php/php-src/compare/master...bp1222:fix-72733|Proposed RFC Implementation]]
