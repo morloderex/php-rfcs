@@ -15,14 +15,15 @@ Add session_create_id() function
 
   string session_create_id([string $prefix])
 
+NOTE: Prefix length is not considered as a part of session.sid_length. Session ID length became 'prefix length' + session.sid_length. Total length must be less than 256 chars.
+
 session_create_id() will create new session ID by
 
-  * Default internal function(php_session_create_id()) when session is not active.
-  * User defined session ID creation function when session is active.
+  * Default internal function(php_session_create_id()) when session is **NOT** active.
+  * Save handler defined session ID creation function when session is active.
+    * Additionally, if session ID validation function is defined, collision is detected.
 
-Session ID collision is detected upon session_start(). Therefore, different session ID could be assigned by collision and session.use_strict_mode=1.  User defined session ID creation function may detect collisions if collision is a problem.
-
-Note: Session ID creation function is not documented, but it's there.
+Note: User defined session ID creation function(handler) is not documented, but it's there.
 http://php.net/manual/en/book.session.php
 It's not documented because Object based save handler has non standard method name. i.e. create_sid() rather than createSid(). Rename will be proposed by different RFC. If you would like to see how it is used, please refer to phpt files. 
 
@@ -38,39 +39,38 @@ Prefix session ID by user id. This could be useful to search active session IDs 
 <code php>
 <?php
 function create_logged_in_session($uid) {
-  // Mark obsolete session as obsolete.
+  // Mark obsolete session as obsolete. Timestamp based session management is mandatory.
   $_SESSION['OBSOLETE'] = time(); // Warn access to this session after a few minutes. Should be checked upon starting session.
 
   // Make sure old session does not have 'uid' in $_SESSION
   unset($_SESSION['uid']);
-  
-  // Save and close session.
-  session_commit(); 
 
-  ///////// Prepare new logged in SID /////////////
-  
-  // Session is active here. So user defined session ID creation function is used. Users may check collision optionally.
+  // Session is active here. It is safe to generate new session ID while session is active,
+  // because session ID collision is detected by session module if save handler implements session ID validation function.
   $sid = session_create_id($uid.'-');  
+
+  // Save and close old session.
+  session_commit(); 
   
-  // Disable to use custom session ID. use_strict_mode should be enabled by default for session security.
+  // use_strict_mode should be enabled by default for session security.
+  // However, it must be disable to use custom session ID. 
   ini_set('session.use_strict_mode', false); 
   
   // Set your own session ID and start session.
   session_id($sid);
-  
-  // If save handler has validate_sid() callback, collision is detected when use_strict_mode=1. Currently disabled. 
+  // Collision is checked already in previous active session.
   session_start(); 
   
   // Error check
   if (session_id() !== $sid) {
-    throw new Exception('Should not happen'); // Save handlers could do something cause this
+    throw new Exception('Should not happen'); // Save handlers could do something cause this. This should never happen usually.
   }
   
   $_SESSION['uid'] = $uid;
 }
 
 function my_session_start() {
-  // Should enable use_strict_mode
+  // Should enable use_strict_mode for security reasons.
   ini_set('session.use_strict_mode', 1);
 
   session_start();
@@ -88,7 +88,7 @@ If session data is stored in database, administrators are able to list active se
 
 ===== Backward Incompatible Changes =====
 
-None.
+None. Just a new function.
 
 ===== Proposed PHP Version(s) =====
 
