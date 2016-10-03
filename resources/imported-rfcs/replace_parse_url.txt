@@ -1,60 +1,56 @@
-====== PHP RFC: Create RFC Compliant URL Parser ======
-  * Version: 0.3
-  * Date: 2016-10-04
+====== PHP RFC: Replace parse_url() ======
+  * Version: 0.1
+  * Date: 2016-10-03
   * Author: David Walker (dave@mudsite.com)
-  * Proposed version: PHP 7.2+
-  * Status: Inactive
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/replace_parse_url
 
 ===== Introduction =====
-This RFC came about for an attempt to resolve [[https://bugs.php.net/bug.php?id=72811|Bug #72811]].  In the attempt, discussion shifted from trying to patch the current implementation of ''parse_url()'' to more generally replacing the current one.  The discussion then shifted to the inability to remove ''parse_url()'' due to BC issues.  Ideas formed on creating an immutable class that will take a URL and parse it, exposing the pieces by getters.
+This RFC came about for an attempt to resolve [[https://bugs.php.net/bug.php?id=72811|Bug #72811]].  In the attempt, discussion shifted from trying to patch the current implementation of ''parse_url()'' to replacing it with an re2c based parser.  The current implementation of ''parse_url()'' does not respect [[https://tools.ietf.org/html/rfc3986|RFC 3986]] with regard to most of the components of a URL.  The bug in question noted that
 
-The current implementation of ''parse_url()'' makes a bunch of exceptions to [[https://tools.ietf.org/html/rfc3986|RFC 3986]].  I do not know if these are conscious exceptions, or, if ''parse_url()'' was never based off of the RFC.  After raising this RFC, I was alerted that the RFC, is complimented by [[https://url.spec.whatwg.org|WHATWG]] spec on URLs.  The aim of WHATWG is to combine RFC 3986 and [[https://tools.ietf.org/html/rfc3987|RFC 3987]].  However, WHATWG is a "Living Standard" which makes it subject to change, however frequent.  Although it does some good combining the two RFC's, the complexities to have a single PHP parser that would require constant maintaining to adhere to the evolving standard is not exactly practical.
-
-So, this RFC proposes creating a new parser that adheres to the two RFC's.  In doing so, if PHP is compiled with mbstring support, would be able to properly support multibyte characters in a URL.
-
-===== Proposal =====
 <file php>
 <?php
+var_dump(parse_url("127.0.0.1:80", PHP_URL_HOST));
 
-class URL {
-    public function  __construct(string $url, string|URL $base);
-    
-    /**
-     * $input - The string to be parsed
-     * $base - (optional) If $url is relative, this is what it is relative to
-     * $encoding_override - (optional) we assume $url is a UTF-8 encoded string, you may change it here
-     * $url - (optional) A URL object that should be modified by the parsing of $input.  The return value will be this variable as well
-     * $state_override - (optional) begin parting the $input from a specific state.
-     */
-    static public function parse(string $input[, URL $base[, int $encoding_override[, URL $url[, int $state_override]]]]) : URL;
-    
-    public function getScheme() : ?string;
-    public function getUsername() : ?string;
-    public function getPassword() : ?string;
-    public function getHostname() : ?string;
-    public function getPort() : ?int;
-    public function getPath() : ?string;
-    public function getQuery() : ?string;
-    public function getFragment() : ?string;
-    
-    public function getAll() : array;
-}
-
+/* Outputs:
+string(9) "127.0.0.1"
+*/
 </file>
 
+While we all may agree that this is sensible, and totally expected, it is actually a lie.  That is not how the RFC defines how that string should be interpreted.  It should parse as a single PATH element ''string(12) "127.0.0.1:80"''.  Why?  Well the RFC defines the ''hier-part'', which contains the host portion, of the URI to be after a double-slash, to which the example lacks.  This would result in the ''path-noscheme'' portion of the parsing to match beginning at the ''1'' and fill the path until a ''?'' or ''#'' is found.
+
+===== Proposal =====
+The proposal of this RFC is two fold.  One, replace the current parser used for ''parse_url()'' to utilize re2c.  Two, ensure ''parse_url()'' more closely follows the RFC.  The function signature will not change, however, the return value will be more consistent.
+
+The function can return
+  * An array consisting of each component of the URI found.
+  * A string|int of the component requested by the 2nd argument
+  * NULL when we can not parse the URI, or, the component request contains no value
+
+===== Discussion Points =====
+==== RFC Break ====
+I do make a single exception and break with the RFC in one place.  The RFC does not permit curly-braces within a query component.  For instance ''http://example.net/index.php?q={fullname}'', where the RFC would define the path as being ''q='', I don't feel this is accurate as ''{'' and ''}'' are not special markers within an URI and should otherwise be treated as part of the string.
+
 ===== Backward Incompatible Changes =====
-None
+Many of the tests that were developed for the current implementation of ''parse_url()'' have been changed to reflect a more standards compliant test.  This change will break anyone who is using the function with a non-standards compliant URI format.  This is the most problematic in terms of a BC break.  By this point, many people who use ''parse_url()'' might expect it to work in a, lets say, forgiving manner.  The example provided in the bug report is a perfect example of what I feel is a common use case of this function which will no longer act in a standards compliant method.
+
+===== Proposed PHP Version(s) =====
+PHP 7.2, or later
 
 ===== RFC Impact =====
 ==== To Existing Extensions ====
-standard
+standard 
 
 ===== Open Issues =====
-  * Deprecate ''parse_url()''?  Try and push people into using the new URLParser class.
-  * Should ''parse_url()'' have a sunset date of PHP8, or PHP9?
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Proposed Voting Choices =====
+Vote to replace ''parse_url()'' with an re2c parser, and require standard compliant URI formats.
 Requires 2/3
 
 ===== Implementation =====
@@ -64,3 +60,4 @@ After the project is implemented, this section should contain
   - a link to the PHP manual entry for the feature
 
 ===== References =====
+PR with working Implementation: [[https://github.com/php/php-src/pull/2079]]
