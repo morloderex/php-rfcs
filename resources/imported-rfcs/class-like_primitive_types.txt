@@ -7,186 +7,76 @@
 
 ===== Background =====
 
-PHP has a small set of built-in types of value: null, Boolean, integer, float, string, array, object and resource. These types are known as “primitive” types, because they are built-in to the language. Of these, objects are special. Objects, themselves instances of the primitive type object, are also instances of PHP's form of non-primitive, user-defined types: classes.
+PHP has a small set of built-in types: null, Boolean, integer, float, string, array, object and resource. These types are known as “primitive” types, because they are built-in to the language. Of these, objects are special. Objects, themselves a primitive type, are also instances of PHP's form of non-primitive, user-defined types: classes.
 
-Since their introduction in PHP 3.0, classes and objects have gained several features that are exclusive to them, which the other primitive types consequently cannot make use of. These features include instance and static methods, properties, class constants, interface implementation, inheritance, and <php>instanceof</php>.
+Classes and objects have evolved considerably since their introduction in PHP 3.0. As part of this evolution, they have gained several features that are exclusive to them, which the other primitive types consequently cannot make use of. These features include instance and static methods, properties, class constants, interface implementation, inheritance, and <php>instanceof</php>.
 
-This set of exclusive features creates an awkward divide between PHP's objects and its other primitive types. Various tasks must be done in different ways for objects versus other types, creating the need for workarounds to bridge the gap. For example, the [[rfc:iterable|iterable pseudo-type]] was introduced because objects can implement <php>Traversable</php>, yet the array type, not being a class, cannot.
+This set of exclusive features creates an awkward divide between PHP's objects and it's other primitive types. Various tasks must be done in different ways for objects versus other types, creating the need for workarounds to bridge the gap. For example, the [[rfc:iterable|iterable pseudo-type]] was introduced because objects can implement <php>Traversable</php>, yet the array type, not being a class, cannot.
 
-By contrast, some of PHP's contemporaries, like JavaScript and Python, make all their primitive types be classes. This brings uniformity, and also means primitive types can benefit from the convenience of method calls as compared to function calls.
-
-There could be benefits to adopting the same approach in PHP. However, as of PHP 5, PHP objects behave differently from the other primitive types, in that they are not value types, but rather reference types. This prevents making the other primitive types into objects, unless objects were changed to also support value type semantics. Even surmounting that hurdle, the PHP interpreter's internal representation of objects versus other primitive values is much less efficient, so replacing the primitive types with classes could significantly reduce performance. Moreover, changing the internal representation of the other primitive types in the PHP interpreter would be a massive undertaking.
-
-Hence, this RFC suggests a different approach.
+===== Introduction =====
+The elevator pitch for the RFC. The first paragraph in this section will be slightly larger to give it emphasis; please write a good introduction.
 
 ===== Proposal =====
+All the features and examples of the proposal.
 
-This RFC proposes to extend PHP's object-oriented features to the other primitive types. They would not become objects, and their internal representation would be unchanged. However, they would now benefit from most of the features of objects.
+To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain hows the proposal brings substantial value to be considered
+for inclusion in one of the world's most popular programming languages.
 
-==== Features extended to primitives ====
+Remember that the RFC contents should be easily reusable in the PHP Documentation.
 
-The following features of objects would now be extended to the other primitive types.
-
-=== Interfaces and inheritance ===
-
-These types would now implement PHP's pre-defined interfaces as appropriate (see the class hierarchy further down for a list of which).
-
-These types would not be extendible by user classes, but could in future potentially extend new built-in abstract classes (e.g. <php>int</php> and <php>float</php> could extend <php>\Number</php>).
-
-Type declarations and <php>instanceof</php> would now accept values of these types as implementing these interfaces and extending these classes, as appropriate.
-
-=== Instance methods and properties ===
-
-These types will provide instance methods as necessary to conform to PHP's pre-defined interfaces (see the class hierarchy further down for a list of which).
-
-In future, they could provide other methods, or magic instance properties (see the future scope section).
-
-=== instanceof ===
-
-The <php>instanceof</php> operator will now accept primitive values, rather than producing a fatal error. In addition, it will now support testing for membership of primitive types:
-
-  * <php>$x instanceof null</php>
-  * <php>$x instanceof bool</php>
-  * <php>$x instanceof int</php>
-  * <php>$x instanceof float</php>
-  * <php>$x instanceof string</php>
-  * <php>$x instanceof array</php>
-  * <php>$x instanceof object</php>
-  * <php>$x instanceof resource</php>
-
-==== Features not extended to primitives ====
-
-The following features would **not** now be extended to the other primitive types:
-
-  * <php>is_object()</php> will continue to return <php>FALSE</php> for the other primitive types
-  * <php>gettype()</php> will continue to report the other primitive types as non-objects
-  * <php>ArrayAccess</php> will not be implemented by <php>array</php>, because it provides mutating methods
-  * <php>null</php> has no shadow class (see the Open Issues section), but does support <php>instanceof null</php>
-
-**FIXME:** What do I do about reflection?
-
-=== Serializable and resources ===
-
-The resource type will not implement the <php>Serializable</php> interface. Though the <php>serialize()</php> function accepts resources, it is broken: they serialise to an integer of the resource ID, and this integer, when deserialised, neither become a resource nor is usable as one. The <php>->deserialize()</php> method would therefore be redundant given resources cannot be deserialised, and the type would not be fulfilling the contract of the interface since resources do not meaningfully/ serialise.
-
-==== Primitive type class hierarchy ====
-
-Behind each other primitive type, there would now be a hidden internal class, or //shadow class//. Attempts to call methods, look up properties, use <php>instanceof</php>, etc. on values of these types would consult these hidden internal classes. The following is an outline of these new classes. Note that the implementations of <php>JsonSerializable</php> would only be present when the JSON extension is loaded.
-
-<code php>
-/* There is no shadow class for null */
-
-final class bool implements Serializable, JsonSerializable {
-    public function __toString() { /* ... */ }
-    public function serialize() { /* ... */ }
-    public function unserialize($serialized) { /* ... */ }
-    public function jsonSerialize() { /* ... */ }
-}
-final class int implements Serializable, JsonSerializable {
-    public function __toString() { /* ... */ }
-    public function serialize() { /* ... */ }
-    public function unserialize($serialized) { /* ... */ }
-    public function jsonSerialize() { /* ... */ }
-}
-final class float implements Serializable, JsonSerializable {
-    public function __toString() { /* ... */ }
-    public function serialize() { /* ... */ }
-    public function unserialize($serialized) { /* ... */ }
-    public function jsonSerialize() { /* ... */ }
-}
-final class string implements Serializable, JsonSerializable {
-    public function __toString() { /* ... */ }
-    public function serialize() { /* ... */ }
-    public function unserialize($serialized) { /* ... */ }
-    public function jsonSerialize() { /* ... */ }
-}
-final class array implements Serializable, JsonSerializable, Countable, IteratorAggregate {
-    public function __toString() { /* ... */ }
-    public function serialize() { /* ... */ }
-    public function unserialize($serialized) { /* ... */ }
-    public function jsonSerialize() { /* ... */ }
-    public function count() { /* ... */ }
-    public function getIterator() {
-        return new ArrayIterator($this);
-    }
-}
-final class resource {
-    public function __toString() { /* ... */ }
-}
-</code>
+If applicable, you may wish to use the language specification as a reference.
 
 ===== Backward Incompatible Changes =====
-
-**FIXME** 
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
-
-This is proposed for the next PHP 7.x. Currently, that would be PHP 7.2.
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 7.x" or "next PHP 7.x.y".
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-
-This has no particular special impact on the SAPIs.
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
 ==== To Existing Extensions ====
-
-This does not impact existing extensions: their view of the world is unchanged and the primitive types other than objects are still not objects, internally.
-
-**FIXME:** Reflection.
+Will existing extensions be affected?
 
 ==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
 
-**FIXME**.
+Please explain how you have verified your RFC's compatibility with opcache.
+
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
 
 ===== Open Issues =====
-
-**FIXME:** Reflection, Opcache.
-
-==== Should null have a shadow class? ====
-
-Or in other words, should these features be extended to <php>null</php>?
-
-<php>null</php> is a value and type representing the absence of a value. It is a special case among the scalar types, lacking its own type declaration and not being coerced in weak type checking.
-
-Would methods like <php>__toString()</php> on <php>null</php> values be more likely to be called in error than intentionally?
-
-In JavaScript, ''null'' does not have any properties or methods, but ''true'' and ''false'' do. In contrast, Python's ''None'' (its equivalent to null) //does// have properties and methods, albeit only magic methods.
-
-This RFC currently chooses to omit null from the extension of most features of objects to the other types, but excepts <php>instanceof null</php> because it lacks the same potential to create errors.
-
-==== Should resource be supported? ====
-
-Resource is a legacy type that could be wholly replaced by objects in future. Extending these features to this type would be further entrenching it and contrary to the goal of its eventual removal.
-
-In particular, <php>instanceof resource</php> could create future backwards-compatibility problems if code uses it to check for values being resources and they later become objects.
+Make sure there are no open issues when the vote starts!
 
 ===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
 
-**FIXME**
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-
-The extension of these features to the other primitive types opens up a number of future possibilities.
-
-One of these would be [[http://nikic.github.io/2014/03/14/Methods-on-primitive-types-in-PHP.html|introducing new methods on the other primitive types]] (and also properties). This could lend string and array manipulation the convenience of method calls, and would provide an opportunity for a fresh start versus PHP's existing string and array functions, which have notoriously inconsistent naming and parameter orders.
-
-It also means we can easily introduce new superclasses of our other primitive types. For example, a new <php>\Number</php> type superclassing <php>int</php> and <php>float</php>, or a new <php>\Scalar</php> type superclassing everything except objects and arrays. Such superclasses could potentially be extended also by user-defined classes.
-
-Likewise, we could introduce new interfaces implemented by our other primitive types. One potential use for this is operator overloading. PHP could add an interface for number-like classes, which when implemented, would allow use of the number operators (''+ - * /'' etc.) with objects of that class. That interface could itself be implemented by PHP's own <php>int</php> and <php>float</php> types.
-
-<php>instanceof</php> could potentially support pseudo-types like <php>callable</php>.
+This sections details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 ===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
-This is a major language change, so it would require a 2/3 majority.
-
-It would be a Yes/No vote on whether to accept the RFC.
+State whether this project requires a 2/3 or 50%+1 majority (see [[voting]])
 
 ===== Patches and Tests =====
+Links to any external patches and tests go here.
 
-There is no interpreter patch at present. **FIXME**.
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
 
-There is no language specification patch at present. **FIXME**
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -196,9 +86,7 @@ After the project is implemented, this section should contain
   - a link to the language specification section (if any)
 
 ===== References =====
-
-**FIXME**
+Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
-
-None yet.
+Keep this updated with features that were discussed on the mail lists.
