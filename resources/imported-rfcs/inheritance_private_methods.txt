@@ -1,21 +1,15 @@
-====== PHP RFC: Remove inappropriate inheritance signature checks on private methods ======
-  * Version: 0.3
-  * Date: 2020-04-16
-  * Author: Pedro Magalhães, pmmaga@php.net
-  * Status: Implemented
-  * Target: 8.0
+====== PHP RFC: Ignore inheritance rules on private methods ======
+  * Version: 0.2
+  * Date: 2017-02-07
+  * Author: Pedro Magalhães, mail at pmmaga dot net
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/inheritance_private_methods
 
 ===== Introduction ===== 
 
-Currently, a method with the same name as a parent's method, is still checked for some inheritance rules regardless of the parent's method visibility.
+Currently, a method with the same name as a parent's method, is checked for inheritance rules regardless of the parent's method visibility.
 
 This leads to inheritance checks being executed even if the parent's method is private. Since private methods are not callable outside of the scope they are defined in, these rules should not be applied.
-
-Some rules are already skipped like the number of arguments or their type, but other rules are still enforced. Namely:
-  * When a method has the same name as a parent's final private method
-  * When a method has the same name as a parent's static private method and the child's method is non-static, or vice-versa
-  * When a method has the same name as a parent's concrete private method and the child's method is abstract
 
 The [[http://php.net/manual/en/language.oop5.inheritance.php|documentation]] explicitly states that only public and protected methods are inherited:
 
@@ -23,11 +17,11 @@ The [[http://php.net/manual/en/language.oop5.inheritance.php|documentation]] exp
 
 ===== Proposal ===== 
 
-This RFC proposes removing these inappropriate inheritance checks that are still enforced in the case of the parent method being private.
+This RFC aims at ignoring these inheritance rules in the case of the parent method being private.
 
 In the current state:
 
-<code php>
+<code php>  
 <?php
  
 class A 
@@ -47,11 +41,11 @@ class B extends A
 
 Produces:
 
-<code>
+<code> 
 Fatal error: Cannot override final method A::finalPrivate()
 </code>
 
-Besides the error occurring, the message mentions overriding which isn't applicable for private methods.
+Besides the error ocurring, the message mentions overriding which isn't applicable for private methods.
 
 With the implementation of this RFC, the previous and the following code would compile correctly:
 
@@ -94,44 +88,41 @@ $b->notOverriden_callYourPrivate();
 And would produce:
 
 <code>
-Warning: Private methods cannot be final as they are never overridden by other classes in ...
 A::myPrivate
 A::myPrivate
 B::myPrivate
 A::myPrivate
 </code>
 
-The final keyword when applied to a private method should have no significance. In most cases, a correct approach is to use ''final protected'' modifiers in a function where overriding is not desired.
+The final keyword when applied to a private method should have no significance.
 
-**NOTE:** Due to how common the usage of ''<nowiki>final private function __construct</nowiki>'' is and given that the same results cannot be achieved with a ''protected'' visibility, an exception to this rule is made for constructors. With this exception, they are the only case where a child class can't override a ''final private'' method.
+Open issue: Applying final to a private method could issue a compiler warning to warn the user that it doesn't have an effect.
 
 ===== Backward Incompatible Changes =====
 
-The new compiler warning:
+There are no BC breaking changes.
 
-<code>
-Warning: Private methods cannot be final as they are never overridden by other classes in ...
-</code>
+NOTE: The construction `final private function` is used for instance to restrict the usage of constructors and cloning of child classes.
+A correct approach to attain a similar effect would be `final protected function`.
 
-Will start appearing in some code bases where both modifiers ''final'' and ''private'' are used. However, given that an exception is made for the most common case ''final private function __construct'', I believe the warning is useful to let users know about this change.
+If the optional compiler warning is implemented this change would cause some existing applications to start issuing that warning.
 
 ===== Proposed PHP Version(s) ===== 
 
-PHP 8.0
+PHP 7.2
+
+===== Open Issues =====
+
+- Producing a compiler warning when `final private function` is used.
 
 ===== Unaffected PHP Functionality =====
 
 The inheritance rules for visible methods remains unaffected, including when these are static or declared on a trait.
 
-===== Vote =====
+===== Proposed Voting Choices =====
 
-Voting started 2020-06-15 and ends 2020-06-29.
-
-<doodle title="Remove inappropriate inheritance signature checks on private methods" auth="pmmaga" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+2/3 majority
 
 ===== Patches and Tests =====
 
-Implementation: https://github.com/php/php-src/pull/5401
+Implementation: https://github.com/php/php-src/compare/master...pmmaga:disable-inherit-check-private
