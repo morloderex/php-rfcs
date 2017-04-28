@@ -1,6 +1,6 @@
-====== PHP RFC: Class name type ======
+====== PHP RFC: Class and interface name types ======
   * Version: 0.1
-  * Date: 2017-04-29
+  * Date: 2017-04-28
   * Author: Andrea Faulds, ajf@ajf.me
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/class_and_interface_name_types
@@ -9,82 +9,41 @@
 There are various cases where the fully-qualified name of a class or interface may be returned from or passed as an argument to a function. While PHP has a type declaration for function names, <php>callable</php>, it does not yet have such a type declaration for class or interface names.
 
 ===== Proposal =====
-This RFC proposes the introduction of a new type declaration for use on parameters and return values, the <php>class</php> type declaration. It would accept the fully-qualified name of a class or interface.
+This RFC proposes the introduction of three new type declarations for use on parameters and return values:
 
-It would validate its value using the following steps:
+  * ''classlike'', which accepts the name of a class or interface
+  * <php>class</php>, which accepts the name of a class
+  * <php>interface</php>, which accepts the name of an interface
+
+These type declarations validate values using the following steps:
 
   - If the value is not a string, reject it.
   - If there is no currently-loaded class, interface, or trait with the name given by the value, attempt to autoload it.
-  - If there is now no currently-loaded class or interface with the name given by the value, reject the value.
+  - If there is now no currently-loaded class or interface (as appropriate) with the name given by the value, reject the value.
   - Otherwise, accept the value.
-
-As a parameter type, it would permit default values of <php>NULL</php> (to make the parameter null) and constant strings (including <php>::class</php> syntax).
 
 A simple example of usage:
 
 <code php>
 <?php
 
-function accepts_class(class $class = stdClass::class) {
+function accepts_class(class $class) {
     var_dump($class);
 }
 
-accepts_class();                   // string(8) "stdClass"
-accepts_class(stdClass::class);    // string(8) "stdClass"
-accepts_class("stdClass");         // string(8) "stdClass"
-accepts_class(ArrayAccess::class); // string(11) "ArrayAccess"
-accepts_class("nonexistant");      // Fatal error: Uncaught TypeError: Argument 1 passed to accepts_class() must be of the type class, string given…
+accepts_class(stdClass::class);    // works
+accepts_class("stdClass");         // also works
+accepts_class(ArrayAccess::class); // Fatal error: Uncaught TypeError: Argument 1 passed to accepts_class() must be of the type class, string given…
 </code>
 
-===== Rationale and Points for Discussion =====
+===== Background and Rationale =====
 
-==== Naming: "class" vs "classname"? ====
+FIXME: Talk about Hack, and what it does differently?
 
-This RFC currently proposes to call this type declaration <php>class</php>. Hack, PHP's sister language, already [[https://docs.hhvm.com/hack/types/type-system#type-aliases__classname|includes a similar type for class names]], but calls it ''classname'' instead.
-
-The name <php>class</php> has a few advantages:
-
-  * It is short
-  * It is already a reserved word, so introducing it requires no backwards-incompatibility break
-  * It resembles the <php>::class</php> syntax for obtaining the name of a class
-  * It avoids the redundancy of saying "name", given PHP does not represent classes as values in any other way (excepting reflection)
-  * It aligns with how PHP treats a class and its fully-qualified name the same in several places (e.g. <php>new $class</php> and <php>$class::$property</php>)
-
-However, there are also arguments in favour of ''classname'':
-
-  * It conveys more directly that the value is a string containing a class name
-  * It is already in use by Hack, so using this would prevent further divergence between Hack and PHP
-
-==== Should "class" include only classes, or both classes and interfaces? ====
-
-This RFC currently proposes that there would be a single new type, <php>class</php>, which would accept the names of both classes and interfaces. There might, however, be a case to be made for accepting only classes, and/or having a separate type for interface names (<php>interface</php>, say), or even a third type for accepting both classes and interfaces.
-
-Having <php>class</php> accept both classes and interfaces has a few arguments in its favour:
-
-  * It limits the number of new types that are introduced (one versus two or three)
-  * It aligns with the internal ''zend_parse_parameters()'' type ''"C"'', used by some functions in the PHP standard library, which likewise accepts both class and interface names
-  * It aligns with how <php>::class</php> works for both class and interface names
-  * Interfaces are essentially glorified abstract classes
-  * PHP internally represents interfaces as a kind of class
-  * Reflection represents interfaces as a kind of class
-  * The type declaration need not be perfectly fine-grained, as the function body can check if the value given is an interface itself
-
-That being said, there are also arguments in favour of <php>class</php> accepting only classes:
-
-  * Class and interface definitions use different keywords
-  * <php>class_exists()</php> treats interfaces as non-existent
-  * It might be surprising to see the name of an //interface// be passed as an argument to a parameter typed "<php>class</php>"
-
-There is an advantage to a separate <php>interface</php> type, insofar as having PHP distinguish classes and interfaces in type declarations makes for clearer function signatures and avoids potential manual testing of whether a value is class or an interface.
-
-If there was a separate <php>interface</php> type, there would be an argument for having the <php>class</php> type also accept interfaces, since classes are a superset of interfaces, and classes can subclass (“implement”) interfaces, but not the other way around.
-
-If none of these approaches are palatable, there could be a //third// type accepting both classes and interfaces, perhaps named ''classlike''. However, this might be reaching the point of diminishing returns.
-
-All the possibilities in this section can and have been implemented provisionally, and the branch on GitHub contains all of them in its commit history.
+FIXME: Justify “classlike”/class/interface distinction?
 
 ===== Backward Incompatible Changes =====
-The <php>class</php> keyword is already a reserved word, so there is no backwards-compatibility break created by its reuse here.
+The ''classlike'' keyword is now restricted from use as a class, interface or trait name, to avoid conflicting with the type declaration. Breaking backwards-compatibility here is unfortunately necessary in order to introduce a new type declaration. It is the author's opinion that this is unlikely to be a common name in existing code, and therefore should cause few if any backwards-compatibility issues in practice.
 
 ===== Proposed PHP Version(s) =====
 This is proposed for the next PHP 7.x, currently PHP 7.2.
@@ -97,7 +56,7 @@ Testing revealed that Opcache's type inference needed updating to accommodate th
 Classes, interfaces and traits continue not to be objects in themselves, and are only referenced by name.
 
 ===== Future Scope =====
-A supertype could be introduced, which could name not only classes and interfaces, but also primitive PHP types (<php>int</php>, <php>string</php> etc.) and possibly pseudo-types.
+A supertype of the ''classlike'', <php>class</php> and <php>interface</php> declarations could be introduced, which could name not only classes and interfaces, but also primitive PHP types (<php>int</php>, <php>string</php> etc.) and possibly pseudo-types.
 
 The potential future ability to use variables containing type names in place of literal type names in source code could facilitate generic programming.
 
@@ -107,7 +66,7 @@ This would require a 2/3 majority, as a language change. The vote would be a Yes
 ===== Patches and Tests =====
 There is a patch here which contains tests: https://github.com/php/php-src/compare/master...hikari-no-yume:class_type_declaration
 
-The commits for versions with multiple new types do not handle inheritance concerns.
+It does not yet handle inheritance concerns.
 
 There is not yet a pull request.
 
