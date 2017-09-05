@@ -1,8 +1,8 @@
 ====== PHP RFC: Operator functions ======
-  * Version: 1.0.2
-  * Date: 2017-09-08
+  * Version: 0.1
+  * Date: 2017-09-05
   * Author: Andrea Faulds, ajf@ajf.me
-  * Status: Under Discussion
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/operator_functions
 
 ===== Background =====
@@ -10,25 +10,19 @@ Over time, PHP has gradually acquired more facilities that enable functional pro
 
 ===== Proposal =====
 ==== Basics ====
-This RFC proposes that, for each of PHP's built-in operators that operate solely on expressions (no assignment operators), a corresponding function with the same symbol would be added to the PHP standard library in the root namespace (<php>\</php>). So, for the <php>+</php> operator there would be a corresponding <php>'+'</php> function, for the <php>===</php> operator a corresponding <php>'==='</php> function, and so on.
+This RFC proposes that, for each of PHP's built-in operators that operate solely on expressions (no assignment operators), a corresponding function with the same symbol would be added to the PHP standard library. So, for the <php>+</php> operator there would be a corresponding <php>'+'</php> function, for the <php>===</php> operator a corresponding <php>'==='</php> function, and so on.
 
 These functions could then be passed as arguments to higher-order functions:
 
 <code php>
-// Convert numbers from strings to ints or floats as appropriate
-$numbers = array_map('+', $_GET["numbers"]);
+// Returns the numbers in $positives negated
+$negatives = array_map('-', $positives);
 </code>
 <code php>
 // Adds the numbers in $terms together (equivalent to array_sum())
 $sum = array_reduce($terms, '+', 0);
-</code>
-<code php>
 // Multiplies the numbers in $terms together (equivalent to array_product())
-$product = array_reduce($terms, '*', 1);
-</code>
-<code php>
-// Union of the arrays (*NOT* the same as array_merge())
-$merged = array_reduce($arrays, '+', []);
+$sum = array_reduce($terms, '*', 0);
 </code>
 <code php>
 class Data
@@ -46,37 +40,32 @@ $data = new Data([1, 22, 3]);
 
 // Sorts using standard comparison rules
 // (equivalent to sort(), but now doesn't need its own code-path)
-$data->sort('<=>');
+$data->sort($unsorted, '<=>');
 
 // Sorts using string comparison rules
-$data->sort('strcmp');
+$data->sort($unsorted, 'strcmp');
 </code>
 
-This is particularly useful when combined with partial application and function composition (primitives PHP currently does not yet have built-in, but can be written manually):
+This is particularly useful when combined with partial application and function composition (primitives PHP currently does not have built-in, but which can be manually written):
 
 <code php>
-// Double all the numbers in the array
-$doubled = array_map(partialApply('*', 2), $terms);
+// Square all the numbers in the array
+$squared = array_map(partialApply('**', 2), $terms);
 </code>
 
 <code php>
 // Select only the positive numbers
-$positiveSubset = array_filter($numbers, partialApply('<', 0));
+$positiveSubset = array_filters($numbers, partialApply('>', 0));
 </code>
 
-An example working partial application implementation would be:
-
-<file php partialApply.php>
-function partialApply(callable $c, ...$args) {
-    return function (...$args2) use ($c, $args) {
-        return $c(...$args, ...$args2);
-    };
-}
-</file>
+<code php>
+// Select only the positive numbers
+$positiveSubset = array_filters($numbers, partialApply('>', 0));
+</code>
 
 ==== Detail ====
 
-Because operators have symbols that aren't valid identifiers in PHP source code (e.g. <php>+</php>), these functions cannot be called directly in the same manner as a normal function (i.e. <php>+(1, 2)</php>). However, a function with any name can be called by specifying its name as a string (e.g. <php>'+'(1, 1)</php> or <php>"+"(1, 1)</php>). Therefore, you could technically use these functions in place of operators:
+Because most operators have symbols that aren't valid identifiers in PHP source code (e.g. <php>+</php>), these functions cannot be called directly in the same manner as a normal function (i.e. <php>+(1, 2)</php>). However, a function with any name can be called by specifying its name as a string (e.g. <php>'+'(1, 1)</php> or <php>"+"(1, 1)</php>). Therefore, you could technically use these functions in place of operators:
 
 <code php>
 // An excessively verbose version of sqrt(($x1 - $x2) ** 2 + ($y1 - $y2) ** 2)
@@ -87,82 +76,59 @@ Of course, there is no practical reason to do this. The usefulness of this propo
 
 The table below lists the new functions that would be added to the root namespace (''\''). Each is named the same as its corresponding operator, including any aliases (for the sake of consistency).
 
-^ Function signature        ^ Corresponding operation             ^ Notes                       ^
-| <php>'+'($a[, $b])</php>  | <php>+$a</php>, <php>$a + $b</php>  |                             |
-| <php>'-'($a[, $b])</php>  | <php>-$a</php>, <php>$a - $b</php>  |                             |
-| <php>'*'($a, $b)</php>    | <php>$a * $b</php>                  |                             |
-| <php>'/'($a, $b)</php>    | <php>$a / $b</php>                  |                             |
-| <php>'%'($a, $b)</php>    | <php>$a % $b</php>                  |                             |
-| <php>'**'($a, $b)</php>   | <php>$a ** $b</php>                 |                             |
-| <php>'&'($a, $b)</php>    | <php>$a & $b</php>                  |                             |
-| <php>'|'($a, $b)</php>    | <php>$a | $b</php>                  |                             |
-| <php>'^'($a, $b)</php>    | <php>$a ^ $b</php>                  |                             |
-| <php>'~'($a)</php>        | <php>~$a</php>                      |                             |
-| <php>'<<'($a, $b)</php>   | <php>$a << $b</php>                 |                             |
-| <php>'>>'($a, $b)</php>   | <php>$a >> $b</php>                 |                             |
-| <php>'=='($a, $b)</php>   | <php>$a == $b</php>                 |                             |
-| <php>'==='($a, $b)</php>  | <php>$a === $b</php>                |                             |
-| <php>'!='($a, $b)</php>   | <php>$a != $b</php>                 |                             |
-| <php>'<>'($a, $b)</php>   | <php>$a <> $b</php>                 |                             |
-| <php>'!=='($a, $b)</php>  | <php>$a !== $b</php>                |                             |
-| <php>'<'($a, $b)</php>    | <php>$a < $b</php>                  |                             |
-| <php>'>'($a, $b)</php>    | <php>$a > $b</php>                  |                             |
-| <php>'<='($a, $b)</php>   | <php>$a <= $b</php>                 |                             |
-| <php>'>='($a, $b)</php>   | <php>$a >= $b</php>                 |                             |
-| <php>'<=>'($a, $b)</php>  | <php>$a <=> $b</php>                |                             |
-| <php>'&&'($a, $b)</php>   | <php>$a && $b</php>                 | Can't fully short-circuit.  |
-| <php>'and'($a, $b)</php>  | <php>$a and $b</php>                | Can't fully short-circuit.  |
-| <php>'||'($a, $b)</php>   | <php>$a || $b</php>                 | Can't fully short-circuit.  |
-| <php>'or'($a, $b)</php>   | <php>$a or $b</php>                 | Can't fully short-circuit.  |
-| <php>'xor'($a, $b)</php>  | <php>$a xor $b</php>                |                             |
-| <php>'!'($a)</php>        | <php>!$a</php>                      |                             |
-| <php>'.'($a, $b)</php>    | <php>$a . $b</php>                  |                             |
+^ Function signature        ^ Corresponding operation            ^
+^ <php>'+'($a[, $b])</php>  ^ <php>+$a</php>, <php>$a + $b</php> ^
+^ <php>'-'($a[, $b])</php>  ^ <php>-$a</php>, <php>$a - $b</php> ^
+^ <php>'*'($a, $b)</php>    ^ <php>$a * $b</php>                 ^
+^ <php>'/'($a, $b)</php>    ^ <php>$a / $b</php>                 ^
+^ <php>'%'($a, $b)</php>    ^ <php>$a % $b</php>                 ^
+^ <php>'**'($a, $b)</php>   ^ <php>$a ** $b</php>                ^
+^ <php>'&'($a, $b)</php>    ^ <php>$a & $b</php>                 ^
+^ <php>'|'($a, $b)</php>    ^ <php>$a | $b</php>                 ^
+^ <php>'^'($a, $b)</php>    ^ <php>$a ^ $b</php>                 ^
+^ <php>'~'($a)</php>        ^ <php>~$a</php>                     ^
+^ <php>'<<'($a, $b)</php>   ^ <php>$a << $b</php>                ^
+^ <php>'>>'($a, $b)</php>   ^ <php>$a >> $b</php>                ^
+^ <php>'=='($a, $b)</php>   ^ <php>$a == $b</php>                ^
+^ <php>'==='($a, $b)</php>  ^ <php>$a === $b</php>               ^
+^ <php>'!='($a, $b)</php>   ^ <php>$a != $b</php>                ^
+^ <php>'<>'($a, $b)</php>   ^ <php>$a <> $b</php>                ^
+^ <php>'!=='($a, $b)</php>  ^ <php>$a !== $b</php>               ^
+^ <php>'<'($a, $b)</php>    ^ <php>$a < $b</php>                 ^
+^ <php>'>'($a, $b)</php>    ^ <php>$a > $b</php>                 ^
+^ <php>'<='($a, $b)</php>   ^ <php>$a <= $b</php>                ^
+^ <php>'>='($a, $b)</php>   ^ <php>$a >= $b</php>                ^
+^ <php>'<=>'($a, $b)</php>  ^ <php>$a <=> $b</php>               ^
+^ <php>'&&'($a, $b)</php>   ^ <php>$a <=> $b</php>               ^
+^ <php>and($a, $b)</php>    ^ <php>$a and $b</php>               ^
+^ <php>'||'($a, $b)</php>   ^ <php>$a || $b</php>                ^
+^ <php>or($a, $b)</php>     ^ <php>$a or $b</php>                ^
+^ <php>xor($a, $b)</php>    ^ <php>$a xor $b</php>               ^
+^ <php>'!'($a, $b)</php>    ^ <php>!$a</php>                     ^
+^ <php>'.'($a, $b)</php>    ^ <php>$a . $b</php>                 ^
 
-Since <php>pow()</php> already exists and behaves identically to how <php>'**'()</php> would, <php>'**'()</php> is simply an alias of it.
-
-These functions do not perform any extra type checking on their arguments beyond that normally performed by the operators they correspond to.
-
-==== Missing operators ====
-
-The table above (like the patch) currently contains all the operators in the [[http://php.net/manual/en/language.operators.php|Operators section of the PHP Manual]], minus <php>instanceof</php>, <php>`backticks`</php> and the assignment operators. Whether these should have functions too is a matter to debate; <php>instanceof</php> doesn't take arbitrary expressions and already has a functional counterpart (<php>is_a</php>). As for the assignment operators, references mean they could be done, but from a functional programming perspective they have limited utility.
-
-PHP also has some other constructs that could be classed as operators but aren't considered such by the manual. A (possibly non-exhaustive) list is:
-
-  * <php>??</php> (Can't <php>isset()</php>. Can't short-circuit.)
-  * <php>?:</php> (Could be <php>'?:'($a, $b[, $c])</php> and map to <php>$a ?: $b</php> or <php>$a ? $b : $c</php> depending on parameter count. Can't short-circuit.)
-  * <php>@</php> (Could not be made a function without changing it to act on a callable.)
-  * <php>(int)</php>, <php>(string)</php> etc. (Note <php>intval()</php> etc already exist.)
-  * <php>clone</php>
-  * <php>print</php> (This always returns 1, so we might as well make <php>echo</php> a function too even though it's a statement.)
-  * <php>-></php> (How do you distinguish between property lookup and method calls? Are identifiers replaced with strings?)
-  * <php>[]</php> (Array indexing.)
-  * <php>()</php> (Function invocation. <php>call_user_func</php> exists already.)
-  * <php>eval</php> (Probably not a good rabbit hole to go down, this requires frowned-upon stack gymnastics due to affecting the current scope.)
-  * <php>include</php>, <php>require</php>, <php>include_once</php>, <php>require_once</php>
-  * <php>yield</php> (Like <php>eval</php>, would require dubious stack gymnastics. It is a control-flow expression, not merely manipulating values.)
-
-Of these, <php>-></php>, <php>()</php>, <php>@</php> and <php>eval</php> are the most dubious.
+This table notably lacks <php>$a instanceof $b</php>, <php>$a[$b]</php> and <php>$a->$b</php>. There may be an argument for adding these latter two.
 
 ===== Backward Incompatible Changes =====
-All of these operator functions create no backwards-compatibility break, since they have names that cannot be used for userland functions, and thus they cannot conflict with function names in existing code (hypothetically this may not be true if using exotic extensions like runkit). 
+All of these operator functions create no backwards-compatibility break, since they have names that cannot be used for userland functions, and thus they cannot possibly conflict with existing code (except that using exotic extensions like runkit). 
 
 ===== Proposed PHP Version(s) =====
 This would go in the next PHP 7.x, most likely 7.3.
 
 ===== RFC Impact =====
 ==== To Existing Extensions ====
-Because <php>'**'()</php> aliases it, <php>pow()</php> is moved out of ''ext/standard'' and into ''Zend''. This is merely an organisational change and has no user impact.
+The patch currently adds these functions to ''ext/standard''. They might make more sense in the Zend Engine instead.
 
 ==== To Opcache ====
 The patch passes its test under OPcache.
 
 ===== Open Issues =====
-See “Missing operators” section.
+None.
 
 ===== Unaffected PHP Functionality =====
 The existing operators themselves behave the same as ever.
 
-Being able to quote function names in function calls (e.g. <php>'+'(1, 1)</php>) is not a new idea introduced by this RFC, it has been possible since [[rfc:uniform_variable_syntax|Uniform Variable Syntax]] in PHP 7.0.
+Quoting function names in function calls is not new, it is a consequence of [[rfc:uniform_variable_syntax|Uniform Variable Syntax]].
 
 ===== Future Scope =====
 Operator functions would fit well with built-in partial application and function composition. These could be added as functions, methods on <php>\Closure</php>, or both.
@@ -186,14 +152,7 @@ After the project is implemented, this section should contain
   - a link to the language specification section (if any)
 
 ===== References =====
-  * PHP manual operators section: http://php.net/manual/en/language.operators.php
-  * Haskell's infix functions (any normal operator is a function and vice-versa) were an inspiration.
+* Haskell's infix functions (any normal operator is a function and vice-versa) was an inspiration.
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
-
-===== Changelog =====
-
-  * v1.0.2 - add subsection discussing omissions
-  * v1.0.1 - acknowledge why certain operators are excluded
-  * v1.0 - first public non-draft version
