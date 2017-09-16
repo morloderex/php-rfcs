@@ -2,7 +2,7 @@
   * Version: 0.9
   * Date: 2017-09-16
   * Author: Thomas Punt, tpunt@php.net
-  * Status: Implemented (in PHP 7.3)
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/flexible_heredoc_nowdoc_syntaxes
 
 ===== Introduction =====
@@ -38,22 +38,61 @@ The indentation of the closing marker dictates the amount of whitespace to strip
 <code php>
 // no indentation
 echo <<<END
-      a
-     b
-    c
+   a
+  b
+ c
 END;
 /*
-      a
-     b
-    c
+   a
+  b
+ c
 */
 
-// 4 spaces of indentation
+// 1 space of indentation
 echo <<<END
-      a
-     b
-    c
-    END;
+   a
+  b
+ c
+ END;
+/*
+  a
+ b
+c
+*/
+
+// 2 spaces of indentation
+echo <<<END
+   a
+  b
+ c
+  END;
+/*
+ a
+b
+c
+*/
+
+// 3 (or more) spaces of indentation
+echo <<<END
+   a
+  b
+ c
+   END;
+/*
+a
+b
+c
+*/
+</code>
+
+Tabs are supported as well. If tabs and spaces are intermixed (for whatever reason...), then each space and each tab is considered as 1 indentation. So if the closing marker is indented by 1 tab, and the heredoc/nowdoc body is indented by spaces, then regardless of the closing marked *looking* further indented, only 1 bit of whitespace will still be stripped from each line:
+<code php>
+// 1 tab indentation
+echo <<<END
+   a
+  b
+ c
+	END;
 /*
   a
  b
@@ -61,49 +100,11 @@ c
 */
 </code>
 
-If the closing marker is indented further than any lines of the body, then a ''ParseError'' will be thrown:
-<code php>
-
-echo <<<END
-  a
- b
-c
- END;
-
-// Parse error: Invalid body indentation level (expecting an indentation at least 5) in %s on line %d
-</code>
-
-Tabs are supported as well, however, tabs and spaces **must not** be intermixed regarding the indentation of the closing marker and the indentation of the body (up to the closing marker). In any of these cases, a ''ParseError'' will be thrown:
-<code php>
-// different indentation for body (spaces) ending marker (tabs)
-{
-	echo <<<END
-	 a
-		END;
-}
-
-// mixing spaces and tabs in body
-{
-    echo <<<END
-    	a
-     END;
-}
-
-// mixing spaces and tabs in ending marker
-{
-	echo <<<END
-		  a
-		 END;
-}
-</code>
-
-These whitespace constraints have been included because mixing tabs and spaces for indentation is harmful to legibility.
-
-Ultimately, the purpose of stripping leading whitespace is to allow for the body of the heredoc and nowdoc to be indented to the same level as the surrounding code, without causing unnecessary (and perhaps undesirable) whitespace to prepend each line of the body text. Without this, developers may choose to de-indent the body text to prevent leading whitespace, which leads us back to the current situation of having indentation levels of code ruined by these syntaxes.
+Moral of the story: don't mix tabs and spaces...
 
 ==== Closing Marker New Line ====
 
-Currently, in order to terminate a heredoc or nowdoc, a new line **must** be used after the closing marker. Removing this requirement will change code from:
+Removing the closing marker requirement will change code from:
 <code php>
 stringManipulator(<<<END
    a
@@ -135,7 +136,7 @@ c
 END, 'd e f'];
 </code>
 
-This change was actually brought up in a previous RFC ([[rfc:heredoc-scanner-loosening|PHP RFC: Loosening heredoc/nowdoc scanner]]). One of the big gotchas that it mentioned, however, was that if the ending marker was found at the start of a line, then regardless of whether it was a part of another word, it would still be considered as the ending marker. For example, the following would not work (due to ''ENDING'' containing ''END''):
+This change was actually brought up in a previous RFC ([[rfc:heredoc-scanner-loosening|PHP RFC: Loosening heredoc/nowdoc scanner]]). One of the big gotchas that it mentioned, however, was that if the ending marker was found at the start of a line, then regardless of whether it was apart of another word, it would still be considered as the ending marker. For example, the following would not work:
 <code php>
 $values = [<<<END
 a
@@ -149,7 +150,7 @@ Parse error: syntax error, unexpected 'ING' (T_STRING), expecting ']' in %s on l
 
 The implementation I am proposing avoids this problem by checking to see if a continuation of the found marker exists, and if so, then if it forms a valid identifier. This means that the terminating marker string will only be considered as such if it is matched exactly as a standalone, valid symbol (that is also found at the start of the line). This enables for the above snippet to now work.
 
-Examples such as the following will still not work, however:
+Something such as the following will still not work, however:
 <code php>
 $values = [<<<END
 a
@@ -159,34 +160,29 @@ END, 'd e f'];
 /*
 Parse error: syntax error, unexpected 'ING' (T_STRING), expecting ']' in %s on line %d
 */
-
-echo <<<END
-END{$var}
-END;
-/*
-Parse error: syntax error, unexpected '$var' (T_VARIABLE) in %s on line %d
-*/
 </code>
 
-There is not a great deal that can be done about this. So the simple rule is: **do not choose a marker that appears in the body of the text** (though it would specifically have to occur at the start of a line in the text to cause problems).
+(Notice the space after the first ''END''.) There is not a great deal that can be done about this. So the simple rule is: **do not choose a marker that appears in the body of the text** (though it would specifically have to occur at the start of a line in the text to cause problems).
 
 ===== Backward Incompatible Changes =====
 
 The rigidity of the syntaxes are solely to minimise the chance of collisions between the enclosing marker and the text within the heredoc/nowdoc. But this has come at a cost of usability and readability of the feature. By making the syntaxes for heredoc and nowdoc more flexible, collisions that do occur will now cause errors if (and only if) the following conditions are met:
 
   * the colliding marker begins at the start of a line in the text
-  * the colliding marker can be seen as standalone, valid symbol name
+  * the colliding marker can be seen as standalone
 
-The changes proposed by this RFC therefore come down to whether you believe developers are responsible enough to choose non-colliding markers. I firmly believe that since we give developers the power to choose their own markers, then they should be responsible enough to choose markers that do not collide with the inner multiline text.
+The changes proposed in this RFC therefore comes down to whether you believe developers are responsible enough to choose non-colliding markers. I firmly believe that since we give developers the power to choose their own markers, then they should be responsible enough to choose markers that do not collide with the inner multiline text.
+
+Therefore, I believe the tradeoff of making the heredoc and nowdoc syntaxes more flexible in return for requiring developers to actually choose good marker names is a tradeoff worth making.
 
 So to quickly reiterate, the changes proposed by this RFC will enable for code such as the following:
 <code php>
 function something()
 {
     stringManipulator(<<<END
-   a
-  b
- c
+       a
+      b
+     c
 END
 );
 }
@@ -213,19 +209,7 @@ No impact on SAPIs or extensions (that I know of).
 
 ===== Proposed Voting Choices =====
 
-There will be two votes, both requiring a 2/3 majority. The first will be regarding whether the closing marker can be indented. The second will be whether the closing marker should remove the new line requirement. These votes are orthogonal to one-another (if one fails and the other passes, then the other still passes).
-
-Voting starts on 2017.11.01 and ends on 2017.11.15.
-
-<doodle title="Allow for the closing marker to be indented and for the leading whitespace to be stripped?" auth="tpunt" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-''''
-<doodle title="Remove the trailing new line requirement from the closing marker?" auth="tpunt" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+There will be two votes, both requiring a 2/3 majority. The first will be regarding whether the closing marker should be able to be indented. The second will be whether the closing marker should remove the new line requirement. These votes are orthogonal to one-another (it doesn't matter if one fails).
 
 ===== Patches and Tests =====
 
