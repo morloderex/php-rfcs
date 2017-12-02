@@ -1,15 +1,15 @@
-====== PHP RFC: Allow explicit call-site pass-by-reference annotation ======
+====== PHP RFC: Explicit call-site pass-by-reference ======
   * Date: 2017-12-02
   * Author: Nikita Popov <nikic@php.net>
-  * Proposed for: PHP 8.0
+  * Proposed for: PHP 7.3
   * Implementation: https://github.com/php/php-src/pull/2958
-  * Status: Inactive
+  * Status: Draft
 
 ===== Introduction =====
 
-By-reference parameters are currently only declared when defining a function, while the call-site does not distinguish between by-value and by-reference passing. This RFC proposes to allow marking by-reference arguments at the call-site as well, and make this required at a future time.
+Currently parameters that are passed by reference are only declared when defining a function, while the call-site does not distinguish between by-value and by-reference arguments. This RFC proposes to allow marking by-reference arguments at the call-site as well.
 
-Consider the following example of an ''inc()'' function, which accepts a number by reference and increments it:
+Consider the following example, of an ''inc'' function, which accepts a number by reference and increments it:
 
 <code php>
 function inc(&$num) { $num++; }
@@ -43,11 +43,11 @@ var_dump($i);
 
 The requirement that the reference is marked at both the definition- and call-site makes this feature different from the call-site pass-by-reference that was used in PHP 4.
 
-By default, the use of a call-site annotation will remain optional. However, a mode that makes it required may be introduced depending on the outcome of the [[https://github.com/php/php-rfcs/pull/2|language evolution RFC]].
+Of course, it remains possible to not explicitly mark reference-passing at the call-site. We may wish to deprecate and remove this ability in the future, but this RFC does not propose this.
 
 ===== Motivation =====
 
-The motivation for this proposal boils down to making it simpler to understand code: For programmers, for static analyzers and for the PHP optimizer and executor.
+The motivation for this proposal boils down to making it simpler to understand code, both for programmers and for static analyzers.
 
 As a simple example, consider the following two calls, which look deceptively similar:
 
@@ -58,7 +58,7 @@ $ret = array_splice($array, 0, 3);
 
 In both cases ''$ret'' will have the same result (the first three elements of the array). However, in the latter case these elements are also removed from the original array. Looking just at the call-site, it's not possible to see that ''array_splice'' actually performs an in-place modification of the array.
 
-With this proposal, the example could be written as follows instead:
+Under this proposal, this example would look as follows instead:
 
 <code php>
 $ret = array_slice($array, 0, 3);
@@ -67,7 +67,7 @@ $ret = array_splice(&$array, 0, 3);
 
 Here it's clearly visible that ''array_splice'' is going to modify the input array, while ''array_slice'' does not.
 
-Beyond this, arguments that are passed by-reference fundamentally change the way in which the argument is accessed. A by-value argument will be read as usual, while a by-reference argument is treated similar to an assignment. Notably, by-reference arguments do not need to be initialized prior to use. The probably most common example of this is the use of the ''preg_match'' function:
+Beyond this, arguments that are passed by-reference fundamentally change the way in which the argument is accessed. A by-value argument will read as usual, while a by-reference argument is treated similar to an assignment. Notably, by-reference arguments do not need to be initialized prior to use. The probably most common example of this is the use of the ''preg_match'' function:
 
 <code php>
 $ip = "127.0.0.1";
@@ -76,7 +76,7 @@ if (preg_match('/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/', $ip, $matches)) {
 }
 </code>
 
-The ''$matches'' variable does not need to be initialized in this case, because the by-reference pass will initialize it implicitly. The proposed syntax makes the by-reference pass and the associated change in access semantics explicit:
+The ''$matches'' variable does not need to be initialized in this case, because the by-reference pass will initialize it implicitly. The proposed syntax makes the by-reference and the associated change in access semantics explicit:
 
 <code php>
 $ip = "127.0.0.1";
@@ -85,7 +85,7 @@ if (preg_match('/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/', $ip, &$matches)) {
 }
 </code>
 
-It should come as no surprise that understanding code that uses implicit by-reference passing is hard not only for humans, but also for static analysis tools. Consider the following basic example:
+It should come as no surprise that understanding code that uses implicit by-reference passing is hard to understand not only for humans, but also for static analysis tools. Consider the following basic example:
 
 <code php>
 function test($obj) {
@@ -96,7 +96,9 @@ function test($obj) {
 
 Does this code use an uninitialized variable ''$x''? Unless it's possible to infer the type of ''$obj'' and determine which method is being called and whether it uses by-reference passing, it's impossible to answer this question. In all likelihood the method uses by-value passing and this is a programming error, but it might also be an intentional use of the by-reference automatic initialization.
 
-While static analyzers in IDEs and CI systems will make reasonable assumptions in this case, the PHP implementation itself does not have this luxury. In fact, our inability to determine at compile-time whether a certain argument is passed by-value or by-reference is one of the most significant obstacles in our ability to analyze and optimize compiled code. The runtime dispatch between by-value and by-reference passing also adds significant complexity to the Zend VM, with at 9 (!!) opcodes dedicated to this task.
+While static analyzers in IDEs and CI systems will make reasonable assumptions in this case, the PHP implementation itself does not have this luxury. In fact, our inability to determine at compile-time whether a certain argument is passed by-value or by-reference is one of the most significant obstacles in our ability to analyze and optimize compiled code. The runtime dispatch between by-value and by-reference passing also adds significant complexity to the Zend VM, with at least 7 opcodes dedicated to only this task.
+
+This proposal does not resolve this issue, because it introduces an entirely optional feature. The previous syntax where pass-by-reference is not explicitly marked will continue to work. We may want to deprecate and remove it in the future, but this RFC does not propose this, as it is a quite significant change.
 
 ===== Detailed proposal =====
 
@@ -146,130 +148,10 @@ inc(&passthruVal($i));
 // Uncaught Error: Cannot pass result of by-value function by reference [run-time]
 </code>
 
-Apart from these additional error checks, the call-site reference-passing annotation does not affect execution semantics in any way.
-
-==== Mode with required call-site annotations ====
-
-This section depends on the outcome of the [[https://github.com/php/php-rfcs/pull/2|language evolution RFC]]. If we decide to introduce editions, then this section will only apply in the next edition. If we decide to introduce fine-grained declares, then the changes only apply if the ''require_explicit_send_by_ref'' declare is enabled. If we decide to not pursue a mechanism for opt-in backwards-incompatible changes, then this section becomes void, and the question of making call-site annotations required can be reconsidered at a later time. As a placeholder, we will assume the declare-based approach here.
-
-While optionally annotating by-reference passing already helps readability, we can only reap the full benefits outlined in the motivation section, if the use of call-site annotations is required. If the ''require_explicit_send_by_ref'' declare is enabled, then all by-reference passes must be annotated with ''&'' at the call-site, otherwise an exception will be thrown:
-
-<code php>
-declare(require_explicit_send_by_ref=1);
-
-function inc(&$num) { $num++; }
-
-$i = 0;
-inc($i);
-// Uncaught Error: Cannot pass parameter 1 by reference
-</code>
-
-If the argument is a prefer-ref argument of an internal function, then adding the ''&'' annotation will pass it by reference, while not adding it will pass it by value. Outside this mode, the passing behavior would instead be determined by the VM kind of the argument operand.
-
-Just like ''strict_types'', the ''require_explicit_send_by_ref'' option only affects call-sites inside the file. Whether the function was declared in a file with ''require_explicit_send_by_ref'' enabled or not does not matter, only the used mode at the call-site matters.
-
-==== Forwarding references in __call, call_user_func and similar ====
-
-The ''%%__call()%%'' and ''%%__callStatic()%%'' magic methods can be used to forward calls, but this does not work properly with by-reference arguments:
-
-<code php>
-class Incrementor {
-    public function inc(&$i) {
-        $i++;
-    }
-}
-
-class ForwardCalls {
-    private $object;
-    public function __construct($object) {
-        $this->object = $object;
-    }
-    public function __call(string $method, array $args) {
-        return $this->object->$method(...$args);
-    }
-}
-
-$forward = new ForwardCalls(new Incrementor);
-$i = 0;
-$forward->inc($i);
-var_dump($i); // int(0)
-</code>
-
-The above code silently "works", but the variable ''$i'' will not actually get passed by reference. A by-reference pass does occur at the ''%%$this->object->$method(...$args)%%'' call, but at this point the value stored in ''$args'' and the variable ''$i'' have no relation to each other.
-
-The explicit call-site annotation can be used to allow passing the variable by reference:
-
-<code php>
-$forward = new ForwardCalls(new Incrementor);
-$i = 0;
-$forward->inc(&$i);
-var_dump($i); // int(1)
-</code>
-
-This will make the corresponding element in ''$args'' be a reference, which the argument unpack then passes on to the called function.
-
-Similarly, ''call_user_func()'' can now be used to call functions that accept by-reference parameters:
-
-<code php>
-function inc(&$i) { $i++; }
-
-$i = 0;
-call_user_func('inc', $i);
-// Warning: inc() expects argument #1 ($i) to be passed by reference, value given
-var_dump($i); // int(0)
-
-$i = 0;
-call_user_func('inc', &$i);
-var_dump($i); // int(1)
-</code>
-
-Both of these features are achieved by introducing a new internal argument passing mode ''prefer-val''. Just like ''prefer-ref'' it accepts both by-value and by-reference, but prefers by-value passing unless by-reference passing is forced by a call-site annotation.
-
-==== Differences to the removed "call-time pass-by-reference" feature ====
-
-In PHP 4 (and available via deprecated ''allow_call_time_pass_reference'' option until PHP 5.4), by-reference passing was performed by adding an annotation **only** at the call-site, but not the declaration-site:
-
-<code php>
-function inc($num) { $num++; }
-
-$i = 0;
-inc(&$i);
-</code>
-
-This was very problematic, because the argument of any function could be forced into being a reference by adding a call-site annotation.
-
-PHP 5 moved towards specifying by-reference passing at the declaration-site, making by-value/by-reference passing part of the API contract of the function, as it should be.
-
-This proposal differs from both in that it requires the by-reference annotation at **both** the declaration-site and the call-site. It is extremely unfortunate that this hasn't been done when the original migration of the by-reference passing system happened, as it could have avoided a lot of unnecessary code churn while arriving at a better system. Given this past mistake, the next best thing we can do is address it now.
-
 ===== Backward Incompatible Changes =====
 
-None. The use of this feature is optional, and the backwards-incompatible part is opt-in.
-
-===== Other languages =====
-
-The following table shows syntactic requirements for by-reference argument passing in different languages. The defining characteristic of a "reference" is here taken to be the ability to modify an argument of primitive type within the function.
-
-^ Language ^ Declaration             ^ Call              ^ Notes ^
-^ C / C++  | ''foo(T *bar)''         | ''foo(&bar)''     | Unless already pointer |
-^ C++      | ''foo(T &bar)''         | ''foo(bar)''      | |
-^ C#       | ''foo(ref T bar)''      | ''foo(ref bar)''  | |
-^          | ''foo(out T bar)''      | ''foo(out bar)''  | |
-^ Rust     | ''foo(bar: &mut T)''    | ''foo(&mut bar)'' | Unless already mut ref |
-^ Swift    | ''foo(_ bar: inout T)'' | ''foo(&bar)''     | |
-
-With the notable exception of C++ (which most likely inspired our current reference-passing syntax), reference annotations are required both at the declaration and the call-site.
-
-In languages where references are first-class types (rather than a special feature of calls specifically), it is possible to store the obtained reference in a variable. In this case the reference may be obtained at a point prior to the call-site. However, the reference has to be explicitly obtained at //some// point.
-
-===== Future Scope =====
-
-==== inout / out parameters ====
-
-Currently PHP uses by-reference passing as a way to implement ''inout'' (array_push) and ''out'' (preg_match) parameters. It may be advisable to make these first-class language features in the future, thus avoiding some of the pitfalls, as well as performance penalties of references.
-
-For example the auto-initialization behavior of references is only desired in the case of ''out'' parameters. For ''inout'' parameters it is liable to hide programming mistakes instead. However, the current system is not capable of distinguishing these cases.
+None. This use of this feature is optional.
 
 ===== Vote =====
 
-Add support for optional call-site by-reference passing annotations?
+This proposal is a language-change and requires a 2/3 supermajority to pass.
