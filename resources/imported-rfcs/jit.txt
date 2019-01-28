@@ -1,38 +1,25 @@
 ====== PHP RFC: JIT ======
-  * Version: 1.0
+  * Version: 0.9
   * Date: 2019-01-28
-  * Author: Dmitry Stogov <dmitry@php.net>, Zeev Suraski <zeev@php.net>
-  * Status: Implemented (PHP 8.0)
+  * Author: Dmitry Stogov, dmitry@zend.com
+  * Status: Draft (or Under Discussion or Accepted or Declined)
   * First Published at: https://wiki.php.net/rfc/jit
 
 ===== Introduction =====
-It's no secret that the performance jump of PHP 7 was originally initiated by attempts to implement JIT for PHP. We started these efforts at Zend (mostly by Dmitry) back in 2011 and since that time tried 3 different implementations.  We never moved forward to propose to release any of them, for three main reasons:  They resulted in no substantial performance gains for typical Web apps;  They were complex to develop and maintain;  We still had additional directions we could explore to improve performance without having to use JIT.
-
-===== The Case for JIT Today ====
-
-Even though most of the fundamentals for JIT-enabling PHP haven't changed - we believe there is a good case today for JIT-enabling PHP.
-
-First, we believe we've reached the extent of our ability to improve PHP's performance using other optimization strategies.  In other words - we can't further improve the performance of PHP unless we use JIT.
-
-Secondly - using JIT may open the door for PHP being more frequently used in other, non-Web, CPU-intensive scenarios - where the performance benefits will actually be very substantial - and for which PHP is probably not even being considered today.
-
-Lastly - making JIT available can provide us (with additional efforts) with the ability to develop built-in functions in PHP, instead of (or in addition to) C - without suffering the huge performance penalty that would be associated with such a strategy in today's, non-JITted engine.  This, in turn, can open the door to faster innovation - and also more secure implementations, that would be less susceptible to memory management, overflows and similar issues associated with C-based development.
+It's not a secret, that PHP-7 performance jump was initiated by attempts to implement JIT for PHP. They were started at 2011 and since that time we tried at least 3 different implementations, but we never harried to release them, because JIT might make serious troubles for big engine changes. Today, we implemented almost all interpretative performance improvement ideas, and we can achieve the next boost only with JIT.
 
 ===== Proposal =====
-We propose to include JIT in PHP 8 and provide additional efforts to increase its performance and usability.
+I propose to include JIT into PHP-8 and provide additional efforts to increase its performance and usability.
 
-In addition, we propose to consider including JIT in PHP 7.4 as an experimental feature (disabled by default).
+In addition, I propose to include JIT into PHP-7.4 as an experimental feature (disabled by default).
 
-PHP JIT is implemented as an almost independent part of OPcache. It may be enabled/disabled at PHP compile time and at run-time.
-When enabled, native code of PHP files is stored in an additional region of the OPcache shared memory and op_array->opcodes[].handler(s) keep pointers to the entry points of JIT-ed code. This approach doesn't require engine modification at all.
+PHP JIT is implemented as almost independent part of opcache. It may be enabled/disabled at PHP compile time and at run-time.
+Native code of PHP scripts is stored in additional region of opcache shared memory and op_array->opcodes[].handler(s) keep pointers to the JIT-ed code. This approach doesn't require engine modification at all.
 
-We use DynAsm (developed for LuaJIT project) for generation of native code. It's a very lightweight and advanced tool, but does assume good, and very low-level development knowledge of target assembler languages.  In the past we tried LLVM, but its code generation speed was almost 100 times slower, making it prohibitively expensive to use. Currently we support x86 and x86_64 CPUs on POSIX platforms and Windows. DynAsm also supports ARM. ARM64, MIPS, MIPS64 and PPC, so in theory we should be able to support all of the platforms that are popular for PHP deployments (given enough efforts).
+To generate native code we use DynAsm (developed for LuaJIT project). It's very lightweight and smart tool, but it assumes very low-level development and good knowledge of target assembler language. In the past we tried LLVM, but it was almost 100 times slower. Currently we support only x86 and x86_64 on posix platforms. Windows support shouldn't be a big problem, but it's a low priority for me. DynAsm also supports ARM. ARM64, MIPS, MIPS64 and PPC, so in general we may support all popular platforms.
 
-PHP JIT doesn't introduce any additional IR (Intermediate Representation) form. It generates native code directly from PHP byte-code and information collected by SSA static analyses framework (a part of opcache optimizer). Code is usually generated separately for each PHP byte-code instruction. Only few combinations are considered together (e.g. compare + conditional jump).
 
-If type of PHP variable is exactly inferred (in SSA) to LONG or DOUBLE, and it can't be accessed indirectly, JIT may store its value directly in CPU registers, avoiding memory stores and loads. PHP JIT liner-scan register allocation algorithm, tat combines high speed with reasonable quality.
-
-The quality of the JIT may be demonstrated on Mandelbrot benchmark published at https://gist.github.com/dstogov/12323ad13d3240aee8f1, where it improves performance more than 4 times (0.011 sec vs 0.046 sec on PHP 7.4).
+The quality of the JIT may be demonstrated on Mondelbrot benchmark published at https://gist.github.com/dstogov/12323ad13d3240aee8f1, where it makes 4 times improvement (0.011 sec vs 0.046 sec on PHP-7.4).
 
 <code php>
     function iterate($x,$y)
@@ -58,7 +45,7 @@ The quality of the JIT may be demonstrated on Mandelbrot benchmark published at 
     }
 </code>
 
-The following is the complete assembler code generated for the PHP function above, with the main loop code visible between .L5 and .L7:
+Following is the complete assembler code generated to the PHP function above, but the main loop code is between .L5 and .L7
 
 <code asm>
 JIT$Mandelbrot::iterate: ; (/home/dmitry/php/bench/b.php)
@@ -264,36 +251,30 @@ JIT$Mandelbrot::iterate: ; (/home/dmitry/php/bench/b.php)
 	jmp .L10
 </code>
 
-In comparison to V8, HHVM, PyPy and most others modern JIT implementations PHP JIT is extremely simple, but anyway it increases the level of the whole PHP complexity, risk of new kind of bugs and cost of development and maintenance.
-
 ===== Backward Incompatible Changes =====
 none
 
 ===== Proposed PHP Version(s) =====
-PHP 8 and PHP 7.4 (separate votes)
+PHP-8 and PHP-7.4 (separate votes)
 
 ===== RFC Impact =====
 ==== To SAPIs ====
 none
 
 ==== To Existing Extensions ====
-JIT is going to affect third party debuggers (e.g. xdebug) and profilers (e.g. XHProf, Blackfire, Tideways).
-
-For debugging a particular request, it's possible to disable JIT (together with opcache) changing "opcache.enable" through C API (zend_alter_ini_entry) at RINIT stage.
-
-Run-time profiling should work even with JIT-ed code, but this might require development of additional tracing API and corresponding JIT extension, to generate tracing callbacks.
+none
 
 ==== To Opcache ====
-JIT would be implemented as a part of OPcache.
+JIT is implemented as a part of opcache.
 
 ==== New Constants ====
 none
 
 ==== php.ini Defaults ====
 If there are any php.ini settings then list:
-  * opcache.jit_buffer_size - size of shared memory buffer reserved for native code generation (in bytes; K, M - suffixes are supported). Default - 0 disables JIT.
-  * opcache.jit - JIT control options. Consists of 4 decimal digits - CRTO (Default 1205. Probably, better to change to 1235).
-    * O - Optimization level
+  * opcache.jit_buffer_size - size (in megabytes) of shared memory buffer reserved for native code generation. Default - 0 disables JIT.
+  * opcache.jit - JIT control options. It consist from 4 decimal digits - CRTO (Default 1205. Probably, better to change to 1235).
+    * O - optimization level
       * 0 - don't JIT
       * 1 - minimal JIT (call standard VM handlers)
       * 2 - selective VM handler inlining
@@ -313,127 +294,54 @@ If there are any php.ini settings then list:
     * C - CPU specific optimization flags
       * 0 - none
       * 1 - enable AVX instruction generation 
-  * opcache.jit_debug - JIT debug control options, where each bit enabling some debugging options. Default - 0.
-      * (1<<0) - print generated assembler code
+  * opcache.jit_debug - JIT debug control options, where each bit enables some debuging options. Default - 0.
+      * (1<<0) - print generated assembler cede
       * (1<<1) - print intermediate SSA form used for code generation
       * (1<<2) - register allocation information
-      * (1<<3) - print stubs assembler code
-      * (1<<4) - generate perf.map file to list JIt-ed functions in Linux perf report
-      * (1<<5) - generate perf.dump file to show assembler code of JIT-ed functions in Linux perf peport
+      * (1<<4) - allow debugging JIT-ed code using GDB
+      * (1<<5) - generate perf.map file to list JIt-ed functions in Linux perf report
       * (1<<6) - provide information about JIt-ed code for Linux Oprofile
       * (1<<7) - provide information about JIt-ed code for Intel VTune
-      * (1<<8) - allow debugging JIT-ed code using GDB
+      * (1<<8) - generate perf.dump file to show assembler code of JIT-ed functions in Linux perf peport
 
 ==== Performance ====
-JIT makes bench.php more than two times faster: 0.140 sec vs 0.320 sec.  It is expected to make most CPU-intensive workloads run significantly faster.
+JIT makes bench.php more than two times faster: 0.140 sec vs 0.320 sec.
+However, in current state it doesn't improve real-life apps like Wordpress (with opcache.jit=1235 326 req/sec vs 315 req/sec).
 
-According to Nikita, PHP-Parser became ~1.3 times faster with JIT. Amphp hello-world.php got just 5% speedup.
-
-However, like the previous attempts - it currently doesn't seem to significantly improve real-life apps like WordPress (with opcache.jit=1235 326 req/sec vs 315 req/sec).
-
-It's planned to provide additional effort, improving JIT for real-life apps, using profiling and speculative optimizations.
-
-==== JIT Debugging ====
-As any complication, JIT increases risk of bugs in JIT itself. They may be caused by inaccurate analyses, bugs in code-generator or register-allocator. Fixing these new kind of bugs is going to be more difficult, because we'll have to catch the place of the failure, get and analyse the assemble code generated for bogus function, find the mistake and understand why it was done by JIT compiler.
-
-In case of crash, we may just run app under gdb until the crash, check that JIT is involved in crash backtrace and find the place:
-
-<code>
-$ gdb php 
-
-(gdb) r app.php
-
-...
-
-(gdb) bt
-
-#1  0xe960dc11 in ?? ()
-#2  0x08689524 in zend_execute (op_array=0xf4074460, return_value=0x0) at Zend/zend_vm_execute.h:69122
-#3  0x085cb93b in zend_execute_scripts (type=8, retval=0x0, file_count=3) at Zend/zend.c:1639
-#4  0x0855a890 in php_execute_script (primary_file=0xffffcbfc) at main/main.c:2607
-#5  0x0868ba25 in do_cli (argc=2, argv=0x9035820) at sapi/cli/php_cli.c:992
-#6  0x0868c65b in main (argc=2, argv=0x9035820) at sapi/cli/php_cli.c:1384
-</code>
-
-Unknown function "??" called from zend_execute() is a JIT-ed code. We may determine the failure location analysing execution context.  
-
-<code>
-(gdb) p (char*)executor_global.current_execute_data.func.op_array.filename.val
-(gdb) p executor_global.current_execute_data.opline.lineno 
-</code>
-
-Line number may be inaccurate, because JIT doesn't keep "opline" in consistency.
-We may disassemble the code around the bogus instruction to understand the real "opline".
-
-<code>
-(gdb) disassemble 0xe960dc00,0xe960dc30
-</code>
-
-Also, it may be useful to analyse bytecode and assembler dump of the bogus JIT-ed function.
-
-<code>
-$ php --opcache.jit_debug=1 app.php
-$ php --opcache.jit_debug=2 app.php
-</code>
-
-To catch the mistake, we might need to trace the JIT code generator (when it generates the bogus code), or instrument it to generate breakpoint (int3 x86 instruction) and then trace the generated code.
-
-PHP JIT may use GDB API to provide information about generated code to debugger. However, it works only for reasonable small scripts. In case of big amount of JIT-ed code, GDB just stuck registering functions. In case we can isolate the bogus code, we may debug JIT in more comfortable way.
-
-<code>
-$ gdb php 
-
-(gdb) r -dopcache.jit_debug=0x100 test.php
-...
-
-(gdb) bt
-
-#1  0xe960dc11 in JIT$foo () at test.php:2
-#2  0x08689524 in zend_execute (op_array=0xf4074460, return_value=0x0) at Zend/zend_vm_execute.h:69122
-#3  0x085cb93b in zend_execute_scripts (type=8, retval=0x0, file_count=3) at Zend/zend.c:1639
-#4  0x0855a890 in php_execute_script (primary_file=0xffffcbfc) at main/main.c:2607
-#5  0x0868ba25 in do_cli (argc=2, argv=0x9035820) at sapi/cli/php_cli.c:992
-#6  0x0868c65b in main (argc=2, argv=0x9035820) at sapi/cli/php_cli.c:1384
-
-(gdb) disassemble
-...
-(gdb) layout asm
-</code>
-
-===== State and compatibility =====
-Currently we support x86 and x86_64 on POSIX platforms (tested on Linux with GCC and LVVM) and Windows (both non-ZTS and ZTS builds). We support "Hybrid" and "Call" VM with and without GCC explicit global register variables extension.
-There are no any restrictions on C compiler and OS any more.
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
 
 ===== Future Scope =====
-In PHP 8 we are going to improve JIT and perform optimized code generation after an initial profiling of hot functions. This would allow application of speculative optimizations and generation only the code that is really executed. It's also possible to do deeper integration of JIT with preloading and FFI, and perhaps a standardized way of developing (and providing) built-in functions that are written in PHP, and not just in C.
+In PHP-8 we are going to improve JIT and perform optimized code generation after an initial profiling of hot functions. This would allow application of speculative optimizations and generation only the code that is really executed. It's also possible to do deeper integration of JIT with preloading and FFI.
 
 ===== Proposed Voting Choices =====
-Support for JIT is more a strategic PHP question. JIT definitely requires a lot of work, but it may be actively developed only as a part of PHP, with common effort.
+This project requires a 50%+1 majority.
 
-This project requires a 2/3+1 majority. Voting opened 2019-03-21 and closes 2019-03-28. 
-
-<doodle title="Include JIT into PHP 8?" auth="user" voteType="single" closed="true">
+<doodle title="Include JIT into PHP-8?" auth="user" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
-As PHP 7.4 is already branched and its engine is not expected to be significantly changed (consequently requiring corresponding changes to the JIT implementation), we can also consider including JIT in PHP-7.4 as an experimental feature (disabled by default), to provide early access and receive more feedback. This also requires a 2/3+1 majority.
+As PHP-7.4 is branched and its engine is not going to be significantly changed, we may also include JIT into PHP-7.4 as an experimental feature (disabled by default).
 
-In case JIT is not included in PHP-7.4 and PHP-8 introduces language compatibility breaks (it already does), existing applications couldn't be tested with JIT without porting to PHP-8.
-
-<doodle title="Include JIT into PHP 7.4 (experimental)?" auth="user" voteType="single" closed="true">
+<doodle title="Include JIT into PHP-7.4 (experimental)?" auth="user" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
 ===== Patches and Tests =====
-  - [[https://github.com/php/php-src/pull/3792|Pull request for master]]
-  - https://github.com/zendtech/php-src/ - The PHP JIT branch was announced more than two years ago, and since that time was kept in consistency with PHP master.
-  - https://github.com/zendtech/php-src/tree/jit-dynasm-7.4 - PHP-7.4 compatible branch
+https://github.com/zendtech/php-src/ - The PHP JIT branch was announced more than two years ago, and since that time was kept in consistency with PHP master.
 
 ===== Implementation =====
-Merged into PHP master by [[https://github.com/php/php-src/commit/9a06876072b9ccb023d4a14426ccb587f10882f3|9a06876072b9ccb023d4a14426ccb587f10882f3]] commit
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
 
 ===== References =====
   - [[https://luajit.org/dynasm.html|DynAsm page]]
   - [[https://corsix.github.io/dynasm-doc/|The Unofficial DynASM Documentation]]
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
