@@ -1,13 +1,12 @@
 ====== PHP RFC: Saner string to number comparisons ======
   * Date: 2019-02-26
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Implemented
+  * Status: Draft
   * Target Version: PHP 8.0
-  * Implementation: https://github.com/php/php-src/pull/3886
 
 ===== Introduction =====
 
-Comparisons between strings and numbers using ''=='' and other non-strict comparison operators currently work by casting the string to a number, and subsequently performing a comparison on integers or floats. This results in many surprising comparison results, the most notable of which is that ''%%0 == "foobar"%%'' returns true. This RFC proposes to make non-strict comparisons more useful and less error prone, by using a number comparison only if the string is actually numeric. Otherwise the number is converted into a string, and a string comparison is performed.
+Comparisons between strings and numbers using ''=='' and other non-strict comparison operators currently work by casting the string to a number, and subsequently performing a comparison on integers or floats. This results in many surprising comparison results, the most notable of which is that ''%%0 == "foobar"%%'' returns true. This RFC proposes to make non-strict comparisons more useful and less error prone, by using a number comparison only if the string is actually numeric. Otherwise the number is converted to a string, and a string comparison is performed.
 
 PHP supports two different types of comparison operators: The strict comparisons ''==='' and ''!=='', and the non-strict comparisons ''=='', ''!='', ''>'', ''>='', ''<'', ''%%<=%%'' and ''%%<=>%%''. The primary difference between them is that strict comparisons require both operands to be of the same type, and do not perform implicit type coercions. However, there are some additional differences:
 
@@ -117,20 +116,21 @@ Different comparison semantics only appear once either non well-formed or non-nu
 <code php>
                          // Before | After | Type
 var_dump(42 == "   42"); // true   | true  | well-formed
-var_dump(42 == "42   "); // true   | false | non well-formed (*)
+var_dump(42 == "42   "); // true   | false | non well-formed
 var_dump(42 == "42abc"); // true   | false | non well-formed
 var_dump(42 == "abc42"); // false  | false | non-numeric
 var_dump( 0 == "abc42"); // true   | false | non-numeric
-// (*) Becomes well-formed if saner numeric strings RFC passes
 </code>
 
-A notable asymmetry under the new semantics is that ''%%"   42"%%'' and ''%%"42   "%%'' compare differently. This inconsistency is being addressed by the [[rfc:saner-numeric-strings|saner numeric strings RFC]].
+A notable asymmetry under the new semantics is that ''%%"   42"%%'' and ''%%"42   "%%'' compare differently. In my opinion both of these should behave the same and ''%%42 == "42   "%%'' should return true. There is a draft RFC [[rfc:trailing_whitespace_numerics|to allow trailing whitespace]] in numeric strings, which would resolve this issue.
 
-==== Precision ====
+==== Precision and locale ====
 
-The reason why the comparison semantics are not simply defined in terms of casting the number to string and performing a non-strict string comparison (even though that is a good way to think about it for most purposes), is that floating-point to string conversions in PHP are subject to the ''precision'' ini directive.
+The reason why the comparison semantics are not simply defined in terms of casting the number to string and performing a non-strict string comparison (even though that is a good way to think about it for most purposes), is that floating-point to string conversions in PHP are subject to two runtime settings: The ''precision'' ini directive, and the decimal separator specified by the active locale.
 
-Comparisons with well-formed numeric strings are handled separately to be independent of this runtime setting. However, it does have an effect if we fall back to binary string comparison. For example:
+Comparisons with well-formed numeric strings are handled separately to be independent of these runtime settings. However, these settings do have an effect for the case where we fall back to binary string comparison.
+
+An example of the effect of the ''precision'' ini directive:
 
 <code php>
 $float = 1.75;
@@ -146,7 +146,24 @@ var_dump($float < "1.75abc");
 var_dump("2" < "1.75abc"); // false
 </code>
 
-An alternative approach to this issue would be to define that the float to string conversion used for comparisons always uses automatically determined precision (''precision=-1'').
+An example of the effect of ''setlocale()'':
+
+<code php>
+$float = 1.75;
+
+var_dump($float < "1.6abc");
+// Behaves like
+var_dump("1.75" < "1.6abc"); // false
+
+setlocale(LC_NUMERIC, 'de_DE.UTF-8');
+var_dump($float < "1.6abc");
+// Behaves like
+var_dump("1,75" < "1.6abc"); // true
+</code>
+
+It should be mentioned that the setlocale() dependence [[https://externals.io/message/103638|may go away]] in PHP 8, but this hasn't been formally proposed yet.
+
+An alternative approach to this issue would be to define that the float to string conversion used for comparisons does not respective the locale and always uses automatically determined precision (''precision=-1'').
 
 ==== Special values ====
 
@@ -169,15 +186,10 @@ The special semantics of NAN follow IEEE-754, under which comparisons involving 
 
 ===== Backward Incompatible Changes =====
 
-This change to the semantics of non-strict comparisons is backwards incompatible. Worse, it constitutes a silent change in core language semantics. Code that worked one way in PHP 7.4 will work differently in PHP 8.0. Use of static analysis to detect cases that may be affected is likely to yield many false positives.
+This change to the semantics of non-strict comparisons is backwards incompatible. Worse, it constitutes a silent change in core language semantics. Code that worked one way in PHP 7.4 will work differently in PHP 8.0. Use of static analysis to detect cases that may be affect is likely to yield many false positives.
 
-Testing with [[https://github.com/php/php-src/pull/3917|a warning on comparison result change]] suggests that the practical impact of this change is much lower than one might intuitively expect, but this likely heavily depends on the type of tested codebase.
+One possible way to mitigate the impact is to introduce an ini setting in PHP 7.4, which will perform the comparison using both the old and the new method and emit a deprecation warning if the results differ. This would allow identifying affected code based on production logs.
 
 ===== Vote =====
 
-Voting starts 2020-07-17 and ends 2020-07-31. A 2/3 majority is required.
-
-<doodle title="Change string to number comparison semantics as proposed?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+TBD
