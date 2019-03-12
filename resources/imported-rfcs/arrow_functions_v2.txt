@@ -3,15 +3,14 @@
   * Author: Nikita Popov <nikic@php.net>
   * Author: Levi Morrison <levim@php.net>
   * Author: Bob Weinand <bwoebi@php.net>
-  * Target version: PHP 7.4
-  * Implementation: https://github.com/php/php-src/pull/3941
-  * Status: Implemented
+  * Target PHP version: PHP 7.4
+  * Status: Draft
 
 ===== Introduction =====
 
-Anonymous functions in PHP can be quite verbose, even when they only perform a simple operation.
-Partly this is due to a large amount of syntactic boilerplate, and partly due to the need to manually
-import used variables. This makes code using simple closures hard to read and understand. This RFC
+Anonymous functions and closures can be verbose even though they perform only a simple operation.
+Additionally, importing variables into the closure's scope is manual and a painful overhead for
+single-expression closures. In practice these single-expression closures are common. This RFC
 proposes a more concise syntax for this pattern.
 
 As an example of the declaration overhead, consider this function that [[https://github.com/darkskillfr/near2u/blob/5a606fc9082c33c7270d37e4c7d29160586285f8/serveur/lib.php|I found online]]:
@@ -22,8 +21,12 @@ function array_values_from_keys($arr, $keys) {
 }
 </PHP>
 
-The actual <php>$arr[$x]</php> operation performed by the closure is trivial, but is somewhat lost
-amidst the syntactic boilerplate. Arrow functions would reduce the function to the following:
+The closure performs a single operation <php>$arr[$x]</php> and is 8 characters but requires 30
+other characters (excluding whitespace). This means that roughly 79% of the closure's code is
+overhead (30/38). For this RFC these extra characters are called 'boilerplate'. This RFC proposes
+arrow functions to reduce the amount of boilerplate by having a shorter syntax and importing used
+variables from the outer scope implicitly. Using arrow functions from this RFC this would reduce
+to the following:
 
 <PHP>
 function array_values_from_keys($arr, $keys) {
@@ -31,16 +34,17 @@ function array_values_from_keys($arr, $keys) {
 }
 </PHP>
 
-The question of short closures has been extensively discussed in the past. A previous
-[[rfc:short_closures|short closures RFC]] went through voting and was declined. This proposal
-tries to address some of the raised concerns with a different choice of syntax that is not
-subject to the limitations of the previous proposal.
+This reduces the amount of boilerplate from 30 characters down to 8.
+
+A previous [[rfc:short_closures|short closures RFC]] has been declined. This proposal tries to
+address some of the raised concerns with a different choice of syntax, that is not subject to the
+limitations of the previous proposal.
 
 Additionally, this RFC includes a lengthy discussion of different syntax alternatives as well as
 binding semantics. Unfortunately short closures are a topic where we're unlikely to find a "perfect"
-solution, due to significant constraints on the syntax and implementation. This proposal makes the
+solution, due to significant constraints on the syntax and implementation. This proposal makes a
 choice that we consider "least bad". Short closures are critically overdue, and at some point we'll
-have to make a compromise here, rather than shelving the topic for another few years.
+have to make a compromise here, rather than putting of the topic for another few years.
 
 ===== Proposal =====
 
@@ -70,8 +74,8 @@ $z = 1;
 $fn = fn($x) => fn($y) => $x * $y + $z;
 </PHP>
 
-Here the outer function captures ''$z''. The inner function then also captures ''$z'' from the outer
-function. The overall effect is that ''$z'' from the outer scope becomes available in the
+Here the outer function captures ''$x''. The inner function then also captures ''$x'' from the outer
+function. The overall effect is that the ''$z'' from the outer scope becomes available inside the
 inner function.
 
 ==== Function signatures ====
@@ -89,25 +93,12 @@ fn&($x) => $x;
 fn($x, ...$rest) => $rest;
 </PHP>
 
-==== $this binding and static arrow functions ====
+==== Static arrow functions ====
 
-Just like normal closures, the ''$this'' variable, the scope and the LSB scope are automatically bound when a short closure is created inside a class method. For normal closures, this can be prevented by prefixing them with ''static''. For the sake of completeness this is also supported for arrow functions:
-
-<PHP>
-class Test {
-    public function method() {
-        $fn = fn() => var_dump($this);
-        $fn(); // object(Test)#1 { ... }
-        
-        $fn = static fn() => var_dump($this);
-        $fn(); // Error: Using $this when not in object context
-    }
-}
-</PHP>
-
-Static closures are rarely used: They're mainly used to prevent ''$this'' cycles, which make GC behavior less predictable. Most code need not concern itself with this.
-
-It has been suggested that we could use this opportunity to change the ''$this'' binding semantics towards only binding ''$this'' if it is actually used inside the closure. Apart from GC effects, this would result in the same behavior. Unfortunately PHP has some implicit uses of ''$this''. For example ''Foo::bar()'' calls may inherit ''$this'' if it is compatible with the ''Foo'' scope. We could only carry out a conservative analysis of potential ''$this'' use, which would be unpredictable from a user perspective. As such, we prefer to keep the existing behavior of always binding ''$this''.
+For the sake of completeness, static arrow functions are supported using the syntax
+<php>static fn($x) => $x</php>. A static arrow function, just like a static closure, will not
+bind the ''$this'' variable. I believe the only way in which static closures are used in practice
+is to avoid GC cycles and make destruction behavior more predictable.
 
 ==== By-value variable binding ====
 
@@ -143,7 +134,7 @@ $fn = fn($str) => preg_match($regex, $str, $matches) && ($matches[1] % 7 == 0)
 </PHP>
 
 Here ''$matches'' is populated by ''preg_match()'' and needn't exist prior to the call. We would
-not want to generate a spurious undefined variable notice in this case.
+not want to generate a spurious undefined variable noticed in this case.
 
 Finally, the automatic binding mechanism only considers variables that are used literally. That is,
 the following code will generate an undefined variable notice, because ''$x'' has no literal uses
@@ -155,10 +146,9 @@ $y = 'x';
 $fn = fn() => $$y;
 </PHP>
 
-Support for this could be added by using a more general binding mechanism (bind everything
-rather than binding what is used) when variable variables are encountered. It's excluded here because
-it seems like an entirely unnecessary complication of the implementation, but it can be supported if
-people consider it necessary.
+Support for this could be easily added by using a more general binding mechanism (bind everything
+rather than binding what is used) when variable variables are encountered. It's excluded here
+because supporting this is a waste of opcodes, but if people don't like that, it can be supported.
 
 ==== Precedence ====
 
@@ -180,8 +170,7 @@ Unfortunately the ''fn'' keyword must be a full keyword and not just a reserved 
 Ilija Tovilo analyzed the top 1,000 PHP repositories on GitHub to find usages of ''fn''.
 [[https://gist.github.com/morrisonlevi/473a7e0cb6e59c830224b1c71b8da28c|The gist]] provides more
 information, but the rough findings are that all known existing usages of ''fn'' are in tests
-except one case where it is a namespace segment. (The namespace use happens to be in my own library,
-and I'm happy to rename it.)
+except one case where it is a namespace segment.
 
 ===== Examples =====
 
@@ -222,20 +211,20 @@ The complement function as found in many libraries:
 
 <PHP>
 function complement(callable $f) {
-    return function (...$args) use ($f) {
-        return !$f(...$args);
+    return function (... $args) use ($f) {
+        return !$f(... $args);
     };
 }
 
 // with arrow function:
 function complement(callable $f) {
-    return fn(...$args) => !$f(...$args);
+    return fn(... $args) => !$f(... $args);
 }
 </PHP>
 
 -----
 
-The following example was provided by [[https://gist.github.com/tpunt/b4f9bf30f43b9e148b73ce18245ab472|tpunt]]:
+The following example was given to me by [[https://gist.github.com/tpunt/b4f9bf30f43b9e148b73ce18245ab472|tpunt]]:
 
 <PHP>
 $result = Collection::from([1, 2])
@@ -246,24 +235,19 @@ $result = Collection::from([1, 2])
         return $tmp + $v;
     }, 0);
 
-echo $result; // 6
+echo $result; //6
 
 // with arrow functions:
 $result = Collection::from([1, 2])
     ->map(fn($v) => $v * 2)
     ->reduce(fn($tmp, $v) => $tmp + $v, 0);
 
-echo $result; // 6
+echo $result; //6
 </PHP>
 
 ===== Vote =====
 
-Voting started 2019-04-17 and ends 2019-05-01. A 2/3 majority is required.
-
-<doodle title="Add arrow functions as described in PHP 7.4?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Simple yes/no vote.
 
 ===== Discussion =====
 
@@ -309,7 +293,7 @@ $array = [(yield $k => $v)];
 $array = [(yield $k) => $v];
 </PHP>
 
-Unfortunately, the ''%%$x => $y%%'' syntax is also subject to the limitations that are described in the following section, which are ultimately much more problematic.
+Unfortunately, the ''%%$x => $y%%'' syntax is also subject to the limitation that are described in the following section, which are ultimately much more problematic.
 
 === ($x) ==> $x * $y ===
 
@@ -440,9 +424,6 @@ $($x) => $x * $y
 -($x) => $x * $y
 ~($x) => $x * $y
 @($x) => $x * $y
-
-// Not possible, because _() is a valid function name, used as an alias for gettext()
-_($x) => $x * $y
 </PHP>
 
 I've highlighted the first four examples as the only ones I would consider somewhat viable. ''fn''
@@ -465,26 +446,6 @@ fn($x): T (\T\T)
 
 It would be possible to resolve this ambiguity by lexing namespaced names as a single token
 (removing support for whitespace inside them). This would, however, be a breaking change.
-
-=== Using -> and --> as arrows ===
-
-As an alternative to ''%%=>%%'' the use of ''%%->%%'' and ''%%-->%%'' has been suggested. Any arrow syntax without a leading sigil would still be subject to the issues in the previous section, but these two in particular also conflict with existing syntax: ''%%->%%'' is already used for property access:
-
-<PHP>
-($x) -> $x
-// already valid, more typically written as:
-$x->{$x}
-</PHP>
-
-''%%-->%%'' is a combination of The post-decrement operator ''%%--%%'' and the greater-than operator ''>'':
-
-<PHP>
-$x --> $x
-// already valid, more typically written as:
-$x-- > $x
-</PHP>
-
-''%%-->%%'' would be valid when restricted to the form that uses parentheses, because ''%%($x)--%%'' is not legal code right now. Both arrows would be possible in conjunction with a leading symbol, but at that point any ambiguity is already resolved by the leading symbol and we may as well use ''%%=>%%''.
 
 === Different parameter list separators ===
 
@@ -555,17 +516,9 @@ The captures here are similar to the ''use()'' list in PHP and additionally supp
 This syntax is not viable in PHP, because ''[$x]($y)'' is already valid syntax, so this would run
 into all the same parsing issues.
 
-=== Miscellaneous ===
+=== Other ideas? ===
 
-It has been suggested to use the ''%%\param_list => expr%%'' syntax (without wrapping the parameters in parentheses), which is very close to the syntax used by Haskell. This syntax is ambiguous, because the ''\'' may also be part of a fully qualified type name:
-
-<PHP>
-[\T &$x => $y]
-// could be
-[\(T &$x) => $y)]
-// or
-[(\T & $x) => $y]
-</PHP>
+Happy to add more to this list.
 
 ==== Binding behavior ====
 
@@ -579,7 +532,7 @@ of reference binding is that it allows you to modify variables inside the arrow 
 
 <PHP>
 $x = 1;
-$fn = fn() => $x++;
+$fn = () => $x++;
 $fn();
 var_dump($x); // By-value: 1
               // By-reference: 2
@@ -592,7 +545,7 @@ block form.
 Unfortunately it cannot be said that by-reference bindings are "strictly better" than by-value
 bindings, due to two main issues: The first is that by-reference bindings have a performance cost,
 because they require the creation of reference wrapper, and their subsequent dereferencing. It
-would be rather unfortunate if the choice between using an arrow function and using the full
+would be rather unfortunate if the choice between using an array function and using the full
 closure syntax would also have to take into account their different performance characteristics.
 
 The second and more important issue is that by-reference binding goes both ways: While it allows
@@ -676,12 +629,6 @@ is common in other languages to also support of form that accepts a code block w
 number of statements:
 
 <PHP>
-fn(params) => {
-    stmt1;
-    stmt2;
-    return expr;
-}
-// or possibly just
 fn(params) {
     stmt1;
     stmt2;
@@ -726,9 +673,9 @@ $fn();
 var_dump($a); // int(3)
 </PHP>
 
-In this example ''$b'' is still implicitly used by-value, but ''$a'' is explicitly used
-by-reference. However, this syntax may be confusing as it is very close to the normal closure
-syntax, which would **not** implicitly bind ''$b''.
+In this example ''$b'' is still implicitly used by-value, but ''$a'' is explicitly used by-value.
+However, this syntax may be confusing as it is very close to the normal closure syntax, which
+would **not** implicitly bind ''$b''.
 
 ==== Allow arrow notation for real functions ====
 
@@ -746,8 +693,3 @@ class Test {
 </PHP>
 
 There are some possible variations of this, e.g. allow ''%%=>%%'' but not ''fn''.
-
-===== Changelog =====
-
-  * 2019-03-14: Clarify $this binding and explain why we're sticking with always-bind behavior.
-  * 2019-03-14: Mention ''%%->%%'', ''%%-->%%'', ''_()'' and ''\$x => $x''.
