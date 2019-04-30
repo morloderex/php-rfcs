@@ -1,17 +1,17 @@
 ====== PHP RFC: Numeric Literal Separator ======
-  * Date: 2019-05-15
-  * Author: Theodore Brown <theodorejb@outlook.com>, Bishop Bettini <bishop@php.net>
+  * Date: 2019-04-30
+  * Author: Theodore Brown <theodorejb@outlook.com>
   * Based on [[https://wiki.php.net/rfc/number_format_separator|previous RFC]] by: Thomas Punt <tpunt@php.net>
-  * Status: Implemented (in PHP 7.4)
-  * Discussion: https://externals.io/message/105714
-  * Target version: PHP 7.4
-  * Implementation: https://github.com/php/php-src/pull/4165
+  * Proposed PHP version: PHP 7.4
+  * Discussion: https://externals.io/message/105450
+  * Status: Draft
+
 
 ===== Introduction =====
 
 The human eye is not optimized for quickly parsing long sequences of
-digits. Thus, a lack of visual separators makes it take longer to
-read and debug code, and can lead to unintended mistakes.
+digits. Thus, a lack of visual separators increases the time it takes
+to read and debug code, and can lead to unintended mistakes.
 
 <code php>
 1000000000;   // Is this a billion? 100 million? 10 billion?
@@ -23,7 +23,7 @@ to convey any additional information, such as whether a financial
 quantity is stored in cents:
 
 <code php>
-$discount = 13500; // Is this 13,500? Or 135, because it's in cents?
+$discount = 12300; // Is this 12,300? Or 123, because it's in cents?
 </code>
 
 ===== Proposal =====
@@ -32,9 +32,9 @@ Enable improved code readability by supporting an underscore in
 numeric literals to visually separate groups of digits.
 
 <code php>
-$threshold = 1_000_000_000;  // a billion!
-$testValue = ‪107_925_284.88; // scale is hundreds of millions
-$discount = 135_00;          // $135, stored as cents
+$threshold = 1_000_000_000; // a billion!
+$testAmt = ‪107_925_284.88;  // scale is hundreds of millions
+$discount = 123_00;         // $123, stored as cents
 </code>
 
 Underscore separators can be used in all numeric literal notations
@@ -44,8 +44,8 @@ supported by PHP:
 6.674_083e-11; // float
 299_792_458;   // decimal
 0xCAFE_F00D;   // hexadecimal
-0b0101_1111;   // binary
-0137_041;      // octal
+0b0010_1101;   // binary
+026_73_43;     // octal
 </code>
 
 ==== Restrictions ====
@@ -57,7 +57,7 @@ the following usages are valid numeric literals:
 <code php>
 _100; // already a valid constant name
 
-// these all produce "Parse error: syntax error":
+// these all produce "Parse error: syntax error"
 100_;       // trailing
 1__1;       // next to underscore
 1_.0; 1._0; // next to decimal point
@@ -66,11 +66,38 @@ _100; // already a valid constant name
 1_e2; 1e_2; // next to e
 </code>
 
+===== Use cases =====
+
+Business logic thresholds, scientific constants, and unit test values
+are common situations where large numeric literals are necessary.
+
+==== Use cases to avoid ====
+
+It may be tempting to use integers for storing data such as phone,
+credit card, and social security numbers since these values appear
+numeric. However, this is almost always a bad idea, since these
+values often have prefixes and leading digits that are significant.
+
+A good rule of thumb is that if it doesn't make sense to use
+mathematical operators on a value (e.g. adding it, multiplying it,
+dividing it, etc.), then an integer probably isn't the best way to
+store it.
+
+<code php>
+// never do this:
+$phoneNumber = 345_6789;
+$creditCard = 378_2822_4631_0005;
+$socialSecurity = 111_11_1111;
+</code>
+
+===== Backward Incompatible Changes =====
+
+None.
+
 ===== Unaffected PHP Functionality =====
 
-Adding an underscore between digits in a numeric literal will not
-change its value. The underscores are stripped out during the lexing
-stage, so the runtime is not affected.
+Underscores in numeric literals will be stripped out during the
+lexing stage, so the runtime will not be affected.
 
 <code php>
 var_dump(1_000_000); // int(1000000)
@@ -80,80 +107,7 @@ This RFC does not change the behavior of string to number
 conversion. Numeric separators are intended to improve code
 readability, not alter how input is processed.
 
-===== Backward Incompatible Changes =====
-
-None.
-
-===== Discussion =====
-
-==== Use cases ====
-
-Digit separators make possible the cognitive process of
-[[https://en.wikipedia.org/wiki/Subitizing|subitizing]]. That is,
-accurately and confidently "telling at a glance" the number of digits,
-rather than having to count them. This measurably lessens the time
-to correctly read numbers longer than four digits.
-
-Large numeric literals are commonly used for business logic
-constants, unit test values, and performing data conversions.
-For example:
-
-Composer's retry delay when removing a file:
-
-<code php>
-usleep(350000); // without separator
-
-usleep(350_000); // with separator
-</code>
-
-Conversion of an Active Directory timestamp (the number of
-100-nanosecond intervals since January 1, 1601) to a Unix timestamp:
-
-<code php>
-$time = (int) ($adTime / 10000000 - 11644473600); // without separator
-
-$time = (int) ($adTime / 10_000_000 - 11_644_473_600); // with separator
-</code>
-
-Working with scientific constants:
-
-<code php>
-const ASTRONOMICAL_UNIT = 149597870700; // without separator
-
-const ASTRONOMICAL_UNIT = 149_597_870_700; // with separator
-</code>
-
-Separating bytes in a binary or hex literal:
-
-<code php>
-0b01010100011010000110010101101111; // without separator
-
-0b01010100_01101000_01100101_01101111; // with separator
-
-0x42726F776E; // without separator
-
-0x42_72_6F_77_6E; // with separator
-</code>
-
-==== Use cases to avoid ====
-
-It may be tempting to use integers for storing data such as phone,
-credit card, and social security numbers since these values appear
-numeric. However, this is almost always a bad idea, since such
-numbers often have prefixes and leading digits that are significant.
-
-A good rule of thumb is that if it doesn't make sense to use
-mathematical operators on a value (e.g. adding it, multiplying it,
-etc.), then an integer probably isn't the best way to store it.
-
-<code php>
-// don't do this:
-$phoneNumber = 345_6789;
-$creditCard = 231_6547_9081_2543;
-$socialSecurity = 111_11_1111;
-</code>
-
-==== Will it be harder to search for numbers? ====
+===== Will it be harder to search for numbers? =====
 
 A concern that has been raised is whether numeric literal separators
 will make it more difficult to search for numbers, since the same
@@ -163,35 +117,31 @@ This is already possible, however. The same number can be written in
 binary, octal, decimal, hexadecimal, or exponential notation. In
 practice, this isn't problematic as long as a codebase is consistent.
 
-Furthermore, separators can sometimes make it easier to find numbers.
-To use an earlier example, 13_500 and 135_00 could be differentiated
-in a find/replace. Another example would be separated bytes in a hex
-literal, which allows searching for a value like "_6F_" to find only
-the numbers containing that specific byte.
+===== Prior art =====
 
-==== Should it be the role of an IDE to group digits? ====
+Numeric literal separators are widely supported in other programming languages.
 
-It has been suggested that numeric literal separators aren't needed
-for better readability, since IDEs could be updated to automatically
-display large numbers in groups of three digits.
+  * Ada: single, between digits [[http://archive.adaic.com/standards/83lrm/html/lrm-02-04.html#2.4|1]]
+  * C# (proposal for 7.0): multiple, between digits [[https://github.com/dotnet/csharplang/blob/master/proposals/csharp-7.0/digit-separators.md|2]]
+  * C++: single, between digits (single quote used as separator) [[http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2013/n3781.html|3]]
+  * Java: multiple, between digits [[https://docs.oracle.com/javase/7/docs/technotes/guides/language/underscores-literals.html|4]]
+  * JavaScript and TypeScript: single, between digits [[http://2ality.com/2018/02/numeric-separators.html|5]]
+  * Julia: single, between digits [[https://docs.julialang.org/en/v1/manual/integers-and-floating-point-numbers/|6]]
+  * Perl: single, between digits [[https://perldoc.perl.org/perldata.html#Scalar-value-constructors|7]]
+  * Python: single, between digits [[https://www.python.org/dev/peps/pep-0515/|8]]
+  * Ruby: single, between digits [[http://ruby-doc.org/core-2.6.3/doc/syntax/literals_rdoc.html#label-Numbers|9]]
+  * Rust: multiple, anywhere [[https://doc.rust-lang.org/reference/tokens.html#number-literals|10]]
+  * Swift: multiple, between digits [[https://docs.swift.org/swift-book/ReferenceManual/LexicalStructure.html#ID415|11]]
 
-However, it isn't always desirable to group numbers the same way.
-For example, a programmer may write ''10050000'' differently
-depending on whether or not it represents a financial quantity stored
-as cents:
+===== Proposed Voting Choices =====
 
-<code php>
-$total = 100_500_00; // represents $100,500.00 stored as cents
+Add numeric literal separators in PHP 7.4? Yes/No.
 
-$total = 10_050_000; // represents $10,050,000
-</code>
+===== Patches and Tests =====
 
-Binary and hex literals may also be grouped by a varying number of
-digits to reflect how they are used (e.g. bits may be separated into
-nibbles, bytes, or words). An IDE cannot do this automatically
-without knowing the programmer's intent for each numeric literal.
+Pending...
 
-==== Why resurrect this proposal? ====
+===== Why resurrect this proposal? =====
 
 The [[https://wiki.php.net/rfc/number_format_separator|previous RFC]]
 was originally voted on over three years ago (January 2016). While a
@@ -207,52 +157,8 @@ has been implemented in additional popular languages (e.g. Python,
 JavaScript, and TypeScript), and a stronger case can be made for the
 feature than was made before.
 
-==== Should I vote for this feature? ====
-
-Andrea Faulds summarized the considerations [[https://externals.io/email/90673/source|as follows]]:
-
-<blockquote>
-This feature offers some benefit in some cases. It doesn't introduce
-much new complexity. There's no new syntax or tokens, it just modifies
-the form of the existing number tokens. It fits in well [with] what's
-already there, consistently applying to all number literals. It follows
-established convention in other languages. Its appearance at least hints
-that values with these separators are not constants or identifiers, but
-numbers, reducing potential for confusion. It limits its own application
-to prevent abuse (no leading, trailing, or repeated separators). And
-it's relatively intuitive.
-</blockquote>
-
-==== Comparison to other languages ====
-
-Numeric literal separators are widely supported in other programming languages.
-
-  * Ada: single, between digits [[http://archive.adaic.com/standards/83lrm/html/lrm-02-04.html#2.4|1]]
-  * C#: multiple, between digits [[https://github.com/dotnet/csharplang/blob/master/proposals/csharp-7.0/digit-separators.md|2]]
-  * C++: single, between digits (single quote used as separator) [[http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2013/n3781.html|3]]
-  * Java: multiple, between digits [[https://docs.oracle.com/javase/7/docs/technotes/guides/language/underscores-literals.html|4]]
-  * JavaScript and TypeScript: single, between digits [[https://github.com/tc39/proposal-numeric-separator|5]]
-  * Julia: single, between digits [[https://docs.julialang.org/en/v1/manual/integers-and-floating-point-numbers/|6]]
-  * Kotlin: multiple, between digits [[https://github.com/Kotlin/KEEP/blob/master/proposals/underscores-in-numeric-literals.md|7]]
-  * Perl: single, between digits [[https://perldoc.perl.org/perldata.html#Scalar-value-constructors|8]]
-  * Python: single, between digits [[https://www.python.org/dev/peps/pep-0515/|9]]
-  * Ruby: single, between digits [[http://ruby-doc.org/core-2.6.3/doc/syntax/literals_rdoc.html#label-Numbers|10]]
-  * Rust: multiple, anywhere [[https://doc.rust-lang.org/reference/tokens.html#number-literals|11]]
-  * Swift: multiple, between digits [[https://docs.swift.org/swift-book/ReferenceManual/LexicalStructure.html#ID415|12]]
-
-===== Vote =====
-
-Voting started 2019-05-30 and ended 2019-06-13.
-
-<doodle title="Support numeric literal separator in PHP 7.4?" auth="theodorejb" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
 ===== References =====
-
-Request to revive RFC: https://externals.io/message/105450
 
 Discussion from previous RFC: https://externals.io/message/89925, https://externals.io/message/90626, https://marc.info/?l=php-internals&m=145320709922246&w=2.
 
-Blog post about original implementation: https://phpinternals.net/articles/implementing_a_digit_separator.
+Previous implementation: https://github.com/php/php-src/pull/1699 and https://phpinternals.net/articles/implementing_a_digit_separator.
