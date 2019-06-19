@@ -1,31 +1,17 @@
-====== PHP RFC: Normalize arrays' "auto-increment" value on copy on write ======
+====== PHP RFC: Normalize the array's "auto-increment" on copy on write ======
 
   * Version: 0.1
   * Date: 2019-06-19
   * Author: Wes (@WesNetmo)
-  * Status: Under discussion
+  * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/normalize-array-auto-increment-on-copy-on-write
 
 ===== Introduction =====
 
-If two ''array''s are equal/identical, they should remain equal/identical ''array''s after
-the same ''array_push(..., $val)'' call is executed on both of them:
-
-<PHP>
-assert($array1 === $array2); // identical/equal
-$array1[] = $array2[] = 123;
-assert($array1 === $array2); // still identical/equal
-</PHP>
-
-This is currently not guaranteed, and because of ''array''s' all-doing nature, it is not
-possible to always enforce this property -- but it should be in some dangerous cases,
-namely when functions from (potential) different authors are interacting.
-
------
-
-When an ''array'' is assigned to a new reference, and it is copied, before a modification,
-due to the copy-on-write behavior, it will result in an ''array'' that is identical in any
-way to the original one, inclusive of its "auto-increment" value:
+When an Array is assigned to a new reference, and it is copied, before a modification, due
+to the copy-on-write behavior, it is done in such a way that the new array is identical
+in any way to the original one before the modification is applied. This includes the
+"next integer index", which gets copied to the new reference as well.
 
 <PHP>
 $array1 = [0, 1, 2];
@@ -33,7 +19,7 @@ unset($array1[1], $array1[2]);
 
 $array2 = $array1;
 assert($array2 === [0]);
-$array2[] = "push"; // triggers COW and then pushes the new entry
+$array2[] = "push";
 
 print_r($array2);
 // Array
@@ -43,14 +29,11 @@ print_r($array2);
 // )
 </PHP>
 
-
-This happens also between different function scopes. Our functions can receive "broken"
-''array''-lists from third-parties that only appear to be well-indexed, but that in
-reality are not, because they were misused during their lifetime (classic example, it was
-used ''unset($array[$lastIndex])'' on them, instead of ''array_pop($array)'').
-
-As result of that, despite "copy on write", the value-type semantics, and even a different
-scope, the following assertion can fail in some cases:
+This behavior can happen, unfortunately, between different scopes. Our code can receive
+"broken" array-lists from third parties, that were misused during their lifetime (for
+example, it was used ''unset()'' on them, instead of ''array_pop()''). Despite "copy on
+write", the value-type semantics, and even a new scope, the following assertion might
+fail in some cases:
 
 <PHP>
 function test(array $array){
@@ -60,6 +43,7 @@ function test(array $array){
     }
 }
 
+
 // For example:
 $poison = [0, 1, 2, 3];
 unset($poison[3]);
@@ -68,10 +52,10 @@ test($poison);
 
 ===== Proposal =====
 
-This RFC proposes to reset the "auto-increment" value in copies triggered by "copy on
-write", in order to guarantee a deterministic behavior to foreign scopes especially. The
-"auto-increment" value of the new variable reference must be equivalent to the
-"auto-increment" value that the ''array'' would have if it was re-created entry by entry,
+This RFC proposes to reset the "next auto-increment" value in copies triggered by "copy
+on write", in order to guarantee a deterministic behavior to foreign scopes especially.
+The "next auto-increment" value of the new variable reference must be equivalent to the
+"next auto-increment" value that the array would have if it was re-created entry by entry,
 as follows:
 
 <PHP>
@@ -81,49 +65,28 @@ foreach($array as $key => $value){
 }
 </PHP>
 
-The reset is not limited to new function scopes but any new by-value reference:
+The reset is not limited to new scopes but any new by-value references:
 
 <PHP>
-$array = [0, 1, 2, 3];
-unset($array[3], $array[2]);
-$arrayCopy = $array;
-$arrayCopy[] = 2;
-assert($arrayCopy === [0, 1, 2]); // this assertion must pass; it doesn't currently
+    $array = [0, 1, 2, 3];
+    unset($array[3], $array[2]);
+    $arrayCopy = $array;
+    $arrayCopy[] = 2;
+    assert($arrayCopy === [0, 1, 2]); // this assertion must pass; it doesn't currently
 </PHP>
 
 ===== Backward Incompatible Changes =====
 
-This change is not backward compatible; code relying on the "auto-increment" value being
-remembered between copies of copy-on-write will break. However, the proposed change should
-be considered a bug-fix, rather than a behavior change; it offers protection against
-''array''-lists that were misused with ''unset()'' instead of ''array_pop/_splice/_shift''
-and thus will only affect code that is already a candidate for improvements. Furthermore,
-the "auto-increment" value is copied inconsistently, when the ''array'' is empty:
-
-<PHP>
-$a = [0, 1];
-unset($a[1]);
-$b = $a;
-$b[] = 2;
-// $b is [0 => 0, 2 => 2]
-
-$a = [0, 1];
-unset($a[0], $a[1]);
-$b = $a;
-$b[] = 2;
-// $b is [0 => 2], rather than [2 => 2]
-</PHP>
-
-The proposed change would make the behavior consistent and safer.
+This change is not backward compatible; code relying on the next element index being
+remembered between copies of copy-on-write will stop function. However, the proposed
+change should be considered a bug-fix, rather than a behavior change. In fact, it offers
+protection against ''array''-lists that were misused with ''unset()'' instead of
+''array_pop/_splice/_shift''.
 
 ===== Proposed PHP Version(s) =====
 
-7.4
+Next PHP minor version
 
 ===== Proposed Voting Choices =====
 
 Vote will require 2/3 majority
-
-===== References  =====
-
-  * [[https://externals.io/message/105992|Pre-vote discussion on externals.io]]
