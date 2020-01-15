@@ -1,71 +1,67 @@
 ====== PHP RFC: Add Stringable interface ======
   * Version: 0.9
   * Date: 2020-01-15
-  * Author: Nicolas Grekas, nicolasgrekas@php.net
-  * Status: Implemented
+  * Author: Nicolas Grekas, nicolas.grekas+php@gmail.com
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/stringable
 
 ===== Introduction =====
-
-This RFC introduces a new ''Stringable'' interface that is automatically added to classes that implement the ''%%__toString()%%'' method.
-
+This PR introduces a new Stringable interface that can be added to implementations of the __toString() method.
 It has two goals:
-  - allow using ''string|Stringable'' to express ''string|object-with-%%__toString()%%''
-  - provide a forward upgrade path from PHP 7 to 8
+1. allow using "string|Stringable" to express "string | object-with-__toString()"
+2. provide a forward upgrade path from PHP 7 to 8
 
 ===== Proposal =====
-Goal 1. is to allow using the ''string|Stringable'' union type in PHP 8, to accept both strings and objects that implement ''%%__toString()%%''. This is critically missing currently, on codes that deal with stringable objects: they can't be made type-safe.
+This goal is to allow using the string|Stringable union type in PHP 8, to accept both strings and objects that implement __toString() and declare this interface. This is critically missing currently, on codes that deal with stringable objects: they can't be made type-safe.
 
-Classes that implement ''%%__toString()%%'' can also declare the interface explicitly. Classes that don't declare the interface explicitly will still declare it implicitly. This allows both forward compatibility and backward compatibility: using a polyfill, classes can declare the interface on PHP 7; and on PHP 8, classes that don't do so will still be compatible with the ''string|Stringable'' union type.
+On purpose, there is no corresponding is_stringable() function, because that would require defining what happens when e.g. an int is passed to this function, and there are no simple answers to this concern.
 
-Once a polyfill becomes widely available (e.g. [[https://github.com/symfony/polyfill/pull/224|as part of symfony/polyfill-php80]]), code style checkers could be able to enforce declaring the interface when ''%%__toString()%%'' is declared explicitly, for people that prefer doing so.
+On purpose also, for BC, classes that implement __toString() aren't required to declare the interface.
+Such classes wouldn't pass the above union type, but that's expected, as that's the semantics of the language.
+
+By being simple and without any magic capabilities on its own, this interface is trivially polyfilled on PHP < 8.
+
+Once a polyfill becomes widely available (I would personally add one to symfony/polyfill-php80 immediately after this PR is accepted), I expect code style checkers to be able to enforce declaring the interface when __toString() is used. For projects that don't use cs checkers, that's fine: they'll notice quickly that they missed adding the interface because their users will ask for it when they'll want to pass the string|Stringable union type.
 
 Here is the stub declaration of the interface:
 
-<PHP>
 interface Stringable
 {
    public function __toString(): string;
 }
-</PHP>
 
-Because it adds the ''string'' return type, this interface has the potential to force a BC break on any existing libraries that want to adopt it.
+Because it adds the string return type, this interface has the potential to force a BC break on any existing libraries that want to adopt it.
 
-In order to ease forward and backward compatibility, this RFC also proposes to automatically add the return type at compile time when a ''%%__toString()%%'' method doesn't do it explicitly already. Returning a string is already enforced by the engine so this doesn't change any semantics.
+In order to ease forward and backward compatibility, the PR also adds the return type to existing __toString methods when it's not explicit declared already. Returning a string is already enforced by the engine so this doesn't change any semantics.
 
-This way, code moving to PHP8 won't be forced to add the return type explicitly (which would break BC on their side), and code in PHP < 8 can adopt a polyfill interface immediately (one that doesn't declare the return type for the same BC reasons.)
+This way, code moving to PHP8 won't be forced to add the return type explicitly (which would break BC on their side), and code in PHP < 8 can adopt a polyfill interface immediately (one that doesn't declare the return type for the same BC reasons.) Providing an easy forward-path is the second goal of this PR.
 
-Providing an easy forward-path is the second goal of this RFC.
-
-For reference, [[https://github.com/symfony/symfony/search?q=%22%40param+string%7Cstringable%22|here are some annotations in Symfony]], added by contributions from real-world use cases and that currently cannot be expressed precisely enough using any union types in PHP 8.
+For reference, here are some annotations in Symfony, added by contributions from real-world use cases and that currently cannot be expressed precisely enough using any union types in PHP 8:
+https://github.com/symfony/symfony/search?q=%22%40param+string%7Cobject%22+stringable&unscoped_q=%22%40param+string%7Cobject%22+stringable
 
 ===== Backward Incompatible Changes =====
-Codes that declare a symbol named ''Stringable'' in the root namespace will have to rename it.
+Code that declare a symbol named "Stringable" in the root namespace will have to rename it.
 
 ===== Proposed PHP Version(s) =====
 PHP 8.0
 
 ===== RFC Impact =====
 ==== To Existing Extensions ====
-Extensions will need to declare both the interface and the ''string'' return type when they declare ''%%__toString()%%'' methods if they want to pass the ''string|Stringable'' union type.
+Extensions will need to add the `string` return type when they declare `__toString` methods.
 
 ===== Open Issues =====
-none
+Make sure there are no open issues when the vote starts!
 
 ===== Unaffected PHP Functionality =====
-Declaring this interface is not mandatory to benefit from the magic of the ''%%__toString()%%'' method.
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-void
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 ===== Proposed Voting Choices =====
-yes/no
-
-===== Vote =====
-<doodle title="Adopt the Stringable interface as proposed in this RFC?" auth="nicolasgrekas" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Accept the proposed interface: yes/no
 
 ===== Patches and Tests =====
 https://github.com/php/php-src/pull/5083/files
@@ -81,7 +77,4 @@ After the project is implemented, this section should contain
 https://github.com/php/php-src/pull/5083
 
 ===== Rejected Features =====
-
-  - Adding a new ''%%stringable%%'' special type (like ''iterable'', ''callable'', etc.) is not considered in this RFC because it would require adding a new reserved keyword in the language. This would break BC more heavily and would defeat goal #2 mentioned previously (ability to polyfill on PHP7.)
-  - Consistently, this RFC doesn't embed any ''%%is_stringable()%%'' function. If we were to consider one, defining what happens when e.g. an int is passed [[https://externals.io/message/98424|has no simple answers]].
-  - it has been proposed [[https://github.com/php/php-src/pull/5083#issuecomment-573899924|on the GitHub PR]] that the method attached to the interface could be named ''%%toString()%%'' instead of ''%%__toString()%%''. This idea goes further than strictly required to achieve goal #1 and has been objected as not necessary in the following comments. For reference, [[https://github.com/php/php-src/pull/5088|here is a naive implementation]] of the proposal. What the patch highlights is that this increases the complexity of the engine, for a reason that would need to be justified.
+Keep this updated with features that were discussed on the mail lists.
