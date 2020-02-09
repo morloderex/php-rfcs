@@ -1,33 +1,34 @@
 ====== PHP RFC: Allow function calls in constant expressions ======
-  * Version: 0.5
-  * Date: 2020-02-16
+  * Version: 0.1
+  * Date: 2020-02-20
   * Author: Tyson Andre <tandre@php.net>
-  * Status: Withdrawn
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/calls_in_constant_expressions
 
 ===== Introduction =====
 
 Currently, constant expressions in declarations allow a limited set of expression types such as literals, constants, and operations.
-This RFC proposes allowing calls of a whitelist of global functions in some constant expressions. Calls would be allowed in declarations of class and global constants, defaults of static properties, static variables, and parameter defaults.
+This RFC proposes allowing calls of global functions in constant expressions (in declarations of constants, instance and static properties, static variables, and parameter defaults).
 This will allow calling functions such as ''\count()'', ''\array_merge()'', ''\array_keys()'', and ''\in_array()'',
 An Error will be thrown if the call would be invalid to use within a constant (due to references or non-constant return values).
+
+Two secondary voting options are proposed for this: Allowing any function to be called, or allowing a small whitelist of deterministic functions.
 
 ===== Proposal =====
 
 This RFC proposes allowing global function calls by name (in any namespace).
-Method calls in constant expressions continue to be fatal errors (e.g. ''"MyClass::methodName"()'' or ''MyClass::methodName()'').
+Method call support is not part of this RFC (e.g. ''"MyClass::methodName"()'' or ''MyClass::methodName()'').
 
-Function calls will be allowed in the following types of constant expressions:
+There are two secondary voting options in this RFC for adding support to PHP.
+These voting options reflect the differing opinions on what a constant is meant to be.
+Allowing any function to be called in a constant expression will allow more flexibility for users,
+but limiting function names to a whitelist will make side effects of uses of constants easier to reason about when developers read php code.
 
-  * Defaults of static properties, but **not** instance properties, due to changes required to the PHP internals expanding the scope of this RFC too much. PHP currently evaluates all of the default values of instance properties of a class once, and permanently stores them. \\ This preserves PHP's current evaluation order (the first time a static property is used, all property default values are evaluated)
-  * Parameter defaults (expressions with function calls will always be evaluated each time the parameter is absent)
-  * Global constants (evaluated immediately) and class constants (evaluated and cached the first time they are successfully fetched)
-  * Defaults of static variables (evaluated and cached the first time the expression succeeds)
+The first option is to allow any function (user-defined or internal) to be called,
+leave it to coding practice guidelines to assert that constants are only
+used in safe ways.
 
-
-Only functions in the following whitelist of functions will be callable in constant expressions.
-Attempting to use other functions in constant expressions will be a fatal compile error.
-This whitelist includes functions that are actually deterministic and without side effects, and don't depend on ini
+The second option is to only allow a whitelist functions that are actually deterministic and without side effects, and don't depend on ini
 settings or locale. The functions must be unambiguously resolved.
 This has the same implementation as the first option, with additional compile-time restrictions.
 
@@ -42,19 +43,19 @@ or calls which aren't unambiguously resolved with ''\'' or ''use function''.
 The function ''get_defined_functions_allowed_in_constant_expressions()'' will be added to provide this list of functions the current php version to end users.
 ''get_defined_functions_allowed_in_constant_expressions()'' will be unaffected by the ''disable_functions'' ini directive, the same way ''get_defined_functions()'' is.
 
+==== Function calls must be by name ====
+
 ==== Behaviors in any constant expression ====
 
-Many of these edge cases aren't possible for functions in the whitelist, but will be checked for in the implementation.
-
 If a function call's result contains anything that is invalid for a constant (e.g. objects or reference cycles),
-an ''Error'' will be thrown and the result will be freed. (same as what ''define()'' would accept).
+an ''Error'' will be thrown and the result will be freed. (same as what ''define()'' would accept)
 
 If a function call attempts to modify a parameter by reference, an ''Error'' will be thrown.
 
 ''func_get_args()'', ''func_get_arg()'', ''func_num_args()'', ''extract()'', ''compact()'', and ''get_defined_vars()''
 will all throw an ''Error'' if they are called in a function expression (through the same mechanism that already forbids them in dynamic calls).
 
-Argument unpacking is allowed. (e.g. ''count(...[CONST_ARRAY])'')
+Argument unpacking is allowed. (e.g. ''count(...[[1,2]])'')
 
 Function calls must be by name:
 
@@ -72,14 +73,21 @@ Global constants will continue to be evaluated immediately.
 Class constants, static property defaults, and static variable defaults will be continue to be evaluated and permanently cached 
 the first time they get used.
 
-Parameter defaults of function/method/closure declarations (containing function calls) will get evaluated every time a function gets called without the parameter (unless a Throwable was thrown).
+Instance properties and parameter defaults with calls will evaluate constant expressions containing function calls every time a class is instantiated or a function gets called without the parameter (unless a Throwable was thrown).
 Opcache is free to cache the result if the parameter values are known and the function is definitely deterministic.
 
 The behavior of constant expressions that don't contain function calls won't be modified by this RFC.
 
+==== Behaviors in Constant Expressions ====
+
+For class constants, static property defaults, and static variable defaults:
+If the evaluation of a constant expression throws, the result will not be cached.
+The expression will be evaluated repeatedly every time the constant expression gets used,
+and will get cached permanently the first time it doesn't throw.
+
 ==== Handling functions not in the whitelist ====
 
-A fatal CompileError will be emitted when including a file if any constant expression uses a function name that is outside of the whitelist.
+A CompileError will be thrown when including a file if any constant expression uses a function name that might be outside of the whitelist.
 
 <code php>
 <?php
@@ -103,7 +111,7 @@ class MyClass {
 class MyClass {
 	const VALUES = [1, 0];
 	const C1 = count(self::VALUES);  // this would not throw
-	const C2 = \COUNT(self::VALUES);  // this would not throw
+	const C2 = \count(self::VALUES);  // this would not throw
 	const C3 = namespace\count(self::VALUES);  // this (namespace-relative) would not throw
 	// const C4 = OtherNS\count();  // this would throw due to being outside of the whitelist
 }
@@ -111,16 +119,16 @@ class MyClass {
 
 ==== Whitelisted Functions ====
 
+The following list of functions is proposed for the whitelist option of the secondary vote.
 Functions with the following properties were chosen.
 
-  * Always return values that can be used in constants (or throw)
-  * Impossible to disable in unpatched php builds (e.g. ''json_encode()'' is excluded because ''json'' can be disabled with ''--disable-json'', and because it depends on the ini setting for numeric precision)
+  * Impossible to disable in unpatched php builds (e.g. ''json'' can be disabled with ''--disable-json'')
   * Reasonably deterministic (e.g. no file/network I/O, not dependent on time zones)
   * Not dependent on locale or ini settings (e.g. ''strtolower'' is different in a Turkish locale, ''(string)$float'' is different in the locale ''de_DE'' due to using a comma instead of a decimal place)
   * Don't expect arbitrary strings as parameters in a way that depends on the way floats implicitly cast to strings without strict_types (due to implicit ''(string)$float'' and ini settings for numeric precision)
     For this reason, ''strlen()'', ''sprintf()'', and ''strpos()'' are omitted from the proposed whitelist. Those may be included in a followup RFC.
 
-The following list of functions is whitelisted.
+The list of functions is below:
 
 	abs
 	acosh
@@ -137,7 +145,6 @@ The following list of functions is whitelisted.
 	array_intersect_assoc
 	array_intersect_key
 	array_intersect
-	array_key_exists
 	array_key_first
 	array_key_last
 	array_keys
@@ -229,28 +236,26 @@ None
 ==== To Opcache ====
 Opcache appears to be unaffected - tests of this RFC are passing. Opcache likely just fails to optimize the constant expressions ahead of time.
 
-In the future, if this gets adopted widely, more aggressive optimizations of calls in constant expressions may be desirable. (e.g. permanently storing parameter defaults if the call is provably deterministic)
-
-Opcache already has the ability to optimize functions such as ''strlen'' at compile time, when using other constants from the same class.
+In the future, if this gets adopted widely, support for optimizing calls in constant expressions may be desirable.
 
 ==== New Functions ====
 
-''get_defined_functions_allowed_in_constant_expressions()'' will be added to PHP.
+If the whitelist approach is used, ''get_defined_functions_allowed_in_constant_expressions()'' will be added to PHP.
+If any call is allowed in the secondary vote, that function won't be added.
 
 ===== Future Scope =====
 
 Future RFCs may expand on this in many ways:
 
   * Allowing even more expression types in constant expressions, such as static method calls.
-  * Adding more groups of functions to the whitelist, or avoiding the whitelist approach.
-  * Allowing function calls in the defaults of instance properties.
-  * Allowing non-constant defaults for instance properties, such as ''public $x = new Foo();''.
+  * Adding more groups of functions to the whitelist, if a whitelist was used.
+  * Allowing non-constant defaults for instance properties, such as ''public $x = new Foo()''
 
 ===== Proposed Voting Choices =====
 
 Primary vote: Allow calling global functions that are in the described whitelist (Yes/No, Requires 2/3 majority)
 
-Also see [[https://externals.io/message/108630|Straw poll: Places to allow function calls in constant expressions]]
+Secondary vote: Allow calling any global functions, without a whitelist limitation (Yes/No, Requires 2/3 majority for "Yes" to pass)
 
 ===== Patches and Tests =====
 
@@ -260,7 +265,3 @@ https://github.com/php/php-src/pull/5139
 
 ===== References =====
 [[https://externals.io/message/108343|Planning an RFC to allow calls to global functions in constant expressions]]
-
-[[https://externals.io/message/108630|Straw poll: Places to allow function calls in constant expressions]]
-
-https://wiki.php.net/rfc/calls_in_constant_expressions_poll
