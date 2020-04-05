@@ -1,106 +1,69 @@
-====== PHP RFC:  Ensure correct signatures of magic methods ======
+====== PHP RFC:  Ensure correct magic methods' signatures when typed ======
   * Version: 1.0
   * Date: 2020-04-05
   * Author: Gabriel Caruso (<carusogabriel@php.net>)
-  * Status: Implemented
+  * Status: Under Discussion
   * Target Version: PHP 8.0
   * Implementation: https://github.com/php/php-src/pull/4177
 
 ===== Introduction =====
 
-It is currently possible to write magic methods that have signatures that don't match the signature expected, such as //%%__%%clone(): float// or //%%__%%isset(): Closure//.
+This RFC is inspired by [[https://bugs.php.net/69718|a bug report]] that lists magic methods in PHP that do not have any checks at all to their signature when typed.
 
-This behavior of allowing incorrect signatures was reported as [[https://bugs.php.net/69718|a bug]].
+However, this implementation is not as simple as just check for the methods' signatures, as this is a Backward Incompatible Change for those who have incorrect signatures over their codebases.
 
-As ensuring magic methods have correct signatures is a backward compatible break for code that currently has incorrect signatures, this change would only be appropriate in a major PHP release.
+Nowadays, PHP already checks the signature for the following methods:
 
-===== Motivation =====
-
-PHP's Magic Methods is something that PHP provides allowing developers to track and act on specific changes of behavior of a certain class. Given that fact, the same should ensure that the end-users are using these methods consistently across different codebases.
-
-Since the introduction of types in PHP 7.0, only the checks list below were introduced to make sure that developers are using PHP's magic methods correctly:
-
-  * //%%__%%clone()// return type: https://3v4l.org/Ub54p
-  * //%%__%%construct()// return type: https://3v4l.org/CCL11
-  * //%%__%%destruct()// return type: https://3v4l.org/HNkgW
-  * //%%__%%toString()// return type: https://3v4l.org/jIg7b/rfc#git-php-master
-
-For PHP 8, this RFC aims to expand these checks.
+  * clone return type: https://3v4l.org/Ub54p
+  * construct return type: https://3v4l.org/CCL11
+  * destruct return type: https://3v4l.org/HNkgW
 
 ===== Proposal =====
 
-This RFC proposes to add parameter and return types checks per the following details. Other magic methods will be not modified.
-
-The proposal follows the [[https://php.net/oop5.magic|Magic Methods documentation]].
+This RFC proposes to introduce the following signatures checks when magic methods are typed:
 
 <code php>
-Foo::__call(string $name, array $arguments): mixed;
+/** @return mixed */
+Foo::__call(string $name, array $arguments);
 
-Foo::__callStatic(string $name, array $arguments): mixed;
+/** @return mixed */
+Foo::__callStatic(string $name, array $arguments);
 
-Foo::__clone(): void;
-
-Foo::__debugInfo(): ?array;
-
-Foo::__get(string $name): mixed;
-
-Foo::__invoke(mixed $arguments): mixed;
+/** @return mixed */
+Foo::__get(string $name);
 
 Foo::__isset(string $name): bool;
 
-Foo::__serialize(): array;
-
-Foo::__set(string $name, mixed $value): void;
-
-Foo::__set_state(array $properties): object;
-
-Foo::__sleep(): array;
-
-Foo::__unserialize(array $data): void;
+/** @param mixed $value */
+Foo::__set(string $name, $value): void;
 
 Foo::__unset(string $name): void;
-
-Foo::__wakeup(): void;
 </code>
 
-**Note:** The //%%__%%construct()// and //%%__%%destruct()// methods won't suffer any changes. They won't allow //void// as a return type given the fact that (almost) all languages, including PHP, don't have the concept of Constructors and Destructors "returning" something after their execution. 
+This follows the [[https://php.net/oop5.magic|Magic Methods documentation]].
   
 ===== Backward Incompatible Changes =====
 
-==== To Magic Methods without types declared ====
+Magic methods' signatures not respecting the ones listed above will throw an error.
 
-None.
+===== Open Question: no return vs. void =====
 
-==== To Magic Methods with the wrong signatures ====
+There's an open question related to methods that have no return. Should they have no return type or, instead, a //void// signature, as illustrated below:
 
-Magic methods' signatures not matching the ones listed above, an error will be thrown, a //Fatal Error// more specific, following the errors of the same kind that are placed today.
-
-===== RFC Impact =====
-
-Scraping the top 1000 Composer packages (using Nikita's [[https://gist.github.com/nikic/a2bfa3e2f604f66115c3e4b8963a6c72|script]]), [[https://gist.github.com/carusogabriel/e0b36e7cd9e6846e04f79008cb7e35d6|the results]] show only 7 occurrences of not matching signatures. 
-
-Luckily, none of them is a problem as //%%__%%call()//, //%%__%%callStatic()// and //%%__%%get()// do not have checks at this time. 
-
-Even with a //mixed// RFC that wouldn't be a problem, as [[https://github.com/php/php-src/blob/ad7e93a023a9/Zend/tests/type_declarations/mixed/inheritance/mixed_return_inheritance_success2.phpt|a specific type can override it]], by the Liskov Substitution Principle.
+<code php>
+class Foo 
+{
+    public function __construct(): void 
+    {
+    }
+}
+</code>
+ 
 
 ===== Future Scope =====
 
-This RFC only aims to add checks for the methods' signatures but as a Future Scope, a runtime check of what is been returning in the methods could be added, same as
+This RFC only aims to add checks for the methods' signatures but as a Future Scope, a runtime check of what is been returning in the methods could be added, same as //__serialize// (https://3v4l.org/HLiTj).
 
-  * //%%__%%serialize()//: https://3v4l.org/HLiTj
-  * //%%__%%toString()//: https://3v4l.org/Dbe6G
-  * //%%__%%debugInfo()//: https://3v4l.org/0EEPh
-  * //%%__%%sleep()//: https://3v4l.org/dH96A
+===== Proposed Voting Choices =====
 
-===== Voting =====
-
-Voting started on 2020-05-29 at 18h (CEST) and ends on 2020-06-19 at 18h (CEST).
-
-<doodle title="Ensure correct signatures of magic methods" auth="carusogabriel" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-===== External resources =====
-
-- Discussion thread: https://externals.io/message/109542
+Yes/No.
