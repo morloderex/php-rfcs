@@ -1,10 +1,9 @@
 ====== PHP RFC: Match expression ======
   * Date: 2020-04-12
   * Author: Ilija Tovilo, tovilo.ilija@gmail.com
-  * Status: Declined
+  * Status: Under Discussion
   * Target Version: PHP 8.0
   * Implementation: https://github.com/php/php-src/pull/5371
-  * Supersedes: https://wiki.php.net/rfc/switch_expression
 
 ===== Proposal =====
 The ''switch'' statement is a fundamental control structure in almost every programming language. Unfortunately, in PHP it has some long-standing issues that make it hard to use correctly, namely:
@@ -46,7 +45,7 @@ switch ('foo') {
 }
 </code>
 
-The ''match'' expression uses strict comparison (''==='') instead. The comparison is strict regardless of ''strict_types''.
+The ''match'' expression uses strict comparison (''==='') instead.
 
 <code php>
 match ('foo') {
@@ -88,11 +87,11 @@ echo match (1) {
 </code>
 
 ==== Fallthrough ====
-The ''switch'' fallthrough has been a large source of bugs in many languages. Each ''case'' must explicitly ''break'' out of the ''switch'' statement or the execution will continue into the next ''case'' even if the condition is not met.
+The ''switch'' fallthrough has been a large source of bugs in many languages. Each ''case'' must explicitely ''break'' out of the ''switch'' statement or the execution will continue into the next ''case'' even if the condition is not met.
 
 <code php>
 switch ($pressedKey) {
-    case Key::RETURN_:
+    case Key::ENTER:
         save();
         // Oops, forgot the break
     case Key::DELETE:
@@ -159,7 +158,7 @@ match ($x) {
 </code>
 
 ===== Blocks =====
-Sometimes passing a single expression to a match arm isn't enough, either because you need to use a statement or the code is just too long for a single expression. In those cases you can pass a block to the arm.
+When the result of the ''match'' expression isn't utilized the arm body can be a list of statements. Additionally the semicolon can be omitted when discarding the expression result. This makes it more consistent with other control structures like ''if'' or ''switch''. Trying to use statement lists when utilizing the result will result in a compilation error.
 
 <code php>
 match ($x) {
@@ -169,280 +168,30 @@ match ($x) {
         baz();
     },
 }
-</code>
 
-Originally this RFC included a way to return a value from a block by omitting the semicolon of the last expression. This syntax is borrowed from Rust ((https://doc.rust-lang.org/reference/expressions/block-expr.html)). Due to [[https://github.com/php/php-src/pull/5448|memory management difficulties]] and a lot of negative feedback on the syntax this is no longer a part of this proposal and will be discussed in a separate RFC.
-
-<code php>
-// Original proposal
-$y = match ($x) {
-    0 => {
-        foo();
-        bar();
-        baz() // This value is returned
-    },
+echo match ($x) {
+    0 => { ... },
 };
-
-// Alternative syntax, <=
-$y = match ($x) {
-    0 => {
-        foo();
-        bar();
-        <= baz();
-    },
-};
-
-// Alternative syntax, separate keyword
-$y = match ($x) {
-    0 => {
-        foo();
-        bar();
-        pass baz();
-    },
-};
-
-// Alternative syntax, automatically return last expression regardless of semicolon
-$y = match ($x) {
-    0 => {
-        foo();
-        bar();
-        baz();
-    },
-};
+//> Fatal error: Match expressions that utilize the result value can't contain statement lists
 </code>
 
-For the time being using blocks in match expressions that use the return value in any way results in a compilation error:
-
-<code php>
-$y = match ($x) {
-    0 => {},
-};
-//> Match that is not used as a statement can't contain blocks
-
-foo(match ($x) {
-    0 => {},
-});
-//> Match that is not used as a statement can't contain blocks
-
-1 + match ($x) {
-    0 => {},
-};
-//> Match that is not used as a statement can't contain blocks
-
-//etc.
-
-// Only allowed form
-match ($x) {
-    0 => {},
-}
-</code>
-
-===== Optional semicolon for match in statement form =====
-When using ''match'' as part of some other expression it is necessary to terminate the statement with a semicolon.
-
-<code php>
-$x = match ($y) { ... };
-</code>
-
-The same would usually be true if the ''match'' expression were used as a standalone expression.
-
-<code php>
-match ($y) {
-    ...
-};
-</code>
-
-However, to make the ''match'' expression more similar to other statements like ''if'' and ''switch'' we could allow dropping the semicolon in this case only.
-
-<code php>
-match ($y) {
-    ...
-}
-</code>
-
-This introduces an ambiguity with the ''+'' and ''-'' unary operators.
-
-<code php>
-match ($y) { ... }
--1;
-
-// Could be parsed as
-
-// 1
-match ($y) { ... };
--1;
-
-// 2
-match ($y) { ... } - 1;
-</code>
-
-A ''match'' that appears as the first element of a statement would always be parsed as option 1 because there are no legitimate use cases for binary operations at a statement level. All other cases work as expected.
-
-<code php>
-// These work fine
-$x = match ($y) { ... } - 1;
-foo(match ($y) { ... } - 1);
-$x[] = fn($y) => match ($y) { ... };
-// etc.
-</code>
-
-This is also how Rust solves this ambiguity((https://play.rust-lang.org/?version=stable&mode=debug&edition=2018&gist=31b5bca165323726e7aa8d14f62f94d5)).
-
-<code rust>
-match true { _ => () } - 1;
-
-// warning: unused unary operation that must be used
-//  --> src/main.rs:2:28
-//   |
-// 2 |     match true { _ => () } - 1;
-//   |                            ^^^
-//   |
-</code>
-
-Because there was some controversy around this feature it was moved to a secondary vote.
-
-===== Allow dropping (true) condition =====
-It has been suggested to make no condition equivalent to ''(true)''.
-
-<code php>
-match {
-    $age >= 30 => {},
-    $age >= 20 => {},
-    $age >= 10 => {},
-    default => {},
-}
-
-// Equivalent to
-
-match (true) {
-    $age >= 30 => {},
-    $age >= 20 => {},
-    $age >= 10 => {},
-    default => {},
-}
-</code>
-
-The keyword ''match'' could be a bit misleading here. A potential gotcha is passing truthy values to the match which will not work as intended. But of course this issue remains regardless of dropping ''(true)'' or not.
-
-<code php>
-match {
-    preg_match(...) => {}, // preg_match returns 1 which is NOT identical (===) to true
-}
-</code>
-
-Because I have no strong opinion on this it will be moved to a secondary vote.
-
-===== Miscellaneous =====
-==== Arbitrary expressions ====
-A match condition can be any arbitrary expression. Analogous to ''switch'' each condition will be checked from top to bottom until the first one matches. If a condition matches the remaining conditions won't be evaluated.
-
-<code php>
-match ($x) {
-    foo() => ...,
-    $this->bar() => ..., // bar() isn't called if foo() matched with $x
-    $this->baz => ...,
-    // etc.
-}
-</code>
-
-==== break/continue ====
-Just like with the switch you can use ''break'' to break out of the executed arm.
-
-<code php>
-match ($x) {
-    $y => {
-        if ($condition) {
-            break;
-        }
-
-        // Not executed if $condition is true
-    },
-}
-</code>
-
-Unlike the switch using ''continue'' targeting the ''match'' expression will trigger a compilation error.
-
-<code php>
-match ($i) {
-    default => {
-        continue;
-    },
-}
-//> Fatal error: "continue" targeting match is disallowed. Did you mean to use "break" or "continue 2"?
-</code>
-
-==== goto ====
-Like with the ''switch'' you can use ''goto'' to jump out of ''match'' expressions.
-
-<code php>
-match ($a) {
-    1 => {
-        match ($b) {
-            2 => {
-                goto end_of_match;
-            },
-        }
-    },
-}
-
-end_of_match:
-</code>
-
-It is not allowed to jump into match expressions.
-
-<code php>
-goto match_arm;
-
-match ($b) {
-    1 => {
-        match_arm:
-    },
-}
-
-//> Fatal error: 'goto' into loop, switch or match is disallowed
-</code>
-
-==== return ====
-''return'' behaves the same as in any other context. It will return from the function.
-
-<code php>
-function foo($x) {
-    match ($x) {
-        1 => {
-            return;
-        },
-    }
-
-    // Not executed if $x is 1
-}
-</code>
-
-===== Future scope =====
-==== Block expressions ====
-As mentioned above block expressions will be discussed in a separate RFC. We'll also use this opportunity to think about blocks in arrow functions.
-
-==== Pattern matching ====
-I have experimented with pattern matching ((https://github.com/php/php-src/compare/master...iluuu1994:pattern-matching)) and decided not to include it in this RFC. Pattern matching is a complex topic and requires a lot of thought. Each pattern should be discussed in detail in a separate RFC.
+===== Pattern matching =====
+I have experimented with pattern matching ((https://github.com/php/php-src/compare/master...iluuu1994:pattern-matching)) for this RFC. Realistically it could sometimes save a few keystrokes. In my opinion this does not justify the significant complexity added to the langage at the moment. It would be mostly useful for algebraic data types which PHP currently does not have.
 
 <code php>
 // With pattern matching
 match ($value) {
     let $a => ..., // Identifer pattern
-    let 'foo' => ..., // Scalar pattern
     let 0..<10 => ..., // Range pattern
     let is string => ..., // Type pattern
     let [1, 2, $c] => ..., // Array pattern
     let Foo { foo: 1, getBar(): 2 } => ..., // Object pattern
     let $str @ is string if $str !== '' => ..., // Guard
-
-    // Algebraic data types if we ever get them
-    let Ast::BinaryExpr($lhs, '+', $rhs) => ...,
 }
 
 // Without pattern matching
 match (true) {
-    true => $value ..., // Identifier pattern
-    'foo' => ..., // Scalar pattern
+    true => $value ..., // Identifer pattern
     $value >= 0 && $value < 10 => ..., // Range pattern
     is_string($value) => ..., // Type pattern
     count($value) === 3
@@ -456,32 +205,7 @@ match (true) {
 }
 </code>
 
-==== Explicit fallthrough ====
-Some people have suggested allowing explicit fallthrough to the next arm. This is, however, not a part of this RFC.
-
-<code php>
-match ($x) {
-    1 => {
-        foo();
-        fallthrough;
-    },
-    2 => {
-        bar();
-    },
-}
-
-// 1 calls foo() and bar()
-// 2 only calls bar()
-</code>
-
-This would require a few sanity checks with pattern matching.
-
-<code php>
-match ($x) {
-    $a => { fallthrough; },
-    $b => { /* $b is undefined */ },
-}
-</code>
+While some patterns are significantly shorter (namely the array pattern) code like that is relatively rare. At the moment the arugment for such a big language change is pretty weak. If the situation ever changes we can always add pattern matching at a later point in time.
 
 ===== "Why don't you just use x" =====
 ==== if statements ====
@@ -505,7 +229,7 @@ $y = [
 ][$x];
 </code>
 
-This code will execute every single "arm", not just the one that is finally returned. It will also build a hash map in memory every time it is executed. And again, you must not forget to handle unexpected values.
+This code will execute every single "arm", not just the one that is finally returned. It will also build a hash map in memory everytime it is executed. And again, you must not forget to handle unexpected values.
 
 ==== Nested ternary operators ====
 <code php>
@@ -518,57 +242,10 @@ $y = $x === 1 ? ...
 The parentheses make it hard to read and it's easy to make mistakes and there is no jumptable optimization. Adding more cases will make the situation worse.
 
 ===== Backward Incompatible Changes =====
-''match'' was added as a keyword (''reserved_non_modifiers''). This means it can't be used in the following contexts anymore:
+There are no breaking changes in this RFC.
 
-  * namespaces
-  * class names
-  * function names
-  * global constants
-
-Note that it will continue to work in method names and class constants.
+===== Proposed PHP Version(s) =====
+The proposed version is PHP 8.
 
 ===== Proposed Voting Choices =====
-Voting starts 2020-04-25 and ends 2020-05-09. 
-
-As this is a language change, a 2/3 majority is required.
-
-<doodle title="Would you like to add match expressions to the language?" auth="ilijatovilo" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-Secondary vote (choice with the most votes is picked):
-
-<doodle title="Should the semicolon for match in statement form be optional?" auth="ilijatovilo" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-Secondary vote (choice with the most votes is picked):
-
-<doodle title="Should we allow dropping (true) condition?" auth="ilijatovilo" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-==== If you voted no, why? ====
-
-  - Not interested
-  - I don't want blocks
-  - Missing return values in blocks
-  - Missing pattern matching
-  - Missing explicit fallthrough
-  - BC break is not acceptable
-  - Wanted [[https://wiki.php.net/rfc/switch_expression|switch expressions]] instead
-  - Other
-
-<doodle title="If you voted no, why?" auth="ilijatovilo" voteType="multi" closed="true">
-   * 1
-   * 2
-   * 3
-   * 4
-   * 5
-   * 6
-   * 7
-   * 8
-</doodle>
+As this is a language change, a 2/3 majority is required. The vote is a straight Yes/No vote for accepting the RFC and merging the patch.
