@@ -1,195 +1,38 @@
-====== PHP RFC: Enumeration type (alternative proposal) ======
+====== PHP RFC: Enumeration type, version 2 ======
   * Version: 0.9
   * Date: 2020-05-14
   * Author: Max Semenik, maxsem.wiki@gmail.com
-  * Status: Obsolete
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/enum_v2
 
-//Note: this is a counterproposal to [[rfc:enum|this RFC]]//
-
 ===== Introduction =====
-Traditionally, PHP has used independent constants to represent related magic numbers. I propose to add a concept well known from many other languages, enumeration type.
-
-Consider the following perfectly valid code:
-<code php>
-preg_split($foo, $bar, LC_ALL * PHP_MAJOR_VERSION);
-</code>
-
-What will this call produce? I have no idea, either:)
-
-It would be so much better to have a more foolproof and type-safe version, like:
-<code php>
-preg_split($foo, $bar, Split::NoEmpty);
-</code>
+The elevator pitch for the RFC. The first paragraph of this section will be slightly larger to give it emphasis; please write a good introduction.
 
 ===== Proposal =====
-
-==== Basics ====
 A simple enum:
 <code php>
-enum Letters {
-    a,          // Enum constants start with 0 by default
+enum foo {
+    a,          // Enum values start with 0 by default
     b,          // 1, always previous value +1 if not specified explicitly
     c = 10,     // Values can be set explicitly
     d,          // 11
-    e = 1,      // Constants with duplicate values are allowed
-    f = 2 * 2,  // Can use the same expressions as class constants
-    g = f,      // Can use other constants too
+    e = 1,      // Elements can duplicate each other
+    f = 2 * 2,  // Can use the same expressions as constants
+    g = f,      // Can use other elements
     h = g + 10, // And in expressions too
-    H,          // Valid, constant names are case sensitive
-    i,          // Optional comma after the last constant is permitted
+    H,          // Valid, element names are case sensitive
+    i,          // Optional comma after the last element is allowed
 }
 </code>
-
-A binary enum is used to represent a set of values:
-<code php>
-binary enum FileMode {
-    Read = 1,
-    Write = 2,
-    Execute = 1 << 2,
-    ReadWrite = Read | Write,
-}
-
-$foo = FileMode::Read | FileMode::Execute;
-</code>
-
-Both enum types can extend other enums:
-<code php>
-enum A { foo = 1 }
-
-enum B extends A { bar = 2 }
-
-$x = B::foo;
-</code>
-
-Overriding constants from base enums is not allowed:
-<code php>
-enum C extends A {
-    foo = 3 // CompileError
-}
-</code>
-
-Constants must be ''int'' and thus fit into ''zend_long'':
-<code php>
-enum foo {
-    bar = 2 ** 100, // CompileError
-    baz = 1.5       // CompileError
-}
-
-$x = 'this is a string';
-$y = (foo)$x; // TypeError
-</code>
-
-==== Type coercion and casts ====
-Enums are implicitly coercible to bool and string:
-<code php>
-function f(FileMode $mode) {
-    if ($mode) {
-        echo "mode: $mode";
-    }
-}
-
-f(FileMode::Read); // Outputs "mode: 1"
-</code>
-
-Enum types can be explicitly cast to each other and ''int'':
-<code php>
-$foo = (FileMode)123;
-$bar = SomeEnum::Const;
-$foo = (FileMode)$bar;
-</code>
-
-Conversion from other types is not checked, thus enums can hold values not covered by their constants. ''Enum::isKnownValue()'' will return `false` while ''Enum::toHumanReadableString()'' will return a numeric string instead of constant name(s).
-
-==== Enum operations ====
-Enums are immutable and don't support arithmetic operations:
-<code php>
-$foo = FileMode::Read;
-$foo = FileMode::Read + 1; // CompileError
-$foo += 1;                 // TypeError
-$bar = $foo + 1;           // TypeError
-</code>
-
-However, binary enums support bitwise operations:
-<code php>
-$foo = FileMode::Read | FileMode::Execute;
-$foo |= FileMode::Write;
-$foo &= ~FileMode::Read;
-</code>
-
-==== Enum usage ====
-Concrete enum types can be used as typehints:
-<code php>
-function open(string $filename, FileMode $mode)
-</code>
-However, not the enum keyword itself:
-<code php>
-function open(string $filename, enum $mode) // CompileError
-</code>
-
-When the type is clear from typehints, enum name can be omitted:
-<code php>
-open('foo.txt', Read | Write)
-</code>
-is equivalent to:
-<code php>
-open('foo.txt', FileMode::Read | FileMode::Write)
-</code>
-
-Same for ''switch'' statements:
-<code php>
-function f(Letters $x) {
-    switch ($x) {
-    case a:
-        // ...
-    case b:
-        // ...
-    }
-}
-</code>
-
-==== Internal representation ====
-Internally, enums are classes and enum constants are public class constants. This makes them the fourth OOP-ey type in PHP, along with ''class'', ''interface'' and ''trait''. They can be autoloaded just like the former types. All enums inherit from this base class (here is PHP pseudocode):
-<code php>
-final // In the sense that userspace can't explicitly extend it
-class Enum {
-    private int $value;
-    private function __construct(); // It shouldn't be possible to create enums like this: $foo = new Enum();
-    public function isBinary(): bool;
-    public function __toString(): string {
-        return (string)(int)$this->value;
-    }
-    
-    // Whether the current value is represented by one of this enum's constants
-    // or their combination for binary enums
-    public function isKnownValue(): bool;
-    
-    // Returns a human readable representation of this enum's value
-    // e.g. (FileMode::Read | FileMode::Write)->toHumanReadableString() would return 'Read | Write'
-    // For unrecognized values, returns a decimal (simple enums) or hexadecimal (binary enums) string.
-    public function toHumanReadableString(): string;
-    
-    public static function parse(string $enum) : ?WhateverConcreteEnumTypeIsExtendingThis;
-}
-</code>
-
-===== Conventions used in this document =====
-Currently, PascalCase is used in enums due to author's experience with C#. While I believe that this convention is nice and makes enums conveniently distinct from PHP conventions that use camelCase for properties and UNDERSCORED_UPPERCASE for constants, I'm not attached to it. The recommended convention for use in language documentation and, subsequently, the PHP core will be determined during community discussion or voted for during the voting phase.
-
-Same applies to the ''Enum'' class name.
 
 ===== Backwards Incompatible Changes =====
-''enum'' and ''binary'' will become reserved keywords. Class name 'Enum' (or whatever we decide to call it) will become unavailable.
+`enum` and `binary` will become reserved keywords.
 
 ===== Proposed PHP Version(s) =====
-PHP 8.1?
+Next PHP 8.x (8.1?)
 
 ===== Open Issues =====
 Make sure there are no open issues when the vote starts!
-
-  * Naming conventions
-  * Base class name(s)
-  * Type coercion details?
 
 ===== Unaffected PHP Functionality =====
 List existing areas/features of PHP that will not be changed by the RFC.
@@ -197,12 +40,10 @@ List existing areas/features of PHP that will not be changed by the RFC.
 This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-After this RFC is implemented, enums may be used for new features or factored into existing ones.
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 ===== Proposed Voting Choices =====
-  * Accept this RFC (yes / no)?
-  * What should be enum base class fully qualified name (''\Enum'' / ''\PHP\Enum'' / something else )?
-  * What enum constant naming convention should be used (PascalCase / camelCase / UPPER_UNDERSCORED)?
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
 ===== Patches and Tests =====
 Links to any external patches and tests go here.
@@ -222,7 +63,7 @@ After the project is implemented, this section should contain
 
 ===== References =====
 Links to external references, discussions or RFCs
-* https://wiki.php.net/rfc/enum - old proposal that wanted to introduce 
+* https://wiki.php.net/rfc/enum
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
