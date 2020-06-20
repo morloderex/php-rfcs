@@ -1,4 +1,4 @@
-====== PHP RFC: Readonly and immutable properties ======
+====== PHP RFC: Your Title Here ======
   * Version: 0.3.2
   * Date: 2020-06-20
   * Author: André Rømcke <andre.romcke+php@gmail.com>
@@ -6,23 +6,18 @@
   * Proposed PHP version: PHP 8.0
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/readonly_and_immutable_properties
-  * Discussion: https://externals.io/message/ //coming//
+  * Discussion: https://externals.io/message/ _coming_
 
 ===== Introduction =====
 
+With the introduction of typed properties in PHP 7.4, properties have become far more powerful. However it is currently not possible to specify disconnected write vs read visibility for properties without having to resort to magic methods (getters and setters). This requires unnecessary boilerplate, makes usage less ergonomic and hurts performance.
 
-**This is a early draft, currently looking for feedback on direction on what would make most sense to propose, especially if there is any point in even exploring using Attributes for the features covered here or not.**
+This RFC resolves this issue by proposing:
+1. Possibility to specify write visibility disconnected from read
+2. Readonly attribute
+3. Immutable attribute, and optionally immutable visibility if #1 is passed
 
-With the introduction of typed properties in PHP 7.4, properties have become far more powerful. However it is currently not possible to specify disconnected write vs read visibility for properties, such as readonly, without having to resort to magic methods (getters and setters). For immutable semantic it's even more cumbersome. This requires unnecessary boilerplate, makes usage less ergonomic and hurts performance.
-
-This RFC resolves this issue by proposing a few options:
-  - Language approach:
-    - Change to make it possibility to specify write visibility disconnected from read.
-    - readonly keyword for write access, on property and class (implicit all properties)
-    - immutable keyword for write access, on property and class (implicit all properties)
-  - Attribute approach:
-    - Readonly attribute for properties, if #1.1/1.2 is accepted this is merely syntax sugar.
-    - Immutable attribute for properties, if #1.3 is accepted this is merely syntax sugar
+_These three proposals will be offered as separate votes._
 
 
 Under this RFC, code like
@@ -31,12 +26,12 @@ Under this RFC, code like
 class User {
     private int $id;
     private string $name;
-
+    
     public function __construct(int $id, string $name) {
         $this->id = $id;
         $this->name = $name;
     }
-
+    
     public function __get($property)
     {
         if (property_exists($this, $property)) {
@@ -45,7 +40,7 @@ class User {
         }
         throw new PropertyNotFoundException($property, static::class);
     }
-
+    
     public function __set($property, $value)
     {
         if (property_exists($this, $property)) {
@@ -54,11 +49,12 @@ class User {
         }
         throw new PropertyNotFoundException($property, static::class);
     }
-
+    
     public function __isset($property)
     {
         return property_exists($this, $property);
     }
+
 
     public function __unset($property)
     {
@@ -73,26 +69,10 @@ might be written as
 class User {
     <<Readonly>>
     public int $id;
-
+    
     <<Readonly>>
     public string $name;
-
-    public function __construct(int $id, string $name) {
-        $this->id = $id;
-        $this->name = $name;
-    }
-}
-</code>
-
-
-or just
-
-<code php>
-<<Readonly>>
-class User {
-    public int $id;
-    public string $name;
-
+    
     public function __construct(int $id, string $name) {
         $this->id = $id;
         $this->name = $name;
@@ -107,314 +87,38 @@ class User {
 
 ==== Readonly ====
 
-This RFC aligns with [[rfc:readonly_properties|Readonly properties]] (2014, Withdrawn).
+This RFC differs from [[rfc:readonly_properties|Readonly properties]] (2014, withdrawn) by instead using the recently accepted Attribute language feature for annotating Readonly properties. As done in Rust, and in user land annotations in many PHP frameworks.
 
 
 ==== Immutability ====
 
 
-This RFC aligns with [[rfc:immutability|Immutability]] (2018, Stale).
+This RFC differs from[[rfc:immutability|Immutability]] (2018, stale) by instead using the recently accepted Attribute language feature for annotating Immutable properties. Aligning with Readonly proposal within this RFC.
 
-This RFC does __not__ align with the semantics of the recent [[rfc:write_once_properties|Write once properties]] (2020, Declined), which is targeting a different problem.
+This RFC does __not__ align with the semantics of the recent [[rfc:write_once_properties|Write once properties]], which is targeting a different problem.
 
 
 ==== Property Accessors Syntax ====
 
 
-This RFC does not try to solve as wide use case as the different iterations of [[rfc:propertygetsetsyntax-v1.2|Property Accessors Syntax]] does.
+This RFC does not try to solve as wider use case as the different iterations of [[rfc:propertygetsetsyntax-v1.2|Property Accessors Syntax]].
 
-However:
-- Accessors overcomplicates readonly, and does not offer solutions to immutability
-- There seems to be a higher need in the community for readonly and immutable semantics
-- Everything Accessors offers beyond disconnected read and write visibility for properties, can easily be done with plain methods. The same is not true for readonly and immutable semantics as shown in the introduction.
+It's of this author's opinion that property type hinting and accessors where the two main obstacles to previous attempts at adding readonly and immutable semantics to PHP properties, fortunately as of PHP 7.4 property types where added. Furthermore while readonly and especially immutable is rather hard to do in a clean way in PHP today, and one of the main use cases needed for most to complete properties use-cases in PHP. Most other use cases offered by Accessors can be accomplished by plain methods.
+
+Thus the author of this RFC believes semantics for Readonly And Immutable properties should be done before Accessors is considered, as the features proposed here can anyway be syntax sugar on top of Accessors, if/when it is accepted.
+ 
 
 
 ===== Proposal =====
 
-==== Common semantics ====
+- TODO: the tree proposals, including how they should be manipulated with reflection
 
-== References ==
-
-Attempting to pass a property value outside of allowed writable scope as a reference, results in an error.
-
-
-==== 1. Language Approach ====
-
-
-=== 1.1 Language ability to set property visibility separately for write access ===
-
-This proposal adds support for enforced write visibility checks for declared properties. The following example illustrates the basic syntax:
-
-<code php>
-class User {
-    // Property is readonly in protected and public scope
-    public:private int $id;
-
-    // Property is readonly in public scope
-    public:protected string $name;
-    
-    // Property is write-only in public and protected scope
-    private:public string $newName;
-
-    public function __construct(int $id, string $name) {
-        $this->id = $id;
-        $this->name = $name;
-    }
-}
-</code>
-
-The format is "<read_visibility>:<write_visibility>", and if you omit the last visibility value you will like before implicit set both read and write visibility at once _(unless other future keywords or attributes states otherwise).
-
-
-== Reflection ==
-
-When using reflection, methods such as ''ReflectionProperty::setAccessible()'' will work as before, it will implicit set visibility for both read and write.
-
-However with this proposal the following existing methods will represent read visibility for cases where it differs:
-- ''ReflectionProperty::isPrivate()''
-- ''ReflectionProperty::isProtected()''
-- ''ReflectionProperty::isPublic()''
-
-And for checking separate write visibility the following methods may be used:
-- ''ReflectionProperty::isWritePrivate'' — Checks if property is writable in private
-- ''ReflectionProperty::isWriteProtected'' — Checks if property is writable in protected
-- ''ReflectionProperty::isWritePublic'' — Checks if property is writable in public
-
-
-''Reflection::getModifiers()'' and ''Reflection::getModifierNames()'' will need adaption too, and proposal is to adapt it so ''getModifierNames()'' continues to return the visibility as specified, meaning it may now return for instance ''public:protected'' as one of the strings returned.
-
-//TODO: Expand this with modifier ints representing all variations and their names//
-
-=== 1.2 readonly keyword ===
-
-This proposal adds support for runtime-enforced readonly write visibility for declared properties. The following example illustrates the basic syntax:
-
-<code php>
-class User {
-    // Property is readonly, and can only be written to in protected scope
-    public readonly int $id;
-    
-    // Property is readonly, and can only be written to in private scope
-    protected readonly string $name;
-
-    // [assuming 1.1 is accepted] Invalid declaration (visibility is already stating property is readonly)
-    public:private readonly string $email;
-
-    public function __construct(int $id, string $name) {
-        $this->id = $id;
-        $this->name = $name;
-    }
-}
-</code>
-
-Keyword can also be set on class level, implicit setting it on all fields unless they have their own immutable attribute:
-
-<code php>
-readonly class User {
-    // Property is readonly, and can only be written to in protected scope
-    public int $id;
-    
-    // Property is readonly, and can only be written to in private scope
-    protected string $name;
-
-    // [assuming 1.1 is accepted] Invalid declaration (visibility is already stating property is readonly)
-    public:private string $email;
-
-    public function __construct(int $id, string $name) {
-        $this->id = $id;
-        $this->name = $name;
-    }
-}
-</code>
-
-
-== Readonly semantics ==
-
-An readonly property may only be written to in scope lower than what is define as its read+write visibility, so if visibility is public, it may only be written to in protected scope.
-
-
-== Reflection ==
-
-When using reflection, methods such as ''ReflectionProperty::setAccessible()'' will work as before, it will implicit disable readonly flag.
-
-Furthermore the following method is proposed added to be able to detect readonly properties:
-- ''ReflectionProperty::isReadonly()''
-
-
-''Reflection::getModifiers()'' and ''Reflection::getModifierNames()'' will need adaption too to add int and keywords for "readonly".
-
-//TODO: Expand this with specific modifier int for "readonly"//
-
-
-=== 1.3 immutable keyword ===
-
-This proposal adds support for runtime-enforced immutable write visibility for declared properties. The following example illustrates the basic syntax:
-
-<code php>
-class User {
-    // Property is immutable, can only be written to in __construct in protected scope
-    public immutable int $id;
-
-    // [assuming 1.1 is accepted] Property is immutable, can only be written to in __construct in private scope
-    public:private immutable string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code>
-
-Keyword can also be set on class level, implicit setting it on all fields unless they have their own readonly attribute:
-
-<code php>
-immutable class User {
-    // Property is immutable, can only be written to in during construction in protected scope
-    public int $id;
-    
-    // Property is immutable, can only be written to during construction in private scope
-    protected string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code> 
-
-
-== Immutable semantics ==
-
-An immutable property may only be written to in construct and in other methods involved in object creation (set_state, unserialize, and wakeup), besides that it is allowed to be unset in destruct. 
-
-Unless otherwise specified in visibility, the write/unset access is available within protected scope.
-
-
-== Reflection ==
-
-When using reflection, methods such as ''ReflectionProperty::setAccessible()'' will work as before, it will implicit disable immutable flag.
-
-Furthermore the following method is proposed added to be able to detect immutable properties:
-- ''ReflectionProperty::isImmutable()''
-
-
-"Reflection::getModifiers()" and "Reflection::getModifierNames()" will need adaption too to add int and keywords for "immutable".
-
-//TODO: Expand this with specific modifier int for "immutable"//
-
-==== 2. Attributes ====
-
-With the recently accepted [[rfc:attributes_v2|Attribute v2 RFC]], another option here, or a supplemental one, would be to use attributes for introducing Readonly and Immutable semantics. Similar to how Rust does with its [[https://docs.rs/readonly/0.1.6/readonly/|readonly create]].
-
-However the Attribute RFC does not allow for what is being drafted here, so this would need suggesting a way for userland classes to tell parser / compiler to enhance language features.
-
-**As such, maybe this should be completely omitted from the proposal?** Should we aim for concepts in 1.1, 1.2 and 3.0 in this RFC?
-
-
-=== 2.1 Readonly attribute ===
-
-
-This proposal adds support for runtime-enforced readonly write visibility for declared properties. The following example illustrates the basic syntax:
-
-<code php>
-use PHP\Attribute\PropertyVisibility\Readonly;
-
-class User {
-    <<Readonly>>
-    public int $id;
-
-    // This property is not readonly
-    public string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code>
-
-Attribute can also be set on class level, implicit setting it on all fields unless they have their own PropertyVisibility attribute:
-
-<code php>
-use PHP\Attribute\PropertyVisibility\Readonly;
-
-<<Readonly>>
-class User {
-    // This property is readable in public scope and writeable in protected
-    public int $id;
-    
-    // This property is readable in protected scope and writeable in private
-    protected string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code> 
-
-//For readonly semantics see proposal 1.2//
-
-
-== Reflection ==
-
-//TODO: show example on reading /setting attribute via reflection, and how this relates to "ReflectionProperty::setAccessible()".//
-
-
-
-=== 2.2. Immutable attribute ===
-
-This proposal adds a compiler attribute which implies a runtime-enforced immutable write visibility checks for declared properties. The following example illustrates the basic syntax:
-
-<code php>
-use PHP\Attribute\PropertyVisibility\Immutable;
-
-class User {
-    <<Immutable>>
-    public int $id;
-
-    public string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code>
-
-
-
-Attribute can also be set on class level, implicit setting it on all fields unless they have their own PropertyVisibility attribute:
-
-<code php>
-use PHP\Attribute\PropertyVisibility\Immutable;
-
-<<Immutable>>
-class User {
-    public int $id;
-    public string $email;
-
-    public function __construct(int $id, string $email) {
-        $this->id = $id;
-        $this->email = $email;
-    }
-}
-</code> 
-
-
-//For immutable semantics see proposal 1.3//
-
-== Reflection ==
-
-//TODO: show example on reading /setting attribute via reflection, and how this relates to ''ReflectionProperty::setAccessible()''.//
 
 
 
 ===== Backward Incompatible Changes =====
 
-Code that expects to be able to make properties writeable via reflection will have to adapt for new code taking advantage of this.
-
-While ''ReflectionProperty::setAccessible()'' will still work like before, checks using ''isProtected()'' or ''isPrivate()'' won't detect if class has other visibility for write (proposal #1), or take into account specific attributes affecting write (assuming proposal #1 is voted down and Readonly and Immutable becomes own attribute logic instead of merely syntax sugar for #1.x)
+Code that expects to be able to make properties writeable via reflection currently will have to adapt, unless we adapt this RFC to allow existing code to work as is.
 
 
 ===== Proposed PHP Version(s) =====
@@ -427,17 +131,12 @@ More future extension code, and possible SPL code, can be written in PHP instead
 
 ===== Performance =====
 
-//Performance tests will need to be done once there is an implementation of this. Then overhead on properties, as well as measuring benefit over using magic methods.//
+//Performance tests will need to be done once there is a implementation of this. Then overhead on properties, as well as measuring benefit over using magic methods.//
 
 ===== Vote =====
 
 As this is a language change, a 2/3 majority is required.
-
-===== References =====
-
-
-  * [[https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes#readonly-fields|C# readonly fields]], semantically similar to what is proposed as "immutable" here.
-  * [[https://docs.rs/readonly/0.1.6/readonly/|Rust readonly create]]
+//RFC is in draft, and will undergo discussion phase before it is put for a vote.//
 
 
 ===== Errata =====
@@ -450,5 +149,6 @@ As this is a language change, a 2/3 majority is required.
 
 Significant changes to the RFC are noted here.
 
-  * 2020-06-21 Initial early draft to get feedback on direction
+  * 2020-06-xx (...)
+  * 2020-06-20 Initial RFC draft.
 
