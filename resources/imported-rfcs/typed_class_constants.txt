@@ -1,222 +1,41 @@
 ====== PHP RFC: Typed class constants ======
   * Date: 2020-07-06
-  * Author: Benas Seliuginas <benas.molis.iml@gmail.com>, Máté Kocsis <kocsismate@php.net>
-  * Target version: PHP 8.3
-  * Status: Accepted
-  * Implementation: https://github.com/php/php-src/pull/10444
+  * Author: Benas Seliuginas <benas.molis.iml@gmail.com>
+  * Target version: PHP 8.1
+  * Status: Draft
 
 ===== Introduction =====
-
-Despite the huge efforts put into improving the type system of PHP year after year, it is still not possible to declare constant types. This is less of a concern for global constants, but can indeed be a source of bugs and confusion for class constants:
-
-By default, child classes can override class constants of their parents, so sometimes it is not easy to assume what the value and the type of a class constant really is, unless either their defining class or the [[rfc:final_class_const|constant itself]] is final:
-
-<code php>
-interface I {
-    const TEST = "Test";  // We may naively assume that the TEST constant is always a string
-}
-
-class Foo implements I {
-    const TEST = [];      // But it may be an array...
-}
-
-class Bar extends Foo {
-    const TEST = null;    // Or null
-}
-</code>
-
-As demonstrated above, it may come in handy to restrict the type of class constants without making them ''final''.
+...
 
 ===== Proposal =====
+...
 
-This RFC proposes to add support for declaring class, interface, trait, as well as enum constant types (collectively called "class constants" from now on for the sake of simplicity):
+===== Alternatives =====
+...
 
-<code php>
-enum E {
-    const string TEST = "Test1";   // E::TEST is a string
-}
-
-trait T {
-    const string TEST = E::TEST;   // T::TEST is a string too
-}
-
-interface I {
-    const string TEST = E::TEST;   // I::TEST is a string as well
-}
-
-class Foo implements I {
-    use T;
-
-    const string TEST = E::TEST;  // Foo::TEST must also be a string
-}
-
-class Bar extends Foo {
-    const string TEST = "Test2";  // Bar::TEST must also be a string, but the value can change
-}
-
-</code>
-
-==== Supported types ====
-
-Class constant type declarations support all type declarations supported by PHP, with the exception of ''void'', ''callable'', ''never''.
-
-The ''void'', ''callable'' types are not supported due to the issues discussed in the [[https://wiki.php.net/rfc/typed_properties_v2#supported_types|typed properties v2 RFC]]. Similarly to the previous types, ''never'' is not applicable in the context of constants.
-
-==== Strict and coercive typing modes ====
-
-The ''strict_types'' mode has no impact on the behavior since type checks are always performed in strict mode. This is consistent with the default value handing of typed properties.
-
-==== Inheritance and variance ====
-
-Class constants are covariant. This means that the type of a class constant is not allowed to be widen during inheritance. If the parent class constant is private, then the type may change arbitrarily. Besides the exceptions mentioned in the previous section, all other types are supported, including union, intersection, as well as DNF types. Some examples:
-
-<code php>
-trait T {
-    public const ?array E = [];
-}
-
-class Test {
-    use T;
-
-    private const int A = 1;
-    public const mixed B = 1;
-    public const int C = 1;
-    public const Foo|Stringable|null D = null;
-
-    // This is illegal since the type cannot change when T::E is redefined
-    public const array E = [];
-}
-
-class Test2 extends Test {
-    // This is legal since Test::A is private
-    public const string A = 'a';
-
-    // This is legal since int is a subtype of mixed
-    public const int B = 0;
-
-    // This is illegal since mixed is a supertype of int
-    public const mixed C = 0;
-
-    // This is legal since Foo&Stringable is more restrictive than Foo|Stringable
-    public const (Foo&Stringable)|null D = null;
-}
-
-enum E {
-    // This is legal since constants provide a covariant context
-    public const static A = E::Foo;
-
-    case Foo;
-}
-
-class Foo implements Stringable {
-    public function __toString() {
-        return "";
-    }
-}
-</code>
-
-The reason why class constant types are covariant is that they are read-only.
-
-==== Constant values ====
-
-Constant values have to match the type of the class constant. The only exception is that float class constants also accept integer values, consistent with the handling of parameter/property types.
-
-The following code illustrates legal and illegal constant values:
-<code php>
-class Test {
-    // this is legal
-    public const string A = 'a';
-    public const int B = 1;
-    public const float C = 1.1;
-    public const bool D = true;
-    public const array E = ['a', 'b'];
-
-    // this is legal
-    public const iterable F = ['a', 'b'];
-    public const mixed G = 1;
-    public const string|array H = 'a';
-    public const int|null I = null;
-
-    // this is legal (special exception)
-    public const float J = 1;
-
-    // this is illegal
-    public const string K = 1;
-    public const bool L = "";
-    public const int M = null;
-}
-</code>
-
-If the constant value is a non compile-time evaluable initializer expression, it is not checked at compile-time. Instead, it will be checked during constant-updating, which will either occur when an object of the class is instantiated or when the class constant is being fetched. As such, the following code is legal:
-
-<code php>
-class Test {
-    public const int TEST1 = C;
-}
-
-define('C', 1);
-
-// this prints 1
-echo Test::TEST;
-</code>
-
-If the constant has an illegal type, a ''TypeError'' exception is thrown during the object ''new Test()'' instantiation or when the class constant ''Test::TEST'' is being fetched.
-
-==== Reflection ====
-
-The ''ReflectionClassConstant'' class is extended with two methods:
-<code php>
-class ReflectionClassConstant implements Reflector {
-    ...
-
-    public function getType(): ?ReflectionType {}
-    public function hasType(): bool {}
-}
-</code>
-
-  * ''getType()'' returns a ''ReflectionType'' if the class constant has a type, and null otherwise.
-  * ''hasType()'' returns ''true'' if the class constant has a type, and false otherwise. The behavior matches that of ''getType()''/''hasType()'' for parameters/properties and ''getReturnType()''/''hasReturnType()'' for return types.
-
-===== Backwards incompatible changes =====
-
+===== Backward incompatible Changes =====
 None.
+
+===== Unaffected functionality =====
+...
 
 ===== Impact on extensions =====
-
-None.
-
-To preserve backwards compatibility with extensions, a new function ''zend_declare_typed_class_constant()'' is introduced while keeping the original ''zend_declare_class_constant_ex()'' function intact.
+...
 
 ===== Future scope =====
+....
 
-Currently, the value of class constants cannot be an instance of their own declaring class. In order to illustrate the problem better, here is an example of such code:
-
-<code php>
-class A {
-    public const CONST1 = C;
-}
-
-const C = new A();
-// Error: Undefined constant "C"
-</code>
-
-This is a not-yet well-known limitation of [[rfc:new_in_initializers|PHP RFC: New in initializers]]. In the context of the current RFC, this means that ''self'', ''static'', or the class name itself (''A'') is not possible to use with class constants in practice. On the other hand, the above mentioned types can be used with enums:
-
-<code php>
-enum E {
-    public const E CONST1 = E::Foo;
-    public const self CONST2 = E::Foo;
-    public const static CONST3 = E::Foo;
-
-    case Foo;
-}
-</code>
+===== Open issues =====
+...
 
 ===== Vote =====
+2/3 majority Yes/No.
 
-The proposal needs 2/3 majority to be accepted. Voting is open until 2023-03-13.
+===== Implementation =====
+...
 
-<doodle title="Add support for typed class constants?" auth="kocsismate" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+===== References =====
+...
+
+===== Rejected features =====
+...
