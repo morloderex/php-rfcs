@@ -1,17 +1,17 @@
 ====== PHP RFC: Closure self reference ======
-  * Version: 1.0
-  * Date: 2023-06-03
-  * Author: Danack, KapitanOczywisty
-  * Status: Under Discussion
+  * Version: 0.1
+  * Date: 2020-11-10
+  * Author: Danack
+  * Status: Draft 
   * First Published at: https://wiki.php.net/rfc/closure_self_reference
 
 ===== Introduction =====
 
-Currently, the main way used to call a closure from within that closure, is to bind a variable by reference into the closure, when the closure is created.
+Currently, the main way used to call a closure from within that closure, is to bind a variable by reference into the closure, when the closure is created. 
 
 However this can lead to shenanigans:
 
-<code php>
+<code lang="php">
 $fibonacci = function (int $n) use (&$fibonacci) {
     if ($n === 0) return 0;
     if ($n === 1) return 1;
@@ -29,146 +29,75 @@ echo $this_is_the_original_fibonacci(10). "\n";
 
 i.e. a change to the variable outside the closure has modified the behaviour of the closure. That a closure can change behaviour like this violates the [[https://en.wikipedia.org/wiki/Principle_of_least_astonishment|Principle of least astonishment]]
 
-It would be better if it was possible to reference a closure inside itself, without having to `use` an external variable.
-
 ===== Proposal =====
 
-Allow closures to be aliased to a variable that can be used within the closure:
+Similar to how $this is defined automatically inside closures that are defined inside classes, add a $lambda variable to all closures, that references the current closure.
 
-<code php>
-$fibonacci = function (int $n) as $fn {
-    if ($n === 0) return 0;
-    if ($n === 1) return 1;
-    return $fn($n-1) + $fn($n-2);
-};
+A closure that needs to call itself can now use the $lambda variable, instead of having to pass in a variable by reference:
 
-echo $fibonacci(5);
-</code>
-
-Or as a short closure, aka arrow function:
-
-<code php>
-$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * $fn($num - 1) : $num;
-</code>
-
-===== Syntax choices =====
-
-There are a plethora of possible syntax choices. Those that have been thought about about are:
-
-==== A constant ====
-
-It would be possible to define a constant that refers to the current closure e.g. __CLOSURE__
-
-<code php>
+<code lang="php">
 $fibonacci = function (int $n) {
     if ($n === 0) return 0;
     if ($n === 1) return 1;
-    return __CLOSURE__($n-1) + __CLOSURE__($n-2);
-};
-
-$factorial = fn(int $num): int => $num > 1 ? $num * __CLOSURE__($num - 1) : $num;
-</code>
-
-
-==== Alias after function return type ====
-
-<code php>
-$fibonacci = function (int $n): int as $fn {
-    if ($n === 0) return 0;
-    if ($n === 1) return 1;
-    return $fn($n-1) + $fn($n-2);
+    return $lambda($n-1) + $lambda($n-2);
 };
 </code>
 
-Due to parser limitations, this can't be used for short closures.
+Any use of $lambda outside of a closure would give an error, similar to how using $this outside of a method of a class instance is not allowed.
 
-
-==== A static function on the closure class ====
-
-e.g. Closure::current()
-
-<code php>
-$fibonacci = function (int $n) {
-    if ($n === 0) return 0;
-    if ($n === 1) return 1;
-    return (Closure::current())($n-1) + (Closure::current())($n-2);
-};
-
-$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * (Closure::current())($num - 1) : $num;
+<code lang="php">
+function foo() {
+   $lambda();
+}
+foo();
+// Fatal error: Using $lambda when not in closure context in %s
 </code>
 
 
+===== BC concerns =====
 
-==== De-anonymize the function ====
+Although this proposal wouldn't require a large amount of change to existing code, people might not be aware that the use $lambda anywhere in their code.
 
-i.e. allow a variable name to be used after the keyword function before the parentheses containing the parameters:
+Because of this it probably makes sense to break the change into two steps:
 
-<code php>
-$fibonacci = function $fn(int $n) {
-    if ($n === 0) return 0;
-    if ($n === 1) return 1;
-    return $fn($n-1) + $fn($n-2);
-};
+  * In one release emit a deprecation notice for any use of a variable named 'lambda'.
+  * In the next release add the ability to use $lambda inside a closure, with the meaning of 'the current closure'.
 
-$factorial = fn $fn(int $num): int => $num > 1 ? $num * $fn($num - 1) : $num;
+==== Why the name '$lambda' ? ====
+
+Seems a reasonable choice as:
+
+  * People who don't know what a lambda is are unlikely to use that name by accident.
+  * People who do know what a lambda is are likely to be able to remember it.
+  * I find it a a fun word to say.
+
+<code lang="php">
+$closure = function () { echo "Hello.";};
+// Fatal error: Using $closure when not in closure context in %s
+// Whoever wrote this code is likely to be confused.
 </code>
 
-This has a large aesthetic downside of appearing to create the closure variable in the scope that the closure is declared in, rather than internal to the closure scope.
-
-
-==== Alias after use variables ====
-
-<code php>
-$fibonacci_offset = function (int $n) use ($offset) as $fn: int {
-    if ($n === 0) return $offset;
-    if ($n === 1) return 1;
-    return $fn($n-1) + $fn($n-2);
-};
+<code lang="php">
+$lambda = function () { echo "Hello.";};
+// Fatal error: Using $lambda when not in closure context in %s
+// Whoever wrote this code has a reasonable chance of understanding the issue.
 </code>
-
-<code php>
-$factorial = fn(int $num): int => $num > 1 ? $num * $fn($num - 1) : $num;
-</code>
-
-
-
-==== Alias immediately after function parameters ====
-<code php>
-$fibonacci_offset = function (int $n) as $fn use($offset): int {
-    if ($n === 0) return $offset;
-    if ($n === 1) return 1;
-    return $fn($n-1) + $fn($n-2);
-};
-</code>
-
-<code php>
-$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * $fn($num - 1) : $num;
-</code>
-
-
-===== Syntax choice evaluation =====
-
-Of the syntaxes considered, the following syntaxes are excluded for the reasons listed:
-
-* A constant. Although this could work it has multiple aesthetic downsides of being verbose, ugly, and just not very language-y.
-
-* Alias after function return type. Can't be used for short closures due to parser limitations.
-
-* A static function on the closure class. Just not very language-y, quite verbose due to the extra ()'s needed
-
-* De-anonymize the function. This has a large aesthetic downside of appearing to create the closure variable in the scope that the closure is declared in, rather than internal to the closure scope.
-
-Which leaves the 'Alias after use variables' and 'Alias immediately after function parameters' as the acceptable options.
-
-As the authors find the 'Alias immediately after function parameters' easiest to read, that is the syntax that has been chosen.
 
 ===== Backward Incompatible Changes =====
 
-None known.
+Use of any variable named $lambda would issue a deprecation notice on the version where a deprecation notice is added.
+
+Any use of $lambda would have to be inside a closure for versions after it is added.  
 
 ===== Proposed PHP Versions =====
 
-8.3
+The voting choices will allow people to choose between:
+
+Either: Deprecate use of $lambda in 8.1 and introduce $lambda to be available inside closures for 8.2
+
+Or: Deprecate use of $lambda in the last planned minor release of PHP 8 and introduce $lambda to be available inside closures for PHP 9.0
+
+or rejecting the RFC.
 
 ===== RFC Impact =====
 
@@ -177,17 +106,28 @@ Unknown.
 
 ===== Future Scope =====
 
-===== Questions =====
+==== Why not make $lambda usable in all functions, and just refer to the current function/method ====
+
+Probably better to just error...unless someone can think of good reasons either way. TBH, I'd probably prefer it to error, to prevent accidental usage.
 
 ===== Proposed Voting Choices =====
 
-Accept this RFC and make it possible to reference a closure from within itself using `as $variable` ? Yes/no.
+==== Vote 1 ====
+
+  * Accept this RFC, give a deprecation notice for any use of a variable called 'lambda' in PHP 8.1 and support the $lambda variable inside any closure from PHP 8.2
+  * Reject this RFC.
+
+==== Vote 2 ====
+  * Accept this RFC, but at versions PHP 8.x (where x is the last planned minor version for PHP 8) for deprecation and adding $lambda to PHP 9.0.
+  * Reject this RFC.
+
+If the result of 'vote 1' is to accept the RFC, then vote 2 is moot.
 
 ===== Patches and Tests =====
 Links to any external patches and tests go here.
 
 ===== Implementation =====
-https://github.com/php/php-src/pull/11118
+None yet.
 
 ===== References =====
 Links to external references, discussions or RFCs
