@@ -1,9 +1,8 @@
 ====== PHP RFC: Restrict $GLOBALS usage ======
   * Date: 2020-12-02
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Implemented
+  * Status: Draft
   * Target Version: PHP 8.1
-  * Implementation: https://github.com/php/php-src/pull/6487
 
 ===== Introduction =====
 
@@ -17,9 +16,9 @@ $GLOBALS['a'] = 2;
 var_dump($a); // int(2)
 </PHP>
 
-The variable ''$a'' is stored inside a compiled-variable (CV) call frame slot on the virtual machine stack, which allows it to be accessed efficiently. In order to allow modification of the variable through ''$GLOBALS'', the ''$GLOBALS'' array stores array elements of type ''INDIRECT'', which contain a pointer to the CV slot.
+The variable ''$a'' is stored inside a compiled-variable (CV) call frame slot on the virtual machine stack, which allows is to be accessed efficient. In order to allow modification of the variable through ''$GLOBALS'', the ''$GLOBALS'' array stores array elements of type ''INDIRECT'', which contain a pointer to the CV slot.
 
-As such, array operations on ''$GLOBALS'' need to check whether the accessed element is ''INDIRECT'' and perform a de-indirection operation. However, as //any// array could potentially be the ''$GLOBALS'' array, this check has to be performed for essentially all array operations on all arrays. This imposes an implementation and performance cost to account for a rarely used edge-case.
+As such, array operations on ''$GLOBALS'' need to check whether the acecssed element is ''INDIRECT'' and perform a de-indirection operation. However, as //any// array could potentially be the ''$GLOBALS'' array, this check has to be performed for all essentially all array operations on all arrays. This imposes an implementation and performance cost to account for a rarely used edge-case.
 
 Additionally, the ''$GLOBALS'' array is excluded from the usual by-value behavior of PHP arrays:
 
@@ -42,112 +41,44 @@ var_dump(${1}); // int(1)
 
 Normal PHP arrays will canonicalize integral string keys to integers, while symbol tables canonicalize integer keys to strings. As ''$GLOBALS'' interfaces between these two worlds, it cannot satisfy the rules of either.
 
-An area where ''INDIRECT'' elements present only in ''$GLOBALS'' are particularly problematic are standard library functions. While ''array_*'' functions generally contain the necessary extra code to correctly handle ''$GLOBALS'', this does not extend to the broader standard library. Functions that do not explicitly account for ''$GLOBALS'' will either silently misbehave, cause assertion failures, or crash. Functions from 3rd-party extensions almost certainly do not handle ''$GLOBALS''.
-
 ===== Proposal =====
 
-The core idea of this proposal is to move ''$GLOBALS'' from being a "real" variable with non-standard semantics, towards being a syntactical variable with two semantics:
+The syntax ''$GLOBALS[$var]'' will no longer access an actual ''$GLOBALS'' array, it will be given special treatment akin to ''${$var}'', just for the global rather than local scope. The engine machinery for this already exists.
 
-  * Accesses of the form ''$GLOBALS[$var]'' will refer to the global variable ''$$var'', and support all the usual variable operations, including writes. ''$GLOBALS[$var] = $value'' remains supported. A good way to think of this is that ''$GLOBALS[$var]'' works the same way as a variable-variable ''$$var'', just accessing the global instead of the local scope.
-  * Accesses of the form ''$GLOBALS'' (without a direct array dereference) will return the a **read-only** copy of the global symbol table.
+Other accesses to ''$GLOBALS'' will return a //copy// of the global symbol table. This copy will not contain INDIRECT entries and will use correct array canonicalization.
 
-This means that all operations in the following code will continue to work as they do now:
+This means that the behavior will stay the same for all usages that either only read ''$GLOBALS'' or only modify it directly. However, indirect modifications of ''$GLOBALS'' will no longer work.
 
-<PHP>
-// Continues to work:
-$GLOBALS['x'] = 1;
-$GLOBALS['x']++;
-isset($GLOBALS['x']);
-unset($GLOBALS['x']);
-// ...anything else using $GLOBALS['x'].
-</PHP>
-
-Read-only usage of ''$GLOBALS'' will also continue to work:
+These two examples show cases where the behavior will change:
 
 <PHP>
-// Continues to work:
-foreach ($GLOBALS as $var => $value) {
-    echo "$var => $value\n";
-}
-</PHP>
-
-In this case the only difference is that there will no longer be a recursive ''"GLOBALS"'' key, which currently needs to be filtered out from most uses of ''$GLOBALS''.
-
-What is no longer supported are writes to ''$GLOBALS'' taken as a whole. All of the following will generate a compile-time error:
-
-<PHP>
-// Generates compile-time error:
-$GLOBALS = [];
-$GLOBALS += [];
-$GLOBALS =& $x;
-$x =& $GLOBALS;
-unset($GLOBALS);
-// ...and any other write/read-write operation on $GLOBALS
-</PHP>
-
-Passing ''$GLOBALS'' by reference will trigger a runtime ''Error'' exception, as by-reference passing can generally only be established at runtime:
-
-<PHP>
-// Generates run-time Error exception:
-by_ref($GLOBALS);
-</PHP>
-
-As ''$GLOBALS'' is now a read-only copy of the global symbol table, the previously incorrect behavior of this code is fixed:
-
-<PHP>
-// This no longer modifies $a. The previous behavior violated by-value semantics.
+// This no longer modifies $a. Arguably this is a bug fix.
 $globals = $GLOBALS;
 $globals['a'] = 1;
 </PHP>
 
-The read-only copy will also use correct key canonicalization, as such the behavior of this code is fixed:
+</PHP>
+// This no longer works, the global scope is not modified:
+foreach ($GLOBALS as $name => &$value) {
+    $value = 1;
+}
 
-<PHP>
-${1} = 1;
-$GLOBALS[1] = 2;
-var_dump(${1}); // int(2)
+// This continue to work fine.
+foreach ($GLOBALS as $name => $value) {
+    $GLOBALS[$name] = 1;
+}
 </PHP>
 
-==== Impact on internals ====
-
-From an implementation perspective, these changes mean that ''INDIRECT'' elements no longer have to be considered when working on ordinary PHP arrays (though many places didn't do so in the first place). However, ''INDIRECT'' elements still need to be considered when working with certain special hashtables. In particular, internal symbol tables, as well as object property tables may still contain ''INDIRECT'' elements. However, these special hashtables will never escape into ordinary PHP arrays.
-
-Apart from manual checks for ''IS_INDIRECT'', the use of the following APIs is no longer necessary:
-
-  * ''*_IND()'' HT iteration macros. Suffix-free macros can be used instead.
-  * ''*_ind()'' HT functions. Suffix-free functions can be used instead.
-  * ''zend_array_count()''. Use of ''zend_hash_num_elements()'' is now safe.
+TODO: Some of the details here need to be fleshed out.
 
 ===== Backward Incompatible Changes =====
 
-Indirect modification of ''$GLOBALS'' will no longer be supported, which is a backwards-incompatible change.
+Indirect modification of ''$GLOBALS'' will no longer be supported.
 
-In the top 2k composer packages I found 23 cases that use ''$GLOBALS'' without directly dereferecing it (full list: https://gist.github.com/nikic/9fd95866f9811b349b947f63214ad7a9). Based on a cursory inspection, there are only two instances where ''$GLOBALS'' is not used in a read-only way:
+In the top 2k composer packages I found 23 cases that use ''$GLOBALS'' without directly dereferecing it. However, all of these usages appear to be read-only on cursory inspection. The only exception is a ''$GLOBALS = array();'' assignment in the PhpStorm stubs, but this is not real code. Here is the full list of non-trivial ''$GLOBALS'' usage: https://gist.github.com/nikic/9fd95866f9811b349b947f63214ad7a9
 
-  * By-ref passing of ''$GLOBALS'' in [[https://github.com/phpseclib/phpseclib/blob/7e72d923ceb8b7456a64149f10d6b04c43e9281a/phpseclib/Crypt/Random.php#L104|phpseclib]]: This code is doing something very peculiar, and I wasn't able to figure out what the purpose of the ''safe_serialize()'' function is. Possibly very old versions of PHP caused infinite recursion when serializing ''$GLOBALS''?
-  * ''$GLOBALS = array()'' in [[https://github.com/JetBrains/phpstorm-stubs/blob/master/superglobals/_superglobals.php#L10|phpstorm-stubs]]: This is not real code, so the usage is not problematic.
-
-As such, the impact of this change is expected to be fairly low. Which isn't to say non-existent: bwoebi has shared an example from his codebase that would be affected:
-
-<PHP>
-extract($GLOBALS, EXTR_REFS);
-// ...
-$GLOBALS += get_defined_vars();
-</PHP>
-
-Both of these lines constitute indirect modification and will no longer work. It is possible to rewrite them in terms of explicit loops:
-
-<PHP>
-foreach ($GLOBALS as $var => $_) $$var =& $GLOBALS[$var];
-// ...
-foreach (get_defined_vars() as $var => $value) $GLOBALS[$var] = $value;
-</PHP>
+As such, I expect the impact of this change to be very low.
 
 ===== Vote =====
 
-Yes/No. Voting started 2020-12-23 and closes 2021-01-06.
-
-<doodle title="Restrict $GLOBALS usage as specified?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Yes/No.
