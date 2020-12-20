@@ -1,245 +1,109 @@
-====== PHP RFC: Object scoped RNG Implementations. ======
-  * Version: 2.1 (Implementation: 1.3)
+====== PHP RFC: Object scoped PRNG Implemantations. ======
+  * Version: 0.1
   * Date: 2020-12-20
   * Author: Go Kudo <zeriyoshi@gmail.com>
-  * Status: Declined
-  * Implementation: https://github.com/php/php-src/pull/6568
+  * Status: Draft
+  * Implementation: WIP
   * First Published at: https://wiki.php.net/rfc/object_scope_prng
 
 ===== Introduction =====
-PHP currently implements an RNG based on the Mersenne Twister, which can be used with mt_srand() and mt_rand().
+
+PHP currently provides the mt_srand() and mt_rand() functions based on the Meresenne Twister as PRNGs.
+However, since these functions keep their state in global space, unintended function calls may cause inconsistency even for the same seed value.
 
 <code php>
-\mt_srand(1234); // Seeding internal MT state.
-\mt_rand(); // Generate random number.
-</code>
-
-The shuffle(), str_shuffle(), and array_rand() functions are also available.
-
-<code php>
-$array = [0 => 'foo', 1 => 'bar', 2 => 'baz'];
-\shuffle($array); // Shuffling array using internal MT state.
-\str_shuffle('foobar'); // Shuffling string using internal MT state.
-\array_rand($array, 1); // Randomize array using internal MT state.
-</code>
-
-However, the current implementation of the Mersenne Twister keeps the state in the global scope, which can easily be unrepeatable with additional code.
-
-<code php>
-\mt_srand(1234);
-\str_shuffle('foobar'); // Result "afroob", always consistent.
-
-\mt_srand(1234);
-example_of_additional_code();
-\str_shuffle('foobar'); // Result "rfoaob"
-
-function example_of_additional_code() {
-    \mt_rand(); // Unintended changes in internal MT state!
-}
-</code>
-
-This is fine if you want to get a completely random result, but it is inconsistent with the existence of the mt_srand() function, which accepts arbitrary seed values. Reproducible results are necessary for implementations that need to be reproduced, such as game logic or test code.
-
-On the other hand, if you want to get a true "completely" random result, the results of the shuffle(), str_shuffle(), and array_rand() functions are not cryptographically secure. This is due to the use of Mersenne Twister internally.
-
-The first way to work around this problem is to implement RNG in PHP. In fact, such a library exists and is available.
-
-However, the PHP implementation of RNG has execution speed issues. This is also the case in PHP 8.x when JIT is enabled.
-
-**PHP 8.1-dev**
-<code shell>
-$ git clone "https://github.com/savvot/random"
-$ time ./php -r 'require __DIR__ . "/random/src/AbstractRand.php"; require __DIR__ . "/random/src/XorShiftRand.php"; $r = new Savvot\Random\XorShiftRand(1234); for ($i = 0; $i < 1000000; $i++) { $r->random(); }'
-
-real    0m0.745s
-user    0m0.744s
-sys     0m0.000s
-</code>
-
-**PHP 8.1-dev + OPcache JIT**
-<code shell>
-$ git clone "https://github.com/savvot/random"
-$ time ./php -dzend_extension="$(pwd)/../../modules/opcache.so" -dopcache.jit_buffer_size=100M -dopcache.enable_cli=1 -r 'require __DIR__ . "/random/src/AbstractRand.php"; require __DIR__ . "/random/src/XorShiftRand.php"; $r = new Savvot\Random\XorShiftRand(1234); for ($i = 0; $i < 1000000; $i++) { $r->random(); }'
-
-real    0m0.083s
-user    0m0.081s
-sys     0m0.002s
-</code>
-
-**RFC Implementation (based PHP 8.1-dev)**
-<code shell>
-$ time ./php -r '$r = new \RNG\XorShift128Plus(1234); for ($i = 0; $i < 1000000; $i++) { rng_next($r); }'
-
-real    0m0.021s
-user    0m0.010s
-sys     0m0.011s
-</code>
-
-RFC has been passed and Fiber will be introduced in PHP 8.1. Implementations with unpredictable execution order, such as Fiber, make this problem worse.
-For example (with amphp), the following results are difficult for the user to be aware of and are not guaranteed to be consistent in the future.
-
-<code php>
-use function Amp\defer;
-use function Amp\delay;
-
-function task(int $i): void {
-    global $running;
-
-    while ($running) {
-        delay(250);
-        echo "${i} : " . mt_rand() . "\n";
-    }
-}
-
 mt_srand(1234);
+foo();
+mt_rand() === 411284887; // false
 
-$running = true;
+function foo() {
+    mt_rand(); // code added
+}
+</code>
 
-defer(fn() => task(1));
-defer(fn() => task(2));
-defer(fn() => task(3));
-defer(fn() => task(4));
+This is inappropriate for applications that require consistency in the generated values (game logic, test code, etc.).
 
-delay(1000);
-$running = false;
+The global state of MT is also used by other functions that use random numbers, and this problem is further exacerbated when the consistency of the results is required by seeding with specific values. (Of course, you are right that such usage is a bad example.)
+
+<code php>
+mt_srand(1234);
+$arr = [1, 2, 3, 4, 5];
+shuffle($arr);
+echo print_r($arr, true); // This result is always consistent.
 
 /*
-Result:
-1 : 411284887
-4 : 1068724585
-2 : 1335968403
-3 : 1756294682
-1 : 940013158
-3 : 1314500282
-4 : 1686544716
-2 : 1656482812
-1 : 1674985287
-2 : 1848274264
-3 : 585388171
-4 : 323490420
-4 : 593702477
-3 : 426315791
-2 : 1722007381
-1 : 1750549071
+Array
+(
+    [0] => 3
+    [1] => 2
+    [2] => 5
+    [3] => 4
+    [4] => 1
+)
 */
 </code>
 
-In addition, problems with having state in the global scope have been reported in some extensions. For example, the Swoole extension notes that the use of mt_rand() requires reinitialization in the process after forking.
+One possible solution is to implement the PRNG in pure PHP. There is actually a userland library [1], but it is not fast enough for PHP at the moment. (However, this may be improved by JIT).
 
-https://www.easyswoole.com/En/Other/random.html
+I have created an extension for PHP to improve these [2]. This could be used to consider what specific goals this RFC is trying to achieve.
 
 ===== Proposal =====
-Implements class-based object scoped PRNG into PHP.
 
-First, implement the following interface. This is a hypothetical PHP code.'
+Implements an object-scoped PRNG in PHP, providing methods equivalent to functions that use RNG results.
 
-Basically, this interface are supposed to be used as arguments to one of the functions. In other words, the next() and next64() methods are not intended to be called directly. next64() returns an invalid value in a 32-bit environment.
+First, it provides the following interface. Namespaces, including their availability, they are stub.
+Users can implement this interface through extensions or PHP code.
 
 <code php>
-namespace RNG;
+namesapce PRNG;
 
-interface RNGInterface
+interface PRNGInterface
 {
-    /** Generates 32bit pseudo random number. */
+    public function __construct(int $seed);
     public function next(): int;
-
-    /** Genrates 64bit pseudo random nunber */
-    public function next64(): int;
+    public function range(int $min, int $max): int;
+    public function shuffle(array &$array): bool;
+    public function str_shuffle(string $string): string;
+    public function arrayRand(array $array, int $num = 1): int|string|array;
 }
 </code>
 
-The next step is to implement the RNG classes that implement this interface. This RFC proposes implementations of XorShift128+, MT19937 (similar to mt_srand()), and OS provided (similar to random_bytes()).
-
-These implementations are done in C and are fast. However, by implementing RNGInterface, we can do the same thing in PHP code.
+The next step is to implement PRNGs that implement the interface. These may be serializable, Being serializable helps to preserve the state.
 
 <code php>
-namespace RNG;
+namespace PRNG;
 
-class XorShift128Plus implements RNGInterface // Fast modern PRNG.
+class XorShift128Plus implements PRNGInterface
 {
     public function __construct(int $seed) {}
     public function next(): int {}
     public function next64(): int {}
-    public function __serialize(): array {}
-    public function __unserialize(array $data): void {}
+    public function range(int $min, int $max): int {}
+    public function shuffle(array &$array): bool {}
+    public function arrayRand(array $array, int $num = 1): int|string|array {}
+    public function strShuffle(string $string): string {}
+    public function __serialize(): string {}
+    public function __unserialized(string $serialized): static {}
 }
 
-class MT19937 implements RNGInterface // Completely consistent \mt_srand() and \mt_rand() implementation.
+class MT19937 implements PRNGInterface
 {
     public function __construct(int $seed) {}
     public function next(): int {}
     public function next64(): int {}
-    public function __serialize(): array {}
-    public function __unserialize(array $data): void {}
+    public function range(int $min, int $max): int {}
+    public function shuffle(array &$array): bool {}
+    public function arrayRand(array $array, int $num = 1): int|string|array {}
+    public function strShuffle(string $string): string {}
+    public function __serialize(): string {}
+    public function __unserialized(string $serialized): static {}
 }
 
-class OS implements RNGInterface // // Cryptographically Secure PRNG.
-{
-    public function next(): int {}
-    public function next64(): int {}
-}
-</code>
-
-Some RNG implementations can serialize state using the standard PHP serialization methods (serialize() and unserialize() function). This is useful for the purpose of storing state.
-
-<code php>
-$rng = new RNG\XorShift128Plus(1234);
- 
-\rng_next($rng);
- 
-$serialized_string = \serialize($rng);
- 
-$rng2 = \unserialize($serialized_string);
- 
-\rng_next($rng) === rng_next($rng2); // true
-</code>
-
-For existing functions that use RNGs, make changes to accept these classes as arguments. If an argument is specified, the function will use that RNG instead of the internal MT.
-
-<code php>
-function shuffle(array &$array, ?RNG\RNGInterface $rng = null): bool {}
-
-function str_shuffle(string $string, ?RNG\RNGInterface $rng = null): string {}
-
-function array_rand(array $array, int $num = 1, ?RNG\RNGInterface $rng = null): int|string|array {}
-</code>
-
-Finally, implement a function that can generate values from RNGs, such as the mt_rand(), random_bytes() function. If the $unsigned argument is false, it will return the value generated by the RNG as is.
-
-<code php>
-function rng_bytes(RNG\RNGInterface $rng, int $length): string {} // simlar random_bytes()
-
-function rng_int(RNG\RNGInterface $rng, int $min, int $max): int {} // simlar mt_rand() with optional arguments
-
-function rng_next(RNG\RNGInterface $rng, bool $unsigned = true): int {} // simlar mt_rand() without optional arguments
-
-/** @throws ValueError */
-function rng_next64(RNG\RNGInterface $rng, bool $unsigned = true): int {} // Generates 64bit random number
-</code>
-
-The rng_next64() function will throw a ValueError exception if 64-bit integer is not available on the platform.
-
-This is for proper handling of next64() in a 32-bit environment and to improve interoperability with the mt_rand() function. The mt_rand() function performs a bit shift on the result and always returns an unsigned integer.
-
-<code php>
-// If the second argument is true (default), rng_next() performs bit shifting like mt_rand() and always returns an unsigned integer.
-\mt_srand(1234);
-$mt_state = new \RNG\MT19937(1234);
-\mt_rand() === \rng_next($mt_state); // true
- 
-// If false, it will return the value as is. This is exactly the same result as $rng->next().
-\mt_rand() === \rng_next($mt_state, false); // false
- 
-// This is useful if you want to use the numbers generated by the RNG directly.
-\rng_next(new \RNG\MT19937(1234), false) === 822569775; // true
 </code>
 
 ===== Backward Incompatible Changes =====
-A new optional argument will be added to the existing arguments below. If you are using reflection for these functions, this may cause problems.
 
-  * shuffle()
-  * str_shuffle()
-  * array_rand()
+With the provides of new classes, some class names (or namespaces) will no longer be available in userland.
 
 ===== Proposed PHP Version(s) =====
 
@@ -250,7 +114,7 @@ A new optional argument will be added to the existing arguments below. If you ar
 none
 
 ==== To Existing Extensions ====
-none
+orng [[https://pecl.php.net/package/orng]] : it is a PECL extension that provides almost the same functionality. If the interface is provided by the core in the future, it will need to be supported. And that's me.
 
 ==== To Opcache ====
 none
@@ -262,25 +126,42 @@ none
 none
 
 ===== Open Issues =====
-=== In other languages, what methods do you use to get around this problem? ===
-Similar to this proposal, a class-based implementation is in place.
-
-  * C# https://docs.microsoft.com/en-us/dotnet/api/system.random
-  * Java https://docs.oracle.com/javase/8/docs/api/java/util/Random.html
+=== Why do we need this feature in the core and not in the extension? ===
+In order to use the features related to pseudo-random numbers that PHP currently provides, an understanding of the core is required. If this proposal is implemented, users will be able to use pseudo-random numbers under the easy to understand concept of objects. This is a useful improvement to the overall functionality of the language.
 
 ===== Unaffected PHP Functionality =====
 It does not affect any related existing functions.
-
   * mt_srand()
   * mt_rand()
+  * shuffle()
+  * str_shuffle()
+  * array_rand()
 
-===== Vote =====
-Voting opens 2021-04-01 and 2021-04-15 at 00:00:00 EDT. 2/3 required to accept.
+===== Proposed Voting Choices =====
+Yes/No, requiring 2/3 majority
 
-<doodle title="Add object-scoped RNG" auth="zeriyoshi" voteType="single" closed="true">
-   * Yes
-   * No
+There are a few additional options for implementation.
+
+<doodle title="In which module will you implement these?" auth="user" voteType="single" closed="true">
+   * ext/standard
+   * ext/prng (new module)
+</doodle>
+
+<doodle title="To which namespace should these classes and interfaces belong?" auth="user" voteType="single" closed="true">
+   * Top Level (\PRNGInterface)
+   * "PRNG" namespace (\PRNG\PRNGInterface)
+</doodle>
+
+<doodle title="Which set of PRNGs should be provided as standard?" auth="user" voteType="single" closed="true">
+   * MT19937 (64bit) / XorShift128+
+   * MT19937
+   * XorShift128+
+   * Interfaces only.
 </doodle>
 
 ===== Patches and Tests =====
-  * https://github.com/php/php-src/pull/6568
+WIP (A rough overview is given in the orng extension [2])
+
+===== References =====
+  * [1] https://github.com/savvot/random
+  * [2] https://github.com/zeriyoshi/php-ext-orng
