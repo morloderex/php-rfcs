@@ -1,8 +1,8 @@
 ====== PHP RFC: Fibers ======
 
-  * Date: 2020-12-16
+  * Date: 2020-12-17
   * Authors: Aaron Piotrowski <trowski@php.net>, Niklas Keller <kelunik@php.net>
-  * Status: Draft
+  * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/fibers
 
 ===== Introduction =====
@@ -33,13 +33,13 @@ To allow better understanding of the RFC, this section defines what the names Fi
 
 === Fibers ===
 
-Fibers allow to create full-stack, interruptible functions that can be used to implement cooperative multitasking in PHP. These are also known as coroutines or green-threads.
-
-Unlike stack-less Generators, each Fiber has its own call stack, allowing them to be paused within deeply nested function calls. A function declaring an interruption point (i.e., calling ''Fiber::suspend()'') need not change its return type, unlike a function using ''yield'' which must return a ''Generator'' instance.
+Fibers allow the creation of full-stack, interruptible functions that can be used to implement cooperative multitasking in PHP. These are also known as coroutines or green-threads.
 
 Fibers pause the entire execution stack, so the direct caller of the function does not need to change how it invokes the function.
 
 Execution may be interrupted anywhere in the call stack using ''Fiber::suspend()'' (that is, the call to ''Fiber::suspend()'' may be in a deeply nested function or not even exist at all).
+
+Unlike stack-less Generators, each Fiber has its own call stack, allowing them to be paused within deeply nested function calls. A function declaring an interruption point (i.e., calling ''Fiber::suspend()'') need not change its return type, unlike a function using ''yield'' which must return a ''Generator'' instance.
 
 This proposal treats ''{main}'' as a fiber, allowing ''Fiber::suspend()'' to be called from the top-level context.
 
@@ -1077,6 +1077,71 @@ A ''FiberScheduler'' is like any other PHP class implementing an interface. The 
 Blocking code (such as ''file_get_contents()'') will continue to block the entire process, even if other fibers exist. Code must be written to use asynchonous I/O, an event loop, and fibers to see a performance and concurrency benefit. As mentioned in the introduction, several libraries already exist for asynchronous I/O and can take advantage of fibers to integrate with synchronous code while expanding the potential for concurrency in an application.
 
 As fibers allow transparent use of asynchronous I/O, blocking implementations can be replaced by non-blocking implementations without affecting the entire call stack. If an internal scheduler is available in the future, internal functions such as ''sleep()'' could be made non-blocking by default.
+
+=== How do various fibers access the same memory? ===
+
+All fibers exist within a single thread. Only a single fiber may execute at a time, so memory cannot be accessed or modified simultaneously by multiple fibers, unlike threads which may modify memory simultaneously.
+
+As fibers are suspended and resumed, execution of multiple fibers that access the same memory can be interleaved. Thus a running fiber may modify memory depended upon by another suspended fiber. There are various strategies to address this problem, including mutexes, semaphores, memory parcels, and channels. This RFC does not provide any such implementations as these can be implemented in user space code using the proposed fiber API. Below is an example implementation of a mutex using the proposed fiber API and the ''FiberScheduler'' implementation from the first example.
+
+<code php>
+class Mutex
+{
+    private Scheduler $scheduler;
+    private SplQueue $queue;
+    private bool $locked = false;
+
+    public function __construct(Scheduler $scheduler)
+    {
+        $this->scheduler = $scheduler;
+        $this->queue = new SplQueue;
+    }
+
+    public function acquire(): Lock
+    {
+        if ($this->locked) {
+            $this->queue->push(Fiber::this());
+            Fiber::suspend($this->scheduler);
+        }
+
+        $this->locked = true;
+
+        return new Lock(function (): void {
+            if ($this->queue->isEmpty()) {
+                $this->locked = false;
+                return;
+            }
+
+            $fiber = $this->queue->pop();
+            $this->scheduler->defer(fn() => $fiber->resume());
+        });
+    }
+}
+
+class Lock
+{
+    private \Closure $release;
+
+    public function __construct(\Closure $release)
+    {
+        $this->release = $release;
+    }
+
+    public function __destruct()
+    {
+        $this->release();
+    }
+
+    public function release(): void
+    {
+        if (isset($this->release)) {
+            $release = $this->release;
+            unset($this->release);
+            ($release)();
+        }
+    }
+}
+</code>
 
 === Why add this to PHP core? ===
 
