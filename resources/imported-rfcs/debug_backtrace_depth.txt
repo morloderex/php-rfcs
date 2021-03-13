@@ -2,13 +2,13 @@
   * Version: 0.1
   * Date: 2021-03-13
   * Author: Tyson Andre, tandre@php.net
-  * Status: Withdrawn
+  * Status: Under Discussion
   * First Published at: https://wiki.php.net/rfc/debug_backtrace_depth
   * Implementation: https://github.com/php/php-src/pull/6653
 
 ===== Introduction =====
 
-Inspecting the current stack trace depth is occasionally useful for manually debugging, checking for potential infinite recursion, or for checking if code would hit stack frame limits in extensions such as Xdebug (''xdebug.max_nesting_limit''). It is currently possible to compute the depth through ''count(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $limit=0))'', but this is verbose and inefficient compared to returning the depth directly.
+Inspecting the current stack trace depth is occasionally useful for manually debugging, checking for potential infinite recursion, or for checking if code would hit stack frame limits in extensions such as XDebug (''xdebug.max_nesting_limit''). It is currently possible to compute the depth through ''count(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $limit=0))'', but this is verbose and inefficient compared to returning the depth directly.
 
 ===== Proposal =====
 
@@ -23,7 +23,7 @@ or less accurately as ''count(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $limi
 
 When ''$limit <= 0'', there is no limit.
 
-Internally, PHP's stack frames are represented like a singly linked list (i.e. to count them, you need to iterate through the frames), and this RFC does not change that representation. The amount of time needed to compute the depth is proportional to the depth, which is why this RFC supports the optional ''$limit''. Counting the frames is still much faster than constructing an array with the ''file'', ''line'', ''class'', etc. with ''debug_backtrace()''.
+Internally, PHP's stack frames are represented like a linked list (i.e. to count them, you need to iterate through the frames), and this RFC does not change that representation. The amount of time needed to compute the depth is proportional to the depth, which is why this RFC supports the optional ''$limit''. Counting the frames is still much faster than constructing an array with the ''file'', ''line'', ''class'', etc. with ''debug_backtrace()''.
 
 ==== Example use cases ====
 
@@ -52,13 +52,13 @@ Stack trace:
 
 === Checking for compatibility with extensions with stack trace limits ===
 
-For example, in Xdebug https://xdebug.org/docs/all_settings#max_nesting_level has a default value of 256 - if you are developing an application or library which cannot override max_nesting_level you may want to ensure your library does not use deep recursion.
+For example, in XDebug https://xdebug.org/docs/all_settings#max_nesting_level has a default value of 256 - if you are developing an application or library which cannot override max_nesting_level you may want to ensure your library does not use deep recursion.
 
 <code php>
 // e.g. a logging function
 function my_common_function() {
     if (is_running_as_unit_test() && debug_backtrace_depth(250) >= 250) {
-        throw new TestFrameworkError("Refactor this code, xdebug.max_nesting_level may be reached in other environments");
+        throw new TestFrameworkError("Refactor this code, it's likely to hit the default xdebug.max_nesting_level in other environments");
     }
     // body of my_common_function()
 }
@@ -106,40 +106,3 @@ Make sure there are no open issues when the vote starts!
 
 ===== Future Scope =====
 The behavior of ''debug_backtrace'' and ''debug_print_backtrace'' could be changed to make $limit be consistent with the documentation in a separate RFC. https://www.php.net/manual/en/function.debug-backtrace.php#refsect1-function.debug-backtrace-parameters.
-
-===== Proposed PHP Version =====
-8.1
-
-===== Discussion =====
-
-==== Limited to a specific use case ====
-
-https://externals.io/message/113502#113821
-
-<blockquote>
-There hasn't been much discussion on this one, probably because the
-functionality and use cases are so specific. I'm not really convinced by
-your examples.
-
-For the purpose of printing debug logs, using an engine-provided depth is
-non-ideal, because any intermediate helper functions will count towards the
-depth. Tracking your own depth will result in a more meaningful/predictable
-output.
-
-For tracking down infinite recursion, isn't this what the xdebug recursion
-limit is for? You'll directly get your recursive stack trace, which should
-make it obvious where the infinite recursion occurs. Using
-debug_backtrace_depth() for this purpose means that you actually already
-need to know where you are infinitely recursing in order to place the guard.
-
-If you want to find places where your code would hit the xdebug recursion
-limit, then why not run it under xdebug and find out, rather than trying to
-simulate the same behavior manually? That again requires that you actually
-place relevant guards in the first place, which makes this another chicken
-and egg problem.
-</blockquote>
-
-
-===== Proposed Voting Choices =====
-
-Yes/No, requiring a 2/3 majority
