@@ -2,77 +2,52 @@
 
   * Date: 2021-03-13
   * Author: Ilija Tovilo, tovilo.ilija@gmail.com
-  * Status: Implemented
-  * Target Version: PHP 8.2
-  * Implementation: https://github.com/php/php-src/pull/8212
+  * Status: Draft
+  * Target Version: PHP 8.1
+  * Implementation: TBD
 
 ===== Proposal =====
 
 PHP allows embedding variables in strings with double-quotes (''%%"%%'') and heredoc in various ways.
 
-  - Directly embedding variables (''"$foo"'')
-  - Braces outside the variable (''"{$foo}"'')
-  - Braces after the dollar sign (''"${foo}"'')
-  - Variable variables (''"${expr}"'', equivalent to ''(string) ${expr}'')
+  1. Directly embedding variables ("$foo")
+  2. Braces outside the variable ("{$foo}")
+  3. Braces after the dollar sign ("${foo}")
+  4. Dynamic variable lookup ("${expr}")
 
-Options 1 and 2 have their pros and cons. Options 3 and 4 are easily confused due to overlapping syntax, 3 is strictly less capable than 1 and 2, and 4 has completely different semantics ([[https://www.php.net/manual/en/language.variables.variable.php|variable variables]]) that are rarely useful in string interpolation.
-
-This RFC proposes to deprecate options 3 and 4 in PHP 8.2 and remove them in PHP 9.0.
-
-<code php>
-var_dump("${foo}");
-// Deprecated: Using ${} in strings is deprecated
-
-var_dump("${(foo)}");
-// Deprecated: Using ${} (variable variables) in strings is deprecated
-</code>
-
-That leaves only two string interpolation options: direct (simple variable only) and powerful (the one that does the most now).
+Unfortunately, all of these have their drawbacks but options 3 and 4 are by far the worst, particularly because they share the exact same syntax. This RFC proposes to deprecate options 3 and 4 in PHP 8.1 and remove them in PHP 9.0.
 
 ===== Status quo =====
 
-Options 1, 2 and 3 roughly try to achieve the same thing, embedding simple variables or chains in a string.  They all support a different subset of features.
+====== Options 1, 2 and 3 ======
 
-==== Simple variable interpolation ====
-
-Options 1, 2, and 3 support embedding basic variables.
+Options 1, 2 and 3 all roughty try to do they same thing: They embed a local variable in a string, sometimes allowing to call a method or access an array offset on that variable. All of these examples are equivalent.
 
 <code php>
 $foo = 'foo';
-
 var_dump("$foo");
 var_dump("{$foo}");
 var_dump("${foo}");
 </code>
 
-==== Array-offset interpolation ====
-
-Options 1, 2, and 3 allow accessing an array offset. Unfortunately, the syntax is not consistent.
+All of the three options allow accessing an array offset. Unfortunately, the syntax is not consistent.
 
 <code php>
 $foo = ['bar' => 'bar'];
-
 var_dump("$foo[bar]");
 var_dump("{$foo['bar']}");
 var_dump("${foo['bar']}");
 </code>
 
-It's worth noting that options 2 and 3 support arbitrary expressions between ''['' and '']'', whereas option 1 only supports simple strings with no spaces or other special characters.
-
-==== Object property interpolation ====
-
 Only syntax 1 and 2 allow accessing properties.
 
 <code php>
 $foo = (object) ['bar' => 'bar'];
-
 var_dump("$foo->bar");
 var_dump("{$foo->bar}");
 </code>
 
-==== Method call interpolation ====
-
-Only syntax 2 allows calling methods.
+Only syntax 1 allows calling methods.
 
 <code php>
 class Foo {
@@ -85,9 +60,7 @@ $foo = new Foo();
 var_dump("{$foo->bar()}");
 </code>
 
-==== Compound interpolation ====
-
-Only syntax 2 allows chaining all of the above.
+Only syntax 1 allows chaining all of the above.
 
 <code php>
 class Bar {
@@ -100,7 +73,7 @@ $foo = ['bar' => new Bar()];
 var_dump("{$foo['bar']->baz()}");
 </code>
 
-==== Option 4 ====
+====== Option 4 ======
 
 PHP has a feature called [[https://www.php.net/manual/en/language.variables.variable.php|Variable variables]]. It allows you to get a variable by name. The name can be a string stored in another variable.
 
@@ -132,73 +105,31 @@ var_dump("${(foo)}");
 //> bar
 </code>
 
-The braces switch from option 3 to 4 because parentheses are not allowed in option 3. This means ''foo'' is no longer interpreted as a variable but as a constant, and option 4 will then try to find a local variable by the name of that constant. This is incredibly unintuitive. Even though I cannot imagine a scenario where variable variables in strings are useful it's worth noting that they can still be expressed with option 2 as ''"{${expr}}"'' with a more consistent syntax.
+The braces switch from option 3 to 4 because braces are not allowed in option 3. This means ''foo'' is no longer interpreted as a variable but as a constant, and option 4 will then try to find a local variable by the name of that constant. This is incredibly unintuitive.
 
-===== Conclusion =====
+====== Conclusion ======
 
-Option 1 offers a simple "base case" for the most common situation and is widely used.
+Options 1, 2 and 3 all try to achieve the same thing. Option 1 is less powerful than option 2 but it is shorter so both have some justification for existing. Option 3 is less powerful than both while not being shorter than any of them. Option 4 is not commonly useful. Option 3 and 4 clash syntax-wise.
 
-Option 2 offers the most robust syntax currently supported, and is widely used.
-
-Option 3 offers a subset of the functionality of option 1 and 2, and is less widely used.
-
-Option 4 offers functionality that is rarely if ever useful, and easily confused with option 3.
-
-For all of the reasons above this RFC proposes to deprecate option 3 and 4 in PHP 8.2 and remove them in PHP 9.
-
-===== Impact =====
-
-An analysis of the top 1000 packagist repositories yielded 267 usages of option 3, 0 of option 4.
-
-https://gist.github.com/iluuu1994/05427dd74100af8e41ebff3d4201742c
-
-==== Migration path ====
-
-The migration of option 3 to 2 is straight forward. Simply move the dollar sign.
-
-<code php>
-"${foo}" => "{$foo}"
-"${foo[expr]}" => "{$foo[expr]}"
-</code>
-
-The migration of option 4 to 2 is also straight forward. All it needs is adding braces around the interpolation.
-
-<code php>
-"${foo->bar}" => "{${foo->bar}}"
-</code>
-
-The main challenge is differentiating between option 3 and 4 (which is a motivation of this RFC). In practice, 4 should be almost non-existent. Nonetheless, the deprecation message will contain the hint ''(variable variables)'' if option 4 is encountered.
-
-I have created [[https://gist.github.com/iluuu1994/72e2154fc4150f2258316b0255b698f2|a simple script]] to automate this process.
-
-===== Unchanged behavior =====
-
-These things caused confusion in the discussion, but will continue working as they are.
-
-  * Variable variables outside of strings (''$foo = ${'bar'};'')
-  * Variable variables as option 1 (''echo "$$foo";'')
-
-===== Comparison to other languages =====
-
-A number of other languages use ''%%${foo}%%'' style string interpolation, most notably bash and JavaScript (in template literals).  However, its behavior is different from that in PHP.  In PHP, that syntax means variable variables.  In JavaScript, it supports arbitrary expressions 2).  In its current form, options 3 and 4 are of limited use, and confusing for users from other nearby languages as they behave quite differently.
+For all of the reasons above this RFC proposes to deprecate option 3 and 4 in PHP 8.1 and remove them in PHP 9.
 
 ====== Future scope ======
 
 Options 1 and 2 are not perfect either. They only allow simple expressions on variables. A different RFC might propose to allow embedding arbitrary expressions into strings.
 
 <code php>
-var_dump("{$:func()}")
+var_dump($"#{func()}")
 </code>
 
 If we decide to do that it would make sense to remove the less useful options first to not further add to the confusion, that's what this RFC is trying to achieve.
 
 ===== Vote =====
 
-Voting starts 2022-04-08 and ends 2022-04-22. 
+Voting starts 2021-xx-x and ends 2021-xx-xx. 
 
 As this is a language change, a 2/3 majority is required.
 
-<doodle title="Deprecate ${} string interpolation in PHP 8.2 and remove them in PHP 9.0?" auth="ilutov" voteType="single" closed="true">
+<doodle title="Deprecate dynamic variable lookup in PHP 8.1 and remove them in PHP 9.0?" auth="ilutov" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
