@@ -1,58 +1,46 @@
 ====== PHP RFC: Final class constants ======
   * Date: 2021-04-23
   * Author: Máté Kocsis <kocsismate@php.net>
-  * Status: Implemented
+  * Status: Under discussion
   * Implementation: https://github.com/php/php-src/pull/6878
-  * Target Version: PHP 8.1
 
 ===== Introduction =====
 
-Currently, class constants are always overridable by child classes. This causes a few smaller caveats:
+Currently, class constants are always overridable by any child classes. This causes a few smaller caveats:
 
 First of all, the engine can't optimize class constant references when late static binding is involved, so it has to pessimistically assume that ''FOO'' is overridden in case of ''static::FOO'' or ''$this::FOO'' invocations.
 
-What's more important is that class constants are not guaranteed to stay constant. Even if the declaring class always references them by using ''self::'', doing so won't prevent a child class from changing their value or even their type, unless the parent is a final class. Although constants not being constants is usually considered only as a theoretical problem, being able to add a ''final'' modifier would make the intention explicit that child classes shouldn't try to override them (e.g. because the parent doesn't use late static binding).
-
-A related interesting fact is that interface constants are already ''final'':
+But more importantly, one cannot easily make sure whether an inherited class constant is overridable or not. For example
+let's consider the following code:
 
 <code php>
-interface I
+class Foo
 {
-    public const X = "i";
+    public const X = "foo";
+    
+    public function getX(): string
+    {
+        return self::X;
+    }
 }
 
-class C implements I
+class Bar extends Foo
 {
     public const X = "bar";
+    
+    public function getBar(): string
+    {
+        return self::X;
+    }
 }
-
-// Fatal error: Cannot inherit previously-inherited or override constant X from interface I
 </code>
 
-This leads to a weird inconsistency. By introducing an intermediate class, overriding still becomes possible:
-
-<code php>
-interface I
-{
-    public const X = "i";
-}
-
-class C implements I
-{
-}
-
-class D extends C 
-{
-    public const X = "d";
-}
-
-// No error
-</code>
+When overriding a class constant, one has to make sure that the parent class references class constants in an LSB context. 
 
 
 ===== Proposal =====
 
-The final modifier can be added to class constants. Doing so prevents overriding of a constant:
+The final modifier can be added to class constants. Doing so prevents a constant to be overridden in a child class:
 
 <code php>
 class Foo
@@ -68,7 +56,7 @@ class Bar extends Foo
 // Fatal error: Bar::X cannot override final constant Foo::X
 </code>
 
-Besides, interface constants would become overridable by default, and the ''final'' modifier could be used to retain the original behavior.
+Besides, interface constants would become overridable by default:
 
 <code php>
 interface I
@@ -79,7 +67,7 @@ interface I
 
 class C implements I
 {
-    public const X = "c"; // Overriding I::X is possible
+    public const X = "c"; // Overriding I::X is not possible
     public const Y = "c"; // Overriding I::Y is not possible
 }
 
@@ -88,7 +76,7 @@ class C implements I
 
 ===== Reflection =====
 
-A ''ReflectionClassConstant::isFinal()'' method is added in order to be able to retrieve if a constant is final.
+A ''ReflectionClassConstant::isFinal()''method is added in order to be able to retrieve if a constant is final.
 
 ===== Backward Incompatible Changes =====
 
@@ -96,11 +84,6 @@ None.
 
 ===== Vote =====
 
-Voting started on 2021-05-19 08:00 UTC and ends 2021-06-02 08:00 UTC. The vote requires 2/3 majority to be accepted.
-
-<doodle title="Add support for final class constants?" auth="kocsismate" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Add support for final class constants? The vote requires 2/3 majority to be accepted.
 
 
