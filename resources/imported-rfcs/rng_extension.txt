@@ -1,18 +1,16 @@
-====== PHP RFC: Random Extension 3.0 ======
-  * Version: 3.0
-  * Date: 2021-09-02
+====== PHP RFC: Add RNG extension and deprecate mt_srand() ======
+  * Version: 0.1
+  * Date: 2021-05-18
   * Author: Go Kudo <zeriyoshi@gmail.com>
-  * Status: Under Discussion
-  * Implementation: https://github.com/php/php-src/pull/7453
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/object_scope_prng
 
 ===== Introduction =====
+PHP is currently having problems with RNG reproducibility.
 
-Currently, PHP's random number implementation suffers from several problems.
+PHP's RNG has been unified into an implementation using the Mersenne twister, with the rand() and srand() functions becoming aliases for mt_rand() and mt_srand() respectively in PHP 7.1.
 
-The first is that there are many different implementations. Historically, the random number implementations have been separated into lcg.c, rand.c, mt_rand.c random.c respectively, and the header file dependencies are complex.
-
-Second, the pseudo-random number generator makes use of global state. If a random number is consumed at an unexpected time, the reproducibility of the result may be lost. Look at the following example.
+But, these functions still store the state in the global state of PHP and are not easily reproducible. Look at the following example.
 
 <code php>
 echo foo(1234, function (): void {}) . PHP_EOL; // Result: 1480009472
@@ -27,9 +25,9 @@ function foo(int $seed, callable $bar): int {
 }
 </code>
 
-Reproducibility of random numbers can easily be lost if additional code is added later.
+As mentioned above, the reproducibility of random numbers can easily be lost if additional processing is added later.
 
-In addition, the fiber extension was introduced in PHP 8.1. This makes it more difficult to keep track of the execution order. However, this problem has existed since the introduced of Generator.
+In addition, the fiber extension was introduced in PHP 8.1. This makes it more difficult to keep track of the execution order. However, this problem has existed since the inception of Generator.
 
 There is also the problem of functions that implicitly use the state stored in PHP's global state. shuffle(), str_shuffle(), and array_rand() functions implicitly advance the state of a random number. This means that the following code is not reproducible, but it is difficult for the user to notice this.
 
@@ -43,192 +41,113 @@ echo mt_rand() . PHP_EOL; // Result: 1314500282
 </code>
 
 ===== Proposal =====
+Implements RNG extension provides a class-based random number generator and deprecate some functions.
 
-Clean up the implementation, separate out the random number related functions as Random extension, and add an object scoped API.
+RNG extension is provided as ext/rng in PHP core and provides the following interfaces and classes.
 
-All of the following functions will be moved to the newly created Random extension.
+<code php>
+namespace RNG;
 
-  * lcg_value()
-  * srand()
-  * rand()
+interface Source
+{
+    /**
+      * Generate random bytes
+      */
+    public function next(): string
+}
+
+/** compatible MT_RAND_MT19937 */
+class MT19937 implements Source
+{
+    public function next(): string;
+    public function __serialize(): array;
+    public function __unserialize(array $data): void;
+}
+
+/** compatible MT_RAND_PHP */
+class MT19937PHP implements Source
+{
+    public function next(): string;
+    public function __serialize(): array;
+    public function __unserialize(array $data): void;
+}
+
+/** XorShift128+ */
+class XorShift128Plus implements Source
+{
+    public function next(): string;
+    public function __serialize(): array;
+    public function __unserialize(array $data): void;
+}
+
+/** OS provided random source (e.g. /dev/random) */
+class PlatformProvided implements Source
+{
+    public function next(): string
+}
+
+class Randomizer
+{
+    public function __construct(protected Source $source) {}
+    public function getSource(): Source {}
+    public function generateBytes(int $length): string {}
+    public function generateFloat(): float {}
+    public function generateBool(): bool {}
+    public function generateInt(): int {} // replaceable mt_rand()
+    public function generateInt(int $min, int $max): int {} // replaceable mt_rand($min, $max)
+    public function arrayShuffle(array &$array): bool {} // replaceable shuffle()
+    public function stringShuffle(string $string): string {} // replaceable str_shuffle()
+    public function arrayRandom(array $array, int $num = 1): int|string|array {} // replaceable array_rand()
+}
+</code>
+
+This makes it possible to simply replace existing code.
+
+<code php>
+
+function before(int $seed): int
+{
+    mt_srand($seed);
+    return mt_rand();
+}
+
+function after(int $seed): int
+{
+    $mt = new RNG\MT19937($seed);
+    return (new RNG\Randomizer($mt))->generateInt();
+}
+</code>
+
+The following functions to deprecation.
+
   * mt_srand()
-  * mt_rand()
-  * random_int()
-  * random_bytes()
+  * srand()
 
-At the same time, the following internal APIs will also be relocated. If you want to use them, you can simply include ext/random/random.h.
+These functions are used to manipulate the global state of PHP. Their existence will become unnecessary when a fully replaceable object-scoped RNG is implemented.
 
-  * php_random_int_throw()
-  * php_random_int_silent()
-  * php_combined_lcg()
-  * php_mt_srand()
-  * php_mt_rand()
-  * php_mt_rand_range()
-  * php_mt_rand_common()
-  * php_srand()
-  * php_rand()
-  * php_random_bytes()
-  * php_random_int()
+Also, change the following function to use the same method as random_byte() (the php_random_bytes() internal function) for processing, instead of PHP's global state.
 
-The following PHP constants will now be provided by the Random extension
+  * shuffle()
+  * str_shuffle()
+  * array_rand()
 
-  * MT_RAND_MT19937
-  * MT_RAND_PHP
-
-To solve the scope problem, the following classes will be added
-
-  * Random class
-  * Random\NumberGenrator abstract class
-  * Random\NumberGenerator\XorShift128Plus class
-  * Random\NumberGenerator\MT19937 class
-  * Random\NumberGenerator\Secure class
-
-The Random class is a utility class that provides functionality using random numbers. It provides the following methods, but does not provide an alternative to array_rand because it is too complex.
-
-  * getInt()
-  * getBytes()
-  * shuffleArray()
-  * shuffleString()
-
-This class can be used in the following way.
-
-<code php>
-// functions
-mt_srand(1234);
-mt_rand(); // generate random number
-mt_rand(1, 10); // generate random number in range
-str_shuffle("foobar"); // shuffle string
-$arr = range(1, 10);
-shuffle($arr); // shuffle array items (pass by reference)
-
-// object
-$mt = new Random\NumberGenerator\MT19937(1234);
-$mt->generate(); // generate random number 
-$random = new Random($mt);
-$random->getInt(1, 10); // generate random number in range
-$random->shuffleString("foobar"); // shuffle string
-$random->shuffleArray(range(1, 10)); // shuffle array items (pass by value)
-</code>
-
-The Random class accepts an instance that inherits from Random\NumberGenerator as a constructor argument.
-
-This class is final and cannot be cloned, but it can be serialized.
-This is to prevent $rng from being copied by reference to a property and causing unintended behavior.
-
-The serializability depends on the serializability of the contained $rng.
-
-<code php>
-final class Random
-{
-    private Random\NumberGenerator $randomNumberGenerator;
-
-    public function __construct(?Random\NumberGenerator $randomNumberGenerator = null) {}
-    public function getNumberGenerator(): Random\NumberGenerator {}
-    public function getInt(int $min, int $max): int {}
-    public function getBytes(int $length): string {}
-    public function shuffleArray(array $array): array {}
-    public function shuffleString(string $string): string {}
-
-    public function __serialize(): array {}
-    public function __unserialize(array $data): void {}
-}
-</code>
-
-The Random\NumberGenerator abstract class has a single abstract method called generate(). 
-
-<code php>
-namespace Random;
-
-abstract class NumberGenerator
-{
-        abstract public function generate(): int {}
-}
-</code>
-
-By defining a class that extends Random\NumberGenerator, the user can use their own random number generator. With the introduction of JIT in PHP 8.0, this can generate random numbers at a realistic speed.
-
-<code php>
-class UserDefinedRNG extends Random\NumberGenerator
-{
-    protected int $current = 0;
-
-    public function generate(): int
-    {
-        return ++$this->current;
-    }
-}
-
-function foobar(Random\NumberGenerator $numberGenerator): void {
-    for ($i = 0; $i < 9; $i++) {
-        echo $numberGenerator->generate();
-    }
-}
-
-foobar(new UserDefinedRNG()); // Results: 123456789
-</code>
-
-It is also useful when you want to use a random number sequence with a fixed result, such as in testing.
-
-The Random class creates and uses an instance of the default random number generator, Random\NumberGenerator\XorShift128Plus, if the constructor argument is omitted.
-
-XorShift128Plus is an efficient, high-quality algorithm used in modern browsers and other applications. This algorithm is capable of generating a wider range of random numbers in a 64-bit environment. In a 32-bit environment, the range beyond zend_long will simply be truncated. This indicates incompatibility between environments, but is acceptable for real-world use.
-
-The Random\NumberGenerator\MT19937 class, which implements the MT19937 Mersenne twister, is also provided for backward compatibility or when a higher period is required. However, a 1-bit right shift is required to obtain exactly the same result as mt_rand(), as shown below. This is due to historical reasons.
-
-<code php>
-$seed = 1234;
-
-$mt = new Random\NumberGenerator\MT19937($seed);
-mt_srand($seed);
-var_dump(mt_rand() === ($mt->generate() >> 1)); // true
-</code>
-
-The following NumberGenerator class supports serialization. Secure is not serializable because it uses random_bytes internally and has no state.
-
-  * Random\NumberGenerator\XorShift128Plus
-  * Random\NumberGenerator\MT19937
-  * Random\NumberGenerator extends user-defined classes.
-
-Also, a new internal API will be implemented.
-
-  * php_random_ng_next()
-  * php_random_ng_range()
-  * php_random_ng_array_data_shuffle()
-  * php_random_ng_string_shuffle()
-
-A Stub showing these implementations can be found on the Pull-Request. It's probably easier to understand if you look at it.
-
-  * [[https://github.com/php/php-src/blob/7a4ef6ccfbf4a2cd48a4f261f2911ebb7b057d46/ext/random/random.stub.php|random.stub.php]]
-
-===== Future Scope =====
-
-This proposal is just a first step to improve the situation of PHP's random number implementation.
-
-If this proposal is approved, I will then propose the following changes
-
-  * Replace the state of the existing implementation with php_random_ng.
-  * Changes random source to php_random_int() a shuffle(), str_shuffle(), and array_rand() .
-  * Deprecate srand() and mt_srand() (step by step)
+These functions are simple and useful if you want to get truly random results. The algorithm used will be changed from MT to give more truly random results.
 
 ===== Backward Incompatible Changes =====
+The following functions, which used to depend on the PHP's global MT state, Always return truly random results.
 
-The code that includes the following header file needs to be changed to ext/random/random.h
+  * shuffle()
+  * str_shuffle()
+  * array_rand()
 
-  * ext/standard/lcg.h
-  * ext/standard/rand.h
-  * ext/standard/mt_rand.h
-  * ext/standard/random.h
+But, the following fully compatible alternative implementations will be available.
 
-The following class names have been reserved and will no longer be available
-
-  * "Random"
-  * "Random\NumberGenerator"
-  * "Random\NumberGenerator\XorShift128Plus"
-  * "Random\NumberGenerator\MT19937"
-  * "Random\NumberGenerator\Secure"
+  * RNG\Randomizer::arrayShuffle()
+  * RNG\Randomizer::stringShuffle()
+  * RNG\Randomizer::arrayRandom()
 
 ===== Proposed PHP Version(s) =====
-8.2
+8.1
 
 ===== RFC Impact =====
 ==== To SAPIs ====
@@ -250,12 +169,12 @@ none
 none
 
 ===== Vote =====
-Voting opens 2021-MM-DD and 2021-MM-DD at 00:00:00 EDT. 2/3 required to accept.
+Voting opens 2021-MM-DD and 2021-YY-MM at 00:00:00 EDT. 2/3 required to accept.
 
-<doodle title="Add Random class" auth="zeriyoshi" voteType="single" closed="true"> 
+<doodle title="Add RNG extension and deprecate and change some functions?" auth="zeriyoshi" voteType="single" closed="true"> 
    * Yes
    * No
 </doodle>
 
 ===== Patches and Tests =====
-  * https://github.com/php/php-src/pull/7453
+TBD
