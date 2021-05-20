@@ -1,9 +1,8 @@
 ====== PHP RFC: First-class callable syntax ======
   * Date: 2021-05-20
-  * Author: Nikita Popov <nikic@php.net>, Joe Watkins <krakjoe@php.net>
-  * Status: Implemented
+  * Author: Nikita Popov <nikic@php.net>
+  * Status: Draft
   * Target Version: PHP 8.1
-  * Implementation: https://github.com/php/php-src/pull/7019
 
 ===== Introduction =====
 
@@ -21,16 +20,6 @@ $fn = Foo::method(...);
 </PHP>
 
 In this example, each pair of expressions is equivalent. The ''strlen(...)'' syntax creates a ''Closure'' that refers to the ''strlen()'' function, and so on.
-
-The ''...'' can be seen akin to the argument unpacking syntax ''...$args'', with the actual arguments not yet filled in:
-
-<PHP>
-$fn = Foo::method(...);
-// Think of it as:
-$fn = fn(...$args) => Foo::method(...$args);
-</PHP>
-
-The syntax is forward-compatible with [[rfc:partial_function_application|partial functions application]].
 
 ===== Proposal =====
 
@@ -61,7 +50,7 @@ And advantage of the first-class callable syntax is that it uses the scope at th
 class Test {
     public function getPrivateMethod() {
         return [$this, 'privateMethod']; // does not work
-        return Closure::fromCallable([$this, 'privateMethod']); // works, but ugly
+        return Closure::fromCallable([$this, 'privateMethod']); // works, bug ugly
         return $this->privateMethod(...); // works
     }
     
@@ -89,36 +78,11 @@ fn(...$args) => new Foo(...$args)
 
 and acquire a callable to that trampoline instead. While certainly possible, this takes a step backwards from the straightforward semantics of the ''foo(...)'' syntax for ordinary calls.
 
-==== Nullsafe calls ====
-
-The first-class callable syntax cannot be combined with the nullsafe operator. Both of the following result in a compile-time error:
-
-<PHP>
-$obj?->method(...);
-$obj?->prop->method(...);
-</PHP>
-
-The ''$obj?->method(...)'' syntax has two potential interpretations:
-
-<PHP>
-$fn = $obj?->method(...);
-// could be
-$fn = $obj !== null ? $obj->method(...) : null;
-// or
-$fn = fn(...$args) => $obj?->method(...$args);
-</PHP>
-
-If this syntax were supported, it would likely follow the first interpretation, as the second interpretation does not correspond to a proper callable. However, this behavior is not particularly useful (as the return type is ''?Closure'') and likely surprising.
-
-==== Strict types ====
-
-The first-class callable syntax interacts with ''declare(strict_types)'' the same way as ''Closure::fromCallable()'': The ''strict_types'' mode at the point where the callable is acquired does not matter. Only the ''strict_types'' mode at the time the call is made is considered.
-
 ===== Rationale =====
 
 ==== Partial Function Application ====
 
-This RFC can be seen as an alternative to the [[rfc:partial_function_application|partial functions application (PFA)]] RFC. I believe that PFA use-cases can be divided into roughly three categories:
+This RFC is intended as an alternative to the [[rfc:partial_function_application|partial functions application (PFA)]] RFC. I believe that PFA use-cases can be divided into roughly three categories:
 
 The first is the use of PFA to acquire a callable, without partially applying any arguments. I believe that the vast majority of PFA uses would be for this purposes. This RFC proposes to provide special support for this use-case **only**.
 
@@ -156,11 +120,11 @@ $array = array_filter($array, fn($s) => str_contains($s, 'foo'));
 
 I think that the existing syntax is already sufficiently concise that there is no strong need to introduce an even shorter one.
 
-As such, I believe that adding a first-class callable syntax, and using the original approach to the pipe operator, would give us most of the benefit of PFA at a much lower complexity cost. The PFA proposal has gone through many iterations, because nailing down the precise semantics turned out to be surprisingly hard. The final proposal is simple on a conceptual level, but very involved when it comes to detailed behavior.
+As such, I believe that adding a first-class callable syntax, and using the original approach to the pipe operator, would give us most of the benefit of PFA at a much lower complexity cost. The PFA proposal has gone through many iterations, because nailing down the precise semantics turned out to be surprisingly hard. According to Joe Watkins (the implementer of the PFA RFC), final semantics we have arrived at (which, at the time of this writing, are not reflected in the PFA proposal itself) will also carry a lot of implementation complexity.
 
 ==== Syntax choice ====
 
-The proposed syntax is forward-compatible with the latest iteration of the PFA proposal. As such, it would be possible to expand it into a full PFA feature in the future.
+The proposed syntax is forward-compatible with the latest iteration of the PFA proposal (which, at the time of this writing, is not yet reflected in the RFC). As such, it would be possible to expand it into a full PFA feature in the future.
 
 The call-based syntax also has the advantage that it is unambiguous: It represents exactly the callable that would be invoked by a direct call of the same syntax. This cannot be said of some other syntax choices that have been discussed in the past, for example:
 
@@ -170,45 +134,10 @@ $this->foo(...);   // Refers to a method
 ($this->foo)(...); // Refers to a callable stored in a property
 
 // What does this mean?
-$this->foo::function;
+$this->foo::callable;
 </PHP>
 
-This can be resolved by limiting the ''::function'' syntax to referencing proper symbols only, and not supporting its use to convert legacy callables to closures using ''$callable::function''. Those would require an explicit ''Closure::fromCallable($callable)'' call.
-
-A problem with the ''strlen::function'' syntax in particular is that it has a false analogy to ''Foo::class''. The latter will just return a string, while the whole point of a first-class callable syntax is that it returns a ''Closure'' object, **not** a simple string or array.
-
-Here are some commonly suggested syntax choices for first-class callables that are definitely **not** possible due to ambiguities:
-
-<PHP>
-// Using "&" sigil:
-&foo->bar;
-// Is ambiguous with by-reference assignment:
-
-$x = &$foo->bar;
-// is currently interpreted as
-$x =& $foo->bar;
-
-// Using no sigil:
-strlen; // Is ambiguous with constant strlen
-Foo::bar; // Is ambiguous with class constant Foo::bar
-$foo->bar; // Is ambiguous with object property $foo->bar
-</PHP>
-
-Here are syntax choices that are (mostly) unambiguous if only usage with proper symbols is allowed:
-
-<PHP>
-// As mentioned above, people might expect this to return "strlen", not a Closure object:
-strlen::function;
-// Same as previous, and we'd rather avoid the legacy "callable" terminology.
-strlen::callable;
-
-// Unlike the "&" sigil, this is not ambiguous. It is also not particularly meaningful though.
-*strlen;
-// This also applies to various other sigils that are not yet used in unary position, but are equally meaningless:
-^strlen;
-</PHP>
-
-I am generally open to using a different syntax, as I don't think forward-compatibility with a potential PFA feature is critical, but none of the choices are particularly great.
+I am generally open to using a different syntax though, as I don't think forward-compatibility with a potential PFA feature is critical.
 
 ===== Backward Incompatible Changes =====
 
@@ -216,9 +145,4 @@ None.
 
 ===== Vote =====
 
-Voting started on 2021-07-02 and closes on 2021-07-16.
-
-<doodle title="Introduce first-class callable syntax as proposed?" auth="nikic" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Yes/No.
