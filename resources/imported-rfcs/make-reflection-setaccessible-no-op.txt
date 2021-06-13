@@ -1,9 +1,9 @@
-====== PHP RFC: Make reflection setAccessible() no-op ======
+====== PHP RFC: #[Deprecated] Attribute ======
 
   * Version: 1.0
   * Date: 2021-06-13
   * Author: Marco Pivetta 
-  * Status: Implemented (in PHP 8.1)
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/make-reflection-setaccessible-no-op
 
 ===== Introduction =====
@@ -44,109 +44,3 @@ https://3v4l.org/ousrD :
 <code>
 Fatal error: Uncaught ReflectionException: Cannot access non-public property Foo::$bar in <SNIP>
 </code>
-
-
-==== The problem with mutability ====
-
-By having `ReflectionProperty#setAccessible()` and `ReflectionMethod#setAccessible()`, any consumer of a `ReflectionMethod` or `ReflectionProperty` that is given by a third party must ensure that `#setAccessible()` is called:
-
-<code php>
-function doSomethingWithState(MyObject $o, ReflectionProperty $p) : void
-{
-    $p->setAccessible(true); // wasteful safety check
-    
-    doSomethingWith($p->getValue($o));
-}
-</code>
-
-In addition to that, any developer that is intentionally using the reflection API (after having evaluated its trade-off) will have to use this obnoxious syntax in order to use it at its fullest:
-
-
-<code php>
-$p = new ReflectionProperty(MyClass::class, 'propertyName');
-
-$p->setAccessible(true);
-
-// now $p is usable
-</code>
-
-
-===== Proposal =====
-
-This RFC proposes to:
-
-  * make `ReflectionProperty` and `ReflectionMethod` behave as if `#setAccessible(true)` had been called upfront
-  * make `ReflectionProperty#setAccessible()` and `ReflectionMethod#setAccessible()` no-op operations, with no side-effects nor state mutation involved
-
-After the RFC is successfully accepted/implemented, the following code should no longer throw, improving therefore the ergonomics around reflection.
-
-<code php>
-class Foo { private $bar = 'a'; }
-
-(new ReflectionProperty(Foo::class, 'bar'))->getValue();
-</code>
-
-
-
-==== Deprecations ====
-
-In order to ease migration to PHP 8.1, and minimize runtime side-effects, a deprecation is explicitly avoided in this RFC.
-
-Instead, a deprecation should be introduced when a new/separate RFC plans for the removal of `ReflectionProperty#setAccessible()` and `ReflectionMethod#setAccessible()`.
-
-Such RFC will be raised **after** the release of PHP 8.1, if this RFC is accepted.
-
-===== Backward Incompatible Changes =====
-
-Although of minimal concern, it is true that some behavior will change:
-
-  * `ReflectionProperty#getValue()` will no longer throw an exception when used against a protected/private property
-  * `ReflectionProperty#setValue()` will no longer throw an exception when used against a protected/private property
-  * `ReflectionMethod#invoke()` will no longer throw an exception when used against a protected/private method
-  * `ReflectionMethod#invokeArgs()` will no longer throw an exception when used against a protected/private method
-  * for extensions developers, `reflection_object->ignore_visibility` no longer exists
-
-===== Proposed PHP Version(s) =====
-
-8.1
-
-===== RFC Impact =====
-==== To SAPIs ====
-None
-
-==== To Existing Extensions ====
-None
-
-==== To Opcache ====
-
-None
-
-==== New Constants ====
-
-None
-
-==== php.ini Defaults ====
-
-None
-
-===== Open Issues =====
-
-None
-
-===== Proposed Voting Choices =====
-
-Accept turning `ReflectionProperty#setAccessible()` and `ReflectionMethod#setAccessible()` into a no-op? (yes/no)
-
-===== Patches and Tests =====
-
-https://github.com/php/php-src/pull/5412
-
-
-===== Vote =====
-
-This is a Yes/No vote, requiring a 2/3 majority. Voting started on 2021-06-23 and ends on 2021-07-07.
-
-<doodle title="Make reflection setAccessible() no-op" auth="ocramius" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
