@@ -1,7 +1,7 @@
 ====== PHP RFC: Unwrap reference after foreach ======
   * Date: 2021-08-13
   * Author: Nikita Popov <nikic@php.net>
-  * Status: Withdrawn
+  * Status: Draft
   * Target Version: PHP 8.2
   * Implementation: https://github.com/php/php-src/pull/7364
 
@@ -55,7 +55,7 @@ While the behavior is justifiable, it remains unexpected.
 
 ===== Proposal =====
 
-This RFC proposes to change the semantics of foreach by reference to unwrap the reference after the loop. This means that ''$value'' will still have the value of the last (visited) element, but will no longer be a reference to it. This also applies if the loop is left using ''break'', ''continue'' or ''goto''.
+This RFC proposes to change the semantics of foreach by reference to unwrap the reference after the loop. This means that ''$value'' will still have the value of the last (visited) element, but will no longer be a reference to it.
 
 While PHP does not have a dedicated language construct for reference unwrapping, the operation is logically equivalent to:
 
@@ -92,19 +92,9 @@ foreach ($array as &$arrayCopy[]) {}
 foreach ($array as &getInfo()['value']) {}
 </PHP>
 
-This RFC proposes to only perform the reference unwrapping for simple variables of the form ''$value'' ("CV"), but not for complex variables.
+Unwrapping the reference requires that we evaluate the variable again after the loop. For a simple variable like ''$value'' this will not have further side effects. For the complex variables in the above example, side effects are possible.
 
-The reason is that complex variables may have side effects. The most obvious case is ''&$arrayCopy[]'', which would result in an additional null element being appended to ''$arrayCopy'' while attempting the unwrap. The ''&getInfo()['value']'' case could similarly have arbitrary side-effects in the ''getInfo()'' call. Even ''&$info['value']'' might be invoking ''__get()''.
-
-Use of complex variables as foreach targets is very unusual, so it is rather unlikely that someone will encounter issues with the reused loop variables in this context. Always performing the unwrap would certainly be possible, but the cure seems worse than disease in this instance.
-
-When foreach is used in conjunction with destructuring, unwrapping will be performed on simple destructuring targets:
-
-<PHP>
-foreach ($array as [&$var, &$complex->var]) {}
-</PHP>
-
-In this example, ''$var'' will be unwrapped because it is a simple variable, while ''$complex->var'' is not affected. As with the non-destructuring case, use of complex variables in this context is unusual and may have side-effects.
+There are broadly two ways we can handle this: Either we always perform the unwrap and accept the potential side effect, or we limit the unwrap operation to only some cases. For all practical purposes, only unwrapping for simple variables would be sufficient.
 
 ===== Backward Incompatible Changes =====
 
