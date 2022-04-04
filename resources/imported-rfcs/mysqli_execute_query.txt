@@ -1,16 +1,15 @@
 ====== PHP RFC: MySQLi Execute Query ======
 
-  * Version: 1
-  * RFC Started: 2022-04-21
-  * RFC Updated: 2022-05-11
-  * Voting Start: 2022-05-11 15:00 UTC / 16:00 BST
-  * Voting End: 2022-05-25 15:00 UTC / 16:00 BST
+  * Version: 0.1
+  * Voting Start: ?
+  * Voting End: ?
+  * RFC Started: 2022-04-04
+  * RFC Updated: 2022-04-04
   * Author: Kamil Tekiela, and Craig Francis [craig#at#craigfrancis.co.uk]
-  * Status: Accepted
-  * Target Version: PHP 8.2
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/mysqli_execute_query
   * GitHub Repo: https://github.com/craigfrancis/php-mysqli-execute-query-rfc
-  * Implementation: [[https://github.com/php/php-src/compare/master...kamil-tekiela:execute_query|From Kamil Tekiela]] (proof of concept)
+  * Implementation: [[https://github.com/php/php-src/compare/master...kamil-tekiela:execute_query|From Kamil Tekiela]]
 
 ===== Introduction =====
 
@@ -33,27 +32,23 @@ Using an example, assume we start with:
 <code php>
 $db = new mysqli('localhost', 'user', 'password', 'database');
 
+$sql = 'SELECT * FROM user WHERE name LIKE ? AND type IN (?, ?)';
+
 $name = '%a%';
-$type1 = 1; // Admin
-$type2 = 2; // Editor
+$type1 = 'admin';
+$type2 = 'editor';
 </code>
 
-Traditionally someone might use escaping, which is [[https://github.com/craigfrancis/php-is-literal-rfc/blob/main/justification/escaping.php?ts=4|very error prone]], e.g.
+Before PHP 8.1, a typical parameterised query would look like this:
 
 <code php>
-foreach ($db->query('SELECT * FROM user WHERE name LIKE "' . $db->real_escape_string($name) . '" AND type_id IN (' . $db->real_escape_string($type1) . ', ' . $db->real_escape_string($type2) . ')') as $row) { // INSECURE
-    print_r($row);
-}
-</code>
-
-To avoid mistakes, parameterised queries should be used (with a [[https://eiv.dev/|literal-string]]), but can be fairly complex:
-
-<code php>
-$statement = $db->prepare('SELECT * FROM user WHERE name LIKE ? AND type_id IN (?, ?)');
-$statement->bind_param('sii', $name, $type1, $type2);
+$statement = $db->prepare($sql);
+$statement->bind_param('sss', $name, $type1, $type2);
 $statement->execute();
 
-foreach ($statement->get_result() as $row) {
+$result = $statement->get_result();
+
+while ($row = $result->fetch_assoc()) {
     print_r($row);
 }
 </code>
@@ -61,40 +56,23 @@ foreach ($statement->get_result() as $row) {
 Since PHP 8.1, we no longer have problems with binding by reference, or needing to specify the variable types via the first argument to //bind_param()//, e.g.
 
 <code php>
-$statement = $db->prepare('SELECT * FROM user WHERE name LIKE ? AND type_id IN (?, ?)');
+$statement = $db->prepare($sql);
 $statement->execute([$name, $type1, $type2]);
 
-foreach ($statement->get_result() as $row) {
+$result = $statement->get_result();
+
+while ($row = $result->fetch_assoc()) {
     print_r($row);
 }
 </code>
 
-This proposed function will simplify this even further, by allowing developers to write this in a one line foreach:
+The proposed function will simply this even further, by allowing developers to write:
 
 <code php>
-foreach ($db->execute_query('SELECT * FROM user WHERE name LIKE ? AND type_id IN (?, ?)', [$name, $type1, $type2]) as $row) {
+$result = $db->execute_query($sql, [$name, $type1, $type2]);
+
+while ($row = $result->fetch_assoc()) {
     print_r($row);
-}
-</code>
-
-In pseudo-code it's basically:
-
-<code php>
-function mysqli_execute_query(mysqli $mysqli, string $sql, array $params = null)
-{
-    $driver = new mysqli_driver();
-
-    $stmt = $mysqli->prepare($sql);
-    if (!($driver->report_mode & MYSQLI_REPORT_STRICT) && $mysqli->error) {
-        return false;
-    }
-
-    $stmt->execute($params);
-    if (!($driver->report_mode & MYSQLI_REPORT_STRICT) && $stmt->error) {
-        return false;
-    }
-
-    return $stmt->get_result();
 }
 </code>
 
@@ -106,32 +84,15 @@ The name was inspired by [[https://www.doctrine-project.org/projects/doctrine-db
 
 ==== Returning false ====
 
-The implementation is effectively calling [[https://www.php.net/mysqli_stmt_get_result|mysqli_stmt_get_result()]] last. While it will return //false// on failure, it will also return //false// for queries that do not produce a result set (e.g. //UPDATE//). Historically this has been addressed by using //mysqli_errno()//, but since 8.1 the [[https://wiki.php.net/rfc/mysqli_default_errmode|Change Default mysqli Error Mode RFC]] was accepted, and Exceptions are used by default.
-
-==== Properties ====
-
-Because [[https://www.php.net/manual/en/class.mysqli-stmt.php|mysqli_stmt]] is not returned, it's not possible to use its properties directly:
-
-  - int|string **$affected_rows** - use //$mysqli->affected_rows// or //mysqli_affected_rows($mysqli)//
-  - int|string **$insert_id** - use //$mysqli->insert_id// or //mysqli_insert_id($mysqli)//
-  - int|string **$num_rows** - also available on //mysqli_result//
-  - int **$param_count**
-  - int **$field_count** - also available on //mysqli_result//
-  - int **$errno** - use //mysqli_errno($mysqli)//, //$mysqli->errno//
-  - string **$error** - use //mysqli_error($mysqli)//, //$mysqli->error//
-  - array **$error_list** - use //mysqli_error_list($mysqli)//, //$mysqli->error_list//
-  - string **$sqlstate** - use //mysqli_sqlstate($mysqli)//, //$mysqli->sqlstate//
-  - int **$id**
-
-It's also worth noting the error property usage will hopefully reduce, as more developers use //mysqli_sql_exception// for errors (because the mysqli Error Mode now defaults to //MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT//).
+Because the implementation is effectively calling [[https://www.php.net/mysqli_stmt_get_result|mysqli_stmt_get_result()]] last, while it will return //false// on failure, it will also return //false// for queries that do not produce a result set (e.g. //UPDATE//). Historically this has been addressed by using //mysqli_errno()//, but since 8.1 the [[https://wiki.php.net/rfc/mysqli_default_errmode|Change Default mysqli Error Mode RFC]] was accepted, and Exceptions are used by default.
 
 ==== Re-using Statements ====
 
-The implementation discards the //mysqli_stmt// object immediately, so you cannot re-issue a statement with new parameters. Anyone who would benefit from this (to skip running prepare again), can still use //mysqli_prepare()//.
+The implementation discards the //mysqli_stmt// object immediately, so you cannot re-issue a statement with new parameters. This is a rarely used feature, and anyone who would benefit from this (to skip running prepare again), can still use //mysqli_prepare()//.
 
 ==== Updating Existing Functions ====
 
-Cannot change //mysqli_query()// because its second argument is //$resultmode//.
+Cannot change //mysqli_query()// because it's second argument is //$resultmode//.
 
 Cannot replace the deprecated //mysqli_execute()// function, which is an alias for //mysqli_stmt_execute()//, because it would create a backwards compatibility issue.
 
@@ -171,7 +132,24 @@ None
 
 ===== Open Issues =====
 
-None
+==== Affected Rows ====
+
+Currently //$mysqli->affected_rows// and //mysqli_affected_rows($mysqli)// returns -1.
+
+==== Properties ====
+
+Because [[https://www.php.net/manual/en/class.mysqli-stmt.php|mysqli_stmt]] is not returned, it's not possible to use its properties:
+
+  - int|string **$affected_rows**
+  - int|string **$insert_id** - can use //$mysqli->insert_id// or //mysqli_insert_id($mysqli)//
+  - int|string **$num_rows** - also available on //mysqli_result//
+  - int **$param_count**
+  - int **$field_count** - also available on //mysqli_result//
+  - int **$errno** - can use //mysqli_errno($mysqli)//, //$mysqli->errno//
+  - string **$error** - can use //mysqli_error($mysqli)//, //$mysqli->error//
+  - array **$error_list** - can use //mysqli_error_list($mysqli)//, //$mysqli->error_list//
+  - string **$sqlstate** - can use //mysqli_sqlstate($mysqli)//, //$mysqli->sqlstate//
+  - int **$id**
 
 ===== Unaffected PHP Functionality =====
 
@@ -185,16 +163,11 @@ N/A
 
 Accept the RFC
 
-<doodle title="mysqli_execute_query" auth="craigfrancis" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+TODO
 
 ===== Implementation =====
 
-[[https://github.com/php/php-src/compare/master...kamil-tekiela:execute_query|From Kamil Tekiela]] (proof of concept)
-
-This implementation copies some details to the mysqli object, but not the affected rows. This means //mysqli_affected_rows($mysqli)// and //$mysqli->affected_rows// will currently return -1.
+[[https://github.com/php/php-src/compare/master...kamil-tekiela:execute_query|From Kamil Tekiela]]
 
 ===== References =====
 
@@ -202,4 +175,4 @@ N/A
 
 ===== Rejected Features =====
 
-None
+TODO
