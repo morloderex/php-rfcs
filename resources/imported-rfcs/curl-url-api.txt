@@ -1,173 +1,78 @@
-====== PHP RFC: New Curl URL API ======
-  * Version: 1.0
-  * Date: 2022-06-21
+====== PHP RFC: Your Title Here ======
+  * Version: 0.9
+  * Date: 2022-06-16
   * Author: Pierrick Charron <pierrick@php.net>
-  * Status: Declined
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/curl-url-api
 
 ===== Introduction =====
 
-Since version 7.62.0 of libcurl, [[https://daniel.haxx.se/blog/2018/10/31/curl-7-62-0-moar-stuff/|1]] the library features a brand new URL API [[https://daniel.haxx.se/blog/2018/09/09/libcurl-gets-a-url-api/|2]] that can be used to parse and generate URLs, using libcurl’s own parser. One of the goals of this API is to tighten a problematic vulnerable area for applications where the URL parser library would believe one thing and libcurl another. This could and has sometimes led to security problems. [[https://www.blackhat.com/docs/us-17/thursday/us-17-Tsai-A-New-Era-Of-SSRF-Exploiting-URL-Parser-In-Trending-Programming-Languages.pdf|3]]
+Since its version 6.62.0 [1], libcurl features a brand new URL API [2] that can be used to parse and generate URLs, using libcurl’s own parser. One of the goal of this API is to tighten a problematic vulnerable area for applications where the URL parser library would believe one thing and libcurl another. This could and has sometimes lead to security problems [3].
 
 ===== Proposal =====
 
-There are obviously many different ways this API could be implemented in userland, and recent discussions showed that there is not yet a consensus on how it should be done. The actual state of ext/curl lib is that all existing functions are thin wrapper over libcurl. The proposal is to add the new Curl Url API keeping it consistant with other curl_ functions. This implementation is a simple one-to-one binding of the libcurl functions. The underlying CURLU handle will be exposed as an opaque <php>CurlUrl</php> object.
-
-The implementations would add 3 new functions <php>curl_url(), curl_url_set() and curl_url_get()</php> that will be used to manipulate the <php>CurlUrl</php> object/handle. 
-
-All <php>CURLUPART_*</php> and <php>CURLU_*</php> constants will be exposed as global constants with the same name in user land.
-
-One new Curl option will also be available: <php>CURLOPT_CURLU</php>. Curl will use the given object and will not change its contents.
-
-Those classes and functions will only exist if the version of libcurl installed on the system is greater than or equal to 7.62. If the version is older, they will not exist.
-
-<PHP>
-const CURLUPART_FRAGMENT = UNKNOWN;
-const CURLUPART_HOST = UNKNOWN;
-const CURLUPART_OPTIONS = UNKNOWN;
-const CURLUPART_PASSWORD = UNKNOWN;
-const CURLUPART_PATH = UNKNOWN;
-const CURLUPART_PORT = UNKNOWN;
-const CURLUPART_QUERY = UNKNOWN;
-const CURLUPART_SCHEME = UNKNOWN;
-const CURLUPART_URL = UNKNOWN;
-const CURLUPART_USER = UNKNOWN;
-
-const CURLU_APPENDQUERY = UNKNOWN;
-const CURLU_DEFAULT_PORT = UNKNOWN;
-const CURLU_DEFAULT_SCHEME = UNKNOWN;
-const CURLU_DISALLOW_USER = UNKNOWN;
-const CURLU_GUESS_SCHEME = UNKNOWN;
-const CURLU_NO_DEFAULT_PORT = UNKNOWN;
-const CURLU_NON_SUPPORT_SCHEME = UNKNOWN;
-const CURLU_PATH_AS_IS = UNKNOWN;
-const CURLU_URLDECODE = UNKNOWN;
-const CURLU_URLENCODE = UNKNOWN;
-
-/* libcurl >= 7.65.0 */
-const CURLUPART_ZONEID = UNKNOWN;
-
-/* libcurl >= 7.67.0 */
-const CURLU_NO_AUTHORITY = UNKNOWN;
-
-/* libcurl >= 7.78.0 */
-const CURLU_ALLOW_SPACE = UNKNOWN;
-
-function curl_url(?string $url = null): CurlUrl {}
-function curl_url_set(CurlUrl $url, int $part, ?string $content, int $flags = 0): void {}
-function curl_url_get(CurlUrl $url, int $part, int $flags = 0): ?string {}
-
-final class CurlUrl {
-    public function __clone() {}
-}
-</PHP>
-
-==== curl_url(?string $url = null) ====
-
-Create a new CurlUrl object. If <php>$url</php> is set, the object will be initialized using this URL, otherwise, all the parts will be set to <php>null</php>
-
-All errors of libcurl will become <php>CurlUrlException</php>.
-
-==== curl_url_set(CurlUrl $url, int $part, ?string $content, int $flags = 0): void ====
-
-Update individual pieces of the URL. The <php>$part</php> argument identifies the particular URL part to set or change (<php>CURLUPART_*</php>). Setting a part to a <php>null</php> value will effectively remove that part's contents from the <php>CurlUrl</php> object.
-
-The <php>$flags</php> argument is a bitmask with individual features.
-
-All errors of libcurl will become <php>CurlUrlException</php>.
-
-^ Supported flags ^ Description  ^
-| <php>CURLU_NON_SUPPORT_SCHEME</php> | If set, allows this function to set a non-supported scheme. |
-| <php>CURLU_URLENCODE</php> | If set, URL encodes the part. |
-| <php>CURLU_DEFAULT_SCHEME</php> | If set, allows the URL to be set without a scheme, in which case the scheme will be set to the default: HTTPS. Overrides the <php>CURLU_GUESS_SCHEME</php> option if both are set. |
-| <php>CURLU_GUESS_SCHEME</php> | If set, allows the URL to be set without a scheme and it instead "guesses" which scheme was intended based on the host name. If the outermost sub-domain name matches DICT, FTP, IMAP, LDAP, POP3 or SMTP then that scheme will be used; otherwise it picks HTTP. Conflicts with the <php>CURLU_DEFAULT_SCHEME</php> option which takes precedence if both are set. |
-| <php>CURLU_NO_AUTHORITY</php> | If set, skips authority checks. The RFC allows individual schemes to omit the host part (normally the only mandatory part of the authority), but libcurl cannot know whether this is permitted for custom schemes. Specifying the flag permits empty authority sections, similar to how file scheme is handled. |
-| <php>CURLU_PATH_AS_IS</php> | If set, makes libcurl skip the normalization of the path. That is the procedure where curl otherwise removes sequences of dot-slash and dot-dot etc. |
-| <php>CURLU_ALLOW_SPACE</php> | If set, the URL parser allows space (ASCII 32) where possible. The URL syntax normally does not allow spaces anywhere, but they should be encoded as %20 or '+'. When spaces are allowed, they are still not allowed in the scheme. When space is used and allowed in a URL, it will be stored as-is unless <php>CURLU_URLENCODE</php> is also set. |
-
-==== curl_url_get(CurlUrl $url, int $part, int $flags = 0): ?string ====
-
-This function lets the user extract individual pieces from the <php>$url</php> object. If the particular part is not set, this function will return <php>null</php>, all other errors of libcurl will become <php>CurlUrlException</php>.
-
-The <php>$part</php> argument identifies the particular URL part to extract.
-
-The <php>$flags</php> argument is a bitmask with individual features.
-
-^ Supported flags ^ Description  ^
-| <php>CURLU_DEFAULT_PORT</php> | If the object has no port stored, this option will make the function return the default port for the used scheme. |
-| <php>CURLU_DEFAULT_SCHEME</php> | If the object has no scheme stored, this option will make the function return the default scheme instead of null. |
-| <php>CURLU_NO_DEFAULT_PORT</php> | Instructs the function to not return a port number if it matches the default port for the scheme. |
-| <php>CURLU_URLDECODE</php> | If set, the function will encode the host name part. If not set (default), libcurl returns the URL with the host name "raw" to support IDN names to appear as-is. IDN host names are typically using non-ASCII bytes that otherwise will be percent-encoded. Note that even when not asking for URL encoding, the '%' (byte 37) will be URL encoded to make sure the host name remains valid. |
-| <php>CURLU_URLENCODE</php> | If set, the function will decode the host name part. If there are any byte values lower than 32 in the decoded string, the get operation will return an error instead. |
-
-==== CurlUrlException ====
-
-The <php>CurlUrlException</php> class represents an error raised by libcurl. The constants exposed in this class are all the codes that <php>CurlUrlException::getCode()</php> could return. Those codes are internally mapped to CURLUE_* error codes that libcurl could raise. Those constants may vary depending on the version of libcurl ext/curl was compiled with.
-
-If ext/curl was compiled with libcurl > 7.80 then <php>CurlUrlException::getMessage()</php> will return a user-friendly message that will describe the problem. (Example: Malformed input to a URL function).
-
-<PHP>
-/* libcurl >= 7.62.0 */
-final class CurlUrlException extends Exception
-{
-    public const BAD_PORT_NUMBER = UNKNOWN;
-    public const MALFORMED_INPUT = UNKNOWN;
-    public const OUT_OF_MEMORY = UNKNOWN;
-    public const UNSUPPORTED_SCHEME = UNKNOWN;
-    public const URL_DECODING_FAILED = UNKNOWN;
-    public const USER_NOT_ALLOWED = UNKNOWN;
-
-    /* libcurl >= 7.81.0 */
-    public const BAD_FILE_URL = UNKNOWN;
-    public const BAD_FRAGMENT = UNKNOWN;
-    public const BAD_HOSTNAME = UNKNOWN;
-    public const BAD_IPV6 = UNKNOWN;
-    public const BAD_LOGIN = UNKNOWN;
-    public const BAD_PASSWORD = UNKNOWN;
-    public const BAD_PATH = UNKNOWN;
-    public const BAD_QUERY = UNKNOWN;
-    public const BAD_SCHEME = UNKNOWN;
-    public const BAD_SLASHES = UNKNOWN;
-    public const BAD_USER = UNKNOWN;
-}
-</PHP>
-
-==== Why not an OO API ? ====
-
-With the very short delay we have before 8.2 feature freeze. It's safer to keep all the curl extension API consistant and not rushing a new OO design which obviously nobody agrees on as all the discussions showed that we are not even close to getting a consensus.
-
-===== Future Scope =====
-
-A better OO API could be discussed and implemented in next PHP versions.
+<php>
+</php>
 
 ===== Backward Incompatible Changes =====
-
-None, except that the new class and function names will be declared by PHP and conflict with applications declaring the same class names in the global namespace.
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
 
-8.2
+===== RFC Impact =====
+==== To SAPIs ====
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
-===== Vote =====
+==== To Existing Extensions ====
+Will existing extensions be affected?
 
-Voting opened on 2022-07-04 and closes on 2022-07-19
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
 
-<doodle title="Add proposed new functional Curl URL API" auth="pierrick" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
+Please explain how you have verified your RFC's compatibility with opcache.
 
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
+
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
+===== Future Scope =====
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
 ===== Patches and Tests =====
+Links to any external patches and tests go here.
 
-Not yet available.
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
-
-N/A
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
 
 ===== References =====
+Links to external references, discussions or RFCs
 
-  - https://daniel.haxx.se/blog/2018/10/31/curl-7-62-0-moar-stuff/
-  - https://daniel.haxx.se/blog/2018/09/09/libcurl-gets-a-url-api/
-  - https://www.blackhat.com/docs/us-17/thursday/us-17-Tsai-A-New-Era-Of-SSRF-Exploiting-URL-Parser-In-Trending-Programming-Languages.pdf
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
