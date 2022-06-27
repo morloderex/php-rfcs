@@ -1,24 +1,21 @@
-====== PHP RFC: Interface Default Methods ======
-  * Version: 2.0
+====== PHP RFC: Your Title Here ======
+  * Version: 0.9
   * Date: 2022-06-27
   * Author: Levi Morrison, levim@php.net
-  * Status: Declined
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/interface-default-methods
 
 
 ===== Introduction =====
-Over time, authors sometimes want to add methods to an interface. Today, this causes large breakages to every implementor. This RFC proposes a way to reduce the scale of breakage.
-
-Additionally, sometimes interfaces can implement some functionality of their interface in terms of other parts of their interface. For example, the interface ''Countable'' could implement <php>function isEmpty(): bool</php> by using <php>$this->count() == 0</php>. Today, traits are often used to accomplish this, but a default interface implementation could be used instead, and would be simpler. When interfaces are designed with this technique in mind, it can enable productivity of the interface over time.
-
-For example, see [[https://doc.rust-lang.org/std/iter/trait.Iterator.html|Rust's Iterator trait]] which has more than 40 functions with default implementations and the implementor mostly needs to implement a single function, ''next(): Option<T>''. These functions with default behaviors have been stabilized over time with little to no breakage in practice. For example, ''for_each'' was added in v1.21 and ''map_while'' was added in v1.57.
+Over time, authors sometimes will want to add methods to an interface. Today, this causes breakages. This RFC proposes one way to reduce the scope of breakage.
 
 ===== Proposal =====
 
-Interface methods can now provide a method body. This implementation will be used if the implementer does not otherwise provide an implementation. Default implementations are available for both instance and static methods.
+Interface methods can now provide an implementation.
 
 <PHP>
-interface Example {
+interface Example
+{
   // Today, you cannot specify an implementation, only a
   // signature.
   function method1(): void;
@@ -30,156 +27,46 @@ interface Example {
 }
 </PHP>
 
-Interface methods can also now be <php>private</php> if they a have method body. The purpose here is to allow helper routines if the default implementations of the <php>public</php> methods need them.
-
-The methods with default implementations are inherited similarly to abstract base classes, as opposed to how traits behave. For instance, a private method on the interface is not accessible to the class which implements the interface; with a trait it would be.
-
-==== Default Method Resolution ====
-
-Default methods for interfaces introduce a form of multiple inheritance. How is a method selected?
-
-Java's resolution algorithm looks like this:
-  - Class definitions always win. If a class, or a parent class, defines a concrete method, then this will always win over all possible default methods.
-  - More specific interfaces take priority over less specific ones. If interfaces ''A'' and ''B'' exist and ''B'' extends ''A'', and both have a default method for the same method, then when a class implements B directly or indirectly the method from ''B'' will take precedence over the method from ''A''.
-  - If the above rules fail, then the class needs to implement the method itself, possibly delegating to one of the interfaces.
-
-This RFC proposes the same. However, rule 2 is only partially implemented at this time.
-
-Here's an example of a class delegating to another method:
-
-<PHP>
-interface Interface1 {
-    function method1() { echo __METHOD__ . "\n"; }
-}
-
-interface Interface2 {
-    function method1() { echo __METHOD__ . "\n"; }
-}
-
-class Class1 implements Interface1, Interface2 {
-    function method1() {
-        Interface1::method1();
-    }
-}
-
-(new Class1())->method1(); // Interface1::method1
-</PHP>
-
-==== Parent Scoping ====
-In interface default methods, you cannot use the <php>parent::</php> scoping mechanism. The following does not work:
-
-<PHP>
-interface Interface1 {
-    function method1() { echo __METHOD__, PHP_EOL; }
-}
-
-interface Interface2 extends Interface1 {
-    function method1() { parent::method1(); }
-}
-</PHP>
-
-The reason is that interfaces can extend multiple other interfaces e.g.
-
-<PHP>
-interface Interface3 extends Interface1, Interface2 {}
-</PHP>
-
-The name of the interface should be used instead:
-
-<PHP>
-interface Interface2 extends Interface1 {
-    function method1() { Interface1::method1(); }
-}
-</PHP>
-
-However, if a sub-class of the inheriting class calls ''parent::method1()'', it will work:
-
-<PHP>
-interface Interface1 {
-    function method1() { echo __METHOD__, PHP_EOL; }
-}
-
-class Class1 implements Interface1 {
-    // Inherits Interface1::method1() here.
-}
-
-class Class2 extends Class1 {
-    function method1() { parent::method1(); }
-}
-
-(new Class2())->method1);
-// output:
-// Interface1::method1
-</PHP>
-
-==== Cancelling Default Methods ====
-If an interface method extends a parent interface method which has a default, this prevents using the default method for classes which implement the child interface but do not directly implement the parent one:
-
-<PHP>
-interface Interface1 {
-    function method1() { echo __METHOD__, "\n"; }
-}
-
-interface Interface2 extends Interface1 {
-    function method1();
-}
-
-/* Would be an error because method1 has not been implemented.
-class Class1 implements Interface2 {
-    // error: method1 has not been implemented.
-}
- */
-
-// This is subtly different, but valid:
-class Class1 implements Interface1, Interface2 {}
-</PHP>
-
-The behavior could go either way. I picked this behavior because if it's wrong, it's easier to correct than the other way around.
+Interfaces can extend multiple interfaces and classes can implement multiple interfaces, so it's possible that there are multiple default methods to choose from. TODO: outline and implement the resolution algorithm.
 
 ===== Backward Incompatible Changes =====
-None, as long as you do not use the feature.
-
-If you do use the feature:
-  * Adding a default implementation to an existing interface method will not break existing code, because every existing usage has a higher priority than the default.
-  * If you add a new method to an interface, there is a compatibility break. The impact of the break is limited to places where the implementor/inheritor of the interface has a method of the same name.
+None.
 
 ===== Proposed PHP Version(s) =====
-PHP 8.3.
+PHP 8.NEXT.
 
 ===== RFC Impact =====
 
-==== To Extensions ====
-Modules can specify an interface implementation as well. These internal default methods should not be marked with ''ZEND_ACC_ABSTRACT'' and should be instead marked with ''ZEND_ACC_DEFAULT_METHOD''.
+==== To Existing Extensions ====
+Modules can specify an interface implementation as well.
 
 ==== To Opcache ====
-Opcache should also work with this feature. The proof of concept implementation has not triggered any issues so far in CI.
-
-==== To the Ecosystem ====
-Previously, interface methods were not allowed to have method bodies. These tools such as parsers, code analyzers, etc will need to be updated.
+Opcache should also work with this feature.
 
 ===== Open Issues =====
 Make sure there are no open issues when the vote starts!
 
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
 ===== Future Scope =====
-This feature may be used to enhance existing interfaces in PHP.
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
-  * ''Countable'' could add <php>function isEmpty(): bool { return $this->count() == 0; }</php>.
-  * ''Iterator'' could add methods like ''map'', ''filter'', and ''reduce'' which behave similarly to ''array_map'', ''array_filter'', and ''array_reduce''.
-
-===== Voting =====
-The vote will be a simple yes/no vote on whether to include the feature.
-<doodle title="Interface Default Methods" auth="levim" voteType="single" closed="false" closeon="2023-07-17T00:00:00Z">
-   * Yes
-   * No
-</doodle>
-
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
 ===== Patches and Tests =====
+Links to any external patches and tests go here.
 
-Here is a work-in-progress pull request: https://github.com/php/php-src/pull/11467.
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
-
 After the project is implemented, this section should contain 
   - the version(s) it was merged into
   - a link to the git commit(s)
