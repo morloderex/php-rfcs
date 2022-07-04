@@ -1,5 +1,5 @@
 ====== PHP RFC: New Curl URL API ======
-  * Version: 0.9
+  * Version: 1.0
   * Date: 2022-06-21
   * Author: Pierrick Charron <pierrick@php.net>
   * Status: Under discussion
@@ -11,51 +11,15 @@ Since version 7.62.0 of libcurl, [[https://daniel.haxx.se/blog/2018/10/31/curl-7
 
 ===== Proposal =====
 
-There are obviously many different ways this API could be implemented in userland, and recent discussions show that there is not yet a consensus on how it should be done. This RFC proposes 4 different solutions of exposing this API.
+There are obviously many different ways this API could be implemented in userland, and recent discussions show that there is not yet a consensus on how it should be done. The actual state of ext/curl lib is that all existing functions are thin wrapper over libcurl. The proposal is to add the new Curl Url API keeping it consistant with other curl_ functions. This implementation is a simple one-to-one binding of the libcurl functions. The underlying CURLU handle will be exposed as an opaque <php>CurlUrl</php> object.
 
-==== Common to all proposed implementations ====
+The implementations would add 3 new functions <php>curl_url(), curl_url_set() and curl_url_get()</php> that will be used to manipulate the <php>CurlUrl</php> object/handle. 
 
-Each of the four different implementations would add two new classes: <php>CurlUrl</php> and <php>CurlUrlException</php>. These two classes will only exist if the version of libcurl installed on the system is greater than or equal to 7.62. If the version is older, these two classes will not exist.
+All <php>CURLUPART_*</php> and <php>CURLU_*</php> constants will be exposed as global constants with the same name in user land.
 
 One new Curl option will also be available: <php>CURLOPT_CURLU</php>. Curl will use the given object and will not change its contents.
 
-The <php>CurlUrlException</php> class represents an error raised by libcurl. The constants exposed in this class are all the codes that <php>CurlUrlException::getCode()</php> could return. Those codes are internally mapped to CURLUE_* error codes that libcurl could raise. Those constants may vary depending on the version of libcurl ext/curl was compiled with.
-
-If ext/curl was compiled with libcurl > 7.80 then <php>CurlUrlException::getMessage()</php> will return a user-friendly message that will describe the problem. (Example: Malformed input to a URL function).
-
-<PHP>
-/* libcurl >= 7.62.0 */
-final class CurlUrlException extends Exception
-{
-    public const BAD_PORT_NUMBER = UNKNOWN;
-    public const MALFORMED_INPUT = UNKNOWN;
-    public const OUT_OF_MEMORY = UNKNOWN;
-    public const UNSUPPORTED_SCHEME = UNKNOWN;
-    public const URL_DECODING_FAILED = UNKNOWN;
-    public const USER_NOT_ALLOWED = UNKNOWN;
-
-    /* libcurl >= 7.81.0 */
-    public const BAD_FILE_URL = UNKNOWN;
-    public const BAD_FRAGMENT = UNKNOWN;
-    public const BAD_HOSTNAME = UNKNOWN;
-    public const BAD_IPV6 = UNKNOWN;
-    public const BAD_LOGIN = UNKNOWN;
-    public const BAD_PASSWORD = UNKNOWN;
-    public const BAD_PATH = UNKNOWN;
-    public const BAD_QUERY = UNKNOWN;
-    public const BAD_SCHEME = UNKNOWN;
-    public const BAD_SLASHES = UNKNOWN;
-    public const BAD_USER = UNKNOWN;
-}
-</PHP>
-
-==== Implementation 1 : Procedural API ====
-
-This implementation is a simple one-to-one binding of the libcurl functions. The underlying CURLU handle will be exposed as an opaque CurlUrl object.
-
-All <php>CURLUPART_*</php> and <php>CURLU_</php> constants will be exposed as global constants with the same name in userland.
-
-Three new functions will be exposed to manipulate the <php>CurlUrl</php> handle.
+Those classes and functions will only exist if the version of libcurl installed on the system is greater than or equal to 7.62. If the version is older, they will not exist.
 
 <PHP>
 const CURLUPART_FRAGMENT = UNKNOWN;
@@ -98,13 +62,13 @@ final class CurlUrl {
 }
 </PHP>
 
-== curl_url(?string $url = null) ==
+==== curl_url(?string $url = null) ====
 
 Create a new CurlUrl object. If <php>$url</php> is set, the object will be initialized using this URL, otherwise, all the parts will be set to <php>null</php>
 
 All errors of libcurl will become <php>CurlUrlException</php>.
 
-== curl_url_set(CurlUrl $url, int $part, string $content, int $flags = 0): void ==
+==== curl_url_set(CurlUrl $url, int $part, string $content, int $flags = 0): void ====
 
 Update individual pieces of the URL. The <php>$part</php> argument identifies the particular URL part to set or change (<php>CURLUPART_*</php>). Setting a part to a <php>null</php> value will effectively remove that part's contents from the <php>CurlUrl</php> object.
 
@@ -121,14 +85,13 @@ All errors of libcurl will become <php>CurlUrlException</php>.
 | <php>CURLU_PATH_AS_IS</php> | If set, makes libcurl skip the normalization of the path. That is the procedure where curl otherwise removes sequences of dot-slash and dot-dot etc. |
 | <php>CURLU_ALLOW_SPACE</php> | If set, the URL parser allows space (ASCII 32) where possible. The URL syntax normally does not allow spaces anywhere, but they should be encoded as %20 or '+'. When spaces are allowed, they are still not allowed in the scheme. When space is used and allowed in a URL, it will be stored as-is unless <php>CURLU_URLENCODE</php> is also set. |
 
-== curl_url_get(CurlUrl $url, int $part, int $flags = 0): ?string ==
+==== curl_url_get(CurlUrl $url, int $part, int $flags = 0): ?string ====
 
 This function lets the user extract individual pieces from the <php>$url</php> object. If the particular part is not set, this function will return <php>null</php>, all other errors of libcurl will become <php>CurlUrlException</php>.
 
 The <php>$part</php> argument identifies the particular URL part to extract.
 
 The <php>$flags</php> argument is a bitmask with individual features.
-
 
 ^ Supported flags ^ Description  ^
 | <php>CURLU_DEFAULT_PORT</php> | If the object has no port stored, this option will make the function return the default port for the used scheme. |
@@ -137,454 +100,67 @@ The <php>$flags</php> argument is a bitmask with individual features.
 | <php>CURLU_URLDECODE</php> | If set, the function will encode the host name part. If not set (default), libcurl returns the URL with the host name "raw" to support IDN names to appear as-is. IDN host names are typically using non-ASCII bytes that otherwise will be percent-encoded. Note that even when not asking for URL encoding, the '%' (byte 37) will be URL encoded to make sure the host name remains valid. |
 | <php>CURLU_URLENCODE</php> | If set, the function will decode the host name part. If there are any byte values lower than 32 in the decoded string, the get operation will return an error instead. |
 
-==== Implementation 2 : Mutable CurlUrl with single setter/getter method ====
+==== CurlUrlException ====
 
-This implementation is an OOPified version of the procedural API offered by libcurl, with few changes:
+The <php>CurlUrlException</php> class represents an error raised by libcurl. The constants exposed in this class are all the codes that <php>CurlUrlException::getCode()</php> could return. Those codes are internally mapped to CURLUE_* error codes that libcurl could raise. Those constants may vary depending on the version of libcurl ext/curl was compiled with.
 
-  * Constants related to the Curl URL API are moved to class constants on <php>CurlUrl</php> or <php>CurlException</php>
-  * Functions that normally take the <php>CurlUrl</php> handle are replaced by methods on this handle.
-  * The <php>CurlUrl::get</php> method will return <php>null</php> instead of an exception if the retrieved part is not set.
-  * All other errors of libcurl will become <php>CurlUrlException</php>
-
-<PHP>
-final class CurlUrl implements Stringable
-{
-    public const PART_FRAGMENT = UNKNOWN;
-    public const PART_HOST = UNKNOWN;
-    public const PART_OPTIONS = UNKNOWN;
-    public const PART_PASSWORD = UNKNOWN;
-    public const PART_PATH = UNKNOWN;
-    public const PART_PORT = UNKNOWN;
-    public const PART_QUERY = UNKNOWN;
-    public const PART_SCHEME = UNKNOWN;
-    public const PART_URL = UNKNOWN;
-    public const PART_USER = UNKNOWN;
-
-    public const APPENDQUERY = UNKNOWN;
-    public const DEFAULT_PORT = UNKNOWN;
-    public const DEFAULT_SCHEME = UNKNOWN;
-    public const DISALLOW_USER = UNKNOWN;
-    public const GUESS_SCHEME = UNKNOWN;
-    public const NO_DEFAULT_PORT = UNKNOWN;
-    public const ALLOW_UNSUPPORTED_SCHEME = UNKNOWN;
-    public const PATH_AS_IS = UNKNOWN;
-    public const URLDECODE = UNKNOWN;
-    public const URLENCODE = UNKNOWN;
-
-    /* libcurl >= 7.65.0 */
-    public const PART_ZONEID = UNKNOWN;
-
-    /* libcurl >= 7.67.0 */
-    public const NO_AUTHORITY = UNKNOWN;
-
-    /* libcurl >= 7.78.0 */
-    public const ALLOW_SPACE = UNKNOWN;
-
-    public function __construct(?string $url = null) {}
-    public function get(int $part, int $flags = 0): string|null {}
-    public function set(int $part, string $content, int $flags = 0): CurlUrl {}
-    public function __toString(): string {}
-    public function __clone() {}
-}
-</PHP>
-
-== __construct(?string $url = null, int $flags = 0) ==
-
-Create a new CurlUrl object. Implementation is similar to :
-
-<PHP>
-public function __construct(?string $url = null, int $flags = 0) {
-    $this->set(self::PART_URL, $url, Curl $flags);
-}
-</PHP>
-
-All errors of libcurl will become <php>CurlUrlException</php>.
-
-== CurlUrl::set(int $part, string $content, int $flags = 0): CurlUrl ==
-
-Update individual pieces of the URL. The <php>$part</php> argument identifies the particular URL part to set or change (<php>CurlUrl::PART_*</php>). Setting a part to a <php>null</php> will effectively remove that part's contents from the <php>CurlUrl</php> object.
-
-The <php>$flags</php> argument is a bitmask with individual features.
-
-All errors of libcurl will become <php>CurlUrlException</php>.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::ALLOW_UNSUPPORTED_SCHEME</php> | If set, allows this method to set a non-supported scheme. |
-| <php>CurlUrl::URLENCODE</php> | If set, URL encodes the part. |
-| <php>CurlUrl::DEFAULT_SCHEME</php> | If set, allow the URL to be set without a scheme and then sets that to the default scheme: HTTPS. Overrides the <php>CurlUrl::GUESS_SCHEME</php> option if both are set. |
-| <php>CurlUrl::GUESS_SCHEME</php> | If set, allows the URL to be set without a scheme and it instead "guesses" which scheme was intended based on the host name. If the outermost sub-domain name matches DICT, FTP, IMAP, LDAP, POP3 or SMTP then that scheme will be used, otherwise it picks HTTP. Conflicts with the <php>CurlUrl::DEFAULT_SCHEME</php> option which takes precedence if both are set. |
-| <php>CurlUrl::NO_AUTHORITY</php> | If set, skips authority checks. The RFC allows individual schemes to omit the host part (normally the only mandatory part of the authority), but libcurl cannot know whether this is permitted for custom schemes. Specifying the flag permits empty authority sections, similar to how file scheme is handled. |
-| <php>CurlUrl::PATH_AS_IS</php> | If set, makes libcurl skip the normalization of the path. That is the procedure where curl otherwise removes sequences of dot-slash and dot-dot etc. |
-| <php>CurlUrl::ALLOW_SPACE</php> | If set, the URL parser allows space (ASCII 32) where possible. The URL syntax normally does not allow spaces anywhere, but they should be encoded as %20 or '+'. When spaces are allowed, they are still not allowed in the scheme. When space is used and allowed in a URL, it will be stored as-is unless <php>CurlUrl::URL_ENCODE</php> is also set. |
-
-
-== CurlUrl::get(int $part, int $flags = 0): string|null ==
-
-This method lets the user extract individual pieces from the <php>CurlUrl</php> object. If the particular part is not set, this method will return <php>null</php>, all other errors of libcurl will become <php>CurlUrlException</php>.
-
-The <php>$part</php> argument identify the particular URL part to extract.
-
-The <php>$flags</php> argument is a bitmask with individual features.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::DEFAULT_PORT</php> | If the object has no port stored, this option will make the method return the default port for the used scheme. |
-| <php>CurlUrl::DEFAULT_SCHEME</php> | If the object has no scheme stored, this option will make the method return the default scheme instead of null. |
-| <php>CurlUrl::NO_DEFAULT_PORT</php> | Instructs the method to not return a port number if it matches the default port for the scheme. |
-| <php>CurlUrl::URLENCODE</php> | If set, the method will encode the host name part. If not set (default), libcurl returns the URL with the host name "raw" to support IDN names to appear as-is. IDN host names are typically using non-ASCII bytes that otherwise will be percent-encoded. Note that even when not asking for URL encoding, the '%' (byte 37) will be URL encoded to make sure the host name remains valid. |
-| <php>CurlUrl::URLDECODE</php> | If set, the method will decode the host name part. If there are any byte values lower than 32 in the decoded string, the get operation will return an error instead. |
-
-==== Implementation 3 : Mutable CurlUrl with multiple setter/getter methods ====
+If ext/curl was compiled with libcurl > 7.80 then <php>CurlUrlException::getMessage()</php> will return a user-friendly message that will describe the problem. (Example: Malformed input to a URL function).
 
 <PHP>
 /* libcurl >= 7.62.0 */
-final class CurlUrl implements Stringable
+final class CurlUrlException extends Exception
 {
-    public const APPEND_QUERY = UNKNOWN;
-    public const DEFAULT_PORT = UNKNOWN;
-    public const DEFAULT_SCHEME = UNKNOWN;
-    public const DISALLOW_USER = UNKNOWN;
-    public const GUESS_SCHEME = UNKNOWN;
-    public const NO_DEFAULT_PORT = UNKNOWN;
-    public const ALLOW_UNSUPPORTED_SCHEME = UNKNOWN;
-    public const PATH_AS_IS = UNKNOWN;
-    public const URL_DECODE = UNKNOWN;
-    public const URL_ENCODE = UNKNOWN;
+    public const BAD_PORT_NUMBER = UNKNOWN;
+    public const MALFORMED_INPUT = UNKNOWN;
+    public const OUT_OF_MEMORY = UNKNOWN;
+    public const UNSUPPORTED_SCHEME = UNKNOWN;
+    public const URL_DECODING_FAILED = UNKNOWN;
+    public const USER_NOT_ALLOWED = UNKNOWN;
 
-    /* libcurl >= 7.67.0 */
-    public const NO_AUTHORITY = UNKNOWN;
-
-    /* libcurl >= 7.78.0 */
-    public const ALLOW_SPACE = UNKNOWN;
-
-    public function __construct(?string $url = null, int $flags = 0) {}
-    public function get(int $flags = 0): string {}
-    public function set(?string $url, int $flags = 0): CurlUrl {}
-    public function getHost(): ?string {}
-    public function setHost(?string $host): CurlUrl {}
-    public function getScheme(): ?string {}
-    public function setScheme(?string $scheme, int $flags = 0): CurlUrl {}
-    public function getPort(int $flags = 0): ?int {}
-    public function setPort(?int $port): CurlUrl {}
-    public function getPath(int $flags = 0): string {}
-    public function setPath(?string $scheme, int $flags = 0): CurlUrl {}
-    public function getQuery(int $flags = 0): ?string {}
-    public function setQuery(?string $query, int $flags = 0): CurlUrl {}
-    public function getFragment(int $flags = 0): ?string {}
-    public function setFragment(?string $fragment, int $flags = 0): CurlUrl {}
-    public function getUser(int $flags = 0): ?string {}
-    public function setUser(?string $user, int $flags = 0): CurlUrl {}
-    public function getPassword(int $flags = 0): ?string {}
-    public function setPassword(?string $password, int $flags = 0): CurlUrl {}
-    public function getOptions(int $flags = 0): ?string {}
-    public function setOptions(?string $options, int $flags = 0): CurlUrl {}
-    public function __toString(): string {}
-    public function __clone() {}
-
-    /* libcurl >= 7.65.0 */
-    public function getZoneId(int $flags = 0): ?string {}
-    public function setZoneId(?string $zoneid, int $flags = 0): CurlUrl {}
+    /* libcurl >= 7.81.0 */
+    public const BAD_FILE_URL = UNKNOWN;
+    public const BAD_FRAGMENT = UNKNOWN;
+    public const BAD_HOSTNAME = UNKNOWN;
+    public const BAD_IPV6 = UNKNOWN;
+    public const BAD_LOGIN = UNKNOWN;
+    public const BAD_PASSWORD = UNKNOWN;
+    public const BAD_PATH = UNKNOWN;
+    public const BAD_QUERY = UNKNOWN;
+    public const BAD_SCHEME = UNKNOWN;
+    public const BAD_SLASHES = UNKNOWN;
+    public const BAD_USER = UNKNOWN;
 }
 </PHP>
 
-In this implementation some constants were renamed from their original curl name to improve readability and consistency.
+==== Why not an OO API ? ====
 
-^ libcurl ^ New name  ^
-| <php>CURLU_APPENDQUERY</php> | <php>CurlUrl::APPEND_QUERY</php> |
-| <php>CURLU_NON_SUPPORT_SCHEME</php> | <php>CurlUrl::ALLOW_UNSUPPORTED_SCHEME</php> |
-| <php>CURLU_URLDECODE</php> | <php>CurlUrl::URL_DECODE</php> |
-| <php>CURLU_URLENCODE</php> | <php>CurlUrl::URL_ENCODE</php> |
+The actual state of ext/curl lib is that all existing functions are thin wrapper over libcurl. With the very short delay we have before 8.2 feature freeze. It's safer to keep all the curl extension API consistant and not rushing a new OO design which obviously nobody agrees on.
 
-== __construct(?string $url = null, int $flags = 0) ==
+===== Future Scope =====
 
-Create a new CurlUrl object. Implementation is similar to :
-
-<PHP>
-public function __construct(?string $url = null, int $flags = 0) {
-    $this->set($url, $flags);
-}
-</PHP>
-
-== CurlUrl::get(int $flags = 0): string ==
-
-Return the full, normalized, and possibly cleaned up URL version of what was previously parsed.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::DEFAULT_SCHEME</php> | If the object has no scheme stored, this option will make the method return the default scheme instead of null. |
-| <php>CurlUrl::DEFAULT_PORT</php> | If the object has no port stored, this option will make the method return the default port for the used scheme. |
-| <php>CurlUrl::NO_DEFAULT_PORT</php> | Instructs the method not to return a port number if it matches the default port for the scheme. |
-| <php>CurlUrl::URL_ENCODE</php> | If set, the method will encode the host name part. If not set (default), libcurl returns the URL with the host name "raw" to support IDN names to appear as-is. IDN host names are typically using non-ASCII bytes that otherwise will be percent-encoded. Note that even when not asking for URL encoding, the '%' (byte 37) will be URL encoded to make sure the host name remains valid. |
-| <php>CurlUrl::URL_DECODE</php> | If set, the method will decode the host name part. If there are any byte values lower than 32 in the decoded string, the get operation will return an error instead. |
-
-== CurlUrl::set(?string $url, int $flags = 0): CurlUrl ==
-
-Set the full URL of the CurlUrl instance.
-If the object is already populated with a URL, the new URL can be relative to the previous. Setting <php>$url</php> to <php>NULL</php> will set all parts of the object to null.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::ALLOW_UNSUPPORTED_SCHEME</php> | Make this function accept unsupported schemes. |
-| <php>CurlUrl::DEFAULT_SCHEME</php> | If set, will make libcurl allow the URL to be set without a scheme and then sets that to the default scheme: HTTPS. Overrides the <php>CurlUrl::GUESS_SCHEME</php> option if both are set. |
-| <php>CurlUrl::GUESS_SCHEME</php> | If set, will make libcurl allow the URL to be set without a scheme and it instead "guesses" which scheme that was intended based on the host name. If the outermost sub-domain name matches DICT, FTP, IMAP, LDAP, POP3 or SMTP then that scheme will be used, otherwise it picks HTTP. Conflicts with the <php>CurlUrl::DEFAULT_SCHEME</php> option which takes precedence if both are set. |
-| <php>CurlUrl::NO_AUTHORITY</php> | If set, skips authority checks. The RFC allows individual schemes to omit the host part (normally the only mandatory part of the authority), but libcurl cannot know whether this is permitted for custom schemes. Specifying the flag permits empty authority sections, similar to how file scheme is handled. |
-| <php>CurlUrl::PATH_AS_IS</php> | If set, makes libcurl skip the normalization of the path. That is the procedure where curl otherwise removes sequences of dot-slash and dot-dot etc. |
-| <php>CurlUrl::ALLOW_SPACE</php> | If set, the URL parser allows space (ASCII 32) where possible. The URL syntax does normally not allow spaces anywhere, but they should be encoded as %20 or '+'. When spaces are allowed, they are still not allowed in the scheme. When space is used and allowed in a URL, it will be stored as-is unless <php>CurlUrl::URL_ENCODE</php> is also set. |
-| <php>CurlUrl::URL_ENCODE</php> | Can be set in combination with CurlUrl::ALLOW_SPACE which makes libcurl URL-encode the space before stored. This affects how the URL will be constructed when <php>CurlUrl::get()</php> is subsequently used to extract the full URL or individual parts. |
-
-== CurlUrl::getHost(): ?string ==
-
-Get the Host part of the URL or null if it wasn't already set.
-
-== CurlUrl::setHost(?string $host): CurlUrl ==
-
-Set the host part of the URL.
-If it is IDNA, the string must then be encoded as your locale says or UTF-8.
-If it is a bracketed IPv6 numeric address, it may contain a zone id (or you can use <php>CurlUrl::setZoneid()</php>).
-
-== CurlUrl::getScheme(): ?string ==
-
-Get the scheme part of the URL or null if it wasn't already set.
-
-== CurlUrl::setScheme(?string $scheme, int $flags = 0): CurlUrl ==
-
-Set the scheme part of the URL.
-Libcurl only accepts setting schemes up to 40 bytes long.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::ALLOW_UNSUPPORTED_SCHEME</php> | Make this function accept unsupported schemes. |
-
-
-== CurlUrl::getPort(int $flags = 0): ?int ==
-
-Get the port part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::DEFAULT_PORT</php> | If the object has no port stored, this option will make the method return the default port for the used scheme. |
-| <php>CurlUrl::NO_DEFAULT_PORT</php> | Instructs the method to return null if the port matches the default port for the scheme. |
-
-
-== CurlUrl::setPort(?int $port): CurlUrl ==
-
-Set the port part of the URL. The given port number must be between 1 and 65535. Anything else will throw an exception.
-
-== CurlUrl::getPath(int $flags = 0): string ==
-
-Get the path part of the URL.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setPath(?string $scheme, int $flags = 0): CurlUrl ==
-
-Set the path part of the URL.
-If a path is set in the URL without a leading slash, a slash will be inserted automatically when this URL is read from the handle.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::getQuery(int $flags = 0): ?string ==
-
-Get the query part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setQuery(?string $query, int $flags = 0): CurlUrl ==
-
-Set the query part of the URL.
-The question mark in the URL is not part of the actual query contents.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-| <php>CurlUrl::APPEND_QUERY</php> | If set, the provided part will be appended on the end of the existing query - and if the previous part did not end with an ampersand (&), an ampersand will be inserted before the new appended part. When <php>CurlUrl::APPEND_QUERY</php> is used together with <php>CurlUrl::URL_ENCODE</php>, the first '=' symbol will not be URL encoded. |
-
-
-== CurlUrl::getFragment(int $flags = 0): ?string ==
-
-Get the fragment part of the URL or null if it wasn't already set.
-The hash sign in the URL is not part of the actual fragment contents.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setFragment(?string $fragment, int $flags = 0): CurlUrl ==
-
-Set the fragment part of the URL
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::getUser(int $flags = 0): ?string ==
-
-Get the user part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setUser(?string $user, int $flags = 0): CurlUrl ==
-
-Set the user part of the URL.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::getPassword(int $flags = 0): ?string ==
-
-Get the password part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setPassword(?string $password, int $flags = 0): CurlUrl ==
-
-Set the password part of the URL.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::getOptions(int $flags = 0): ?string ==
-
-Get the options part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setOptions(?string $options, int $flags = 0): CurlUrl ==
-
-Set the options part of the URL.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::getZoneId(int $flags = 0): ?string ==
-
-Get the zone id part of the URL or null if it wasn't already set.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_DECODE</php> | If set, URL decode the contents before returning it. |
-
-
-== CurlUrl::setZoneId(?string $zoneid, int $flags = 0): CurlUrl ==
-
-Set the zone id part of the URL.
-
-^ Supported flags ^ Description  ^
-| <php>CurlUrl::URL_ENCODE</php> | If set, URL encodes the part. |
-
-
-== CurlUrl::__toString(): string ==
-
-Same as calling <php>CurlUrl::get()</php>
-
-
-==== Implementation 4 : Immutable CurlUrl with multiple `with*`/getter methods ====
-
-This solution is similar to the previous one, except that the <php>CurlUrl</php> object will be immutable. All <php>set*</php> methods will be replaced by a <php>with*</php> method that will, instead of modifying the instance of the object, return a new object with the modified part of the URL.
-
-This would avoid confusing behaviour where the CurlUrl object would be unintentionally modified after being attached to a CurlHandle.
-
-<PHP>
-/* libcurl >= 7.62.0 */
-final class CurlUrl implements Stringable
-{
-    public const APPEND_QUERY = UNKNOWN;
-    public const DEFAULT_PORT = UNKNOWN;
-    public const DEFAULT_SCHEME = UNKNOWN;
-    public const DISALLOW_USER = UNKNOWN;
-    public const GUESS_SCHEME = UNKNOWN;
-    public const NO_DEFAULT_PORT = UNKNOWN;
-    public const ALLOW_UNSUPPORTED_SCHEME = UNKNOWN;
-    public const PATH_AS_IS = UNKNOWN;
-    public const URL_DECODE = UNKNOWN;
-    public const URL_ENCODE = UNKNOWN;
-
-    /* libcurl >= 7.67.0 */
-    public const NO_AUTHORITY = UNKNOWN;
-
-    /* libcurl >= 7.78.0 */
-    public const ALLOW_SPACE = UNKNOWN;
-
-    public function __construct(?string $url = null, int $flags = 0) {}
-    public function get(int $flags = 0): string {}
-    public function with(string $url, int $flags = 0): CurlUrl {}
-    public function getHost(): ?string {}
-    public function withHost(?string $host): CurlUrl {}
-    public function getScheme(): ?string {}
-    public function withScheme(?string $scheme, int $flags = 0): CurlUrl {}
-    public function getPort(int $flags = 0): ?int {}
-    public function withPort(?int $port): CurlUrl {}
-    public function getPath(int $flags = 0): string {}
-    public function withPath(?string $scheme, int $flags = 0): CurlUrl {}
-    public function getQuery(int $flags = 0): ?string {}
-    public function withQuery(?string $query, int $flags = 0): CurlUrl {}
-    public function getFragment(int $flags = 0): ?string {}
-    public function withFragment(?string $fragment, int $flags = 0): CurlUrl {}
-    public function getUser(int $flags = 0): ?string {}
-    public function withUser(?string $user, int $flags = 0): CurlUrl {}
-    public function getPassword(int $flags = 0): ?string {}
-    public function withPassword(?string $password, int $flags = 0): CurlUrl {}
-    public function getOptions(int $flags = 0): ?string {}
-    public function withOptions(?string $options, int $flags = 0): CurlUrl {}
-    public function __toString(): string {}
-    public function __clone() {}
-
-    /* libcurl >= 7.65.0 */
-    public function getZoneId(int $flags = 0): ?string {}
-    public function withZoneId(?string $zoneid, int $flags = 0): CurlUrl {}
-}
-</PHP>
-
+A better OO API could be discussed and implemented in next PHP versions.
 
 ===== Backward Incompatible Changes =====
 
-None, except that the class names <php>CurlUrl</php> and <php>CurlUrlException</php> will be declared by PHP and conflict with applications declaring the same class names in the global namespace.
+None, except that the new class and function names will be declared by PHP and conflict with applications declaring the same class names in the global namespace.
 
 ===== Proposed PHP Version(s) =====
 
 8.2
 
-===== Voting =====
+===== Vote =====
 
-A first vote (⅔rds) to allow the introduction of a new Curl Url API
+Voting opened on 2022-07-04 and closes on 2022-07-18
 
-An STV vote to choose the implementation.
-
-With STV you SHOULD rank **all** the choices in order. Don't pick the same option more than once, as that invalidates your vote.
-
-==== Primary vote ====
-
-<doodle title="Should we introduce a new Curl URL API" auth="pierrick" voteType="single" closed="true">
+<doodle title="Add proposed new functional Curl URL API" auth="pierrick" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
-==== Secondary vote ====
-
-This is a ranked-choice poll (following [[https://en.wikipedia.org/wiki/Single_transferable_vote#Example|STV]]) between the proposed implementations.
-
-You can vote **4** times, but make sure you select each implementation only once.
-
-=== First choice ===
-
-<doodle title="CurlUrl implementation" auth="pierrick" voteType="single" closed="true">
-   * Implementation 1 : Procedural API
-   * Implementation 2 : Mutable CurlUrl with single setter/getter method
-   * Implementation 3 : Mutable CurlUrl with multiple setter/getter methods
-   * Implementation 4 : Immutable CurlUrl with multiple `with*`/getter methods
-</doodle>
 
 ===== Patches and Tests =====
 
-This patch is a work in progress of the 3rd solution : https://github.com/php/php-src/pull/8770
+Not yet available.
 
 ===== Implementation =====
 
