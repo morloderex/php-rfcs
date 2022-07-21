@@ -1,0 +1,165 @@
+====== PHP RFC: Asymmetric Visibility ======
+  * Version: 0.9
+  * Date: 2022-07-21
+  * Author: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/asymmetric-visibility
+
+
+===== Introduction =====
+
+PHP has long had the ability to control the visibility of object properties -- ''public'', ''private'', or ''protected''.  However, that control is always the same for both ''get'' and ''set'' operations.  That is, they are "symmetric."  This RFC proposes to allow properties to have separate ("asymmetric") visibility, with separate visibility for read and write operations.  The specifics are mostly borrowed from Swift.
+
+===== Proposal =====
+
+This RFC provides a new syntax for declaring the "set" operation visibility of an object property.  Specifically:
+
+<code php>
+class Foo
+{
+    public private(set) string $bar;
+}
+</code>
+
+This code declares a property ''$bar'' that may be read from ''public'' scope but may only be modified from ''private'' scope.  It may also be declared ''protected(set)'' to allow the property to be set from any ''protected' scope (that is, child classes).
+
+The behavior of the property is otherwise unchanged, aside from the restricted visibility.
+
+Asymmetric visibility properties may also be used with constructor property promotion:
+
+<code php>
+class Foo
+{
+    public function __construct(
+        public private(set) string $bar,
+    ) {}
+}
+</code>
+
+While a reference to a property with restricted ''set'' visibility may still be obtained, attempting to write to it from a wider visibility will still generate an error.
+
+If the property is an object, the restricted visibility applies only to changing the object referenced by the property.  It does not impact the object itself.  That is consistent with the behavior of the ''readonly'' property.
+
+Example:
+
+<code php>
+class Bar
+{
+    public string $name = 'beep';
+}
+
+class Foo
+{
+    public private(set) Bar $bar;
+}
+
+$f = new Foo();
+
+// This is allowed
+$f->bar->name = 'boop';
+
+// This is NOT allowed
+$f->bar = new Bar();
+</code>
+
+==== Interaction with ''__set'' ====
+
+If a class declares a property to have non-public set-visibility and also declares a ''__set'' magic method, external attempts to set the property will invoke the ''__set'' magic method.  This behavior is consistent with how ''private'' and ''protected'' properties operate today.
+
+That is, the following would be legal:
+
+<code php>
+class Foo
+{
+    public private(set) int $age;
+    
+    public function setAge(int $age) {
+        $this->age = $age;
+    }
+    
+    public function __set(string $var, mixed $val) {
+        if ($var === 'age' && $val > 18) {
+            $this->$var = $val;
+        } else {
+          throw new \InvalidArgumentException();
+        }
+    }
+}
+
+$f = new Foo();
+
+
+// Works fine, because the write operation happens in private.
+$f->setAge(5);
+
+// Calls __set and throws an exception.
+$f->age = 5;
+</code>
+
+==== Relationship with ''readonly'' ====
+
+While at first glance ''public private(set)'' may seem like it is redundant with ''readonly'', they are in fact different.  ''readonly'' allows only private set, but only allows it once.  ''public private(set)'' allows a property to be set an unlimited number of times, but only from ''private'' scope.
+
+==== Typed properties ====
+
+Asymmetric visibility is only compatible with properties that have an explicit type specified.  This is mainly due to implementation complexity.  However, as any property may now be typed ''mixed'' and defaulted to ''null'', that is not a significant limitation.
+
+===== Backward Incompatible Changes =====
+
+None.  This syntax would have been a parse error before.
+
+===== Proposed PHP Version(s) =====
+
+PHP 8.3
+
+===== RFC Impact =====
+
+===== Future Scope =====
+
+This RFC is kept very simple.  However, it does allow for future expansion.
+
+==== Alternate operations ====
+
+At this time, there are only two possible operations to scope: read and write.  In concept, additional operations could be added with their own visibility controls.  Possible examples include:
+
+  * ''init'' - Allows a property to be set only from initialization operations, such as ''__construct'', ''__clone'', ''__unserialize'', etc.
+  * ''once'' - Allows a property to be set only once, and then frozen thereafter.  In this case, ''public private(once)'' would be exactly equivalent to ''readonly'', whereas ''public protected(once)'' would be similar but also allow the property to be set from child classes.
+  * ''unset'' - Allows a property to be unset from a different scope than it can be set to a real value.
+
+This RFC does NOT include any of the above examples; they are listed only to show that this syntax supports future expansion should a use be found.
+
+==== Additional visibility ====
+
+Should PHP ever adopt packages and package-level visibility, this syntax would be fully compatible with it.  For example, ''public package(set)'' would be a natural syntax to use.
+
+This RFC does NOT include any discussion of such expanded visibility definition, just notes that it in no way precludes such future developments.
+
+==== Property accessors ====
+
+Asymmetric visibility has been proposed before as a component of the [[rfc:property_accessors|Property Accessors]] RFC.  That RFC models directly on C# syntax, which puts limited-operation visibility on the right of the property as part of the accessor definition.
+
+This RFC uses a syntax borrowed from Swift, which provides similar functionality but with the visibility modifiers together on the left side of the property.  That has two benefits over the C# style syntax:
+
+  - It is less confusing, as all visibility is in one place together.
+  - It allows asymmetric visibility to be proposed and discussed independently of the larger property accessor question.
+
+While the authors do support (and intent to work on) property accessors generally, we feel it is better addressed separately from asymmetric visibility as the two are orthogonal considerations.  Notably, this RFC does NOT preclude or limit the development of asymmetric visibility in the future.
+
+===== Proposed Voting Choices =====
+
+This is a simple yes-or-no vote to include this feature.
+
+===== Patches and Tests =====
+
+Patch is available here: https://github.com/iluuu1994/php-src/pull/25
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+This syntax is borrowed directly from [[https://docs.swift.org/swift-book/LanguageGuide/AccessControl.html|Swift's access control system]].
