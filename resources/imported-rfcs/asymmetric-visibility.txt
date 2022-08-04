@@ -99,13 +99,32 @@ The ''set'' visibility, if it differs from the main (''get'') visibility, MUST b
 
 ==== Interaction with __set ====
 
-Currently, if a symmetrically defined property is accessed from an illegal scope, but there is a <php>__set</php> method defined on the class,<php>__set</php> will be called with the var/val pair of the assignment to allow it to set the value.  However, this does not happen if a property is ''readonly''.  If a ''public'' ''readonly'' property is set externally, an error is thrown without any attempt to invoke <php>__set</php>.  These features are therefore inconsistent.
+Currently, if a symmetrically defined property is accessed from an illegal scope and there is a <php>__set</php> method defined on the class, <php>__set</php> will be called with the var/val pair of the assignment. The same happens with ''readonly'' properties but only when the property is inaccessible (e.g. a private property is accessed from global scope). If the ''readonly'' property is in scope (and already initialized) an error is thrown instead. This behavior is intended to avoid surprising behavior when classes implement <php>__set</php> for unrelated purposes. We propose the same behavior for asymmetric visibility.
 
-For explicit asymmetric visibility, we have opted to not invoke <php>__set</php> when a defined property is accessed from an illegal scope.  Instead, the engine will simply throw an error.  There are a few reasons for this decision:
+If the read visibility is unmatched <php>__set</php> is called. If it is matched but the write visibility is unmatched an error is thrown.
 
-  - As noted, ''readonly'' is a form of asymmetric visibility, and thus consistency with that behavior is more important.
-  - If it is possible to recast ''readonly'' as an alias for a more robust asymmetric visibility syntax in the future (see "Future Scope" below), following ''readonly''s pattern avoids BC issues at that time.
-  - The authors' intent is to submit property accessors as a separate RFC in the future (see "Future Scope" below), which would in most such cases obviate the use of <php>__set</php> entirely.  Avoiding any interaction with <php>__set</php> now reduces the potential for BC challenges in the future.
+<code php>
+class Foo {
+    protected private(set) string $prot;
+    public private(set) string $pub;
+    
+    public function __set($name, $value) {
+        var_dump($name, $value);
+    }
+}
+
+$foo = new Foo();
+
+// Calls __set
+$foo->prot = 'Foo';
+
+// Throws an error
+$foo->pub = 'Foo';
+</code>
+
+There are a two main reasons for this decision:
+
+  - As noted, ''readonly'' is a form of asymmetric visibility, and thus consistency with that behavior is important.
   - If at some point in the future it is determined that falling back to <php>__set</php> does make sense, it is much easier to enable at that time than to remove it if we find it causes too many problems.
 
 ==== Relationship with readonly ====
