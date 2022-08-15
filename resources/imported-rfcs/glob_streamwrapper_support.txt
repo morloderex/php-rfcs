@@ -10,6 +10,116 @@ The current implementation of glob() is a thin wrapper for POSIX glob(3). Apart 
 
 Workarounds can be a struggle. Some projects may rely on regular expressions which are different from globbing. Some may attempt the use of fnmatch() which does not support all the features of glob() like brace expansions.
 
+Example of a workaround using scandir and regex:
+
+<code>
+  function glob_streamwrapper($glob, $flags=0) {
+
+  // Unixify paths
+    $glob = str_replace('\\', '/', $glob);
+
+  // Set basedir and remains
+    $basedir = '';
+    $remains = $glob;
+    for ($i=0; $i<strlen($glob); $i++) {
+      if (in_array($glob[$i], ['*', '[', ']', '{', '}'])) break;
+      if ($glob[$i] == '/') {
+        @list($basedir, $remains) = str_split($glob, $i+1);
+      }
+    }
+
+  // Halt if basedir does not exist
+    if ($basedir && !is_dir($basedir)) {
+      return [];
+    }
+
+  // If there are no pattern remains, return base directory if valid
+    if (!$remains) {
+      if (is_dir($basedir)) {
+        return [$basedir];
+      } else {
+        return [];
+      }
+    }
+
+  // Extract pattern for current directory
+    if (($pos = strpos($remains, '/')) !== false) {
+      list($pattern, $remains) = [substr($remains, 0, $pos+1), substr($remains, $pos+1)];
+    } else {
+      list($pattern, $remains) = [$remains, ''];
+    }
+
+  // fnmatch() doesn't support GLOB_BRACE. Let's create a regex pattern instead.
+    $regex = strtr($pattern, [
+      '[!' => '[^',
+      '\\' => '\\\\',
+      '.'  => '\\.',
+      '('  => '\\(',
+      ')'  => '\\)',
+      '|'  => '\\|',
+      '+'  => '\\+',
+      '^'  => '\\^',
+      '$'  => '\\$',
+      '*'  => '[^/]*',
+      '?'  => '.',
+    ]);
+
+    if ($flags & GLOB_BRACE) {
+
+      $regex = preg_replace_callback('#\{[^\}]+\}#', function($matches) {
+        return strtr($matches[0], ['{' => '(', '}' => ')', ',' => '|']);
+      }, $regex);
+
+    } else {
+      $regex = strtr($regex, ['{' => '\\{', '}' => '\\}']);
+    }
+
+    $regex = '#^'.$regex.'$#';
+
+    $folders = [];
+    $files = [];
+
+  // Open directory
+    $dh = opendir($basedir ? $basedir : './');
+
+  // Step through each file in directory
+    while ($file = readdir($dh)) {
+      if (in_array($file, ['.', '..'])) continue;
+
+    // Prepend path
+      $file = $basedir . $file;
+      $filetype = filetype($file);
+
+      if ($filetype == 'dir') {
+
+      // Collect a matching folder
+        if (preg_match($regex, basename($file)) || preg_match($regex, basename($file).'/')) {
+          if ($remains) {
+            $folders = array_merge($folders, file_search($file .'/'. $remains, $flags));
+          } else {
+            $folders[] = $file .'/';
+          }
+        }
+
+      } else if ($filetype == 'file') {
+
+      // Skip if not a directory during GLOB_ONLYDIR
+        if ($flags & GLOB_ONLYDIR) continue;
+
+      // Collect a matching file
+        if (preg_match($regex, basename($file))) {
+          $files[] = $file;
+        }
+      }
+    }
+
+  // Merge folders and files into one and same result
+    $results = array_merge($folders, $files);
+
+    return $results;
+  }
+</code>
+
 ===== Proposal =====
 Consistently implement StreamWrapper support for glob(). Example: <code>glob('vfs://*.ext')</code>
 
