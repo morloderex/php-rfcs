@@ -2,17 +2,18 @@
   * Version: 0.9
   * Date: 2022-08-14
   * Author: Juan Carlos Morales, dev.juan.morales@gmail.com
-  * Status: Implemented
-  * Target Version: PHP 8.3
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/json_validate
   * Implementation: https://github.com/php/php-src/pull/9399
+
+===== Preliminary note =====
+
+**If the name of the function needs to be change, I will change it; the functionality is the important thing here**
 
 ===== Introduction =====
 This RFC introduces a new function called json_validate() to validate if an string contains a valid json.
 
-Most userland implementations use json_decode() which by design generates a ZVAL(object/array/etc.) while parsing the string, ergo using memory and processing that could be save.
-
-The proposed function will use the exact same JSON parser that already exists in the PHP core, which is also use by json_decode(), this garantees that what is valid in //json_validate()// is also valid in //json_decode()//.
+Most userland implementations to achieve this are done using json_decode() which by design generates an object/array while parsing the string, ergo using memory and processing, that could be save.
 
 ===== Proposal =====
 ==== Description ====
@@ -37,136 +38,39 @@ Maximum nesting depth of the structure being decoded.
 
 **''flags''**
 
-Bitmask of **JSON_INVALID_UTF8_IGNORE**. The behavior of this constant is described on the [[https://www.php.net/manual/en/json.constants.php|JSON constants page]].
+Bitmask of **JSON_INVALID_UTF8_IGNORE**, **JSON_THROW_ON_ERROR**. The behavior of these constants is described on the [[https://www.php.net/manual/en/json.constants.php|JSON constants page]].
+
+Function description, examples, technical strategy, current JSON parser, etc.
 
 ==== Return values ====
 
 Returns **true** if the string passed contains a valid json, otherwise returns **false**.
 
+==== Extra behavior ====
+-
 ==== Examples ====
-**1. Validate a valid json-string**
-<code php>
-var_dump(json_validate('{ "test": { "foo": "bar" } }'));
-</code>
+-
+===== Fundaments/Reasons =====
+==== Disadvantages of using json_decode ====
 
-Result will be
-<code php>
-bool(true)
-</code>
-
-**2. Validate an invalid json-string**
-<code php>
-var_dump(json_validate('{ "": "": "" } }'));
-</code>
-
-Result will be
-<code php>
-bool(false)
-</code>
-
-
-Errors during validation can be fetch by using [[https://www.php.net/manual/es/function.json-last-error.php|json_last_error()]] and/or [[https://www.php.net/manual/es/function.json-last-error-msg.php|json_last_error_msg()]].
-
-===== General notes from discussion of the RFC =====
-
-  * Different users have tested the functionality and obtained the promised results. Also their feedback about it was positive.
-  * Most part of the community in the mailing list showed a positive opinion about this RFC, and looks forward for its integration into PHP.
-  * The ones that checked the code also agree that is small implementation, easy to maintain, and at the same time provides a big benefit for such small implementation.
-  * The community got involve very actively in the discussion of the RFC and provided all kind of useful feedback, and also took the time to test json_validate() by themselves.
-
-===== Use cases contributed by the community =====
-
-Eventhough not reduce to only these examples, during discussion in mailing list, some users expressed:
-
-<blockquote>"Yes well-formed JSON from a trusted source tends to be small-ish.
-But a validation function also needs to deal with non-well-formed
-JSON, otherwise you would not need to validate it."</blockquote>
-
-<blockquote>"If with a new function (json_validate()) it becomes much easier to
-defend against a Denial-of-Service attack for some parts of a JSON
-API, then this can be a good addition just for security reasons."</blockquote>
-
-<blockquote>"fast / efficient validation of a common communication format
-reduces the attack surface for Denial-of-Service attacks."</blockquote>
- 
-===== Reasons to have json_validate() function in the core =====
-
-Based on discussion of the RFC in the mailing list
-
-==== Disadvantages of using json_decode to only validate a json-string ====
-
-By design, json_decode() generates a ZVAL (object/array/etc.) while parsing the string, ergo using memory and processing for it, that is not needed if the only thing to discover is if a string contains a valid json or not.
+By design, json_decode() generates an object/array while parsing the string, ergo using memory and processing for it, that is not needed if the only thing to discover is if a string contains a valid json.
 
 ==== Disadvantages of using regex ====
 
 Using a regex for this task forces different, error-prone, hard to maintain, implementations.
 
-==== Disadvantages of userland solutions ====
-
-  * Writing a JSON parser is no trivial
-  * They need to be up-to-date with the existing PHP JSON parser used by **json_decode()** already, otherwise a json-string valid in **userland solution** might not be valid json-string for **json_decode()** or vice-versa. 
-  * Is redundant work writing a JSON Parser in the userland, as PHP already has one.
-
-==== PHP already has a JSON parser ====
-
-As previously mentioned, PHP already has a JSON parser used by json_decode(). The proposed function will use that parser, guaranteeing 100% compatibility between **json_decode()** and **json_validate()** 
-
 ==== Needs from major projects and developers ====
 
-In the "References" section, there is a list of major open-source php projects that could benefit with this new function.
-
-Also in the mentioned section a link to one of the most popular StackOverflow questions is provided, which somehow reflects the need from our developers to have a feature like this included.
-
-Please check the "References" section.
+In the "References" section, there is a list of major open-source php projects needing this feature; also in th mntioned section can find a link to one of the most popular StackOverflow questions, which somehow reflects the need from our developers to have a feature like this included.
 
 ==== Complexity added in the core ====
 
-At the moment, there is a JSON parser in the core, used by //json_decode()// to do its job, so there is no need to write a new JSON parser for this RFC; the proposed function will use the existing JSON parser exclusively to parse an string without generating any object/array/etc. in memory for it.
-
-===== Reasons NOT to have json_validate() function in the core =====
-
-One member of the mailing list expressed that:
-
-  * Incorporating such a small implementation that can be achieve with userland code is not a good idea.
-
-Quote: <blockquote>"If we keep the tendency to pollute already bloated standard
-library with an army of small functions that could have not exists and
-be replaced with normal PHP counterparts IMHO we'll end with
-frustration from developers as I believe DX slowly falls down here."</blockquote>
-
-  * json_validate() would only be useful for edge cases.
-
-Quote: <blockquote>"A `json_decode()` is a substitute that IMO solves 99% of use cases.
-If I'd follow your logic and accept every small addition that handles
-1% of use cases, somebody will raise another RFC
-for simplexml_validate_string or yaml_validate and the next PhpToken::validate.
-All above can be valid if we trust that people normally validate 300MB
-payloads to do nothing if they DON'T fail and there is nothing strange
-about that."</blockquote>
-
-  * The user also provided an implementation of a JSON parser written in pure PHP. https://gist.github.com/brzuchal/37e888d9b13937891c3e05fead5042bc
-
-===== Changes in the RFC that happened during discussion =====
-
-==== Throw Exception on error ====
-
-In my initial implementation, the developer had the option to provide a flag to indicate that in case of error during validation an exception should be throw.
-
-The ability to throw an exception on error was removed from the implementation, as this was pointed not only by most of user in the mailing list (with good reasons), but also during code review; as it does not make sense to have such a behavior.
-
-I also have to admit that after they showed their arguments, I changed my mind, and now I also think it makes sense to have such a behavior in the function.
-
-So removing the ability to throw exception on error was removed from implementation.
-
-==== Others ====
-  * I removed 3 of the originally provided examples in the RFC because did not adjust to the RFC purpose or were not clear.
-  * I had to adjust the wording in this RFC document regarding disadvantage of using json_decode() as pointed here:
-    * [[https://github.com/php/php-src/pull/9399#discussion_r955626844|PR comment from user drealecs]]
+At the moment, there is a JSON parser in the core, used by json_decode to do its job, so there is no need to write a new JSON parser for this RFC; the proposed function will use the existing JSON parser exclusively to parse an string without generating any object/array in memory for it.
 
 ===== Backward Incompatible Changes =====
 None, as this is a new function only.
 
-**json_validate** will no longer be available as a function name.
+**json_validate** will no longer be available as a function name, could break potential userland implementations.
 
 ===== Proposed PHP Version(s) =====
 next PHP 8.x
@@ -174,14 +78,17 @@ next PHP 8.x
 ===== RFC Impact =====
 This RFC has no impact on SAPIs, existing extensions, Opcache, etc.
 
+===== Open Issues =====
+- No open issues
+
 ===== Future Scope =====
-- (To be defined by future discussions if needed)
+- (To be defined)
 
 ===== Proposed Voting Choices =====
 - (To be defined)
 
 ===== Implementation =====
-- Github: https://github.com/php/php-src/pull/9399
+- (To be done later after pushing to github)
 
 ===== References =====
 
@@ -217,6 +124,16 @@ class JsonValidator extends ConstraintValidator
 <code php>
     public static function isJson($value)
     {
+</code>
+
+[[https://github.com/magento/magento2/blob/7c6b6365a3c099509d6f6e6c306cb1821910aab0/app/code/Magento/User/Block/Role/Grid/User.php|Magento]]
+
+<code php>
+    private function getJSONString($input)
+    {
+        $output = json_decode($input);
+        return $output ? $this->_jsonEncoder->encode($output) : '{}';
+    }
 </code>
 
 [[https://github.com/magento/magento2/blob/7c6b6365a3c099509d6f6e6c306cb1821910aab0/lib/internal/Magento/Framework/DB/DataConverter/SerializedToJson.php|Magento]]
@@ -260,6 +177,19 @@ class JsonValidator extends ConstraintValidator
     }
 </code>
 
+
+[[https://github.com/symfony/http-kernel/blob/94986633e4c3e7facb7defbd094a2e1170486ab5/DataCollector/RequestDataCollector.php|Symfony htp-kernel ]]
+
+<code php>
+    public function getPrettyJson()
+    {
+        $decoded = json_decode($this->getContent()); //<------ here 
+
+        return \JSON_ERROR_NONE === json_last_error() ? json_encode($decoded, \JSON_PRETTY_PRINT) : null;
+    }
+</code>
+
+
 [[https://github.com/Respect/Validation/blob/3dcd859d986f1b586b5539ea19962723ab7352ed/library/Rules/Json.php|Respect / Validation]]
 
 <code php>
@@ -302,6 +232,26 @@ final class Json extends AbstractRule
 }
 </code>
 
+[[https://github.com/humhub/humhub/blob/26d7e2667a9317057abe335a056ac8e8f4d675fb/protected/humhub/modules/web/security/controllers/ReportController.php|humhub]]
+
+
+<code php>
+    public function actionIndex()
+    {
+        Yii::$app->response->statusCode = 204;
+
+        if(!SecuritySettings::isReportingEnabled()) {
+            return;
+        }
+
+        $json_data = file_get_contents('php://input');
+        if ($json_data = json_decode($json_data)) { //<----- json_decode() just to check if is valid json-string only
+            $json_data = json_encode($json_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+            $json_data = preg_replace('/\'nonce-[^\']*\'/', "'nonce-xxxxxxxxxxxxxxxxxxxxxxxx'", $json_data);
+            Yii::error($json_data, 'web.security');
+        }
+    }
+</code>
 
 [[https://github.com/PrestaShop/PrestaShop/blob/24f9e510ecb0cb002ac3f4834f3210e8d9359899/classes/Validate.php|Prestashop]]
 
@@ -358,7 +308,8 @@ if (\is_string($value)) {
 
 ==== Stackoverflow questions related to this ====
 
-In PHP, this question is one of the most high ranked questions related to json && php in stackoverflow, **"Fastest way to check if a string is JSON in PHP?"**. [[https://stackoverflow.com/questions/6041741/fastest-way-to-check-if-a-string-is-json-in-php|The question]]
+
+In PHP, this question is one of the most high ranked questions related to json && php in stackoverflow, "Fastest way to check if a string is JSON in PHP?". [[https://stackoverflow.com/questions/6041741/fastest-way-to-check-if-a-string-is-json-in-php|The question]]
 
 Viewed 484k times. [[https://stackoverflow.com/questions/tagged/php%20json?sort=MostVotes&edited=true|The ranking]]
 
@@ -366,11 +317,5 @@ Person asking how to do exactly this, also providing a real use case; eventhough
 
 Someone has also doing exactly this , in JAVA. [[https://stackoverflow.com/questions/3679479/check-if-file-is-json-java|In Java]]
 
-===== Vote =====
-
-Voting started 2022-09-22 and will end on 2022-10-07 at 00:00:00 UTC time zone.
-
-<doodle title="json_validate" auth="juan_morales" voteType="single" closed="true" closeon="2022-10-07T00:00:00Z">
-   * Yes
-   * No
-</doodle>
+===== Rejected Features =====
+- No rejected features currently.
