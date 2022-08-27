@@ -64,7 +64,31 @@ bool(false)
 
 Errors during validation can be fetch by using [[https://www.php.net/manual/es/function.json-last-error.php|json_last_error()]] and/or [[https://www.php.net/manual/es/function.json-last-error-msg.php|json_last_error_msg()]].
 
+===== General notes from discussion of the RFC =====
+
+  * Different users have tested the functionality and obtained the promised results. Also their feedback about it was positive.
+  * Most part of the community in the mailing list showed a positive opinion about this RFC, and looks forward for its integration into PHP.
+  * The ones that checked the code also agree that is small implementation, easy to maintain, and at the same time provides a big benefit for such small implementation.
+  * The community got involve very actively in the discussion of the RFC and provided all kind of useful feedback, and also took the time to test json_validate() by themselves.
+
+===== Use cases contributed by the community =====
+
+Eventhough not reduce to only these examples, during discussion in mailing list, some users expressed:
+
+<blockquote>"Yes well-formed JSON from a trusted source tends to be small-ish.
+But a validation function also needs to deal with non-well-formed
+JSON, otherwise you would not need to validate it."</blockquote>
+
+<blockquote>"If with a new function (json_validate()) it becomes much easier to
+defend against a Denial-of-Service attack for some parts of a JSON
+API, then this can be a good addition just for security reasons."</blockquote>
+
+<blockquote>"fast / efficient validation of a common communication format
+reduces the attack surface for Denial-of-Service attacks."</blockquote>
+ 
 ===== Reasons to have json_validate() function in the core =====
+
+Based on discussion of the RFC in the mailing list
 
 ==== Disadvantages of using json_decode to only validate a json-string ====
 
@@ -77,9 +101,12 @@ Using a regex for this task forces different, error-prone, hard to maintain, imp
 ==== Disadvantages of userland solutions ====
 
   * Writing a JSON parser is no trivial
-  * They need to be up-to-date with the existing PHP JSON parser used by **json_decode()** already, otherwise a json-string valid in **json_validate()** might not be valid json-string for **json_decode()** or vice-versa.
-  * We already have a JSON parser in PHP, that is used by **json_decode()**; reusing the existing JSON Parser provides 100% compatibility between the validation of a json-string, and json_decode().
-  * 
+  * They need to be up-to-date with the existing PHP JSON parser used by **json_decode()** already, otherwise a json-string valid in **userland solution** might not be valid json-string for **json_decode()** or vice-versa. 
+  * Is redundant work writing a JSON Parser in the userland, as PHP already has one.
+
+==== PHP already has a JSON parser ====
+
+As previously mentioned, PHP already has a JSON parser used by json_decode(). The proposed function will use that parser, guaranteeing 100% compatibility between **json_decode()** and **json_validate()** 
 
 ==== Needs from major projects and developers ====
 
@@ -97,15 +124,14 @@ At the moment, there is a JSON parser in the core, used by json_decode to do its
 
 One member of the mailing list expressed that:
 
-  - Incorporating such a small implementation that can be achieve with
-userland code is not a good idea.
+  * Incorporating such a small implementation that can be achieve with userland code is not a good idea.
 
 Quote: <blockquote>"If we keep the tendency to pollute already bloated standard
 library with an army of small functions that could have not exists and
 be replaced with normal PHP counterparts IMHO we'll end with
 frustration from developers as I believe DX slowly falls down here."</blockquote>
 
-  - json_validate() would only be useful for edge cases.
+  * json_validate() would only be useful for edge cases.
 
 Quote: <blockquote>"A `json_decode()` is a substitute that IMO solves 99% of use cases.
 If I'd follow your logic and accept every small addition that handles
@@ -115,7 +141,22 @@ All above can be valid if we trust that people normally validate 300MB
 payloads to do nothing if they DON'T fail and there is nothing strange
 about that."</blockquote>
 
-  - The user also provided an implementation of a JSON parser written in pure PHP. https://gist.github.com/brzuchal/37e888d9b13937891c3e05fead5042bc
+  * The user also provided an implementation of a JSON parser written in pure PHP. https://gist.github.com/brzuchal/37e888d9b13937891c3e05fead5042bc
+
+===== Changes in the RFC hat happened during discussion =====
+
+====== Throw Exception on error ======
+
+In my initial implementation, the developer had the option to provide a flag to indicate that in case of error during validation and exception should be throw.
+
+The ability to throw an exception on error was remove from the implementation, as this was pointed not only by most of user in the mailing list (with good reasons), but also during code review; as it does not make sense to have such a behavior.
+
+I also hae to admit that after they showed their arguments, I changed my mind, and now I also think it makes sense to have such a behavior in the function.
+
+====== Others ======
+  * I removed 3 of the provided examples because did not adjust to the RFC purpose or were not clear.
+  * Had to adjust the wording regarding disadvantage of using json_decode() as pointed here:
+    * [[https://github.com/php/php-src/pull/9399#discussion_r955626844|PR comment from user drealecs]]
 
 ===== Backward Incompatible Changes =====
 None, as this is a new function only.
@@ -128,8 +169,76 @@ next PHP 8.x
 ===== RFC Impact =====
 This RFC has no impact on SAPIs, existing extensions, Opcache, etc.
 
-===== Open Issues =====
-- No open issues
+===== Open Issues/Questions =====
+
+====== Returning BOOLEAN or INT ======
+
+Option 1) Return boolean, TRUe for valid string or FALSE for invalid. In case of error, rely on the functions json_last_error() and json_last_error_msg() to get the proper error. This is how is implemented at the moment.
+
+Option 2) Return integer number, following the already existing constants for json errors, being the return values as:
+
+JSON_ERROR_NONE
+  No error has occurred
+
+JSON_ERROR_DEPTH
+  The maximum stack depth has been exceeded
+
+JSON_ERROR_STATE_MISMATCH
+  Invalid or malformed JSON
+
+JSON_ERROR_CTRL_CHAR
+  Control character error, possibly incorrectly encoded
+
+JSON_ERROR_SYNTAX
+  Syntax error
+
+JSON_ERROR_UTF8
+  Malformed UTF-8 characters, possibly incorrectly encoded
+
+JSON_ERROR_RECURSION
+  One or more recursive references in the value to be encoded
+
+JSON_ERROR_INF_OR_NAN
+  One or more NAN or INF values in the value to be encoded
+
+JSON_ERROR_UNSUPPORTED_TYPE
+  A value of a type that cannot be encoded was given
+
+JSON_ERROR_INVALID_PROPERTY_NAME
+  A property name that cannot be encoded was given
+
+JSON_ERROR_UTF16
+  Malformed UTF-16 characters, possibly incorrectly encoded
+
+
+From implementation point of view, is very easy to achieve both, we just have to come to an agreement.
+
+Personally I prefer Option 1, the BOOLEAN return value, because TRUE is more appeal to the understanding that the json-string is valid ... than returning zero or JSON_ERROR_NONE, which in PHP is a falsy value by design. For me BOOLEAN will avoid confusions in the usage of the function.
+
+Option 2 would force the developers to write code like:
+<code php>
+if (!json_validate($input)) {
+    ...
+}
+</code>
+
+<code php>
+if (json_validate($input) === JSON_ERROR_NONE) {
+    ...
+}
+</code>
+
+<code php>
+if (json_validate($input) === 0) {
+    ...
+}
+</code>
+
+... etc.
+
+I also have the feeling that with "Option 2" developers will end up writing a wrapper around json_validate() to use it straight forward in their code.
+
+**I prefer Option 1.** , but this is still open.
 
 ===== Future Scope =====
 - (To be defined by future discussions if needed)
