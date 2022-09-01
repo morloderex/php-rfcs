@@ -44,6 +44,8 @@ try {
 } finally {
     restore_error_handler();
 }
+
+var_dump($result); // Do something with the $result. Must not appear in the 'try' to not 'catch' unrelated errors.
 </PHP>
 
 In fact adding a custom error handler before calling <php>unserialize()</php> is the example used in the documentation page for <php>restore_error_handler()</php> (https://www.php.net/manual/en/function.restore-error-handler.php). 
@@ -56,7 +58,10 @@ The proposed solution to the described problem consists of two parts:
 
 A new <php>\UnserializationFailedException</php> will be added. Whenever a <php>\Throwable</php> is thrown during <php>unserialize</php> (e.g. within an <php>__unserialize()</php> handler or because a throwing error handler converts <php>E_NOTICE</php>/<php>E_WARNING</php> into an <php>Exception</php>), this <php>\Throwable</php> will be wrapped in a new instance of <php>\UnserializationFailedException</php>.
 
-This allows a developer to use <php>catch(\UnserializationFailedException)</php> (a) to catch all <php>\Throwable</php>s happening during unserialization and (b) to catch only <php>\Throwable</php>s that happen during unserialization without also catching unrelated <php>\Throwable</php>s.
+This allows a developer to use just write <php>catch(\UnserializationFailedException $e)</php> to:
+
+  * (a) Catch all possible <php>\Throwable</php>s happening during unserialization, and to
+  * (b) Write <php>try</php>-<php>catch</php> blocks that include more than just the call <php>unserialize()</php>, without also catching unrelated <php>\Throwable</php>s. This can improve readability, because the <php>catch</php> to handle unserialization failures does not need to appear in the middle of processing and can instead be placed at the bottom together with other <php>catch</php> blocks handling a specific type of issue.
 
 The original <php>\Throwable</php> will be accessible through the <php>$previous</php> property of <php>\UnserializationFailedException</php>, allowing the developer to learn about the actual cause of the unserialization failure by inspecting <php>->getPrevious()</php>.
 
@@ -98,6 +103,7 @@ The example in the introduction can be simplified to:
 <PHP>
 try {
     $result = unserialize($serialized);
+    var_dump($result); // Do something with the $result. Can appear in the 'try', because the 'catch' block is specific to unserialization.
 } catch (\UnserializationFailureException $e) {
     // unserialization failed.
 }
