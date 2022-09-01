@@ -82,15 +82,15 @@ The UnserializationFailedException will no longer be available. The query <code>
 
 ==== Existing error handling for unserialize() might need to be updated ====
 
-This is not considered an issue, because due to the inconsistency in error handling, the only safe solution to handle all possible errors during <php>unserialize()</php> is <php>catch(Throwable)</php>. This continues to work as-is.
+This is not considered an issue, because due to the inconsistency in error handling, the only safe solution to handle all possible errors during <php>unserialize()</php> is to <php>catch(Throwable)</php>. This continues to work as-is.
 
-Every other solution is already broken in the face of untrusted input data, because (internal) classes can and will throw various types of <php>Exception</php> and <php>Error</php>. Examples of this include:
+Every other solution is already broken in the face of untrusted input data, because (internal) classes can and will throw various types of <php>Exception</php> and <php>Error</php>. Examples of unsafe code includes:
 
   * <php>@unserialize()</php> (will fail if a class throws).
   * <php>catch(Exception)</php> (will fail for ext/date which throws <php>Error</php>s).
   * <php>catch(Error)</php> (will fail for various extensions which throw <php>Exception</php> or <php>UnexpectedValueException</php>).
 
-Nothing will change for unserializing trusted, well-formed input strings, because they won't fail.
+Nothing will change for unserializing trusted, well-formed input strings, because unserialization will not fail for them by definition.
 
 ===== Proposed PHP Version(s) =====
 
@@ -104,8 +104,11 @@ None.
 
 ==== To Existing Extensions ====
 
-Existing extensions should update their error handling in the unserialize handlers to emit an error message that is most useful to the user.
+Existing extensions may update their error handling in the unserialize handlers to throw <php>Exception</php>s that best describe the type of error in the serialized data without needing to concern themselves with compatibility, because anything that is thrown will automatically be wrapped in the unified <php>\UnserializationFailedException</php>.
 
+If an extension uses <php>unserialize()</php> internally then the safe backwards compatibility concerns as with userland code applies.
+
+Extensions replacing the serializer by a custom serializer (e.g. igbinary) may need to be adjusted to ensure their behavior is consistent with the behavior of the default serializer.
 
 ==== To Opcache ====
 
@@ -134,7 +137,9 @@ None.
 
 ===== Proposed Voting Choices =====
 
-==== Adding a generic Exception ====
+==== Adding a wrapper Exception ====
+
+2/3 required to implement <php>\UnserializationFailedException</php> that wraps any other <php>\Throwable</php>.
 
 <doodle title="Add the UnserializationFailedException?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
    * Yes
@@ -143,16 +148,18 @@ None.
 
 ==== Increasing the severity of existing warnings / notices ====
 
+2/3 required to increase the severity of errors that do not currently throw.
+
 <doodle title="Increase the severity for syntax errors in the serialized payload?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
    * Yes
    * No
 </doodle>
 
-If the previous vote is accepted, then:
+If the previous vote ("increase severity") passes then the following vote will decide which severity should be used. A simple majority (50%+1) is required. In case of a tie the <php>E_WARNING</php> option will be used, as it is the more conservative option.
 
 <doodle title="Increase the severity of errors in serialized payload to?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
    * UnserializationFailedException
-   * Warning
+   * E_WARNING
 </doodle>
 
 ===== Patches and Tests =====
