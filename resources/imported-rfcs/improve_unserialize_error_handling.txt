@@ -97,15 +97,20 @@ Currently these cases will not throw. Instead an <php>E_NOTICE</php> or an <php>
 
 The severity of these should be unified, because the cases that emit an <php>E_NOTICE</php> are not any more or less actionable by the developer than the cases that emit <php>E_WARNING</php>.
 
-Specifically the severity should be increased, because unserialization failing commonly implies that an untrusted input string is passed into <php>unserialize()</php> which is not something that should be done in the first place, as unserializing arbitrary classes might allow for remote code execution.
+Specifically the severity should be increased, because unserialization failing commonly implies that an fundamentally unsafe operation is performed:
+  - Storing or transmitting the output of <php>serialize()</php> with a medium that is not binary-safe and truncates at NUL bytes. This will break the unserialization of payloads that include classes that contain <php>protected</php> or <php>private</php> properties.
+  - Storing the output of <php>serialize()</php> in a storage that will transcode between charsets (e.g. a MySQL <code>TEXT</code> column and setting different connection charsets). This will break the unserialization of payloads that includes non-ASCII strings, because the byte length might change.
+  - Passing an untrusted input string into <php>unserialize()</php>. Apart from allowing a user to emit arbitrary errors, this might also allow for remote code execution unless <php>allowed_classes</php> is configured to something safe.
+
+All of these cases have in common that the application will no longer be operating on the original data that itself serialized. In the best case unserialization will outright fail, thus returning <php>false</php> from <php>unserialize()</php>, in the worst case the information will be silently modified (e.g. when attempting to unserialize 64 Bit integers with a 32 Bit binary).
 
 At the very least the <php>E_NOTICE</php> cases should be adjusted to emit an <php>E_WARNING</php> to consistently emit an <php>E_WARNING</php> in all cases.
 
-However changing both <php>E_NOTICE</php> and <php>E_WARNING</php> to throw the new <php>\UnserializationFailedException</php> might be a better solution. For applications that use a throwing error handler, the <php>\Throwable</php> thrown by the error handler for the <php>E_NOTICE</php> / <php>E_WARNING</php> will be handled by the mechanisms described in the previous section and thus will be wrapped into <php>\UnserializationFailedException</php>.
+However changing both the existing <php>E_NOTICE</php> and the existing <php>E_WARNING</php> to throw the new <php>\UnserializationFailedException</php> might be a better solution. For applications that use a throwing error handler, the <php>\Throwable</php> thrown by the error handler for the <php>E_NOTICE</php> or <php>E_WARNING</php> will be handled by the mechanisms described in the previous section and thus will be wrapped into <php>\UnserializationFailedException</php>.
 
 In other words: This would only affect applications that do not use a throwing error handler.
 
-For these applications without a throwing error handler throwing an <php>\UnserializationFailedException</php> might be a steep increase in severity, however these applications already need to be prepared to handle <php>\Throwable</php>s thrown from an unserialize handler. The fact that an unserialization failure commonly indicates something unsafe also warrants that the operation fails “loudly”, instead of silently continuing. Furthermore consistently throwing the proposed <php>\UnserializationFailedException</php> allows the developer to take advantage of the benefits of the unified error handling as described in the previous section, even when they are not yet ready to use a throwing error handler.
+For these applications without a throwing error handler throwing an <php>\UnserializationFailedException</php> might be a steep increase in severity, however these applications already need to be prepared to handle <php>\Throwable</php>s thrown from an unserialize handler. The facts that an unserialization failure commonly indicates something inherently unsafe and that <php>unserialize()</php> currently might return bogus data without completely failing (e.g. for out-of-range integers) also warrants that the operation fails “loudly”, instead of silently continuing. Furthermore consistently throwing the proposed <php>\UnserializationFailedException</php> allows the developer to take advantage of the benefits of the unified error handling as described in the previous section, even when they are not yet ready to use a throwing error handler.
 
 ==== Resulting code ====
 
