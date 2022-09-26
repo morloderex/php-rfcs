@@ -63,6 +63,64 @@ To clean up the special cases internal implementation and to clean up the API fo
    * No
 </doodle>
 
+==== Global Mersenne Twister ====
+
+Authors: Tim Düsterhus <timwolla@php.net>, Go Kudo <zeriyoshi@php.net>
+
+Before PHP 8.2, PHP provided two kinds of random number generators. A seedable random number generator using the Mt19937 ("Mersenne Twister") algorithm and a cryptographically secure random number generator (CSPRNG). The former stores its state in an implicit global variable and the latter is not seedable. This made it hard to achieve reproducible results for testing, as the global variable makes it hard to determine what operation modify the Mt19937 state, thus changing future values. 
+
+To fix this [[rfc:rng_extension|Random Extension 5.x]] RFC for PHP 8.2 introduces object-based random number algorithms (“Engines”) that store their entire state within an object. Generating numbers with one object, won't affect the sequence of another object.
+
+The API of the random extension that relates to the generation of random integers currently looks like the following:
+
+  * Global Mt19937
+    * mt_rand()
+    * mt_srand()
+    * mt_getrandmax()
+    * rand() (alias for mt_rand() since PHP 7.1)
+    * srand() (alias for mt_srand() since PHP 7.1)
+    * getrandmax() (alias for mt_getrandmax() since PHP 7.1)
+  * CSPRNG
+    * random_int()
+  * Random\Randomizer
+    * ->getInt()
+
+Thus there are three functions returning a random integer (<php>mt_rand()</php>, <php>rand()</php>, <php>random_int()</php>) and the object-based and pluggable <php>Randomizer::getInt()</php>.
+
+The functions using the global Mt19937 instance are the worst choice, they are neither cryptographically secure, nor properly reproducible, but at the same time they are also the easiest to use, as the function names are the shortest ones.
+
+To clean up the API and avoid the “global state” gotcha the global Mt19937 should be removed. The function-based API will then provide just the secure <php>random_int()</php> function which is the safe default choice. If a reproducible sequence is desired, the object-oriented API provides a drop-in replacement for the global Mt19937 using the <php>\Random\Engine\Mt19937</php> class. Thus the following functions shall be deprecated:
+
+  * mt_rand()
+  * mt_srand()
+  * mt_getrandmax()
+  * rand()
+  * srand()
+  * getrandmax()
+
+A userland replacement can be written by leveraging <php>$GLOBALS</php> to store an <php>\Random\Randomizer</php> object with a <php>\Random\Engine\Mt19937</php> engine.
+
+<doodle title="Deprecate the global Mt19937?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * Yes
+   * No
+</doodle>
+
+In addition to the 6 functions related to integer generation, the global Mt19937 is also used for the following functions:
+
+  * array_rand()
+  * shuffle()
+  * str_shuffle()
+
+The proposed deprecation and removal of <php>mt_srand()</php> will affect these functions, as they will no longer be seedable, thus a decision needs to be taken with regard to the behavior of these functions, if the global Mt19937 is removed. There are two options:
+
+  * Deprecate and remove <php>array_rand()</php>, <php>shuffle()</php>, <php>str_shuffle()</php>. A drop-in replacement is available by using <php>\Random\Randomizer</php>
+  * Migrate <php>array_rand()</php>, <php>shuffle()</php>, <php>str_shuffle()</php> to use the CSPRNG internally. The functions will still be available, but no longer seedable.
+
+<doodle title="What to do with the non-integer functions using the global Mt19937?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * Deprecate and remove together with mt_srand()
+   * Convert to CSPRNG
+</doodle>
+
 ===== Backward Incompatible Changes =====
 
 For PHP 8.3 additional deprecation notices will appear. For PHP 9.0 the previously deprecated functionality will no longer be available.
