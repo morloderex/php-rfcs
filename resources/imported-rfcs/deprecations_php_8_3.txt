@@ -37,6 +37,28 @@ When preparing this RFC, I searched the Internet for existing open-source softwa
 This constant is unused since it was added to PHP (in PHP 5.3 or before), likely it was meant to call <php>NumberFormatter::formatCurrency()</php>/<php>NumberFormatter::parseCurrency()</php> from <php>NumberFormatter::format()</php>/<php>NumberFormatter::parse()</php> respectively.
 However, this was never implemented, likely because there is no way to pass the necessary currency argument.
 
+==== MT_RAND_PHP ====
+
+The implementation of Mt19937 ("Mersenne Twister") in PHP versions before 7.1 contains two bugs:
+
+  * <php>mt_rand()</php> without parameters returns different numbers than the reference implementation, due to a typo in a variable name.
+  * <php>mt_rand($min, $max)</php> with a restricted range uses a broken scaling algorithm based on floating point arithmetic. As doubles have only 53 Bits of precision, this will introduce a bias if a range larger than 53 Bits is requested.
+
+Both of these issues were fixed in PHP 7.1 by the [[rfc:rng_fixes|RNG fixes and changes RFC]] that also aliased <php>rand()</php> to <php>mt_rand()</php>. The <php>MT_RAND_PHP</php> constant was added to allow developers that rely on a specific sequence for a given seed to opt into the old implementation with the non-standard Mt19937 algorithm and the biased scaler.
+
+The object-oriented <php>Mt19937</php> engine that was introduced in the [[rfc:rng_extension|Random Extension 5.x RFC]] in PHP 8.2 also supports the <php>MT_RAND_PHP</php> option to allow developers a smooth migration from the global instance of Mt19937 as used with <php>mt_rand()</php> to the object-oriented <php>Random\Randomizer</php>.
+
+Supporting the biased scaler with the object-oriented API requires a special case for Mt19937 in the internal implementation. It furthermore [[https://github.com/php/php-src/pull/9197|required a fix (PR 9197)]], because the biased scaler in PHP 8.1 and earlier exhibits undefined behavior that was only caught by the newly added tests in PHP 8.2. Thus the behavior for certain inputs changed between PHP 8.1 and PHP 8.2 and could not be relied on even in older versions, as the results depend on the compiler used.
+
+The only purpose of the constant/broken mode is backwards compatibility, but this cannot be achieved, due to the bad scaler being broken by design and relying on undefined behavior. As such it fails at its sole purpose. The bad scaling is also intransparent to the developer, as it silently returns biased results for certain inputs.
+
+To clean up the special cases internal implementation and to clean up the API for the developer, <php>MT_RAND_PHP</php> should be deprecated.
+
+<doodle title="Deprecate the broken pre-PHP 7.1 Mt19937 implementation (MT_RAND_PHP)?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * Yes
+   * No
+</doodle>
+
 ===== Backward Incompatible Changes =====
 
 For PHP 8.3 additional deprecation notices will appear. For PHP 9.0 the previously deprecated functionality will no longer be available.
