@@ -1,0 +1,136 @@
+====== PHP RFC: Randomizer Additions ======
+  * Version: 1.0
+  * Date: 2022-10-09
+  * Author: Joshua Rüsweg, josh@wcflabs.de
+  * Author: Tim Düsterhus, timwolla@php.net
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/randomizer_additions
+
+===== Introduction =====
+This RFC extends the Randomizer class with two useful building blocks. 
+
+With PHP 8.2, the new random extension was introduced. The new class is a great way to get random values, but currently it is not possible to create random strings from a given set of characters to generate a random string from this input alphabet. This function is useful as a building block, as many use cases require generating random strings with a specified list of characters (e.g. random passwords, voucher codes, numeric strings larger than integers) and implementing this in userland requires multiple lines of code for what effectively is a very simple operation. Furthermore the obvious implementation based on ->getInt() is inefficient, as it requires at least one call to the engine per character, whereas a 64 Bit engine could generate randomness for 8 characters at once.
+
+Furthermore the new random extension has also no method to generate a random float number. This is also a non-trivial method to implement with pure PHP. So that is also a useful building block to implement within the class. 
+
+===== Proposal =====
+Add two new methods to <php>\Random\Randomizer</php>:
+
+<PHP>
+namespace Random;
+
+final class Randomizer {
+    // […]
+    public function getBytesFromAlphabet(string $alphabet, int $length): string {}
+    public function nextFloat(): float {}
+}
+</PHP>
+
+==== getBytesFromAlphabet() ==== 
+
+The method returns a random string based on a given alphabet. 
+
+=== Parameters ===
+**''alphabet''**
+
+The alphabet, from which the bytes can be chosen at random, are drawn.
+
+Note:
+
+The alphabet can contains duplicate characters. These duplicate characters increase the chance of drawing the character.
+
+**''length''**
+
+The length of the output string. 
+
+=== Return values ===
+
+A random string with the length of the parameter **''length''** containing only bytes from the parameter **''alphabet''**.
+
+=== Example === 
+**1. Random string with a chance of 75% a and 25% b per letter.**
+<PHP>
+$randomizer = new \Random\Randomizer();
+var_dump($randomizer->getBytesFromAlphabet('aaab', 8));
+</PHP>
+
+Result will be something like that: 
+
+<PHP>
+string(8) "abaaaaba"
+</PHP>
+
+**2. A number which is greater than INT64.**
+<PHP>
+$randomizer = new \Random\Randomizer();
+var_dump($randomizer->getBytesFromAlphabet(implode('', range(0, 9)), 21));
+</PHP>
+
+Result will be something like that: 
+
+<PHP>
+string(21) "227867140937005314255"
+</PHP>
+
+==== nextFloat() ==== 
+This method generates a random float within the interval [0, 1).
+
+=== Return values ===
+
+A random float value within the interval [0, 1). 
+
+=== Example === 
+**1. Simulate a coinflip:** 
+<PHP>
+$randomizer = new \Random\Randomizer();
+var_dump($randomizer->nextFloat() < 0.5);
+</PHP>
+
+Result will be something like that: 
+
+<PHP>
+bool(true)
+</PHP>
+
+**2. Get true at a 10% chance:** 
+<PHP>
+$randomizer = new \Random\Randomizer();
+var_dump($randomizer->nextFloat() < 0.1);
+</PHP>
+
+Result will be something like that: 
+
+<PHP>
+bool(false)
+</PHP>
+
+===== Backward Incompatible Changes =====
+None, since the current implementation of the Randomizer class is final and cannot be modified by the user. 
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x
+
+===== RFC Impact =====
+==== To SAPIs ====
+None.
+
+==== To Existing Extensions ====
+None.
+
+==== To Opcache ====
+None.
+
+==== New Constants ====
+None.
+
+==== php.ini Defaults ====
+None.
+
+===== Patches and Tests =====
+  * Implementation of <php>getBytesFromAlphabet()</php>: https://github.com/php/php-src/pull/9664
+  * Implementation of <php>nextFloat()</php>: https://github.com/php/php-src/pull/9679
+
+These implementations are fully functional. 
+
+===== References =====
+  * First discussion on the mailing list: https://externals.io/message/118762
