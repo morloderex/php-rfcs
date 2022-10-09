@@ -1,293 +1,136 @@
 ====== PHP RFC: Randomizer Additions ======
-  * Version: 1.3
+  * Version: 1.0
   * Date: 2022-10-09
   * Author: Joshua Rüsweg, josh@wcflabs.de
   * Author: Tim Düsterhus, timwolla@php.net
-  * Status: Implemented
-  * Target Version: PHP 8.3
-  * Implementation: https://github.com/php/php-src/commit/ac3ecd03af009d433d4b75d570b3b0f0a3fc0ff7 and https://github.com/php/php-src/commit/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/randomizer_additions
 
 ===== Introduction =====
+This RFC extends the Randomizer class with two useful building blocks. 
 
-This RFC proposes to add new “building block” methods to \Random\Randomizer that implement commonly useful operations that are either verbose or very hard to implement in userland.
+With PHP 8.2, the new random extension was introduced. The new class is a great way to get random values, but currently it is not possible to create random strings from a given set of characters to generate a random string from this input alphabet. This function is useful as a building block, as many use cases require generating random strings with a specified list of characters (e.g. random passwords, voucher codes, numeric strings larger than integers) and implementing this in userland requires multiple lines of code for what effectively is a very simple operation. Furthermore the obvious implementation based on ->getInt() is inefficient, as it requires at least one call to the engine per character, whereas a 64 Bit engine could generate randomness for 8 characters at once.
 
-Generating **a random string containing specific characters** is a common use case to generate random identifiers, voucher codes, numeric strings that exceed the range of an integer and more. Implementing this operation in userland requires selecting random offsets within an input string in a loop and thus requires multiple lines of code for what effectively is a very simple operation. It is also easy to introduce subtle bugs, for example by introducing an off-by-one error with regard to the maximum string index by forgetting to subtract one from the string length. The obvious implementation that uses <php>Randomizer::getInt()</php> to select the offsets is also inefficient as it requires at least one call to the engine per character, whereas a 64 Bit engine could generate randomness for 8 characters at once.
-
-Generating a **random floating point value** is also a useful building block, for example to generate a random boolean with a specific chance. Doing this in userland correctly is somewhere between non-trivial and impossible. The obvious implementation, dividing a random integer retrieved using <php>Randomizer::getInt()</php> by another integer easily results in a bias, because of rounding errors and the decreasing density of floats for larger absolute values.
+Furthermore the new random extension has also no method to generate a random float number. This is also a non-trivial method to implement with pure PHP. So that is also a useful building block to implement within the class. 
 
 ===== Proposal =====
-
-Add three new methods <php>\Random\Randomizer</php> and one enum accompanying one method:
+Add two new methods to <php>\Random\Randomizer</php>:
 
 <PHP>
 namespace Random;
 
 final class Randomizer {
     // […]
-    public function getBytesFromString(string $string, int $length): string {}
+    public function getBytesFromAlphabet(string $alphabet, int $length): string {}
     public function nextFloat(): float {}
-    public function getFloat(
-        float $min,
-        float $max,
-        IntervalBoundary $boundary = IntervalBoundary::ClosedOpen
-    ): float {}
-}
-
-enum IntervalBoundary {
-    case ClosedOpen;
-    case ClosedClosed;
-    case OpenClosed;
-    case OpenOpen;
 }
 </PHP>
 
-==== getBytesFromString() ==== 
+==== getBytesFromAlphabet() ==== 
 
-The method allows you to generate a string with a given length that consists of randomly selected bytes from a given string. 
+The method returns a random string based on a given alphabet. 
 
 === Parameters ===
+**''alphabet''**
 
-<php>string $string</php>
-
-The string from which random bytes are selected.
+The alphabet, from which the bytes can be chosen at random, are drawn.
 
 Note:
 
-The string may contain duplicate bytes. When bytes are duplicated the chance of a value being selected is equal to its proportion within the string. If each byte only appears once, the bytes will be uniformly selected.
+The alphabet can contains duplicate characters. These duplicate characters increase the chance of drawing the character.
 
-<php>int $length</php>
+**''length''**
 
 The length of the output string. 
 
-=== Return Value ===
+=== Return values ===
 
-A random string with the length of the parameter <php>$length</php> containing only bytes from the parameter <php>$string</php>.
+A random string with the length of the parameter **''length''** containing only bytes from the parameter **''alphabet''**.
 
-=== Examples === 
-
-**1. A random domain name.**
-
+=== Example === 
+**1. Random string with a chance of 75% a and 25% b per letter.**
 <PHP>
-<?php
 $randomizer = new \Random\Randomizer();
-
-var_dump(sprintf(
-    "%s.example.com",
-    $randomizer->getBytesFromString('abcdefghijklmnopqrstuvwxyz0123456789', 16)
-)); // string(28) "xfhnr0z6ok5fdlbz.example.com"
+var_dump($randomizer->getBytesFromAlphabet('aaab', 8));
 </PHP>
 
-**2. A numeric backup code for multi-factor authentication.**
+Result will be something like that: 
 
 <PHP>
-<?php
-$randomizer = new \Random\Randomizer();
-
-var_dump(
-    implode('-', str_split($randomizer->getBytesFromString('0123456789', 20), 5))
-); // string(23) "09898-46592-79230-33336"
+string(8) "abaaaaba"
 </PHP>
 
-**3. An arbitrary precision decimal number.**
-
+**2. A number which is greater than INT64.**
 <PHP>
-<?php
 $randomizer = new \Random\Randomizer();
-
-// Note that trailing zeros might be returned, but all
-// possible decimals are distinct.
-var_dump(sprintf(
-    '0.%s',
-    $randomizer->getBytesFromString('0123456789', 30)
-)); // string(30) "0.217312509790167227890877670844"
+var_dump($randomizer->getBytesFromAlphabet(implode('', range(0, 9)), 21));
 </PHP>
 
-**4. A random string where each character has a 75% chance of being 'a' and 25% chance of being 'b'.**
+Result will be something like that: 
 
 <PHP>
-<?php
-$randomizer = new \Random\Randomizer();
-
-var_dump(
-    $randomizer->getBytesFromString('aaab', 16)
-); // string(16) "baabaaaaaaababaa"
-</PHP>
-
-**5. A random DNA sequence.**
-
-<PHP>
-<?php
-$randomizer = new \Random\Randomizer();
-
-var_dump(
-    $randomizer->getBytesFromString('ACGT', 30)
-); // string(30) "CGTAGATCGTTCTGATAGAAGCTAACGGTT"
-</PHP>
-
-==== getFloat() ==== 
-
-The method returns a float between <php>$min</php> and <php>$max</php>. Whether the interval boundaries are open or closed (i.e. whether <php>$min</php> and <php>$max</php> are possible results) depends on the value of the <php>$boundary</php> parameter. The default is the half-open interval [$min, $max), i.e. including the lower and excluding the upper bound. The returned values are uniformly selected and evenly distributed within the configured interval.
-
-Evenly distributed means that each possible subinterval contains the same number of possible values as each other identically sized subinterval. As an example when calling <php>->getFloat(0, 1, IntervalBoundary::ClosedOpen)</php> a return value less than <php>0.5</php> is equally likely as a return value that is at least <php>0.5</php>. A return value less than <php>0.1</php> will happen in 10% of the cases, as will a return value that is at least <php>0.9</php>.
-
-The algorithm used is the γ-section algorithm as published in: Drawing Random Floating-Point Numbers from an Interval. Frédéric Goualard, ACM Trans. Model. Comput. Simul., 32:3, 2022. https://doi.org/10.1145/3503512
-
-=== Parameters ===
-
-<php>float $min</php>
-
-The lower bound of the interval of possible return values.
-
-<php>float $max</php>
-
-The upper bound of the interval of possible return values.
-
-<php>\Random\IntervalBoundary $boundary = \Random\IntervalBoundary::ClosedOpen</php>
-
-  * ClosedOpen (default): <php>$min</php> may be returned, <php>$max</php> may not.
-  * ClosedClosed: <php>$min</php> and <php>$max</php> both may be returned.
-  * OpenClosed: <php>$min</php> may not be returned, <php>$max</php> may.
-  * OpenOpen: Neither <php>$min</php>, nor <php>$max</php> may be returned.
-
-=== Return Value ===
-
-A random float, such that: 
-
-  * ClosedOpen (default): <php>$float >= $min && $float < $max</php>
-  * ClosedClosed: <php>$float >= $min && $float <= $max</php>
-  * OpenClosed: <php>$float > $min && $float <= $max</php>
-  * OpenOpen: <php>$float > $min && $float < $max</php>
-
-=== Examples === 
-
-**1. Generate a random latitude and longitude:** 
-
-<PHP>
-<?php
-$randomizer = new \Random\Randomizer();
-
-// Note that the latitude granularity is double the
-// longitude's granularity.
-//
-// For the latitude the value may be both -90 and 90.
-// For the longitude the value may be 180, but not -180, because
-// -180 and 180 refer to the same longitude.
-var_dump(sprintf(
-    "Lat: %+.6f Lng: %+.6f",
-    $randomizer->getFloat(-90, 90, \Random\IntervalBoundary::ClosedClosed),
-    $randomizer->getFloat(-180, 180, \Random\IntervalBoundary::OpenClosed),
-)); // string(32) "Lat: -51.742529 Lng: +135.396328"
+string(21) "227867140937005314255"
 </PHP>
 
 ==== nextFloat() ==== 
+This method generates a random float within the interval [0, 1).
 
-This method is equivalent to <php>->getFloat(0, 1, \Random\IntervalBoundary::ClosedOpen)</php>. The internal implementation is simpler and faster and it does not require explicit parameters for the common case of the [0, 1) interval.
+=== Return values ===
 
-=== Return Value ===
+A random float value within the interval [0, 1). 
 
-A random float, such that <php>$float >= 0 && $float < 1</php>.
-
-=== Examples === 
-
+=== Example === 
 **1. Simulate a coinflip:** 
+<PHP>
+$randomizer = new \Random\Randomizer();
+var_dump($randomizer->nextFloat() < 0.5);
+</PHP>
+
+Result will be something like that: 
 
 <PHP>
-<?php
-$randomizer = new \Random\Randomizer();
-
-var_dump(
-    $randomizer->nextFloat() < 0.5
-); // bool(true)
+bool(true)
 </PHP>
 
 **2. Get true at a 10% chance:** 
-
 <PHP>
-<?php
 $randomizer = new \Random\Randomizer();
-
-var_dump(
-    $randomizer->nextFloat() < 0.1
-); // bool(false)
+var_dump($randomizer->nextFloat() < 0.1);
 </PHP>
 
+Result will be something like that: 
+
+<PHP>
+bool(false)
+</PHP>
 
 ===== Backward Incompatible Changes =====
-
-The <php>\Random\IntervalBoundary</php> class name is no longer available. The <php>\Random</php> namespace is reserved by the random extension and a GitHub code search for <code>symbol:IntervalBoundary language:php</code> did not emit any results. As such this is a theoretical issue.
+None, since the current implementation of the Randomizer class is final and cannot be modified by the user. 
 
 ===== Proposed PHP Version(s) =====
-
 Next PHP 8.x
 
 ===== RFC Impact =====
-
 ==== To SAPIs ====
-
 None.
 
 ==== To Existing Extensions ====
-
 None.
 
 ==== To Opcache ====
-
 None.
 
 ==== New Constants ====
-
 None.
 
 ==== php.ini Defaults ====
-
 None.
-
-===== Open Issues =====
-
-None.
-
-===== Unaffected PHP Functionality =====
-
-The only affected functionality is the Randomizer class that receives new methods. These methods might be visible with Reflection. Everything else is unaffected.
-
-===== Proposed Voting Choices =====
-
-Each vote requires a 2/3 majority; voting runs for 2 weeks until 2022-11-23T09:00:00Z.
-
-==== getBytesFromString() ====
-
-<doodle title="Add Randomizer::getBytesFromString()?" auth="timwolla" voteType="single" closed="true" closeon="2022-11-23T09:00:00Z">
-   * Yes
-   * No
-</doodle>
-
-==== getFloat()/nextFloat() ====
-
-<doodle title="Add Randomizer::nextFloat(), Randomizer::getFloat(), and the IntervalBoundary enum?" auth="timwolla" voteType="single" closed="true" closeon="2022-11-23T09:00:00Z">
-   * Yes
-   * No
-</doodle>
 
 ===== Patches and Tests =====
-
-  * Implementation of <php>getBytesFromString()</php>: https://github.com/php/php-src/pull/9664
-  * Implementation of <php>nextFloat()</php> and <php>getFloat()</php>: https://github.com/php/php-src/pull/9679
+  * Implementation of <php>getBytesFromAlphabet()</php>: https://github.com/php/php-src/pull/9664
+  * Implementation of <php>nextFloat()</php>: https://github.com/php/php-src/pull/9679
 
 These implementations are fully functional. 
 
-===== Implementation =====
-
-  * https://github.com/php/php-src/commit/ac3ecd03af009d433d4b75d570b3b0f0a3fc0ff7
-  * https://github.com/php/php-src/commit/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76
-
 ===== References =====
-
   * First discussion on the mailing list: https://externals.io/message/118762
-  * RFC discussion: https://externals.io/message/118810
-
-===== Changelog =====
-
-  * 1.3: Rename the third getFloat() parameter from $bounds to $boundary to be consistent with the enum name.
-  * 1.2: Rename GetFloatBounds to IntervalBoundary.
-  * 1.1: Renames getBytesFromAlphabet to getBytesFromString, add GetFloatBounds enum.
