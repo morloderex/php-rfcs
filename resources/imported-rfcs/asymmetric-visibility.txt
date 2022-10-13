@@ -37,6 +37,20 @@ class Foo
 }
 </code>
 
+==== Abbreviated form ====
+
+In earlier versions of PHP, the visibility modifier was optional and if not specified defaulted to ''public''.  That is still technically the case if the ''var'' keyword is used instead, although in practice that is almost never done.  
+
+In the interest of compactness, this RFC allows the same default assumption if only a ''set'' visibility is specified.  If a ''set'' visibility is specified but no ''get'' visibility, the ''get'' visibility defaults to ''public''.  That is, the following two declarations are semantically identical:
+
+<code php>
+public protected(set) string $foo;
+
+protected(set) string $foo;
+</code>
+
+A non-public ''get'' visibility must still be specified explicitly.
+
 ==== References ====
 
 While a reference to a property with restricted ''set'' visibility may still be obtained, it may only be obtained from a scope that would allow writing.  Put another way, getting a reference to a property follows the ''set'' visibility, not the ''get'' visibility.  Trying to get a reference to a property with a more restrictive scope will result in an error.
@@ -109,6 +123,8 @@ $f->bar = new Bar();
 
 The ''set'' visibility, if it differs from the main (''get'') visibility, MUST be strictly lesser than the main visibility.  That is, the ''set'' visibility may only be ''protected'' or ''private''.  If the main visibility is ''protected'', ''set'' visibility may only be ''private''.  Any violation of this rule will result in a compile time error.
 
+There is one exception, that of a ''private readonly'' property.  That would technically expand to ''private private(set) readonly'', which is allowed.
+
 ==== Interaction with __set ====
 
 Currently, if a symmetrically defined property is accessed from an illegal scope and there is a <php>__set</php> method defined on the class, <php>__set</php> will be called with the var/val pair of the assignment. The same happens with ''readonly'' properties but only when the property is inaccessible (e.g. a private property is accessed from global scope). If the ''readonly'' property is in scope (and already initialized) an error is thrown instead. This behavior is intended to avoid surprising behavior when classes implement <php>__set</php> for unrelated purposes. We propose the same behavior for asymmetric visibility.
@@ -141,11 +157,37 @@ There are a two main reasons for this decision:
 
 ==== Relationship with readonly ====
 
-While at first glance ''public private(set)'' may seem like it is redundant with ''readonly'', they are in fact different.  ''readonly'' allows only private set, but only allows it once.  ''public private(set)'' allows a property to be set an unlimited number of times, but only from ''private'' scope.
+The ''readonly'' flag on a property is better understood as "write once," but with an implicit ''private(set)''.  In the interest of compatibility, we propose to make that explicit.
 
-However, it may be possible to redefine ''readonly'' in terms of asymmetric visibility in the future.  (See the "Future Scope" section below.)
+A ''readonly'' property flag may be combined with asymmetric visibility.  If both a ''get' and ''set'' visibility are specified, then ''readonly'' has no meaning other than "write once."  If no ''set'' visibility is specified, then ''readonly'' implies ''private(set)''.
 
-Using both ''readonly'' and asymmetric visibility on the same property is not allowed and will result in an Error.
+Put another way, the following syntaxes are all semantically identical.
+
+<code php>
+public private(set) readonly string $foo;
+public readonly string $foo;
+readonly string $foo;
+</code>
+
+However, this approach also makes the following possible:
+
+<code php>
+class Foo
+{
+    public protected(set) readonly string $name;
+}
+
+class Bar extends Foo
+{
+    public function setName(string $name): void
+    {
+        // $name allows protected scope setting, so this is fine.
+        $this->name ??= $name;
+    }
+}
+</code>
+
+Technically it also enables ''public public(set) readonly string $foo'', although how often that will be useful is debatable.
 
 ==== Typed properties ====
 
@@ -192,7 +234,6 @@ This RFC is kept very simple.  However, it does allow for future expansion.
 At this time, there are only two possible operations to scope: read and write.  In concept, additional operations could be added with their own visibility controls.  Possible examples include:
 
   * ''init'' - Allows a property to be set only from initialization operations, such as <php>__construct</php>, <php>__clone</php>, <php>__unserialize</php>, etc.
-  * ''once'' - Allows a property to be set only once, and then frozen thereafter.  In this case, ''public private(once)'' would be exactly equivalent to ''readonly'', whereas ''public protected(once)'' would be similar but also allow the property to be set from child classes.
   * ''unset'' - Allows a property to be unset from a different scope than it can be set to a real value.
 
 This RFC does NOT include any of the above examples; they are listed only to show that this syntax supports future expansion should a use be found.
@@ -216,8 +257,10 @@ While the authors do support (and intent to work on) property accessors generall
 
 ===== Proposed Voting Choices =====
 
-This is a simple yes-or-no vote to include this feature.
+This is a simple yes-or-no vote to include this feature.  2/3 majority required to pass.
 
 ===== References =====
 
 This syntax is borrowed directly from [[https://docs.swift.org/swift-book/LanguageGuide/AccessControl.html|Swift's access control system]].
+
+Syntax decisions in this RFC are supported by a poll conducted in September 2022.  The results were [[https://externals.io/message/118557#118628|posted to the Internals list]].
