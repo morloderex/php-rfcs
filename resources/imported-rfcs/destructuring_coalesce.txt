@@ -52,20 +52,56 @@ list(
 
 ==== Semantics ====
 
-Note that for nested destructuring, the coalescing does **not** skip the existence check of its container. Thus the following will emit an undefined key warning:
+The semantics of list destructuring are generally preserved.
+
+An expression like
 <PHP>
-[[$a ?? "default"]] = []; // the first [0] dimension does not exist
+[[$a]] = $array;
 </PHP>
+is currently equivalent to (with ''$tmp'' denoting a temporary variable):
+<PHP>
+$tmp = $array;
+$tmp = $tmp[0];
+$a = $tmp[0];
+</PHP>
+
+Thus an expression like
+<PHP>
+$array = [];
+[[$a ?? "default"]] = $array; // the first [0] dimension does not exist
+</PHP>
+will be equivalent to:
+<PHP>
+$tmp = $array;
+$tmp = $tmp[0]; // no coalesce here, emits an undefined key warning
+$a = $tmp[0] ?? "default";
+</PHP>
+
+Meaning that the existence of the container is always checked (producing undefined variable or key warnings if absent), only the the immediate entry which the coalesce operator is applied to never produces warnings if absent.
 
 It however is trivial to skip this check too, by defaulting the first nesting level to an empty array:
 <PHP>
-[[$a ?? "default"] ?? []] = [];
+[[$a ?? "default"] ?? []] = $array;
+// equivalent to:
+$tmp = $array;
+$tmp = $tmp[0] ?? [];
+$a = $tmp[0] ?? "default";
 </PHP>
 
 Similarly, the following also emits a warning about the undefined variable:
 <PHP>
 [$a ?? "default"] = $undefinedVariable;
-// Fix it via [$a ?? "default"] = $undefinedVariable ?? [];
+// equivalent to:
+$tmp = $undefinedVariable;
+$a = $tmp[0] ?? "default";
+</PHP>
+
+Which can be coalesced away with:
+<PHP>
+[$a ?? "default"] = $undefinedVariable ?? [];
+// equivalent to
+$tmp = $undefinedVariable ?? [];
+$a = $tmp[0] ?? "default";
 </PHP>
 
 ==== Discussion of undefined key warning in nested destructuring ====
