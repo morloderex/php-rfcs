@@ -1,0 +1,87 @@
+====== PHP RFC: Destructuring Coalesce ======
+  * Version: 0.1
+  * Date: 2022-10-14
+  * Author: Bob Weinand <bwoebi@php.net>
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/destructuring_coalesce
+
+===== Introduction =====
+
+This RFC proposes adding an operator for default values in destructuring assignments.
+
+===== Proposal =====
+
+This RFC proposes the usage of the ''??'' coalescing operator in destructuring assignments, allowing for default values to be specified when an array key specified on the left-hand side does not exist in the destructured array.
+
+In its simplest form the destructuring coalesce will be written as follows:
+<PHP>
+[$a ?? "default value"] = $array;
+</PHP>
+meaning that ''$a'' will contain "default value" if no key ''0'' exists in ''$array''.
+
+By extension, this also works in all of the following scenarios where destructuring is currently allowed:
+<PHP>
+["string key" => $a ?? "default value"] = $array;
+foreach ($array as [$a, $b ?? "default"]) {} // key 0 is required, key 1 may be absent
+[[$a ?? 1], [$b ?? 2]] = $array; // nested destructuring
+[[$a, $b] ?? [1, 2]] = $array; // if $array[0] is null or does not exist, $a will be 1 and $b will be 2
+</PHP>
+
+Note that for nested destructuring, the coalescing does '''not''' skip the existence check of its container. Thus the following will emit an undefined key warning:
+<PHP>
+[[$a ?? "default"]] = [];
+</PHP>
+
+It however is trivial to skip this check too, by defaulting the first nesting level to an empty array:
+<PHP>
+[[$a ?? "default"] ?? []] = [];
+</PHP>
+
+Similarly, the following also emits a warning about the undefined variable:
+<PHP>
+[$a ?? "default"] = $undefinedVariable;
+// Fix it via [$a ?? "default"] = $undefinedVariable ?? [];
+</PHP>
+
+==== Discussion of undefined key warning in nested destructuring ====
+
+The ''??'' coalesce operator, when applied to an array expression, silences undefined key warnings for the whole of the left-hand expression.
+
+However, crucially, the current RFC binds its coalescing operation to the variable itself, respecting only the current dimension for key existence. This behaviour is tied to how array destructuring works: array keys are only fetched once. Meaning a construct like:
+<PHP>
+[[$a, $b, $c ?? "default"]] = $array;
+</PHP>
+only fetches ''$array[0]'' once, and then takes the ''0'', ''1'' and ''2'' keys from that fetched value. This is also consistent with the fact that only one warning is emitted upon non-existence of its direct container, even though all three values are fetched from ''$array[0]''.
+
+Further, an argument can here be made that the behaviour is idempotent with regards to what the exact nested contents are of the left-hand side. I.e. ''%%[[$a, $b]] = ...%%'' is handled identically to ''%%[[$a ?? 1, $b ?? 2]] = ...%%'', with respect to its first dimension.
+
+Additionally, this allows more fine-grained control over what exactly is expected to exist. While a feature for the general coalesce operator, making its usage more ergonomic, it's also a drawback, that a typo in the lowest dimension might be unnoticed, i.e. ''$variableExpectedToExist["dimension expected to possibly not exist"] ?? "default"'' does never emit a warning.
+
+With this proposal that issue does not exist and it is also not expected to be a major loss in ergonomics, as oftentimes, when you destructure, the base array is expected to exist.
+
+It actually even allows one to concisely express nested array access with key checking, i.e., supposing we currently write code like ''$value = $array[0]["nested"][1] ?? "default";'', and we expect everything to exist, except possibly the last ''[1]'' dimension, it can be written as ''%%[["nested" => [1 => $value ?? "default"]]] = $array;%%'', checking for the existence of ''$array'', ''$array[0]'' and ''$array[0]["nested"]'' (and emitting warnings upon absence). The RFC author does not recommend writing code this way in general, but acknowledges that this is a possibility enabled by the outlined semantics.
+
+===== Proposed PHP Version(s) =====
+
+Next minor version.
+
+===== Proposed Voting Choices =====
+
+Add a destructuring coalesce feature as described?
+
+A 2/3 majority is required.
+
+===== Patches and Tests =====
+Links to any external patches and tests go here.
+
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
+
+===== Implementation =====
+
+https://github.com/php/php-src/pull/9747
+
+Includes support for JIT / Optimizer.
