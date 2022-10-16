@@ -105,7 +105,7 @@ user_function(NULL, NULL, NULL, NULL);
   // Uncaught TypeError x4?
 </code>
 
-Arrays, Resources, and Objects (without //__toString()//) cannot be coerced (for fairly obvious reasons).
+Arrays, Resources, and Objects (without toString) cannot be coerced (for fairly obvious reasons).
 
 String/Int/Float/Bool can be coerced.
 
@@ -209,7 +209,7 @@ The only realistic way for developers to find when NULL is passed to these inter
 
 It is possible to use very strict Static Analysis, to follow every variable from source to sink (to check if a variable could be NULL), but most developers are not in a position to do this (i.e. not using static analysis, or not at a high enough level, or they are using a baseline to ignore).
 
-In the last JetBrains developer survey (with 67% regularly using Laravel), **only 33% used Static Analysis** ([[https://www.jetbrains.com/lp/devecosystem-2021/php/#PHP_do-you-use-static-analysis|source]]); where it's fair to many still would still not be identify these possible NULL values (too low level, and/or using a baseline).
+In the last JetBrains developer survey (with 67% regularly using Laravel), **only 33% used Static Analysis** ([[https://www.jetbrains.com/lp/devecosystem-2021/php/#PHP_do-you-use-static-analysis|source]]); where it's fair to say many of these developers would //still// not identify these possible NULL values (too low level, and/or using a baseline).
 
 As an example, take this simple script:
 
@@ -221,14 +221,7 @@ echo htmlentities($nullable);
 ?>
 </code>
 
-Even that is considered fine today by the relevant tools:
-
-<code cli>
-composer require --dev rector/rector
-./vendor/bin/rector init
-./vendor/bin/rector process ./src/
-[OK] Rector is done!
-</code>
+This is considered fine by these tools:
 
 <code cli>
 composer require --dev "squizlabs/php_codesniffer=*"
@@ -294,6 +287,42 @@ No errors found!
 </code>
 Note: Psalm can detect this at [[https://psalm.dev/docs/running_psalm/error_levels/|levels 1, 2, and 3]] (don't use a baseline).
 
+==== One Solution ====
+
+Since [[https://github.com/rectorphp/rector-src/pull/2543|21st June 2022]], Rector can modify 362 function arguments via //NullToStrictStringFuncCallArgRector//:
+
+<code cli>
+mkdir -p rector/src;
+
+cd rector/;
+
+composer require --dev rector/rector;
+
+echo '<?= htmlspecialchars($var) ?>' > src/index.php;
+
+echo '<?php
+
+use Rector\Php81\Rector\FuncCall\NullToStrictStringFuncCallArgRector;
+use Rector\Config\RectorConfig;
+
+return static function (RectorConfig $rectorConfig): void {
+    $rectorConfig->paths([__DIR__ . "/src"]);
+    $rectorConfig->rule(NullToStrictStringFuncCallArgRector::class);
+};
+' > rector.php;
+
+./vendor/bin/rector process;
+</code>
+
+This will litter the code with the use of //(string)// type casting, e.g.
+
+<code diff>
+-<?= htmlspecialchars($var) ?>
++<?= htmlspecialchars((string) $var) ?>
+</code>
+
+For a typical project (which won't be using strict_types), expect thousands of changes to be made; and note how this does not improve code quality.
+
 ==== Temporary Solutions ====
 
 You can disable //E_DEPRECATED// (as recommended by projects like WordPress).
@@ -328,7 +357,7 @@ One example diff didn't exactly make the code easier to read:
  + $result = substr($string ?? '', 0, $length);
 </code>
 
-As noted above - PHPCompatibility, CodeSniffer, Rector, etc are unable to find or update these cases.
+As noted above - Rector can add //(string)// type casting automatically, but I have no idea how this improves code quality.
 
 ===== Proposal =====
 
