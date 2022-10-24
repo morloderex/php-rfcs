@@ -1,0 +1,55 @@
+====== PHP RFC: Readonly amendments ======
+  * Date: 2022-10-24
+  * Author: Máté Kocsis <kocsismate@php.net>, Nicolas Grekas
+  * Status: Draft
+  * Target Version: PHP 8.3
+  * Implementation: https://github.com/php/php-src/pull/9497
+
+===== Introduction =====
+
+PHP 8.1 added support for readonly properties via [[rfc:readonly_properties_v2|PHP RFC: Readonly properties 2.0]], and PHP 8.2 added support for readonly classes via [[rfc:readonly_classes|PHP RFC: Readonly classes]]. However, this feature still has some shortcomings which should be addressed. Therefore, this RFC proposes the below amendments for the original RFCs:
+
+==== Proposal 1: Non-readonly classes can extend readonly classes ====
+
+Currently, non-readonly classes are disallowed to extend readonly classes:
+
+<PHP>
+readonly class A {}
+class B extends A {}
+// Fatal error: Non-readonly class B cannot extend readonly class A
+</PHP>
+
+This exception was added to the readonly classes RFC mainly as a precaution for unforeseeable side-effects and also in order to prevent the occasional violation of invariants of the parent (no dynamic or mutable properties are allowed) by the child. However, as it turned out based on the discussion of https://externals.io/message/118554, this restriction prevents Nicolas Grekas to implement proxies for readonly classes; but neither him, nor I (and apparently no one else) could find a good enough example where the restriction would prevent any real bugs. Therefore, I propose to lift the restriction in question so that the following code becomes valid:
+
+<PHP>
+class A {}
+readonly class B extends A {}
+// No error
+</PHP>
+
+As readonly classes are already disallowed to create dynamic properties, any child class -- including non-readonly ones -- also fall under this rule:
+
+<PHP>
+class A {}
+readonly class B extends A {}
+
+$b = new B();
+$b->dynamicProperty = 1;
+// Fatal error: Uncaught Error: Cannot create dynamic property B::$dynamicProperty
+</PHP>
+
+Furthermore, just like readonly classes, they cannot accept the ''#[AllowDynamicProperties]'' attribute.
+
+===== Proposal 2: Readonly properties can be reinitialized during cloning =====
+
+==== Reflection ====
+
+The above proposals don't have impact for reflection.
+
+===== Backward Incompatible Changes =====
+
+None.
+
+===== Vote =====
+
+All votes require 2/3 majority.
