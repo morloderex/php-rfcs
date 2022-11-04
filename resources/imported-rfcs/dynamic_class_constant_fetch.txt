@@ -1,0 +1,178 @@
+====== PHP RFC: Dynamic class constant fetch ======
+
+  * Date: 2022-11-04
+  * Author: Ilija Tovilo, tovilo.ilija@gmail.com
+  * Status: Draft
+  * Target Version: PHP 8.3
+  * Implementation: https://github.com/php/php-src/pull/9793
+
+===== Proposal =====
+
+PHP implements various ways of looking up members name.
+
+  - Variables <php>$$foo</php>
+  - Properties <php>$foo->$bar</php>
+  - Static properties <php>Foo::${$bar}</php>
+  - Methods <php>$foo->{$bar}()</php>
+  - Static methods <php>Foo::{$bar}()</php>
+  - Classes for static methods <php>$foo::bar()</php>
+
+One notable exception are class constants.
+
+<code php>
+class Foo {
+    const BAR = 'bar';
+}
+$bar = 'BAR';
+
+// This is currently a syntax error
+echo Foo::{$bar}; 
+
+// Instead, the `constant` function must be used
+echo constant(Foo::class . '::' . $bar);
+</code>
+
+This limitation seems rather arbitrary. This RFC proposes to introduce the syntax described above.
+
+===== Semantics =====
+
+==== Non-existent class constants ====
+
+Trying to access a non-existent class constant by name throws a <php>Error</php>. This behavior is equivalent to a normal
+class constant fetch.
+
+<code php>
+class Foo {}
+
+$bar = 'BAR';
+echo Foo::{$bar};
+// Error: Undefined constant Foo::BAR
+</code>
+
+==== {} expression type ====
+
+The result of the expression in the braces <php>{}</php> must be of type <php>string</php>. If it is not, an
+<php>Error</php> is thrown.
+
+<code php>
+echo Foo::{[]};
+// Error: Illegal offset type
+</code>
+
+==== Order of execution ====
+
+Unfortunately, the order of execution for member lookups is inconsistent.
+
+<code php>
+function test($value) {
+    echo $value . "\n";
+    return $value;
+}
+
+class Foo implements ArrayAccess {
+    public function __get($property) {
+        echo 'Property ' . $property . "\n";
+        return $this;
+    }
+    
+    public function __call($method, $arguments) {
+        echo 'Method ' . $method . "\n";
+        return $this;
+    }
+    
+    public static function __callStatic($method, $arguments) {
+        echo 'Static method ' . $method . "\n";
+        return static::class;
+    }
+
+    public function offsetGet($offset): mixed {
+        echo 'Offset ' . $offset . "\n";
+        return $this;
+    }
+    public function offsetExists($offset): bool {}
+    public function offsetSet($offset, $value): void {}
+    public function offsetUnset($offset): void {}
+}
+
+$foo = new Foo();
+
+$foo->{test('foo')}->{test('bar')};
+// foo
+// bar
+// Property foo
+// Property bar
+
+$foo->{test('foo')}()->{test('bar')}();
+// foo
+// Method foo
+// bar
+// Method bar
+
+Foo::{test('foo')}()::{test('bar')}();
+// foo
+// Static method foo
+// bar
+// Static method bar
+
+$foo[test('foo')][test('bar')];
+// foo
+// bar
+// Offset foo
+// Offset bar
+
+// Can't be demonstrated because there is no __getStatic
+// Foo::${test('foo')}::${test('bar')};
+// foo
+// Static property foo
+// bar
+// Static property bar
+</php>
+
+Property and array accesses evaluate all expressions in the chain before performing any of the actual operations. For
+constants, order is less relevant because it's very rare for them to be chained. Thus, the simpler approach is chosen,
+which is evaluating them in order.
+
+<code php>
+// Foo::{test('foo')}::{test('bar')};
+// foo
+// Class constant foo
+// bar
+// Class constant bar
+</code>
+
+==== Magic 'class' constant ====
+
+For completeness, accessing the magic <php>class</php> constant dynamically is allowed.
+
+<code php>
+namespace Foo;
+
+$class = 'class';
+echo Bar::{$class};
+// Foo\Bar
+</code>
+
+==== Enums ====
+
+The feature works for enum cases as expected.
+
+===== Future scope =====
+
+==== Interaction with ?? ====
+
+This RFC proposes no change in the interaction between class constant fetches and the null-coalescing operator
+<php>??</php>. That is, <php>Foo::{$bar} ?? null;</php> will throw an <php>Error</php> if the given constant does not 
+exist. It would be possible to suppress this error as is done for other types of member accesses. However, it's not
+clear whether this is desirable, especially for explicit class constant fetches. This change can be made in the future
+with no backwards compatibility break.
+
+===== Vote =====
+
+Voting starts ??? and ends ???. 
+
+As this is a language change, a 2/3 majority is required.
+
+<doodle title="Add dynamic class constant fetches to PHP 8.3?" auth="ilutov" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
