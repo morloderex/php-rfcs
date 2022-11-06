@@ -2,7 +2,7 @@
 
   * Date: 2022-11-06
   * Author: Ilija Tovilo, tovilo.ilija@gmail.com
-  * Status: Implemented
+  * Status: Under discussion
   * Target Version: PHP 8.3
   * Implementation: https://github.com/php/php-src/pull/9301
 
@@ -25,9 +25,9 @@ foo();
 // 3
 </code>
 
-The right hand side of the assignment <php>static $i = 1;</php> must currently be a constant expression. This means
+The right hand side of the assignment <php>static $i = 1;</php> must currently be a constant expressions. This means
 that it can't call functions, use parameters, amongst many other things. This limitation is hard to understand from a
-user perspective. This RFC suggests lifting this restriction by allowing the static variable initializer to contain
+user perspective. This RFC suggest lifting this restriction by allowing the static variable initializer to contain
 arbitrary expressions.
 
 <code php>
@@ -69,7 +69,7 @@ foo();
 // 2
 </code>
 
-The static variable is overridden at compile time, resulting in both statements referring to the same underlying static
+The static variable is overridden at compile time resulting in both statements to refer to the same underlying static
 variable initializer. This is not useful or intuitive. The new implementation is not compatible with this behavior but
 would instead result in the first initializer to win. Instead of switching from one dubious behavior to another,
 redeclaring static variables is disallowed in this RFC and results in a compile time error.
@@ -84,13 +84,12 @@ function foo() {
 
 ==== ReflectionFunction::getStaticVariables() ====
 
-<php>ReflectionFunction::getStaticVariables()</php> can be used to inspect a function's static variables and their
+<php>ReflectionFunction::getStaticVariables()</php> can be used to inspect a functions static variables and their
 current values. Currently, PHP automatically evaluates the underlying constant expression and initializes the static
-variable if the function has never been called. With this RFC this is no longer possible, as static variables may depend
-on values that are only known at runtime. Instead, the compiler will //attempt// to resolve the constant expression at
-compile time. If successful, the value will be embedded in the static variables table. Otherwise it will be initialized
-to <php>null</php>. After executing the function and assigning to the static variable the contents of the variable will
-be reflectable through <php>ReflectionFunction::getStaticVariables()</php>.
+variable if the function has never been called, since the initializer cannot depend on any runtime values of the
+function. This is no longer possible with arbitrary initializers. Instead, static variables in
+<php>ReflectionFunction::getStaticVariables()</php> will be initialized to <php>null</php>. After executing the function
+and assigning to the static variables the contents of the variables will be reflectable.
 
 <code php>
 function foo($initialValue) {
@@ -104,7 +103,7 @@ var_dump((new ReflectionFunction('foo'))->getStaticVariables()['x']);
 // 1
 foo(2);
 var_dump((new ReflectionFunction('foo'))->getStaticVariables()['x']);
-// 1
+// 2
 </code>
 
 From the example above, it becomes more obvious why the initializer <php>$initialValue</php> cannot be evaluated before
@@ -115,7 +114,7 @@ calling the function.
 ==== Exceptions during initialization ====
 
 An initializer might throw an exception. In that case, the static variable remains uninitialized and the initializer
-will be called again in the next execution.
+will be called again on the next execution.
 
 <code php>
 function bar($throw) {
@@ -148,7 +147,6 @@ foo(true);
 
 When the static variable declaration overwrites an existing local variable that contains an object with a destructor
 that throws an exception, the assignment of the static variable is guaranteed to occur before the exception is thrown.
-This is analogous to assignments to regular variables.
 
 <code php>
 class Foo {
@@ -157,13 +155,13 @@ class Foo {
     }
 }
 
-function foo($y) {
+function foo() {
     $x = new Foo();
-    static $x = $y;
+    static $x = 42;
 }
 
 try {
-    foo(42);
+    foo();
 } catch (Exception) {}
 
 var_dump((new ReflectionFunction('foo'))->getStaticVariables()['x']);
@@ -182,49 +180,22 @@ a useful scenario for recursive static variable initializers, so semantics here 
 <code php>
 function foo($i) {
     static $x = $i < 3 ? foo($i + 1) : 'Done';
-    var_dump($x);
-    return $i;
+    var_dump($a);
+    return $cond;
 }
 
 foo(1);
-// string(4) "Done", $i = 3
-// string(4) "Done", $i = 2
-// string(4) "Done", $i = 1
+// string(4) "Done" // $i = 3
+// string(4) "Done" // $i = 2
+// string(4) "Done" // $i = 1
 
 foo(5);
-// string(4) "Done", $i = 5, initializer not called
+// string(4) "Done" // $i = 5, initializer not called
 </code>
-
-==== What initializers are known at compile-time? ====
-
-In the discussion the question arose whether static variables depending on other static variables are known at compile time.
-
-<code php>
-function foo() {
-   static $a = 0;
-   static $b = $a + 1;
-}
-</code>
-
-The answer is no. In this example it's clear that <php>$a</php> holds the value <php>0</php> until the initialization of <php>$b</php>. However, that's not necessarily the case. If <php>$a</php> is modified at any point between the two initializations the initial value of <php>$b</php> also changes.
-
-Here's a quick explanation of how this is implemented: During compilation of static variables the initializer AST is passed to the <php>zend_eval_const_expr</php> function. It traverses the AST and tries to compile-time evaluate all nodes by evaluating their children first and then the node itself if the child nodes were successfully evaluated. If the evaluation fails the nodes stay AST nodes and will again be evaluated at runtime when more information is available (e.g. when class constants are declared). These expressions are currently considered for compile-time constant expression evaluation:
-
-  * Literals (strings, ints, bools, etc)
-  * Binary operations
-  * Binary comparisons
-  * Unary operations
-  * Coalesce operator
-  * Ternary operator
-  * Array access (<php>self::FOO['bar']</php>)
-  * Array literals
-  * Magic constants (e.g. <php>__FILE__</php>)
-  * Global constants (that are known at compile time)
-  * Class constants (that are known at compile time)
 
 ===== Vote =====
 
-Voting starts 2023-03-21 and ends 2023-04-04. 
+Voting starts ??? and ends ???. 
 
 As this is a language change, a 2/3 majority is required.
 
