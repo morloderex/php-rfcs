@@ -19,7 +19,7 @@ class B extends A {}
 // Fatal error: Non-readonly class B cannot extend readonly class A
 </PHP>
 
-This exception was added to the readonly classes RFC mainly as a precaution for unforeseeable side-effects and also in order to prevent the occasional violation of invariants of the parent (no dynamic or mutable properties are allowed) by the child. However, as it turned out based on the discussion of https://externals.io/message/118554, this restriction prevents to implement decoration via inheritance proxies for readonly classes; but no one could find a good enough example where the restriction would prevent any real bugs. Therefore, we propose to lift the restriction in question so that the following code becomes valid:
+This rule was added to the readonly classes RFC mainly as a precaution for unforeseeable side-effects and also in order to prevent the occasional violation of invariants of the parent (no dynamic or mutable properties are allowed) by the child. However, as it turned out based on the discussion of https://externals.io/message/118554, this restriction prevents to implement the commonly used "decoration via inheritance" pattern; but no one could find a good enough example where the restriction would prevent any real bugs nor help enforce any design principle. Therefore, we propose to lift the restriction in question so that the following code becomes valid:
 
 <PHP>
 readonly class A {}
@@ -27,38 +27,11 @@ class B extends A {}
 // No error
 </PHP>
 
-Readonly classes are already strictly disallowed to create dynamic properties, however non-readonly child classes do not fall under this rule, only a deprecation is emitted:
+Readonly classes are already disallowed to create dynamic properties, however their non-readonly child classes would allow them as any other non-readonly classes do, with the same behavior: a deprecation is emitted when dynamic properties are used, unless ''#[AllowDynamicProperties]'' is used.
 
-<PHP>
-readonly class A {}
-class B extends A {}
+Given that 8.2 deprecated dynamic properties, we could consider not supporting them on non-readonly child classes of readonly classes. However, we realized that it would be both inconsistent and inefficient to alter from the current standard behavior due to technical reasons.
 
-$b = new B();
-$b->dynamicProperty = 1;
-// Deprecated: Creation of dynamic property B::$dynamicProperty is deprecated
-</PHP>
-
-Unlike readonly classes, they can also accept the ''#[AllowDynamicProperties]'' attribute in order to suppress the above deprecation notice.
-
-Furthermore, readonly classes can declare neither static, nor untyped properties, no matter if the declaration is done directly in the class or indirectly via a trait ([[https://github.com/php/php-src/issues/9285|https://github.com/php/php-src/issues/9285]]). On the other hand, their non-readonly children can do the following:
-
-<PHP>
-trait BTrait {
-    public static $staticProperty2;
-    public $untypedProperty2;
-}
-
-readonly class A {}
-
-class B extends A {
-    use BTrait;
-
-    public static $staticProperty;
-    public $untypedProperty;
-}
-
-// No error
-</PHP>
+Furthermore, readonly classes can declare neither static, nor untyped properties, no matter if the declaration is done directly in the class or indirectly via a trait ([[https://github.com/php/php-src/issues/9285|https://github.com/php/php-src/issues/9285]]). Under this RFC, their non-readonly child classes would support them as any other child classes do.
 
 Here is an example of non-readonly child class that tracks the number of times a method has been called:
 
@@ -96,14 +69,14 @@ class B extends A
 
 Such construct is commonly used in e.g. mock classes in order to assert the number of times a method has been called.
 
-Right now in PHP 8.2, this is not allowed.
+Right now in PHP 8.2, this is not allowed. This proposal is about allowing such constructs.
 
 
 ===== Proposal 2: Readonly properties can be reinitialized during cloning =====
 
 Currently, readonly properties cannot be "deep-cloned" since an ''Error'' is thrown the second time they are assigned to any value. This is a major inconvenience which prevents any non-basic use-cases. The second proposal eliminates this shortcoming by making it possible to reinitialize readonly properties during cloning according to the following semantics:
 
-Reinitialization can only take place //during// the ''_clone()'' magic method call, no matter if the actual assignment happens in a different method or function invoked inside ''_clone()''. This will ensure that the original object being cloned is left intact so the readonly invariant still holds at the object level, while the new instance can be modified.
+Reinitialization can only take place //during// the ''%%___clone()%%'' magic method call, no matter if the actual assignment happens in a different method or function invoked inside ''%%__clone()%%''. This will ensure that the original object being cloned is left intact so the readonly invariant still holds at the object level, while the new instance can be modified.
 
 Reinitialization of each property is possible once and only once: any subsequent modification attempts trigger an ''Error''. Apart from this, semantics of readonly properties is not changed in any other way, so their modification is still allowed only in the private scope, just like before.
 
@@ -137,7 +110,9 @@ None.
 
 There is still one more known shortcoming of the original RFCs: static properties don't support the readonly modifier, therefore readonly classes cannot contain static properties. These restrictions could be lifted at a later point of time.
 
-TODO: mention clone-with / clone-modifier ideas
+In order to help write "[[rfc:readonly_properties_v2#rationale|clone-based withers]]", a [[https://externals.io/message/112624|clone with]] and a [[https://twitter.com/nicolasgrekas/status/1561960616331546625|clone modifier]] syntax have been discussed.
+
+None of the envisioned ideas for the future collide with the proposals in this RFC.
 
 ===== Vote =====
 
