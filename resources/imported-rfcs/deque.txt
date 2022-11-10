@@ -235,7 +235,7 @@ Some examples of how queues are used in php applications and libraries are below
 
 Once applications and libraries such as those were able to use ''Collections\Deque'' (e.g. when the minimum PHP version requirement was raised), they would benefit from the speedup and reduced memory that ''Collections\Deque'' has over ''SplDoublyLinkedList''/''SplQueue''.
 
-Looking at the [[#benchmarks]] section, ''SplQueue''(and the parent class ''SplDoublyLinkedList'') is typically slower than ''array'' (though ''array'' has higher reported memory usage). By introducing a data structure (''Deque'') that's even faster and uses less memory than an ''array'' for use as a double-ended queue, even more applications would benefit from it.
+Looking at the [[#benchmarks]] section, ''SplQueue''(and the parent class ''SplDoublyLinkedList'') is typically slower than ''array'' when used as a queue (though ''array'' has higher reported memory usage). By introducing a data structure (''Deque'') that's even faster and uses less memory than an ''array'' for use as a double-ended queue, even more applications would benefit from it.
 
     * Additionally, ''Deque'' would allow some code to be refactored or written in a more readable way in cases where php developers would previously be avoiding using ''SplDoublyLinkedList'' (or ''SplStack''/''SplQueue'') due to older datastructures having time and memory usage inefficiencies.
 
@@ -256,6 +256,7 @@ Even users that don't write code using ''Deque'' may still benefit from its incl
 
     - Pushing/popping/shifting/unshifting takes roughly 30% less time.
     - ''Deque'' typically uses less memory than ''SplDoublyLinkedList''.
+    - Memory locality results in much better performance of ''Collections\Deque'' when processing large amounts of data (See [[#comparing_read_performance_to_other_data_structures|benchmarks]])
     - The iteration order is predictable, unlike ''SplDoublyLinkedList'', where it can be modified with flags. ''Collections\Deque'' is also an ''IteratorAggregate'', allowing multiple iterators to run independently.
     - Constant-time access for reading or modifying elements at any position in the ''Deque'', unlike ''SplDoublyLinkedList'' where that would require walking the linked list.
 
@@ -520,6 +521,72 @@ Appending to SplStack:          n= 1048576 iterations=      20 memory=33554584 b
 Appending to SplFixedArray:     n= 1048576 iterations=      20 memory=16777304 bytes, create+destroy time=3.140 read time = 0.487 result=10995105792000
 </code>
 
+==== Comparing read performance to other data structures ====
+
+''Collections\Deque'' has faster read performance than other *objects* currently available in the spl.)
+
+This benchmark demonstrates this for a large variety of array sizes.
+
+  * In use cases where the SplDoublyLinkedList is fragmented and there are a lot of processor cache misses, ''Collections\Deque'' is over 3 times faster than SplDoublyLinkedList and its subclasses.
+  * This is somewhat faster than the other *objects* at all other cache sizes.
+
+(''Ds\Deque'' is from a PECL (not part of php), and is included for comparison by request (installed as a shared library))
+
+<code none>
+Test repeatedly reading from 16 arrays of variable sizes 'n'.
+This shows how the poor memory locality of linked lists(SplStack) can cause noticeably worse performance than continuous memory of arrays/Deques when the linked lists are fragmented.
+
+Caveats:
+- SplStack was over 3 times slower for very large arrays when the linked list entries (and other data being accessed) aren't found in the processor's caches (large values of 'n')
+
+  (In real use cases, the processor would be running other applications and those would compete for the cache)
+- ArrayObject currently doesn't implement optimized array access handlers like SplFixedArray or the 2 Deque implementations. It calls ArrayAccess->offsetGet.
+- Spl data structures aren't final and need to check if offsetGet has been overridden.
+- PHP has optimized code paths for arrays.
+Results for php 8.3.0-dev debug=false with opcache enabled=true
+
+Reading from array:             n=       1 outer size=16 iterations=  800000 memory=     3832 bytes, read time=0.278 result=96000000
+Reading from Collections\Deque  n=       1 outer size=16 iterations=  800000 memory=     2640 bytes, read time=0.442 result=96000000
+Reading from Ds\Deque:          n=       1 outer size=16 iterations=  800000 memory=     3800 bytes, read time=0.477 result=96000000
+Reading from ArrayObject:       n=       1 outer size=16 iterations=  800000 memory=     6008 bytes, read time=0.898 result=96000000
+Reading from SplStack:          n=       1 outer size=16 iterations=  800000 memory=     3608 bytes, read time=1.020 result=96000000
+Reading from SplFixedArray:     n=       1 outer size=16 iterations=  800000 memory=     1600 bytes, read time=0.540 result=96000000
+
+Reading from array:             n=       4 outer size=16 iterations=  200000 memory=     3832 bytes, read time=0.149 result=115200000
+Reading from Collections\Deque  n=       4 outer size=16 iterations=  200000 memory=     2640 bytes, read time=0.247 result=115200000
+Reading from Ds\Deque:          n=       4 outer size=16 iterations=  200000 memory=     3800 bytes, read time=0.272 result=115200000
+Reading from ArrayObject:       n=       4 outer size=16 iterations=  200000 memory=     6008 bytes, read time=0.533 result=115200000
+Reading from SplStack:          n=       4 outer size=16 iterations=  200000 memory=     5144 bytes, read time=0.437 result=115200000
+Reading from SplFixedArray:     n=       4 outer size=16 iterations=  200000 memory=     2368 bytes, read time=0.297 result=115200000
+
+Reading from array:             n=       8 outer size=16 iterations=  100000 memory=     3832 bytes, read time=0.137 result=140800000
+Reading from Collections\Deque  n=       8 outer size=16 iterations=  100000 memory=     3664 bytes, read time=0.247 result=140800000
+Reading from Ds\Deque:          n=       8 outer size=16 iterations=  100000 memory=     3800 bytes, read time=0.265 result=140800000
+Reading from ArrayObject:       n=       8 outer size=16 iterations=  100000 memory=     6008 bytes, read time=0.438 result=140800000
+Reading from SplStack:          n=       8 outer size=16 iterations=  100000 memory=     7192 bytes, read time=0.364 result=140800000
+Reading from SplFixedArray:     n=       8 outer size=16 iterations=  100000 memory=     3392 bytes, read time=0.273 result=140800000
+
+Reading from array:             n=    1024 outer size=16 iterations=    1024 memory=   328952 bytes, read time=0.136 result=8707375104
+Reading from Collections\Deque  n=    1024 outer size=16 iterations=    1024 memory=   263760 bytes, read time=0.243 result=8707375104
+Reading from Ds\Deque:          n=    1024 outer size=16 iterations=    1024 memory=   263896 bytes, read time=0.266 result=8707375104
+Reading from ArrayObject:       n=    1024 outer size=16 iterations=    1024 memory=   331128 bytes, read time=0.453 result=8707375104
+Reading from SplStack:          n=    1024 outer size=16 iterations=    1024 memory=   527384 bytes, read time=0.342 result=8707375104
+Reading from SplFixedArray:     n=    1024 outer size=16 iterations=    1024 memory=   263488 bytes, read time=0.282 result=8707375104
+
+Reading from array:             n=   65536 outer size=16 iterations=      20 memory= 16844024 bytes, read time=0.176 result=687341568000
+Reading from Collections\Deque  n=   65536 outer size=16 iterations=      20 memory= 16778832 bytes, read time=0.309 result=687341568000
+Reading from Ds\Deque:          n=   65536 outer size=16 iterations=      20 memory= 16778968 bytes, read time=0.327 result=687341568000
+Reading from ArrayObject:       n=   65536 outer size=16 iterations=      20 memory= 16846200 bytes, read time=0.559 result=687341568000
+Reading from SplStack:          n=   65536 outer size=16 iterations=      20 memory= 33557528 bytes, read time=0.823 result=687341568000
+Reading from SplFixedArray:     n=   65536 outer size=16 iterations=      20 memory= 16778560 bytes, read time=0.356 result=687341568000
+
+Reading from array:             n=  262144 outer size=16 iterations=      10 memory= 67176056 bytes, read time=0.353 result=5497851740160
+Reading from Collections\Deque  n=  262144 outer size=16 iterations=      10 memory= 67110864 bytes, read time=0.618 result=5497851740160
+Reading from Ds\Deque:          n=  262144 outer size=16 iterations=      10 memory= 67111000 bytes, read time=0.656 result=5497851740160
+Reading from ArrayObject:       n=  262144 outer size=16 iterations=      10 memory= 67178232 bytes, read time=1.124 result=5497851740160
+Reading from SplStack:          n=  262144 outer size=16 iterations=      10 memory=134220824 bytes, read time=2.115 result=5497851740160
+Reading from SplFixedArray:     n=  262144 outer size=16 iterations=      10 memory= 67110592 bytes, read time=0.719 result=5497851740160
+</code>
 ===== Future Scope =====
 
 If ''Collections\Deque'' is added, there would be plenty of time for myself or others to propose and discuss additional methods before PHP 8.3's feature freeze (probably in July 2023)
@@ -1203,6 +1270,235 @@ foreach ($sizes as [$n, $iterations]) {
 }
 </code>
 
+=== Benchmark read performance ===
+
+<code php>
+<?php
+
+const OUTER_SIZE = 16;
+
+function bench_array(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+
+    $values = [];
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[] = [];
+    }
+
+    for ($j = 0; $j < $n; $j++) {
+        for ($i = 0; $i < OUTER_SIZE; $i++) {
+            $values[$i][] = $i + $j;
+        }
+    }
+
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            foreach ($inner as $v) {
+                $total += $v;
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from array:             n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+function bench_deque(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+
+    $values = new Collections\Deque();
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[] = new Collections\Deque();
+    }
+    for ($j = 0; $j < $n; $j++) {
+        foreach ($values as $i => $inner) {
+            $inner[] = $i + $j;
+        }
+    }
+
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            for ($i = 0; $i < $n; $i++) {
+                $total += $inner[$i];
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from Collections\Deque  n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+function bench_ds_deque(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+    $values = new Ds\Deque();
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[] = new Ds\Deque();
+    }
+    for ($j = 0; $j < $n; $j++) {
+        foreach ($values as $i => $inner) {
+            $inner[] = $i + $j;
+        }
+    }
+
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            for ($i = 0; $i < $n; $i++) {
+                $total += $inner[$i];
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from Ds\Deque:          n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+// SplStack is a subclass of SplDoublyLinkedList, so it is a linked list that takes more memory than needed.
+// In this case it has worse cache locality
+function bench_spl_stack(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+    $values = new SplStack();
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[] = new SplStack();
+    }
+    for ($j = 0; $j < $n; $j++) {
+        foreach ($values as $i => $inner) {
+            $inner[] = $i + $j;
+        }
+    }
+
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            // random access in doubly linked list is slow, use foreach
+            foreach ($inner as $v) {
+                $total += $v;
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from SplStack:          n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+function bench_array_object(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+    $values = new ArrayObject();
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[] = new ArrayObject();
+    }
+    for ($j = 0; $j < $n; $j++) {
+        foreach ($values as $i => $inner) {
+            $inner[] = $i + $j;
+        }
+    }
+
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            for ($i = 0; $i < $n; $i++) {
+                $total += $inner[$i];
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from ArrayObject:       n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+function bench_spl_fixed_array(int $n, int $iterations) {
+    gc_collect_cycles();
+    $startMemory = memory_get_usage();
+    $values = new SplFixedArray(OUTER_SIZE);
+    for ($i = 0; $i < OUTER_SIZE; $i++) {
+        $values[$i] = new SplFixedArray($n);
+    }
+    for ($j = 0; $j < $n; $j++) {
+        foreach ($values as $i => $inner) {
+            $inner[$j] = $i + $j;
+        }
+    }
+    $startTime = hrtime(true);
+    $total = 0;
+    for ($j = 0; $j < $iterations; $j++) {
+        foreach ($values as $inner) {
+            for ($i = 0; $i < $n; $i++) {
+                $total += $inner[$i];
+            }
+        }
+    }
+    $endMemory = memory_get_usage();
+    $endTime = hrtime(true);
+
+    $totalReadTime = ($endTime - $startTime) / 1000000000;
+    printf("Reading from SplFixedArray:     n=%8d outer size=%d iterations=%8d memory=%9d bytes, read time=%.3f result=%d\n",
+        $n, OUTER_SIZE, $iterations, $endMemory - $startMemory, $totalReadTime, $total);
+}
+$n = 2**20;
+$iterations = 10;
+$sizes = [
+    [1, 800000],
+    [4, 200000],
+    [8, 100000],
+    [2**10, 2**10],
+    [2**16, 20],
+    [2**18, 10],
+];
+ini_set('memory_limit', '1G');
+printf(<<<EOT
+Test repeatedly reading from %d collections of variable sizes 'n'.
+This shows how the poor memory locality of linked lists(SplStack) can cause noticeably worse performance than continuous memory of arrays/Deques when the linked lists are fragmented.
+
+Caveats:
+- SplStack was around 3 times slower for very large arrays when the linked list entries (and other data being accessed) aren't found in the processor's caches (large values of 'n')
+
+  (In real use cases, the processor would be running other applications and those would compete for the cache)
+- ArrayObject currently doesn't implement optimized array access handlers like SplFixedArray or the 2 Deque implementations. It calls ArrayAccess->offsetGet.
+- Spl data structures aren't final and need to check if offsetGet has been overridden.
+- PHP has optimized code paths for arrays.
+
+EOT
+, OUTER_SIZE);
+printf(
+    "Results for php %s debug=%s with opcache enabled=%s\n\n",
+    PHP_VERSION,
+    PHP_DEBUG ? 'true' : 'false',
+    json_encode(function_exists('opcache_get_status') && (opcache_get_status(false)['opcache_enabled'] ?? false))
+);
+
+foreach ($sizes as [$n, $iterations]) {
+    bench_array($n, $iterations);
+    bench_deque($n, $iterations);
+    bench_ds_deque($n, $iterations);
+    bench_array_object($n, $iterations);
+    bench_spl_stack($n, $iterations);
+    bench_spl_fixed_array($n, $iterations);
+    echo "\n";
+}
+</code>
+
 ===== Changelog =====
 
    * 0.2: Link to definition of Deque.
@@ -1215,4 +1511,4 @@ foreach ($sizes as [$n, $iterations]) {
    * 0.7.0: Remove get()/set() helpers due to overlap with offsetGet/offsetSet functionality - introduction of typed get()/set() was suggested as better suited for a separate proposal for all data structures.
    * 0.8.0: Change bottom()/top() to first()/last()
    * 0.9.0: Add benchmark for repeated unshift then repeated shift. Add discussion section for request to ''return $this''. Remove duplicate quotes. Clarify notes on performance.
-   * 1.0.0: Support removing element with offsetUnset. Add ''insert(int $offset, mixed ...$values): void {}'' Improve iterator behavior and make it consistent with other iterators. Update benchmarks for php 8.3.
+   * 1.0.0: Support removing element with offsetUnset. Add ''insert(int $offset, mixed ...$values): void {}'' Improve iterator behavior and make it consistent with other iterators. Update benchmarks for php 8.3. Add benchmark of impact of memory locality on read performance vs SplDoublyLinkedList.
