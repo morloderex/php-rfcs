@@ -20,7 +20,7 @@ While ''SplDoublyLinkedList'' and its subclass ''SplQueue''/''SplStack'' exist i
 It would be useful to have an efficient ''Deque'' container in the standard library to provide an alternative without those drawbacks, as well as for the following reasons: 
 
     - To provide a better alternative to ''SplDoublyLinkedList'', ''SplStack'', and ''SplQueue'' for use cases that require stacks or queues.
-    - As a more efficient option than ''array'' and ''SplDoublyLinkedList'' as a queue or ''Deque'', for workflows requiring ''shift'' or ''unshift''. Repeatedly shifting/unshifting from the front of an array is slow, because each shift/unshift requires moving every element of the array.
+    - As a more efficient option than ''array'' and ''SplDoublyLinkedList'' as a queue or ''Deque'', for workflows requiring ''shift'' or ''unshift''. Repeatedly shifting/unshifting from the front of an array is slow, because each shift/unshift requires moving(shifting) every element of the array.
     - To have a memory-efficient collection suitable for applications that run for long periods of time. Notably, PHP's ''array'' type will currently never release allocated capacity, and Deque has lower memory usage than SplDoublyLinkedList.
 
 
@@ -51,7 +51,7 @@ The dynamic array approach uses a variant of a dynamic array that can grow from 
     - (omitted, see article)
 </blockquote>
 
-Similarly to deques in other languages (such as [[https://docs.python.org/3/library/collections.html#deque-objects|Python collections.deque]], [[https://cplusplus.com/reference/deque/deque/|C++ std::deque]], [[https://doc.rust-lang.org/std/collections/struct.VecDeque.html|Rust std::collections::VecDeque]], etc.) this is backed by a memory-efficient representation with good cache locality and provides constant amortized-time push/pop/shift/unshift operations. (this RFC's implementation is a circular buffer represented as a raw C array of values with a size, offset, and capacity)
+Similarly to deques in other languages (such as [[https://docs.python.org/3/library/collections.html#deque-objects|Python collections.deque]], [[https://cplusplus.com/reference/deque/deque/|C++ std::deque]], [[https://doc.rust-lang.org/std/collections/struct.VecDeque.html|Rust std::collections::VecDeque]], etc.) this is backed by a memory-efficient representation with good cache locality and provides constant amortized-time push/pop/popFront/pushFront operations. (this RFC's implementation is a circular buffer represented as a raw C array of values with a size, offset, and capacity)
 
 This reclaims memory that is no longer used  (when less than a quarter of the capacity is used), unlike ''array''
 
@@ -73,23 +73,21 @@ namespace Collections;
  *
  * This supports amortized constant time pushing and popping onto the start (i.e. front, first)
  * or back (i.e. end, last) of the Deque.
- *
- * Method naming is based on https://www.php.net/spldoublylinkedlist
- * and on array_push/pop/unshift/shift/ and array_key_first/array_key_last.
  */
 final class Deque implements IteratorAggregate, Countable, JsonSerializable, ArrayAccess
 {
     /** Construct the Deque from the values of the Traversable/array, ignoring keys */
     public function __construct(iterable $iterator = []) {}
     /**
-     * Returns an iterator that accounts for calls to shift/unshift tracking the position of the start of the Deque.
-     * Calls to shift/unshift will do the following:
+     * Returns an iterator that accounts for calls to popFront/pushFront tracking the position of the start of the Deque.
+     * Calls to popFront/pushFront will do the following:
      * - Increase/Decrease the value returned by the iterator's key()
      *   by the number of elements added/removed to/from the start of the Deque.
      *   (`$deque[$iteratorKey] === $iteratorValue` at the time the key and value are returned).
-     * - Repeated calls to shift will cause valid() to return false if the iterator's
+     * - Repeated calls to popFront will cause valid() to return false if the iterator's
      *   position ends up before the start of the Deque at the time iteration resumes.
      * - They will not cause the remaining values to be iterated over more than once or skipped.
+     * insert()/offsetUnset() will have similar effects when inserting/removing elements before the iterator's position.
      */
     public function getIterator(): \InternalIterator {}
     /** Returns the number of elements in the Deque. */
@@ -107,17 +105,17 @@ final class Deque implements IteratorAggregate, Countable, JsonSerializable, Arr
     /** Appends value(s) to the end of the Deque. */
     public function push(mixed ...$values): void {}
     /** Prepends value(s) to the start of the Deque. */
-    public function unshift(mixed ...$values): void {}
+    public function pushFront(mixed ...$values): void {}
     /**
      * Pops a value from the end of the Deque.
      * @throws \UnderflowException if the Deque is empty
      */
     public function pop(): mixed {}
     /**
-     * Shifts a value from the start of the Deque.
+     * Pops a value from the start of the Deque.
      * @throws \UnderflowException if the Deque is empty
      */
-    public function shift(): mixed {}
+    public function popFront(): mixed {}
 
     /**
      * Peeks at the value at the start of the Deque.
@@ -177,7 +175,7 @@ final class Deque implements IteratorAggregate, Countable, JsonSerializable, Arr
     * For a ''Collections\Deque'' instance of size ''n'', there are ''n+1'' possible positions of an ''InternalIterator'' (at the positions ''0..n-1'', as well as being an invalid iterator at position ''n'' (the end of the Deque). After appending to the end of the deque (or inserting 1 or more values at position ''n''), the iterator becomes valid again.
     * The value is the value found in the Deque at the time ''InternalIterator::current()'' is called. (or ''null'' if the iterator is invalid). (E.g. if you mutate the deque, you will see the new value when iterations such as ''foreach'' reach that value)
     * The key is the offset in the Deque at which the value would be found at the time ''InternalIterator::key()'' is called. (or null if the iterator is invalid)
-    * ''shift'' or ''unshift'' changing the position of the start of the deque are accounted for - offsets in the deque won't be skipped or processed multiple times.
+    * ''popFront'' or ''pushFront'' changing the position of the start of the deque are accounted for - offsets in the deque won't be skipped or processed multiple times.
     * ''InternalIterator::valid()'' returns true if the InternalIterator's offset (computed from relative position to the start of the Deque) is within the Deque.
     * ''InternalIterator::next()'' advances the InternalIterator's position unless it is already at the end of the Deque.
 
@@ -189,7 +187,7 @@ $deque = new Collections\Deque(['first', 'second', 'third']);
 foreach ($deque as $offset => $value) {
     printf("value: %6s deque[offset=%s]=%s\n", $value, $offset, $deque[$offset]);
     if ($value === 'second') {
-        printf("=> Shifting while iterating: removed %s\n", $deque->shift());
+        printf("=> Removing from front while iterating: removed %s\n", $deque->popFront());
     } elseif ($value === 'third') {
         printf("=> Push while iterating\n");
         $deque->push('fourth');
@@ -200,7 +198,7 @@ var_dump($deque);
 /*
 value:  first deque[offset=0]=first
 value: second deque[offset=1]=second
-=> Shifting while iterating: removed first
+=> Removing from front while iterating: removed first
 value:  third deque[offset=1]=third
 => Push while iterating
 value: fourth deque[offset=2]=fourth
@@ -254,7 +252,7 @@ Even users that don't write code using ''Deque'' may still benefit from its incl
 
 ==== Why use this instead of SplDoublyLinkedList? ====
 
-    - Pushing/popping/shifting/unshifting takes roughly 30% less time.
+    - Pushing/popping/pushFront(unshifting)/popFront(shifting) takes roughly 30% less time.
     - ''Deque'' typically uses less memory than ''SplDoublyLinkedList''.
     - Memory locality results in much better performance of ''Collections\Deque'' when processing large amounts of data (See [[#comparing_read_performance_to_other_data_structures|benchmarks]])
     - The iteration order is predictable, unlike ''SplDoublyLinkedList'', where it can be modified with flags. ''Collections\Deque'' is also an ''IteratorAggregate'', allowing multiple iterators to run independently.
@@ -308,12 +306,26 @@ Making all functionality ''final'' turns out to be the same approach that the PE
     * Avoid multiple methods doing the same thing (e.g. ''SplDeque'' has a redundant ''enqueue'' methods to add to the end of an array because the base class already had ''push()'')
     * "They are designed to be self-contained, much like an ''array''. You can't extend an ''array'', so we design our own APIs around it by using an internal ''array'' to store the actual data."
 
-==== push/pop/shift/unshift (and first()/last()) ====
+==== push/pop/pushFront/popFront (and first()/last()) ====
 
-This is consistent with the name used for ''array_push()''/''array_pop()''/''array_shift()''/''array_unshift()''/''array_key_first()''/''array_key_last()'', as well as names used for ''SplDoublyLinkedList''
+This is consistent with the name used for ''array_push()''/''array_pop()''/''array_key_first()''/''array_key_last()'', as well as names used for ''SplDoublyLinkedList''.
+
+The name of pushFront/popFront was chosen because the method names:
+
+    * Is self-explanatory and obvious whether it is adding or removing values.
+    * Are used for an amortized constant time operation. Unlike array_shift()/array_shift(), it is not actually shifting other elements to make room at the front
+
+The names pushFront/popFront were chosen after feedback from Nikita Popov, in https://externals.io/message/116100#116214
+
+<blockquote>
+5. The shift/unshift terminology is already used by our array API, but I'm
+   not sure it's the most intuitive choice in the context of a deque. SplQueue
+   has enqueue() and dequeue(). Another popular option from other languages
+   (which I would personally favor) is pushFront() and popFront().
+</blockquote>
 
 ===== Backward Incompatible Changes =====
-The class name ''\Collections\Deque'' is now used by PHP, and it will be a compilation error to declare classlikes of the same name in the namespace ''Collections'' since the class already exists.
+The class name ''\Collections\Deque'' is now used by PHP, and it will be a compilation error to declare classlikes of the same name in the namespace ''Collections'', since the class already exists.
 
 ===== Proposed PHP Version(s) =====
 8.3
@@ -411,9 +423,9 @@ Results for php 8.3.0-dev debug=false with opcache enabled=true
 
 
 
-==== Two cycles of appending n values then shifting them from the start ====
+==== Two cycles of appending n values then removing them from the front ====
 
-Note that it is possible to have constant time removal from the start of a PHP ''array'' efficiently (as long as ''key'' stays at the start of the array), but it is not possible to have constant time prepending (`unshift`) to the start of an array. ''array_unshift'' is a linear time operation (takes time proportional to the current array size).
+Note that it is possible to have constant time removal from the start of a PHP ''array'' efficiently (as long as ''key'' stays at the start of the array), but it is not possible to have constant time prepending (''pushFront''/''unshift'') to the start of an array. ''array_unshift'' is a linear time operation (takes time proportional to the current array size).
 So ''unshift'' is not included in these benchmarks.
 
 Because there's a second cycle in this benchmark, array becomes an associative array and uses more memory than a packed array (https://www.npopov.com/2014/12/22/PHPs-new-hashtable-implementation.html). (At the time of writing, a packed array uses double the memory of a ''Deque'', though there is an unrelated change in review proposing reducing the memory usage of packed arrays). 
@@ -483,7 +495,7 @@ Results for php 8.3.0-dev debug=false with opcache enabled=true
 
 ==== Only appending to a Deque and reading elements without removal ====
 
-Note that the proposed ''Deque'' as well as the existing ''SplDoublyLinkedList''/''SplStack'' are expected to perform equally well at shifting to (adding to) or unshifting from(removing from) the start(first elements) of an array. (Shifting or unshifting (or unsetting) the start is inefficient for arrays)
+Note that the proposed ''Deque'' as well as the existing ''SplDoublyLinkedList''/''SplStack'' are expected to perform equally well at shifting to (pushFront, i.e. adding to) or unshifting from(popFront, i.e. removing from) the start(first elements) of an array. (Shifting or unshifting (or unsetting) the start is inefficient for arrays)
 
 **For this benchmark, Deque can be created and read from faster than the fastest methods of reading ''SplStack'' or ''SplFixedArray''.**
 
@@ -732,7 +744,7 @@ If a Map/Set function were to be added, then methods for add/remove would return
 
 3. Slight additional performance overhead for functionality I assume will be used relatively infrequently
 
-(php has to increment reference counts and opcache can't eliminate the opcode to decrease reference counts and possibly free the return value of ''$deque->unshift()''/''push()'' with the return type info being an object)
+(php has to increment reference counts and opcache can't eliminate the opcode to decrease reference counts and possibly free the return value of ''$deque->pushFront()''/''push()'' with the return type info being an object)
 
 4. Returning ''$this'' makes code easier to write at some cost to readability (for users new to PHP or this class, though it may help readability to developers deeply familiar with parts of standard library using it) - Developers new to php or using ''Collections\Deque'' for the first time would not immediately know what the code they're reading is doing.
 (less of a problem with a good IDE, typechecker, and a typed codebase, but this isn't universal)
@@ -750,7 +762,7 @@ Adding ''RETURN_OBJ_COPY(Z_OBJ_P(ZEND_THIS));'' and a different method with the 
 
 5. I won't know if anyone is strongly against fluent interfaces belonging in core, or strongly against adopting fluent interfaces (''return $this'') in an ad-hoc way. Changing it here would make it unclear if the vote was for/against the overall functionality or the new design choice of ''return $this;''. \\ I'd rather not do this without evidence this is widely considered a better design by the community (e.g. the change to a namespace had a policy RFC https://wiki.php.net/rfc/namespaces_in_bundled_extensions).
 
-6. If we decide we want to change the return type of a method (in general, not for push/unshift), then it's less of a breaking change to change it from ''void'' (where less code would use the return value) than from ''$this'' (where there may be existing code such as ''$obj->method()->otherMethod()'').
+6. If we decide we want to change the return type of a method (in general, not for push/pushFront), then it's less of a breaking change to change it from ''void'' (where less code would use the return value) than from ''$this'' (where there may be existing code such as ''$obj->method()->otherMethod()'').
 
 **Also, that feedback isn't a request specifically about ''Collections\Deque'' or collections in general, but rather about the general design of classes in php**
 
@@ -1177,7 +1189,7 @@ function bench_deque(int $n, int $iterations) {
 
             $startReadTime = hrtime(true);
             while (count($values) > 0) {
-                $total += $values->shift();
+                $total += $values->popFront();
             }
             $endReadTime = hrtime(true);
             $totalReadTime += $endReadTime - $startReadTime;
