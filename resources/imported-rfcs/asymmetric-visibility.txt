@@ -125,35 +125,70 @@ The ''set'' visibility, if it differs from the main (''get'') visibility, MUST b
 
 There is one exception, that of a ''private readonly'' property.  That would technically expand to ''private private(set) readonly'', which is allowed.
 
-==== Interaction with __set ====
+==== Interaction with __set and __unset ====
 
-Currently, if a symmetrically defined property is accessed from an illegal scope and there is a <php>__set</php> method defined on the class, <php>__set</php> will be called with the var/val pair of the assignment. The same happens with ''readonly'' properties but only when the property is inaccessible (e.g. a private property is accessed from global scope). If the ''readonly'' property is in scope (and already initialized) an error is thrown instead. This behavior is intended to avoid surprising behavior when classes implement <php>__set</php> for unrelated purposes. We propose the same behavior for asymmetric visibility.
+In PHP 8.2, the behavior of <php>__set</php> has some subtleties to it due to ''readonly'' introducing asymmetric visibility through the back door.  Specifically,
 
-If the read visibility is unmatched <php>__set</php> is called. If it is matched but the write visibility is unmatched an error is thrown.
+    - If a defined property is assigned to from a scope where it is readable and writeable, then it is just written to normally.
+    - If a defined property is assigned to from a scope where it is not readable, then <php>__set</php> is called, always.
+    - If a defined property is assigned to from a scope where it is readable and not writeable (due to ''readonly''), then <php>__set</php> will be called if and only if the property was explicitly ''unset()'' previously.  In all other cases, an exception is thrown.
 
-<code php>
-class Foo {
-    protected private(set) string $prot;
-    public private(set) string $pub;
+
+This RFC continues the 3rd rule above.  A property with asymmetric visibility that is written to from a scope where it is readable but not writeable, <php>__set</php> will be called if and only if the property had previously been ''unset()''.  Otherwise, an error will be thrown.
+
+If <php>__set()</php> is not defined, the write will fail with an error regardless.
+
+<php code>
+class Example
+{
+    public private(set) string $pubpriv;
+    protected private(set) string $protpriv;
+
+    public function __set($name, $value): void
+    {
+        echo "__set($name, $value)\n";
+        $this->$name = $value;
+    }
     
-    public function __set($name, $value) {
-        var_dump($name, $value);
+    public function unsetPub()
+    {
+        unset($this->pubpriv);
+    }
+
+    public function unsetProt()
+    {
+        unset($this->protpriv);
     }
 }
 
-$foo = new Foo();
+class Child extends Example
+{
+    public function test()
+    {
+        $this->pubpriv = 'a';  // Error, because the property is readable but not unset
+        $this->protpriv = 'a'; // Error, because the property is readable but not unset
 
-// Calls __set
-$foo->prot = 'Foo';
+        $this->unsetPub();
+        $this->unsetPriv();
 
-// Throws an error
-$foo->pub = 'Foo';
-</code>
+        $this->pubpriv = 'a'; // Calls __set, because pubpriv has been unset
+        $this->protpriv = 'a'; // Calls __set, because protpriv has been unset
+    }
+}
 
-There are a two main reasons for this decision:
+$ex = new Child();
 
-  - As noted, ''readonly'' is a form of asymmetric visibility, and thus consistency with that behavior is important.
-  - If at some point in the future it is determined that falling back to <php>__set</php> does make sense, it is much easier to enable at that time than to remove it if we find it causes too many problems.
+$ex->pubpriv = 'a';  // Error, because the property is readable but not unset
+$ex->protpriv = 'a'; // Calls __set
+
+$ex->unsetPub();
+
+$ex->pubpriv = 'a'; // Calls __set, because pubpriv has been unset
+
+$ex->test();
+</php> 
+
+The logic for calling ''unset()'' externally (and thus triggering <php>__unset()</php>) is the same.
 
 ==== Relationship with readonly ====
 
