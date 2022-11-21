@@ -2,245 +2,371 @@
   * Version: 0.9
   * Date: 2022-11-09
   * Author: Derick Rethans <derick@php.net>
-  * Status: *Rough* Draft
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/unicode_text_processing
 
 
 ===== Introduction =====
 
 This RFC suggests to introduce a new class to make using and processing
-(Unicode) text significantly more developer friendly compared to the wealth of
-functionality that the intl extension provides. The goal is to make it easy for
-developers to do Unicode text processing correctly. The RFC does not aim to
-introduce a class that does everything that the intl extension provides with
-regards to Unicode strings.
+(Unicode) text significantly more developer friendly compared to the
+wealth of functionality that the intl extension provides. The goal is to
+create an API that developers can use to do Unicode text processing
+correctly, without having to know all the intricacies.
+
+==== Definitions ====
+
+^ Term ^ Description ^
+| Grapheme | A Unicode "character". A **single** character includes: a normal character (p), a character with diacritics (ô), a character with space modifiers, or an emoji (☺). |
+
 
 ===== Proposal =====
 
-To introduce a new "Text" class, with methods to operate on the text stored
-in the objects.
+To introduce a new "Text" class, with methods to operate on the text
+stored in the objects.
 
 Methods on the class will all return a new (immutable) object.
+==== Basics ====
+
+Text objects are constructed by passing a UTF-8 encoded string to the
+constructor.
+
+The ''toString()'' method collapses the internally stored text into a
+UTF-8 encoded string, which can be used by all existing PHP functions
+that accept strings.
+
+The internal representation would be UTF-16, as that's what ICU uses.
+Unlike the PHP 6 approach, the conversion to/from the internal
+representation only happens on the boundaries: UTF-8 to UTF-16 through
+the constructor, and the reverse through the ''toString()'' method.
+
+There are multiple groups of methods indicated below. Some are to
+represent PHP's existing string functions (substr, wordwrap, etc.), but
+with meaningful names.
+
+Design Goals:
+
+  * keep it simple
+  * default behaviour should be the most expected
+  * prefer a method per function, instead of allowing the behaviour of a method to be changed through (optional) arguments.
+  * operations are on **graphemes**
+  * no redundent methods that can be constructed from other methods, unless they already exist in PHP, or are frequently used
+  * more as we discuss this...
+
+Non Design Goals:
+
+  * introduce every feature of the intl extension
+
+Each section below contains a list of expected methods. This list is
+currently not exhaustive. Please join the discussion on the mailing list
+to suggest modifications or additions, keeping the design goals in mind.
+
+If an argument to any of the methods is listed as ''string|Text'',
+passing in a ''string'' value will have the same semantics as replacing
+the passed value with ''new Text($string)''. The locale from the Text
+object that this method is called on is also used for this new wrapped
+value, if necessary.
+
+==== Locales and Internationalisation ====
+
+By default each string will have the "root" collator associated with it,
+but it is possible to configure a specific collator by using the
+''$collator'' argument in the constructor. The ''$collator'' is specified as
+a string describing an ICU locale name:
+https://unicode-org.github.io/icu/userguide/collation/api.html#instantiating-the-predefined-collators
+
+For example, the locale (or collation) name ''en-u-ks-level1'' means
+case-insensitive sorting for the English locale. This will require
+extensive documentation.
+
+Numerical order collation (such as PHP's ''natsort()'') can be achived
+by adding the ''kn'' flag to the locale name, such as in ''de-u-kn''
+(case-sensitive German, with numerics in value order).
+
+Other options are described in BCP47:
+https://github.com/unicode-org/cldr/blob/main/common/bcp47/collation.xml
+and defaults at http://www.unicode.org/reports/tr35/tr35-collation.html#Collation_Settings
+
+Specifying the locale and collator will also be possible by passing in a
+''Intl\\Collator'' object
+(https://www.php.net/manual/en/class.collator.php) to allow for more
+descritive construction of a locale with all its options.
+
+
+==== Construction ====
+
+This section lists all the method that construct a Text object.
+
+=== __construct(string $text, string $locale = 'root/standard'), __construct(string $text, \\Intl\\Collator $collator = new \\Intl\\Collator('root/standard')) ===
 
 The constructor takes a UTF-8 encoded text, and stores this in an internal
 structure. The constructor will also convert the given text to Unicode
 Canonical Form. Passing in non-well-formed UTF-8 will result in an
-`InvalidEncodingException`. The constructor will also strip out a BOM
+''InvalidEncodingException''. The constructor will also strip out a BOM
 (Byte-Order-Mark) character, if present.
 
-By default each string will have the "root" locale associated with it, but it
-is possible to configure a specific locale by using the `$locale` argument in
-the constructor.
 
-The ``__toString()`` method collapses the internally stored text into a
-UTF-8 encoded string, which can be used by all existing PHP functions that
-accept strings.
+=== static Text::join(array(string|Text) $elements, string|Text $separator) ===
 
-Methods fall into multiple groups. Some to implement PHP's existing
-string functions (substr, wordwrap, etc.), but with meaningful names. A
-design goal is to rather create more methods, than allowing the behaviour of
-methods to be changed through (optional) arguments.
+Creates a new Text object by concatenating the each Text element in
+''$elements'', inserting ''$separator'' in between each element.
 
-The internal representation would be UTF-16, as that's what ICU uses. Unlike
-the PHP 6 approach, the conversion to/from the internal representation only
-happens on the boundaries: UTF-8 to UTF-16 through the constructor, and the
-reverse through the ``__toString()`` method.
+Semantics like: ''implode(string $separator, array(string) $array)''
 
-==== Groups of Methods ====
 
-Each section will contain a list of expected methods, which from the start
-might not be exhaustive. Please join the discussion on the mailing list to
-suggest modifications or additions, keeping the design goals in mind.
+==== Standard String Operations ====
 
-=== Construction ===
 
-``__construct(string $text, string $locale = 'C')``
+=== split(string|Text $separator, int $limit = PHP_INT_MAX): array(Text) ===
 
-=== Standard String Operations ===
+Returns an array of Text objects, each of which is a substring of ''$this'',
+formed by splitting it on boundaries formed by the text ''$separator''.
 
-All string operators operate on **graphemes**, which are generally: a normal
-character, a character with diacritics, a character with space modifiers, or
-an emojis.
+Like ''explode($separator, $limit)''.
 
-I am not sure if these should accept `string|Text` or only `Text` as
-`$textToFind`. Accepting a string makes for a easier to use API, but with the
-caveat that we internally need to convert it pretty much to a `Text` object
-any way.
 
-``splitByText(Text $separator, int $limit = PHP_INT_MAX): array(Text)``
-	Returns an array of Text objects, each of which is a substring of `$this`,
-	formed by splitting it on boundaries formed by the text `$separator`.
+=== subString(int $offset, int $length) : Text|false ===
 
-	Like `explode($separator, $limit)`.
+Returns a sub-string, starting at ''$offset'' for ''$length'' graphemes.
 
-``static Text::joinFromTexts(array(Text) $elements, Text $separator``
-	Creates a new Text object by concatenating the each Text element in
-	`$elements`, inserting `$separator` in between each element.
+Like: ''grapheme_substr($this, $offset, $length)''
+https://www.php.net/manual/en/function.grapheme-substr.php
 
-	Semantics like `implode(string $separator, array(string) $array);`
+=== trimLeft, trimRight, trim ===
 
-``subString(int $offset, int $length) : Text|false``
-	Returns a sub-string, starting at `$offset` for `$length` graphemes.
+Removes white space at the start of, the end of, or both sides of the text.
 
-	Like: `grapheme_substr($this, $offset, $length)`
-	https://www.php.net/manual/en/function.grapheme-substr.php
+Like: ''ltrim'', ''rtrim'', and ''trim'', but with using the Unicode definition
+of what white space is. https://unicode.org/reports/tr44/#White_Space
 
-``trimLeft``
-``trimRight``
-``trim``
-	Removes white space at the start of, the end of, or both sides of the text.
+=== wrap(int $maxWidth, bool $cutLongWords = false) : array(Text) ===
 
-	Like: `ltrim`, `rtrim`, and `trim`, but with using the unicode definition
-	of what white space is. https://unicode.org/reports/tr44/#White_Space
+Wraps a text to a given number of graphemes into an array of Text objects.
 
-``wrap(int $maxWidth, bool $cutLongWords = false) : array(Text)``
-	Wraps a text to a given number of graphemes into an array of Text objects.
+Like: ''wordwrap'', but based on graphemes and returning an array instead of
+inserting a break character.
 
-	Like: `wordwrap`, but based on graphemes and returning an array instead of
-	inserting a break character.
+If ''$cutLongWords'' is set, no Text element will be larger than
+''$maxWidth''.
 
-	If `$cutLongWords` is set, no Text element will be larger than
-	`$maxWidth`.
 
-``replaceText(Text $search, Text $replace)`` ??
+=== replaceText(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) ===
 
-``replaceTextCaseInsensitively(Text $search, Text $replace)`` ??
-	Will have to use locales too.
+Replaces the first ''$maxReplacements'' occurrences of ''$search'' with
+''$replace''.
 
-``reverse()``
-	Reverses a text, taking into account grapheme boundaries.
+The ''$replaceFrom'' and ''$replaceTo'' arguments control which found
+items are being replace. The ''$replaceFrom'' argument is the first
+argument that is being replaced (0-indexed), and ''$replaceTo'' is the
+last item. Positive numbers are counted from the first occurence of
+''$search'' in the Text, and negative numbers from the last found
+occurrence.
 
-=== Finding text in text ===
+
+=== replaceTextCaseInsensitively(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) ===
+
+Replaces every occurrence of ''$search'' with ''$replace'' using the locale of
+the object that the method is called on. The locale of ''$search'' and
+''$replace'' is ignored.
+
+''$replaceFrom'' and ''$replaceTo'' behave as with ''replaceText''.
+
+
+=== reverse() ===
+
+Reverses a text, taking into account grapheme boundaries.
+
+
+==== Finding Text in Text ====
 
 Methods to find text in other text.
 
-``getPositionOfFirstOccurrence(string|Text $textToFind, int $offset) : int|false``
-	Returns the position (in grapheme units) of the first occurrence of
-	`$textToFind` starting at the (grapheme) `$offset`, or false if not found.
+=== getPositionOfFirstOccurrence(string|Text $textToFind, int $offset) : int|false ===
 
-	Like: `grapheme_strpos($this, $textToFind, $offset)`
-	https://www.php.net/manual/en/function.grapheme-strpos.php
+Returns the position (in grapheme units) of the first occurrence of
+''$textToFind'' starting at the (grapheme) ''$offset'', or false if not found.
 
-``getPositionOfLastOccurrence(string|Text $textToFind, int $offset) : int|false``
-	Like `getPositionOfFirstOccurrence` but then from the end of the text.
+Like: ''grapheme_strpos($this, $textToFind, $offset)''
+https://www.php.net/manual/en/function.grapheme-strpos.php
 
-``returnFromFirstOccurence(string|Text $textToFind) : Text|false``
-	Returns the `Text` starting with the `$textToFind` if found, and
-	otherwise `false`.
+*I think this method name is too long*
 
-	Like: `grapheme_strstr($this, $textToFind)`
-	(https://www.php.net/manual/en/function.grapheme-strstr.php)
-
-``returnFromLastOccurence(string|Text $textToFind) : Text|false``
-	Like `returnFromFirstOccurence` but then from the end of the text.
-
-`compareWith(Text $other) : int` (or also the Text's compare handler)
-	Needs to use a locale, and sorting text strength (to avoid all the many
-	options)... perhaps use Intl's collator instead? Or have two methods?
-
-`compareWithNaturalOrder(Text $other) : int`
-	Like `strnatcmp`/`strnatcasecmp`. Would be a short cut for using
-	`compareWithCollator` with a `$collator` with the NUMERIC_COLLATION option
-	turned on.
-
-`compareWithCollator(Text $other, \Intl\Collator $collator) : int`
-
-``contains(Text $string)``
-	Returns true if the text `$string` can be found in the text.
-
-	Like `str_contains`.
-
-``endsWith(Text $string)``
-
-``startsWith(Text $string)``
+=== getPositionOfLastOccurrence(string|Text $textToFind, int $offset) : int|false ===
 
 
-Case-insensitive variants are not included. If you need this, convert the
-text(s) with ``toLower`` first. Or allow for using Intl's Collator? That'd be
-nicer...
-
-=== Case Conversions ===
-
-``toLower``
-	Converts the text to lower case, using the lower case variant of each
-	Unicode code point that makes up the text.
-
-``toUpper``
-
-``toTitle``
-i
-``firstToLower``
-	Converts the first grapheme in the text to a lower case variant.
-
-``firstToUpper``
-
-``firstToTitle``
+Like ''getPositionOfFirstOccurrence'' but then from the end of the text.
 
 
-=== Counting ===
+=== returnFromFirstOccurence(string|Text $textToFind) : Text|false ===
 
-`getByteCount()`
-	Returns the size in bytes that the text will take when converted to UTF-8.
+Returns the ''Text'' starting with the ''$textToFind'' if found, and
+otherwise ''false''.
 
-`length()`
-`getCharacterCount()`
-	Returns the number of characters that make up the text. A character (also
-	sometimes call a grapheme) consists of the base-character, and all
-	combining diacritics. Unicode calls these "extended grapheme clusters".
-	http://unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries
+Like: ''grapheme_strstr($this, $textToFind)''
+(https://www.php.net/manual/en/function.grapheme-strstr.php)
 
-`getCodePointCount()`
-	Returns the number of Unicode code points that make up the text.
-	(Not sure if we should add this, as it doesn't really have any use).
 
-`countWords()`
-	Pretty much a shortcut for::
+=== returnFromLastOccurence(string|Text $textToFind) : Text|false ===
+
+Like ''returnFromFirstOccurence'' but then from the end of the text.
+
+=== contains(string|Text $string) ===
+
+Returns true if the text ''$string'' can be found in the text.
+
+Like ''str_contains''.
+
+
+=== endsWith(string|Text $string) : bool ===
+
+Could be constructed from ''getPositionOfFirstOccurrence()'' and
+''length()'', but it's an often required method, and standard PHP has it
+too.
+
+
+=== startsWith(string|Text $string) : bool ===
+
+Compares the first ''$string.Length()'' graphemes of ''$this'' using the
+locale and collator that are configured with ''$this''.
+
+Case-insensitive comparison can be achieved by setting the right
+''$locale'' and ''$collator'' on ''$this''.
+
+Could be constructed from ''getPositionOfFirstOccurrence()'',
+but it's an often required method, and standard PHP has it
+too.
+
+
+==== Comparing Text Objects ====
+
+=== compareWith(Text $other) : int ===
+
+Uses the configured ''$locale'' of ''$this'' to compare it against
+''$other''. The locale of ''$other'' is ignored.
+
+This same method is also used for comparing two Text objects as "compare
+handler".
+
+
+==== Case Conversions ====
+
+
+=== toLower ===
+
+Converts the text to lower case, using the lower case variant of each
+Unicode code point that makes up the text.
+
+
+=== toUpper ===
+
+
+
+=== toTitle ===
+
+
+
+=== firstToLower ===
+
+Converts the first grapheme in the text to a lower case variant.
+
+
+=== firstToUpper ===
+
+
+
+=== firstToTitle ===
+
+
+
+==== Counting ====
+
+
+=== getByteCount() ===
+
+Returns the size in bytes that the text will take when converted to UTF-8.
+
+
+=== length(), getCharacterCount() ===
+
+Returns the number of characters that make up the text. A character (also
+sometimes call a grapheme) consists of the base-character, and all
+combining diacritics. Unicode calls these "extended grapheme clusters".
+http://unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries
+
+
+=== getCodePointCount() ===
+
+Returns the number of Unicode code points that make up the text.
+(Not sure if we should add this, as it doesn't really have any use).
+
+
+=== countWords() ===
+
+Pretty much a shortcut for::
 
 	$count = 0;
 	foreach ($text->getWordIterator as $word) { $count++ };
 
-	Uses the locale, just like the iterators.
+Uses the locale, just like the iterators.
 
 
-=== Iterators ===
+==== Iterators ====
 
 These functions return an iterator that can be used to iterator over the text.
 The return of the iterators are effected by the text's locale.
 
-``getCharacterIterator``
 
-``getLineIterator``
-
-``getSentenceIterator``
-
-``getTitleIterator``
-
-``getWordIterator``
+=== getCharacterIterator ===
 
 
-=== Transliteration ===
+
+=== getLineIterator ===
+
+
+
+=== getSentenceIterator ===
+
+
+
+=== getTitleIterator ===
+
+
+
+=== getWordIterator ===
+
+
+
+==== Transliteration ====
 
 Converts text between scripts and other properties.
 
-``transliterate(string $transliterationString)``
 
-``transliterate(\Intl\Transliterator $transliterator)``
+=== transliterate(string $transliterationString) ===
+
+
+
+=== transliterate(\Intl\Transliterator $transliterator) ===
+
 
 With the first one being a "simple" one to use, and the second using Intl's
 Transliterator for more complex cases.
 
-Should we add shortcuts for a set of often used ones, such as `Any-Latin`? I
+Should we add shortcuts for a set of often used ones, such as ''Any-Latin''? I
 think so, as it's the majority use case.
 
-``toLatin``
-	Converts any script to Latin.
 
-``removeAccents``
-	Removes the accents from a (latin script) text.
+=== toLatin ===
 
-	A shortcut for the transliteration string `"Latin-ASCII"` (or a more
-	suitable one, which I believe is `"NFD; [:Nonspacing Mark:] Remove;
-	NFC."`.
+Converts any script to Latin.
+
+
+=== removeAccents ===
+
+Removes the accents from a (latin script) text.
+
+A shortcut for the transliteration string ''"Latin-ASCII"'' (or a more
+suitable one, which I believe is ''"NFD; [:Nonspacing Mark:] Remove;
+NFC."''.
 
 
 ===== Backward Incompatible Changes =====
@@ -282,7 +408,7 @@ There is no patch yet.
 
 ===== Implementation =====
 
-After the project is implemented, this section should contain 
+After the project is implemented, this section should contain
   - the version(s) it was merged into
   - a link to the git commit(s)
   - a link to the PHP manual entry for the feature
