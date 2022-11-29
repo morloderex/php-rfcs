@@ -30,8 +30,7 @@ The rationale behind all of these is the following:
     * Errors with parsing the free-form text to create a ''DateInterval'' object become a ''DateMalformedIntervalStringException''.
     * Errors with parsing the free-form text to create a ''DatePeriod'' object become a ''DateMalformedPeriodStringException''.
 
-The hierarchy
- will look like:
+The hierarchy will look like:
 
   * Error
     * ''"Cannot modify readonly property DatePeriod::$%s"''
@@ -72,7 +71,7 @@ The hierarchy
         * ''"Failed to parse interval (%s)"'' (date_interval_initialize)
         * ''"Unknown or bad format (%s) at position %d (%c): %s"'' (date_interval_create_from_date_string/OO variant; now: either a warning or exception)
         * ''"String '%s' contains non-relative elements"'' (date_interval_create_from_date_string/OO variant; now: either a warning or exception)
-      * DateMalformedPeriodStringException (all DatePeriod, __construct)
+      * DateMalformedPeriodStringException (all DatePeriod's constructor)
         * ''"Unknown or bad format (%s)" (date_period_initialize)''
         * ''"%s(): ISO interval must contain a start date, \"%s\" given"''
         * ''"%s(): ISO interval must contain an interval, \"%s\" given"''
@@ -83,97 +82,10 @@ Procedural style use of date/time functions are not effected, and will continue 
 
 ===== Backward Incompatible Changes =====
 
-- The warning for broken serialisation data becomes a new ''Error'', following in the footsteps of the serialization error RFCs that we have seen. This ought not cause a real concern, as right now you would get a broken DateTime object.
-- The ''"Epoch doesn't fit in a PHP integer"'' now returns a new ''DateRangeError'' instead of a generic ''ValueError'', which it does not subclass. This is only an issue for 32-bit platforms.
-- The ''====== PHP RFC: More Appropriate Date/Time Exceptions ======
-  * Version: 0.9
-  * Date: 2022-11-29
-  * Author: Derick Rethans <derick@php.net>
-  * Status: Draft
-  * First Published at: http://wiki.php.net/rfc/datetime-exceptions
-
-
-===== Introduction =====
-
-This RFC proposes to introduce Date/Time extension specific exceptions and errors where this makes sense.
-
-Right now, they are either warnings/errors, or plain "Exception" or "Error". This does not allow for catching Date/Time extensions as they are not specific enough.
-
-
-===== Proposal =====
-
-The proposals is to reclassify warnings and errors as Exceptions, and introduce Date extension specific exceptions and errors.
-
-The rationale behind all of these is the following:
-
-  * Common errors (such as modifying readonly properties and invalid serialisation data) will throw an ''Error'', as that is what PHP does for user land code that makes these errors.
-  * Programming errors that do not come forth from user input, or free form text, become a ''ValueError''.
-  * Corrupted data (such as an invalid Timezone Database) becomes a ''DateError''.
-  * Uninitialised objects (due to a child not calling ''parent::construct'') becomes a ''DateObjectError''
-  * Issues that come to light due to user input, or free form text arguments that need to be parsed, become specific ''Exceptions'' under the ''DateException'' hierarchy:
-    * Errors with timezone creation cause an ''DateInvalidTimeZoneException''.
-    * Errors that come forth out of operations that can not be executed (such as using a non-special relative time specification with ''DateTime::sub()'') become a ''DateInvalidOperationException''
-    * Errors with parsing the free-form text to create a ''DateTime'' and/or ''DateTimeImmutable'' object become a ''DateMalformedStringException''.
-    * Errors with parsing the free-form text to create a ''DateInterval'' object become a ''DateMalformedIntervalStringException''.
-    * Errors with parsing the free-form text to create a ''DatePeriod'' object become a ''DateMalformedPeriodStringException''.
-
-The hierarchy
- will look like:
-
-  * Error
-    * ''"Cannot modify readonly property DatePeriod::$%s"''
-    * ''"Invalid serialization data for DateTime object"''
-    * ''"Invalid serialization data for DateTimeImmutable object"''
-    * ''"Invalid serialization data for DateTimeZone object"''
-    * ''"Invalid serialization data for DatePeriod object"''
-    * ''"Unknown or bad format (%s) at position %d (%c) while unserializing: %s"'' (currently a warning)
-    * ''"Trying to compare uninitialized DateTimeZone objects"''
-    * ''"An iterator cannot be used with foreach by reference"''
-    * ValueError (all, already like this)
-      * ''"must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY"''
-      * ''"must be one of SUNFUNCS_RET_TIMESTAMP, SUNFUNCS_RET_STRING, or SUNFUNCS_RET_DOUBLE"''
-    * TypeError
-      * ''"DatePeriod::construct() accepts (DateTimeInterface, DateInterval, int [, int]), or (DateTimeInterface, DateInterval, DateTime [, int]), or (string [, int]) as arguments"'' (already like this)
-    * DateError
-      * ''"Timezone database is corrupt. Please file a bug report as this should never happen"''
-      * ''"Timezone initialization failed"''
-      * DateObjectError
-        * ''"The " #class_name " object has not been correctly initialized by its constructor"'' (DATE_CHECK_INITIALIZED)
-        * ''"DatePeriod has not been initialized correctly"''
-        * ''"Trying to compare uninitialized DateTimeZone objects"''
-        * ''"The DateTime object has not been correctly initialized by its constructor"''
-      * DateRangeError (is currently a ValueError)
-        * ''"Epoch doesn't fit in a PHP integer"''
-  * Exception
-    * DateException
-      * DateInvalidTimeZoneException (these are not easy to just change/add)
-        * ''"Timezone must not contain null bytes"''
-        * ''"Timezone offset is out of range (%s)"''
-        * ''"Unknown or bad timezone (%s)"''
-      * DateInvalidOperationException
-        * ''"Only non-special relative time specifications are supported for subtraction"'' (currently a WARNING for both procedural and OO variants)
-      * DateMalformedStringException
-        * ''Failed to parse time string (%s) at position %d (%c): %s"''
-      * DateMalformedIntervalStringException
-        * ''"Unknown or bad format (%s)"'' (date_interval_initialize)
-        * ''"Failed to parse interval (%s)"'' (date_interval_initialize)
-        * ''"Unknown or bad format (%s) at position %d (%c): %s"'' (date_interval_create_from_date_string/OO variant; now: either a warning or exception)
-        * ''"String '%s' contains non-relative elements"'' (date_interval_create_from_date_string/OO variant; now: either a warning or exception)
-      * DateMalformedPeriodStringException (all DatePeriod, __construct)
-        * ''"Unknown or bad format (%s)" (date_period_initialize)''
-        * ''"%s(): ISO interval must contain a start date, \"%s\" given"''
-        * ''"%s(): ISO interval must contain an interval, \"%s\" given"''
-        * ''"%s(): ISO interval must contain an end date or a recurrence count, \"%s\" given"''
-        * ''"%s(): Recurrence count must be greater than 0"''
-
-Procedural style use of date/time functions are not effected, and will continue to use warnings and errors as they currently do.
-
-===== Backward Incompatible Changes =====
-
-- The warning for broken serialisation data becomes a new ''Error'', following in the footsteps of the serialization error RFCs that we have seen. This ought not cause a real concern, as right now you would get a broken DateTime object.
-- The ''"Epoch doesn't fit in a PHP integer"'' now returns a new ''DateRangeError'' instead of a generic ''ValueError'', which it does not subclass. This is only an issue for 32-bit platforms.
-- The ''"Only non-special relative time specifications are supported for subtraction"'' warning with ''DateTime::sub()'' and ''date_sub()'' becomes a new ''DateInvalidOperationException''. Leaving this with a warning and a NULL return is not useful behaviour.
-- The ''"Unknown or bad format (%s) at position %d (%c): %s"'' and ''"String '%s' contains non-relative elements"'' warnings that are created while parsing wrong/broken ''DateInterval'' strings will now throw a new ''DateMalformedIntervalStringException'' when used with the OO interface, instead of showing a warning and returning false. 
+  - The warning for broken serialisation data becomes a new ''Error'', following in the footsteps of the serialization error RFCs that we have seen. This ought not cause a real concern, as right now you would get a broken DateTime object.
+  - The ''"Epoch doesn't fit in a PHP integer"'' now returns a new ''DateRangeError'' instead of a generic ''ValueError'', which it does not subclass. This is only an issue for 32-bit platforms.
+  - The ''"Only non-special relative time specifications are supported for subtraction"'' warning with ''DateTime::sub()'' and ''date_sub()'' becomes a new ''DateInvalidOperationException''. Leaving this with a warning and a NULL return is not useful behaviour.
+  - The ''"Unknown or bad format (%s) at position %d (%c): %s"'' and ''"String '%s' contains non-relative elements"'' warnings that are created while parsing wrong/broken ''DateInterval'' strings will now throw a new ''DateMalformedIntervalStringException'' when used with the OO interface, instead of showing a warning and returning false. 
 
 ===== Proposed PHP Version(s) =====
 
@@ -212,7 +124,7 @@ None yet.
 
 ===== Proposed PHP Version(s) =====
 
-Next PHP 8.x.8.x.y".
+Next PHP 8.x.
 
 ===== RFC Impact =====
 
