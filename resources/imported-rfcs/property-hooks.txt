@@ -1,0 +1,253 @@
+====== PHP RFC: Property hooks ======
+  * Version: 0.9
+  * Date: 2022-12-01
+  * Author:  Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/property-hooks
+
+===== Introduction =====
+
+Developers often use methods to wrap and guard access to object properties. There are several highly common patterns for such logic, which in practice may be verbose to implement repeatedly.  Alternatively, developers may use <php>__get</php> and <php>__set</php> to intercept reads and writes generically, but that is a sledge-hammer approach that intercepts all undefined (and some defined) properties unconditionally.  Property hooks provide a more targeted, purpose-built took for common property interactions.
+
+The combination of this RFC and the [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC effectively replicate and replace the previous [[rfc:property_accessors|Property Accessors]] RFC.
+
+The design and syntax below is derived from both Swift and C#, although not an exact copy of either.
+
+===== Proposal =====
+
+This RFC allows attaching one or more of a fixed set of "hooks" to declared properties.  Some hooks are mutually-dependent, while others are effectively independent.  The hooks proposed by this RFC cover most common cases, but in concept more could be added in the future.
+
+The sections below attempt to "build up" the hook design piece by piece.  Some common expected patterns are also included later; this section attempts to be a complete description of the semantic logic.
+
+==== Enabling hooks ====
+
+Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property.  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property.  However, that may technically count as a BC break when adding a hook to a previously-defined property.  For that reason, the syntax allows enabling hooks without defining any; the only effect of doing so is to disallow acquiring a reference to the property.
+
+A property may enable hooks by replacing its '';'' with ''{}'', indicating that zero or more hooks may be included in the brackets in the future.
+
+<code php>
+class Point {
+    public int $x {}
+    public int $y;
+}
+</code>
+
+In this case, the ''$x'' parameter has enabled hooks, and therefore no reference to it may be obtained.  The ''$y'' parameter has not, and so a reference to it may be obtained.  Otherwise there is no difference in behavior.
+
+The hook block may also be used in constructor property promotion.
+
+<code php>
+class Point {
+    public function __construct(public int $x {}, public int $y {})
+}
+</code>
+
+To simplify the implementation, hooks may only be implemented on typed properties.
+
+As an important effect of this change, array properties may not be assigned to in-place if hooks are enabled.  That's because doing so requires directly modifying the property without going through a place where hooks can be implemented.  However, the array may be requested, modified, and reassigned.  In code:
+
+<code php>
+class MyList {
+    public array $values = [] {}
+}
+
+$l = new MyList();
+
+// This will fail.
+$l->values[] = 1;
+
+// But this is allowed.
+$a = $l->values;
+$a[] = 1;
+$l->values = $a;
+</code>
+
+While not ideal, it is an unavoidable impact of disabling direct access to a property.
+
+==== get and set ====
+
+The ''get'' and ''set'' hooks overwrite the PHP default read and write behavior.  They may be implemented individually or together.  If either one is implemented, PHP will not create any storage property on the object.  The developer is on their own to implement whatever storage behavior is appropriate.
+
+=== get ===
+
+If a ''get'' hook is implemented, then PHP will create no automatic storage for that property.  Instead, reads of that property will invoke the defined hook.
+
+<code php>
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName {
+        get { 
+            return $this->first . " " . $this->last;
+        }
+    }
+}
+
+$u = new User('Larry', 'Garfield');
+
+// prints "Larry Garfield"
+print $u->fullName;
+</code>
+
+The ''get'' hook body is an arbitrarily complex method body, which MUST return a value that is type compatible with the property.
+
+If a ''get'' hook is defined but no ''set'' hook, then any attempt to write to the property will result in an error.
+
+=== set ===
+
+If a ''set'' hook is implemented, then PHP will create no automatic storage for that property.  Instead, writes to that property will invoke the defined hook.
+
+<code php>
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName {
+        get { 
+            return $this->first . " " . $this->last;
+        }
+        set ($value) {
+            [$this->first, $this->last] = explode(' ', $value);
+        }
+    }
+    
+    public function getFirst(): string
+    {
+        return $this->first;
+    }
+}
+
+$u = new User('Larry', 'Garfield');
+
+$u->fullName = 'Ilija Tovilo';
+
+// prints "Ilija"
+print $u->getFirst();
+</code>
+
+The ''set'' hook body is an arbitrarily complex method body, which accepts one argument and has a void return.  The argument is not typed, but PHP will throw a TypeError if the value provided is not of the same type defined on the property.
+
+Specifying the argument name is optional.  If not specified, it defaults to ''$value''.  That is, the following ''set'' hook is identical to the previous:
+
+<code php>
+    public string $fullName {
+        get { 
+            return $this->first . " " . $this->last;
+        }
+        set {
+            [$this->first, $this->last] = explode(' ', $value);
+        }
+    }
+</code>
+
+If a ''set'' hook is defined but no ''get'' hook, then any attempt to read from the property will result in an error.  Such "write only" properties are of limited (but probably non-zero) value, but do not cause any issues for other functionality.
+
+In practice, most ''set'' implementations will also include a ''get'', but not all ''get'' implementations will include a ''set''.
+
+==== beforeSet ====
+
+The ''beforeSet'' hook intercepts values before they are assigned to a property, and optionally modifies them.  It does not affect PHP's storage of the value; that is, if only ''beforeSet'' is implemented, there will still be a real value stored on a real property on the object.  ''beforeSet'' may be used for validation or sanitization.
+
+<code php>
+class User {
+    
+    public string $username {
+        beforeSet($value) {
+            return strtolower($value);
+        }
+    }
+}
+
+$u = new User();
+
+$u->username = "JamesKirk";
+
+// prints "jameskirk"
+print $u->username;
+</code>
+
+The ''beforeSet'' hook body is an arbitrarily complex method body, which accepts one untyped argument.  It MUST return a value, and that value MUST be type-compatible with the property.  In this example, the value is being sanitized to lowercase.  If the hook wishes to modify the value being saved conditionally, it may do so and sometimes return ''$value'' unmodified.
+
+Specifying the argument name is optional.  If not specified, it defaults to ''$value''.
+
+A ''beforeSet'' hook may also be used for validation by throwing an exception should the value not meet some arbitrary criteria.
+
+<code php>
+class User {
+    
+    public string $username {
+        beforeSet($value) {
+            if (strlen($value) > 10) throw new \InvalidArgumentException('Too long');
+            return strtolower($value);
+        }
+    }
+}
+</code>
+
+
+
+===== Backward Incompatible Changes =====
+
+None.  
+
+===== Proposed PHP Version(s) =====
+
+PHP 8.3.
+
+===== RFC Impact =====
+==== To SAPIs ====
+Describe the impact to CLI, Development web server, embedded PHP etc.
+
+==== To Existing Extensions ====
+Will existing extensions be affected?
+
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
+
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
+
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
+===== Future Scope =====
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+Links to any external patches and tests go here.
+
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
