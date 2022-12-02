@@ -4,6 +4,7 @@
   * Author:  Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/property-hooks
+  * Implementation: Pending
 
 ===== Introduction =====
 
@@ -185,7 +186,242 @@ class User {
 }
 </code>
 
+Whatever value is returned from ''beforeSet'' will be assigned to the property, either directly or through a defined ''set'' hook.
 
+==== afterSet ====
+
+The ''afterSet'' hook intercepts values after they are assigned to a property.  They may not modify the property, but may read from it.  If a ''get'' hook is defined, the read attempt will invoke the ''get'' hook.  The ''afterSet'' hook is mainly useful for logging or change tracking.
+
+<code php>
+class Person {
+    private array $modified = [];
+    
+    public string $name {
+        get => $this->$_name;
+        afterSet($value) {
+            $this->modified['name'] = $value;
+        }
+    }
+
+    public int $age {
+        afterSet($value) {
+            $this->modified['age'] = $value;
+        }
+    }
+    
+    public function save(): void
+    {
+        foreach (array_keys($this->isModified) as $prop => $val) {
+            print "$prop was set to $val\n";
+        }
+    }
+}
+
+$p = =new Person();
+
+$p->name = 'Larry';
+
+// prints: name was set to Larry
+$p->save();
+</code>
+
+The ''afterSet'' hook body is an arbitrarily complex method body, which accepts one untyped argument and is return void.
+
+Specifying the argument name is optional.  If not specified, it defaults to ''$value''.
+
+==== Scoping ====
+
+All hooks operate in the scope of the object being modified.  That means they have access to all public, private, or protected methods of the object, as well as any public, private, or protected properties, including properties that may have their own property hooks.  Accessing another property from within a hook does not bypass the hooks defined on that property.
+
+The most notable implication of this is that non-trivial hooks may stub out to an arbitrarily complex method if they wish.  For example:
+
+<code php>
+class Person {
+    public string $phone {
+        beforeSet { return $this->sanitizePhone($value); }
+    }
+    
+    private function sanitizePhone(string $value): string
+    {
+        $value = ltrim($value, '+');
+        $value = ltrim($value, '1');
+
+        if (!preg_match('/\d\d\d\-\d\d\d\-\d\d\d\d/', $new)) {
+            throw new \InvalidArgumentException();
+        }
+        return $new;
+    }
+}
+</code>
+
+ILIJA: What do we do with static properties?  Nikita's RFC skipped them out of laziness, but didn't indicate it couldn't be done.  I'm entirely fine skipping them as they seem far less useful, but I defer to you.
+
+==== Abbreviated forms ====
+
+There are two shorthand notations supported, beyond the optional argument to ''set'', ''beforeSet'', and ''afterSet''.
+
+First, if a hook's body is a single expression, then the ''{ }'' and ''return'' statement may be omitted and replaced with ''=>'', just like with arrow functions.
+
+Second, if there is one and only one hook, and that hook is ''get'', then the hook name and wrapping ''{}'' may be omitted and replaced with ''=>''.
+
+That means the following three examples are all semantically identical:
+
+<code php>
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName {
+        get { 
+            return $this->first . " " . $this->last;
+        }
+    }
+}
+
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName {
+        get => $this->first . " " . $this->last;
+    }
+}
+
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName => $this->first . " " . $this->last;
+}
+</code>
+
+For void-return hooks, if the single-expression results in a value it will be silently discarded.  That is, the following is an example of legal syntax:
+
+<code php>
+class User
+{
+
+    private array $modified = [];
+
+    public string $fullName {
+        get => $this->first . " " . $this->last;
+        set => [$this->first, $this->last] = explode(' ', $value);
+        beforeSet => \ucfirst($value);
+        afterSet => $this->modified['first'] = true && $this->modified['last'] = true;
+    }
+
+    public function __construct(private string $first, private string $last) {}
+}
+</code>
+
+By way of comparison, here is the same logic implemented via methods in PHP 8.2:
+
+<code php>
+class User
+{
+    private array $modified = [];
+    
+    public function __construct(private string $first, private string $last) {}
+    
+    public function getFullName(): string
+    {
+        return $this->first . " " . $this->last;
+    }
+    
+    public function setFullName(string $value): void
+    {
+        $value = \ucfirst($value);
+        [$this->first, $this->last] = explode(' ', $value);
+        $this->modified['first'] = true;
+        $this->modified['last'] = true;
+    }
+}
+</code>
+
+==== Interaction with asymmetric visibility ====
+
+The [[rfc:asymmetric-visibility|Asymmetric Visibility]] introduces separate access control for ''get'' and ''set'' operations.  That visibility applies the same regardless of what if any hooks are implemented.  As the syntax for asymmetric visibility is confined to the left side of the property and hooks to the right, they do not interact syntactically at all.
+
+==== Interaction with readonly ====
+
+''readonly'' properties have the effect of forcing private ''set'' scope, and limiting the property to a single ''set'' operation.  That behavior is independent of hooks, and therefore the two are compatible.
+
+The one caveat is if a ''get'' hook is implemented.  It is entirely possible for a ''get'' hook to return different values at different times (say, if the ''$first'' property were modified, as in the examples above).  That may give the appearance of a property being non-readonly when it actually is.
+
+ILIJA: I don't actually know what we should do here.  Make ''readonly'' mean cache?  Disallow it?  Say "caveat coder?"  I'm not sure.
+
+==== Interaction with <php>__get</php> and <php>__set</php> ====
+
+If a class has properties that implement hooks, they are therefore defined, and cannot be "unset".  Therefore, a <php>__get</php> or <php>__set</php> method will never be called for those properties.  They will be called for truly undefined properties just as they always have been.
+
+==== Interaction with ''isset()'' and ''unset()'' ====
+
+If a property implements hooks other than ''get'' or ''set'', then ''isset()'' is unaffected.  Additionally, ''afterSet'' and ''beforeSet'' will not be called if a property is ''unset()''.
+
+If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php today.
+
+If a property implements ''get'' or ''set'', then ''unset()'' may not be invoked on the property.  Doing so will result in an error.  As there is no stored property by that name to unset, the operation is meaningless.
+
+ILIJA: Check this section.  Does this make logical sense?
+
+==== Inheritance ====
+
+A child class may define or redefine individual hooks on a property by redefining the property and just the hooks it wishes to override.  The type and visibility of the property are subject to their own rules independently of this RFC.
+
+A child class may also add hooks to a property that had none, nor opted in to hooks.
+
+ILIJA: Not sure about this one, as it could be an LSP issue the same as disabling references is.  Thoughts?
+
+<code php>
+class Point
+{
+    public int $x {}
+    public int $y {}
+}
+
+class PositivePoint extends Point
+{
+  public int $x {
+      beforeSet => $ >= 0 ? $x :  throw new \InvalidArgumentException('Too small');
+  }
+}
+</code>
+
+Each hook overrides parent class implementations independently of each other.
+
+Hooks may also be declared ''final'', in which case they may not be overridden.
+
+<code php>
+class User 
+{
+    
+    public string $username {
+        final beforeSet($value) => strtolower($value);
+    }
+}
+
+class Manager extends User
+{
+    public string $username {
+        // This is allowed
+        afterSet => $this->modifications['username'] => true;
+        // But this is NOT allowed, because beforeSet is final in the parent.
+        beforeSet => strtoupper($value);
+    }
+}
+</code>
+
+If the property itself is declared ''final'', then hooks could not be overridden anyway.  Therefore, declaring hooks ''final'' on a property that is declared ''final'' will throw an error.
+
+ILIJA: Do we also want abstract hooks?  Nikita's RFC had it, but I'm not sure if they make sense. 
+
+===== Reflection =====
+
+ILIJA: Oh dear oh dear...
+
+===== Usage examples =====
+
+TODO: LARRY
 
 ===== Backward Incompatible Changes =====
 
@@ -196,48 +432,32 @@ None.
 PHP 8.3.
 
 ===== RFC Impact =====
-==== To SAPIs ====
-Describe the impact to CLI, Development web server, embedded PHP etc.
-
-==== To Existing Extensions ====
-Will existing extensions be affected?
-
-==== To Opcache ====
-It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
-
-Please explain how you have verified your RFC's compatibility with opcache.
-
-==== New Constants ====
-Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
-
-==== php.ini Defaults ====
-If there are any php.ini settings then list:
-  * hardcoded default values
-  * php.ini-development values
-  * php.ini-production values
 
 ===== Open Issues =====
 Make sure there are no open issues when the vote starts!
 
 ===== Unaffected PHP Functionality =====
-List existing areas/features of PHP that will not be changed by the RFC.
 
-This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+This RFC has been designed alongside asymmetric visibility in such a way that either one can pass or fail on its own, and whatever passes is still useful.  Both may also pass, and they will naturally dovetail together.
 
 ===== Future Scope =====
-This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+==== Properties in interfaces ====
+
+Nikita's original property accessor RFC included the ability to define properties as part of an interface, and specifically that a property needed to be readable and/or writeable.  The authors of this RFC have omitted that feature for now.  It is a good and useful feature that would be valuable to add, but it's better to keep this RFC focused on just the hooks themselves.  The authors would support such an RFC in the future, and time permitting may consider it themselves.
+
+==== isset and unset hooks ====
+
+PHP supports magic methods for <php>__isset</php> and <php>__unset</php>.  While it is tempting to allow those as hooks as well, the authors feel their use is limited and could result in wacky, inconsistent behavior.  They have therefore been omitted.  However, it is possible to reintroduce them in a future RFC should valid use cases be shown.
+
+==== readonly ====
+
+It may be feasible to further integrate ''readonly'' with hooks in the future.  That is a task for a future RFC.
 
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
 
-===== Patches and Tests =====
-Links to any external patches and tests go here.
+This is a simple yes-or-no vote to include this feature. 2/3 majority required to pass. 
 
-If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
-
-Make it clear if the patch is intended to be the final patch, or is just a prototype.
-
-For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
