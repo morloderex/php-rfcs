@@ -1,0 +1,121 @@
+====== PHP RFC: Path to Saner Increment/Decrement operators ======
+
+  * Version: 0.1
+  * Date: 2022-11-21
+  * Author: George Peter Banyard, <girgias@php.net>
+  * Status: Draft
+  * Target Version: PHP 8.3
+  * Implementation: [[https://github.com/php/php-src/pull/]]
+  * First Published at: [[http://wiki.php.net/rfc/saner-inc-dec-operators]]
+
+===== Introduction =====
+
+PHP's increment and decrement operators can have some surprising behaviours when used with types other than int and float. Various previous attempts (([[rfc:normalize_inc_dec|PHP RFC: Normalize increment and decrement operators]]))
+(([[rfc:alpanumeric_decrement|PHP RFC: Alphanumeric Decrement]]))
+(([[rfc:increment_decrement_fixes|PHP RFC: Increment/Decrement Fixes]]))
+have been made to improve the behaviour of these operators.
+But none have been implemented.
+
+We will first detail the current behaviour of the two operators, then propose various changes to warn or deprecate about the pitfalls to be converted to errors in PHP 9.
+
+==== Current behaviour ====
+
+If the value is of type ''array'' or ''resource'' then a ''TypeError'' is raised.
+
+If the value is of type ''object'' and is an instance of an internal class that implements the ''do_operation'' handler and overloads the + and/or - operation, the corresponding operation is acted upon the object. Otherwise, a ''TypeError'' is raised. Examples of such internal objects are ''GMP'' or ''FFI\CData''.
+
+If the value is of type ''int'' or ''float'', the operation is performed, with the usual caveat that if the new integer value over/under-flows, it is cast to a ''float''.
+
+If the value is of type ''bool'', no action is performed on the value.
+
+If the value is of type ''null'', no action is performed when the decrement operator is used, but the value is cast to the integer ''1'' if the increment operator is used.
+
+If the value is of type ''string'' the following steps are performed:
+
+  * If the string is numeric, then a standard numeric type cast is performed, and the ''int''/''float'' behaviour is utilized.
+  * Otherwise the string is a non-numeric string:
+     * If the decrement operator is used no action is performed, //unless// the the string is empty where the value is cast to the integer ''-1''.
+     * Else, the increment operator is used and a PERL alphanumeric string increment is performed.
+
+
+Note: this means that the behaviour around the empty string differs between both operators. Because for ''++'' a PERL increment is used the result is the string ''"1"''. This behaviour is identical in PHP 7 and PHP 8 and was not affected by the changes around the empty string to int conversions which happened in PHP 8.0.
+
+<PHP>
+<?php
+
+$s1 = $s2 = "";
+var_dump(++$s1, ++$s1, --$s2, --$s2);
+/* this results in
+string(1) "1"
+int(2)
+int(-1)
+int(-2)
+*/
+</PHP>
+
+===== Proposal =====
+
+The proposal is to create a path which creates awareness around the usage of these operators when they have no effects and deprecate inconsistent and unintuitive behaviour. The changes are as follows:
+
+If the value is of type ''bool'':
+
+  * Emit an <php>E_WARNING</php> when using either the increment or decrement operator.
+
+If the value is of type ''null'':
+
+  * Add support to the decrement operator. This would cast the value to the integer ''-1''.
+
+If the value is of type ''string'':
+
+  * Emit an <php>E_WARNING</php> when using the decrement operator on non-empty non-numeric string values.
+  * Deprecate PERL alphanumeric string increments by emitting an <php>E_DEPRECATED</php> when using the increment operator on non-empty non-numeric string values.
+  * Deprecate using the decrement operator on an empty string, to align the behaviour with the PERL alphanumeric string increment deprecation, and the semantics of what is considered a numeric string.
+
+==== Proposal Addendum ====
+
+As the behaviour around these operators and values of type ''null'' has been controversial in the past, a separate addendum will be voted on to replace the
+text in the section describing the changes to the ''null'' type by the following:
+
+  * Emit an <php>E_WARNING</php> when trying to use the decrement operator on values of type ''null''.
+  * Deprecate using the increment operator on values of type ''null'' by emitting an <php>E_DEPRECATED</php> in this case.
+
+
+===== Backward Incompatible Changes =====
+
+The backwards incompatible changes are the changes which introduce an <php>E_DEPRECATED</php> diagnostic.
+
+The changes that introduce an <php>E_WARNING</php> diagnostic do not break backwards compatibility, however they might be elevated to an exception via a user set error handler which may reveal some unintended usages.
+
+===== Proposed PHP Version =====
+
+Next minor version, i.e. PHP 8.3.
+
+===== Proposed Voting Choices =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2022-XX-XX and will end on 2022-XX-XX.
+<doodle title="Accept Path to Saner Increment/Decrement operators RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+The addendum to this proposal will also require a 2/3 majority to be accepted.
+
+Voting started on 2022-XX-XX and will end on 2022-XX-XX.
+<doodle title="Accept Path to Saner Increment/Decrement operators Addendum?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Implementation =====
+
+GitHub pull request: https://github.com/php/php-src/pull/XXXX
+
+After the project is implemented, this section should contain
+
+  * the version(s) it was merged into
+  * a link to the git commit(s)
+  * a link to the PHP manual entry for the feature
+
+===== References =====
