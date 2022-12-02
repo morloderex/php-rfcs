@@ -350,19 +350,42 @@ The one caveat is if a ''get'' hook is implemented.  It is entirely possible for
 
 ILIJA: I don't actually know what we should do here.  Make ''readonly'' mean cache?  Disallow it?  Say "caveat coder?"  I'm not sure.
 
-==== Interaction with <php>__get</php> and <php>__set</php> ====
+==== Interaction with magic methods ====
 
 If a class has properties that implement hooks, they are therefore defined, and cannot be "unset".  Therefore, a <php>__get</php> or <php>__set</php> method will never be called for those properties.  They will be called for truly undefined properties just as they always have been.
 
-==== Interaction with ''isset()'' and ''unset()'' ====
+==== Interaction with isset() and unset() ====
 
 If a property implements hooks other than ''get'' or ''set'', then ''isset()'' is unaffected.  Additionally, ''afterSet'' and ''beforeSet'' will not be called if a property is ''unset()''.
 
-If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php today.
+If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php> today.
 
 If a property implements ''get'' or ''set'', then ''unset()'' may not be invoked on the property.  Doing so will result in an error.  As there is no stored property by that name to unset, the operation is meaningless.
 
 ILIJA: Check this section.  Does this make logical sense?
+
+==== Interaction with constructor property promotion ====
+
+As of PHP 8.0, properties may be declared inline with the constructor.  That creates an interesting potential for complexity if the property also includes hooks, as the hooks may be arbitrarily complex, and therefore long, leading to potentially tens of lines of code technically within the constructor's method signature.
+
+On the other hand, the ''beforeSet'' hook in particular is extremely useful for validation, including validation on promoted properties.  Making them incompatible would undercut the value of both tremendously.  That is true to a lesser extent for ''afterSet''.  (Properties with ''get'' and ''set'' hooks make little sense to include in promotion.)
+
+After much consideration, the authors have opted to allow hooks to be implemented within constructor property promotion.  While pathological examples could certainly be shown, we anticipate in practice that the impact will be far less.  In particular, the shorthand version of hook bodies and the ability to call out to private methods if they get complicated partially obviate the concern about syntactic complexity.
+
+For example, we predict the following to be the extent of most combinations of hooks and promotion:
+
+<code php>
+class User
+{
+  public function __construct(
+    public string $username { beforeSet => strtolower($username); }
+  ) {}
+}
+
+Which is, all things considered, not too bad for the level of power it gives.
+
+
+</code>
 
 ==== Inheritance ====
 
