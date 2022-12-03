@@ -163,44 +163,36 @@ class B extends A {
 
 ==== Interaction with __set and __unset ====
 
-In PHP 8.2, the behavior of <php>__set</php> has some subtleties to it due to ''readonly'' introducing asymmetric visibility through the back door.  Specifically, when trying to assign to a property that has been defined, and the class has a <php>__set</php> method defined:
+In PHP 8.2, the behavior of <php>__set</php> has some subtleties to it due to ''readonly''.  In addition, ''readonly'' is actually two different modifiers in one: a write-once marker and an implicit ''private(set)''.  That introduces a question as to which aspect of it is associated with its special behavior.
 
-  * If the property is read-accessible
-      * And the property has been ''unset()'' explicitly, then <php>__set</php> is called.
-      * And the property has NOT been ''unset()'' explicitly
-          * And the property is write-accessible, then the property will be set directly.
-          * And the property is NOT write-accessible, then an error is thrown.
-  * If the property is NOT read-accessible, then <php>__set</php> is called.
+The following is (to the best of our ability to determine) the existing logic in PHP 8.2 for how <php>__set</php> behaves:
 
-This RFC continues the rules above without change.  A property with asymmetric visibility that is written to from a scope where it is readable but not writeable, <php>__set</php> will be called if and only if the property had previously been ''unset()''.  Otherwise, an error will be thrown.
+<code>
+// When writing to a property on an object with __set:
+if (property is NOT read-visible) {
+  call __set
+} else { // It is read-visible
+  if (property is set-visible) {
+    assign property
+  } else { // The property is NOT set-visible
+    if (property is unset) {
+      call __set
+    } else {
+       if (property is readonly) {
+        error
+      } else {
+        call __set
+      }
+    }
+  }
+}
+</code>
+
+In particular, ''readonly'' has an extra requirement that <php>__set</php> will only be called if the property has been explicitly ''unset()''.  By associating that conceptually with the write-once-ish part of ''readonly'', we're able to avoid the need for that on properties that have only asymmetric visibility.
+
+The net result is that properties with an explicit asymmetric visibility will trigger <php>__set</php> (if defined) if written to from a scope where they are not visible, regardless of whether they have been ''unset()'' or not.  (Whether or not that requirement for ''readonly'' properties is reasonable is out of scope for this RFC.)
 
 If <php>__set()</php> is not defined, the write will fail with an error regardless.
-
-<code php>
-class Example 
-{
-    public private(set) string $pubpriv;
-
-    public function __set($name, $value): void 
-    {
-        echo "__set($name, $value)\n";
-        $this->$name = $value;
-    }
-    
-    public function unsetPub(): void 
-    {
-        unset($this->pubpriv);
-    }
-}
-
-$ex = new Example();
-
-$ex->pubpriv = 'a';  // Error, because the property is readable but not unset
-
-$ex->unsetPub();
-
-$ex->pubpriv = 'a'; // Calls __set, because pubpriv has been unset
-</code> 
 
 The logic for calling ''unset()'' externally (and thus triggering <php>__unset()</php>) is the same.
 
