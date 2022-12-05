@@ -656,6 +656,154 @@ class Request
 
 This example combines with the previous.  It allows only select HTTP methods through, and forces upcasting the URL to a ''URL'' object.  (Presumably the ''URL'' constructor contains logic to validate and reject invalid URL formats.)
 
+==== Synchronized changes ====
+
+At times, two properties must be kept in sync with each other.  Updating them in place (or creating a new object with-er style) is fine, but updating one must update the other.  
+
+As an example, consider a Request object (similar to PSr-7), where the ''uri'' property's ''host'' field must be kept in sync with the ''header'' list's ''host'' field.  Today, and even with asymmetric visibility, that would require a pair of set methods.  With property hooks, that relationship can be built into the properties directly.
+
+<PHP>
+class Request
+{
+    private bool $updating = false;
+
+    public URI $uri {
+        afterSet($uri) {
+            if (!$this->updating) {
+                $this->updating = true;
+                $this->headers['host'] = $uri->host;
+                $this->updating = false;
+            }
+        }
+    }
+    
+    public array $headers = [] {
+        afterSet($headers) {
+            if (!$this->updating) {
+                $this->updating = true;
+                $this->uri->host = $headers['host'] ?? '';
+                $this->updating = false;
+            }
+        }
+    }   
+    
+    // Lots of other stuff we're not dealing with right now;
+}
+</PHP>
+
+Because the relationship is bidirectional, we need an additional semaphore to avoid an infinite loop.  That's easily implemented, however.  Now both ''$request->uri'' and ''$request->headers'' may be written to directly and they will always remain in sync.
+
+==== ORM change tracking ====
+
+This example also incorporates asymmetric visibility.  Note that it's glossing over internal details of the ORM's loading process, as those often involve wonky reflection anyway.  That's not what is being discussed here.
+
+<PHP>
+class Product
+{
+    public private(set) array $modified = [];
+    
+    public bool $hasChanges => !count($this->modified);
+    
+    public readonly string $sku;
+    
+    public string $name {
+        afterSet => $this->modified['name'] => $value;
+    }
+    public Color $color {
+        afterSet => $this->modified['color'] => $value;
+    }
+    public float $price {
+        afterSet => $this->modified['price'] => $value;
+    }
+}
+
+
+class ProductRepo
+{
+    public function save(Product $p)
+    {
+        // Here we're checking a boolean property that is computed on the fly.
+        if ($p->hasChanges) {
+            // We can get the list here, but not change it.
+            $fields = $p->modified;
+            
+            // Do something with an SQL builder to write just the changed properties,
+            // or build an EventSource event with just the changes, or whatever.
+        }
+    }
+}
+
+$repo = new ProductRepo();
+
+$p = $repo->load($sku);
+
+// This is type checked.
+$p->price = 99.99;
+
+// This is also type checked.
+$p->color = new Color('#ff3378');
+
+$repo->save($p);
+</PHP>
+
+This functionality could, certainly, be implemented with plain methods.  The important thing to note here is that to a consumer of ''Product'', the API is exactly the same as this class:
+
+<PHP>
+class Product
+{
+    public readonly string $sku;
+    
+    public string $name {}
+    public Color $color {}
+    public float $price {}
+}
+</PHP>
+
+Which means we could easily start off without change tracking and just have a plain and boring, easy to write object, and then add change tracking later without an API change.  We wouldn't need to write this, longer version "just in case":
+
+<PHP>
+class Product
+{
+    public readonly string $sku;
+    
+    private string $name;
+    private Color $color;
+    private float $price;
+    
+    // None of this is necessary.
+    
+    public function getName(): string
+    {
+        return $this->name;
+    }
+    
+    public function setName(string $name): void
+    {
+        $this->name = $name;
+    }
+
+    public function getColor(): Color
+    {
+        return $this->color;
+    }
+    
+    public function setColor(Color $color): void
+    {
+        $this->color = $color;
+    }
+    
+    public function getPrice(): float
+    {
+        return $this->float;
+    }
+    
+    public function setPrice(float $price): void
+    {
+        $this->price = $price;
+    }
+}
+</PHP>
+
 ===== Backward Incompatible Changes =====
 
 None.  
