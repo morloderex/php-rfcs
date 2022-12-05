@@ -535,6 +535,118 @@ ILIJA: Oh dear oh dear...
 
 TODO: LARRY
 
+This section includes a collection of examples the authors feel are representative of how hooks can and will be used.  It is non-normative, but gives a sense of how hooks can be used to improve a code base.
+
+==== Derived properties ====
+
+As in the examples above, this example demonstrates a virtual property that is calculated on the fly off of other values.
+
+<php>
+class User
+{
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName => $this->first . " " . $this->last;
+}
+</php>
+
+==== Lazy/cached properties ====
+
+Sometimes, a derived property may be expensive to compute.  The example above would recompute it every time.  However, the ''??='' operator may be used to easily cache the value.
+
+<php>
+class User
+{
+    private string $full;
+    
+    public function __construct(private string $first, private string $last) {}
+    
+    public string $fullName => $this->full ??= $this->first . " " . $this->last;
+}
+</php>
+
+This does introduce a question of when to invalidate the cache.  If ''$first'' changes, ''$full'' will be out of date.  This is only a concern in some classes, but if it is then it may be addressed with the ''afterSet'' hook:
+
+<php>
+class User
+{
+    private string $full;
+    
+    public function __construct(
+        public string $first { afterSet => unset($this->full); }, 
+        public string $last { afterSet => unset($this->full); },
+    ) {}
+    
+    public string $fullName => $this->full ??= $this->first . " " . $this->last;
+}
+</php>
+
+Now, ''$fullName'' will be cached but the cache reset any time ''$first'' or ''$last'' is updated.
+
+All of these options are entirely transparent to the caller.
+
+==== Type normalization ====
+
+A ''beforeSet'' method takes the same variable type as the property is declared for.  However, there is no requirement that it cannot narrow the type.  For example:
+
+<php>
+class ListOfStuff
+{
+    public iterable $items 
+    {
+        beforeSet => is_array($value) ? new ArrayObject($value) : $value;
+    }
+}
+</php>
+
+This example will accept either an array or ''Traversable'', but will ensure that the value that gets written is always a ''Traversable'' object.  That may be helpful for later internal logic.
+
+Another example would be auto-boxing a value:
+
+<php>
+use Symfony\Component\String\UnicodeString;
+
+
+class Person
+{
+    public string|UnicodeString $name {
+        beforeSet => $value instanceof UnicodeString ? $value : new UnicodeString($value);
+    }
+}
+</php>
+
+This example ensures that the ''$name'' property is always a ''UnicodeString'' instance, but allows users to write PHP strings to it.  Those will get automatically up-converted to ''UnicodeStrings'', which then ensures future code only has one type to have to worry about.
+
+ILIJA: This is why I want to allow a wider type on the set and beforeSet hooks, so that you can type the property as just UnicodeString, but still allow strings to be written to it.  As is, this is a bit misleading as it means the code says reads may get back a string, but in practice they can only get back UnicodeString.
+
+==== Validation ====
+
+As mentioned, one of the main uses of ''beforeSet'' is validation.
+
+<php>
+class Request
+{
+  
+  
+  public function __construct(
+      public string $method = 'GET' { beforeSet => $this->normalizeMethod($value); },
+      public string|Url $url { beforeSet => $url instanceof Url ? $url :  },
+      public array $body,
+  ) {}
+  
+  private function normalizeMethod(string $method): string
+  {
+      $method = strtoupper($method);
+      if (in_array($method, ['GET', 'POST', 'PUT', 'DELETE', 'HEAD']) {
+          return $method;
+      }
+      throw new \InvalidArgumentException("$method is not a supported HTTP operation.");
+  }
+}
+</php>
+
+This example combines with the previous.  It allows only select HTTP methods through, and forces upcasting the URL to a ''URL'' object.  (Presumably the ''URL'' constructor contains logic to validate and reject invalid URL formats.)
+
 ===== Backward Incompatible Changes =====
 
 None.  
@@ -565,6 +677,10 @@ PHP supports magic methods for <php>__isset</php> and <php>__unset</php>.  While
 ==== readonly ====
 
 It may be feasible to further integrate ''readonly'' with hooks in the future.  That is a task for a future RFC.
+
+==== Reusable hooks ====
+
+Swift has the ability to declare hook "packages" that can be applied to multiple properties, even in separate classes.  That further helps reduce boilerplate, without having to pack even more logic into the type system.  In a sense, it does for hooks what PHP traits do for methods and properties.  While that is potentially useful, it would be a whole big feature unto itself.  The authors therefore opted to avoid that for now.  It is an addition that could be pursued in the future if it's found to be useful.
 
 ===== Proposed Voting Choices =====
 
