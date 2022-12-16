@@ -1,8 +1,8 @@
 ====== PHP RFC: Unicode Text Processing ======
   * Version: 0.9
-  * Date: 2022-12-15
+  * Date: 2022-12-16 (Original date: 2022-12-15)
   * Author: Derick Rethans <derick@php.net>
-  * Status: Under Discussion
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/unicode_text_processing
 
 
@@ -25,8 +25,8 @@ Unicode text processing always available in the core.
 
 ===== Proposal =====
 
-To introduce a new "Text" class, with methods to operate on the text
-stored in the objects.
+To introduce a new final "Text" class, with methods to operate on the
+text stored in the objects.
 
 Methods on the class will all return a new (immutable) object.
 
@@ -110,15 +110,16 @@ used in the function signatures to the methods on the ''Text'' class.
 
 This section lists all the method that construct a Text object.
 
-=== __construct(string $text, string $locale = 'root/standard') ===
+=== __construct(string $text, string $locale = 'root/standard') : \Text ===
 
 The constructor takes a UTF-8 encoded text, and stores this in an internal
 structure. The constructor will also convert the given text to Unicode
-Canonical Form. Passing in non-well-formed UTF-8 will result in an
-''InvalidEncodingException''. The constructor will also strip out a BOM
-(Byte-Order-Mark) character, if present.
+Canonical Form (also called Normalisation Form C, or NFC). Passing in
+non-well-formed UTF-8 will result in an ''InvalidEncodingException''.
+The constructor will also strip out a BOM (Byte-Order-Mark) character,
+if present.
 
-=== static Text::create(string $text, string $locale = 'root/standard') ===
+=== static Text::create(string $text, string $locale = 'root/standard') : \Text ===
 
 The Symfony String package, offers a static function to construct a String
 through a single-character function (''u''), which you can import into the
@@ -128,7 +129,7 @@ This method solves a similar use, so that you can shorten ''new Text(…)'' to
 ''t'' after having imported the method into the file's scope with:
 For example with ''use \Text::create as t''.
 
-=== static Text::join(array(string|Text) $elements, string|Text $separator, string $collator = NULL) ===
+=== static Text::join(array(string|Text) $elements, string|Text $separator, string $collator = NULL) : \Text ===
 
 Creates a new Text object by concatenating the Text element in
 ''$elements'', inserting ''$separator'' in between each element.
@@ -146,7 +147,7 @@ If the ''$elements'' array is empty, an empty ''Text'' object with the
 ==== Standard String Operations ====
 
 
-=== split(string|Text $separator, int $limit = PHP_INT_MAX): array(Text) ===
+=== split(string|Text $separator, int $limit = PHP_INT_MAX) : array(Text) ===
 
 Returns an array of Text objects, each of which is a substring of ''$this'',
 formed by splitting it on boundaries formed by the text ''$separator''.
@@ -161,7 +162,7 @@ Returns a sub-string, starting at ''$offset'' for ''$length'' graphemes.
 Like: ''grapheme_substr($this, $offset, $length)''
 https://www.php.net/manual/en/function.grapheme-substr.php
 
-=== trimLeft, trimRight, trim ===
+=== trimStart, trimEnd, trim : \Text ===
 
 Removes white space at the start of, the end of, or both sides of the text.
 
@@ -180,10 +181,9 @@ If ''$cutLongWords'' is set, no Text element will be larger than
 ''$maxWidth''.
 
 
-=== replaceText(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) ===
+=== replaceText(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) : \Text ===
 
-Replaces the first ''$maxReplacements'' occurrences of ''$search'' with
-''$replace''.
+Replaces occurrences of ''$search'' with ''$replace''.
 
 The locale of ''$search'' is used to find sub-strings that
 match, if it is a ''Text'' object, otherwise the locale embedded in the object
@@ -197,9 +197,9 @@ last item. Positive numbers are counted from the first occurrence of
 occurrence.
 
 In order to find sub-strings case-insensitively, you can use the ''$collator''
-argument to the constructor of the ''$search'' argument.
+argument to ''Text::__construct'' of the ''$search'' argument.
 
-=== reverse() ===
+=== reverse() : \Text ===
 
 Reverses a text, taking into account grapheme boundaries.
 
@@ -221,12 +221,15 @@ Returns the position (in grapheme units) of the first occurrence of
 Like: ''grapheme_strpos($this, $search, $offset)''
 https://www.php.net/manual/en/function.grapheme-strpos.php
 
-*I think this method name is too long*
+Alternative suggested names: ''findOffset''
+
 
 === getPositionOfLastOccurrence(string|Text $search, int $offset) : int|false ===
 
 
 Like ''getPositionOfFirstOccurrence'' but then from the end of the text.
+
+Alternative suggested names: ''findOffsetLast''
 
 
 === returnFromFirstOccurence(string|Text $search) : Text|false ===
@@ -236,6 +239,8 @@ otherwise ''false''.
 
 Like: ''grapheme_strstr($this, $search)''
 (https://www.php.net/manual/en/function.grapheme-strstr.php)
+
+Alternative suggested names: ''startingWith''
 
 
 === returnFromLastOccurence(string|Text $search) : Text|false ===
@@ -247,6 +252,8 @@ Like ''returnFromFirstOccurence'' but then from the end of the text.
 Returns true if the text ''$search'' can be found in the text.
 
 Like ''str_contains''.
+
+Alternative suggested names: ''startingWithLast''
 
 
 === endsWith(string|Text $search) : bool ===
@@ -288,54 +295,66 @@ handler". Here only the locale on ''$this'' is taken into account.
 
 These operations all use the collation that is configured on the Text object.
 
-=== toLower ===
+=== toLower : \Text ===
 
 Converts the text to lower case, using the lower case variant of each
 Unicode code point that makes up the text.
 
-=== toUpper ===
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''het ĳsselmeer is vol met ideëen''.
+
+
+=== toUpper : \Text ===
 
 The same, but then to upper case.
 
-=== toTitle ===
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''HET ĲSSELMEER IS VOL MET IDEËEN''.
+
+
+=== toTitle : \Text ===
 
 The same, but then to title case (the first letter of each word).
 
-=== firstToLower ===
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''Het Ĳsselmeer is Vol met Ideëen''.
+
+
+=== firstToLower : \Text ===
 
 Converts the first grapheme in the text to a lower case variant.
 
-=== firstToUpper ===
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''het Ĳsselmeer is vol met ideëen''.
+
+
+=== firstToUpper : \Text ===
 
 The same, but then to upper case.
 
-=== firstToTitle ===
-
-The same, but then to title case (the first letter of each word).
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''Het Ĳsselmeer is vol met ideëen''.
 
 
-=== wordsToLower ===
+
+=== wordsToLower : \Text ===
 
 Converts the first grapheme in every word to an lower case variant.
 
-=== wordsToUpper ===
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''het ĳsselmeer is vol met ideëen''.
+
+
+=== wordsToUpper : \Text ===
 
 The same, but then to upper case.
 
-=== wordsToTitle ===
-
-The same, but then to title case (the first letter of each word).
+Example: ''Het Ĳsselmeer is vol met ideëen'' to ''Het Ĳsselmeer Is Vol Met Ideëen''.
 
 
 ==== Counting ====
 
 
-=== getByteCount() ===
+=== getByteCount() : int ===
 
 Returns the size in bytes that the text will take when converted to UTF-8.
 
 
-=== length(), getCharacterCount() ===
+=== length(), getCharacterCount(): int  ===
 
 Returns the number of characters that make up the text. A character (also
 sometimes call a grapheme) consists of the base-character, and all
@@ -343,13 +362,13 @@ combining diacritics. Unicode calls these "extended grapheme clusters".
 http://unicode.org/reports/tr29/#Grapheme_Cluster_Boundaries
 
 
-=== getCodePointCount() ===
+=== getCodePointCount() : int ===
 
 Returns the number of Unicode code points that make up the text.
 (Not sure if we should add this, as it doesn't really have any use).
 
 
-=== getWordCount() ===
+=== getWordCount() : int ===
 
 Pretty much a shortcut for::
 
@@ -369,7 +388,7 @@ These are inspired by ICU4J's BreakIterators
 and Intl's create*Instance methods on ''Intl\BreakIterator''
 (https://www.php.net/manual/en/class.intlbreakiterator.php).
 
-=== getCharacterIterator ===
+=== getCharacterIterator : \Iterator ===
 
 Returns an Iterator that locates boundaries between logical characters.
 Because of the structure of the Unicode encoding, a logical character may be
@@ -380,7 +399,7 @@ allows various processes (especially text editors) to treat as characters the
 units of text that a user would think of as characters, rather than the units
 of text that the computer sees as "characters".
 
-=== getWordIterator ===
+=== getWordIterator : \Iterator ===
 
 Returns an Iterator that locates boundaries between words. This is useful
 for double-click selection or "find whole words" searches. This type of
@@ -388,7 +407,7 @@ iterator makes sure there is a boundary position at the beginning and end
 of each legal word. (Numbers count as words, too.) Whitespace and punctuation
 are kept separate from real words. 
 
-=== getLineIterator ===
+=== getLineIterator : \Iterator ===
 
 Returns an Iterator that locates positions where it is legal for a text
 editor to wrap lines. This is similar to word breaking, but not the same:
@@ -397,12 +416,12 @@ line to start with whitespace, for example), and some special characters can
 force a position to be considered a line-break position or prevent a position
 from being a line-break position. 
 
-=== getSentenceIterator ===
+=== getSentenceIterator : \Iterator ===
 
 Returns an Iterator that locates boundaries between sentences.
 
 
-=== getTitleIterator ===
+=== getTitleIterator : \Iterator ===
 
 Returns an Iterator that locates boundaries between title breaks. 
 
@@ -412,7 +431,7 @@ Returns an Iterator that locates boundaries between title breaks.
 Converts text between scripts and other properties.
 
 
-=== transliterate(string $transliterationString) ===
+=== transliterate(string $transliterationString) : \Text ===
 
 Transliterates the content of the ''Text'' object according to the rules as
 specified in the ''$transliterationString''.
@@ -456,6 +475,8 @@ There will be no impact to SAPIs, existing extensions, nor Opcache.
 
 ===== Open Issues =====
 
+  - Add a method a like mb_strcut, to extract a string of a maximum amount of bytes from a position, as encoded through UTF-8.
+  - Tidy up language related to locale/collator. As Tim Starling says: "If the input is an ICU locale string, then I think you should just call it locale. Then the user will be armed with the correct terminology when they go looking for more information in the ICU manual. In ICU, case conversion and BreakIterator need a locale, not a collator.
 
 ===== Questions and Answers =====
 
@@ -497,3 +518,12 @@ After the project is implemented, this section should contain
 ===== Rejected Features =====
 
 Nothing rejected yet.
+
+
+===== Changes =====
+
+0.9.1 — 2022-12-16
+
+  * Tim Düsterhus: Removed firstToTitle/wordsToTitle; added examples for toUpper and friends; added return types everywhere; added suggested other names for getPosition... methods; marked class as final.
+  * Paul Crovella: Clarify which normalisation is being used.
+  * Daniel Wolfe: Update trimLeft/trimRight to trimStart/trimEnd.
