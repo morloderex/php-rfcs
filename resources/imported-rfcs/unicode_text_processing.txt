@@ -1,6 +1,6 @@
 ====== PHP RFC: Unicode Text Processing ======
-  * Version: 0.9
-  * Date: 2022-12-16 (Original date: 2022-12-15)
+  * Version: 0.9.2
+  * Date: 2022-12-21 (Original date: 2022-12-15)
   * Author: Derick Rethans <derick@php.net>
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/unicode_text_processing
@@ -31,7 +31,7 @@ text stored in the objects.
 Methods on the class will all return a new (immutable) object.
 
 The proposal is to make the ''Text'' class part of the PHP core. This would
-mean that it is therefore always available to users. As the implementation
+mean that it is therefore always available to user. As the implementation
 requires ICU, this would also mean that PHP will depend on the ICU library.
 
 ==== Basics ====
@@ -71,25 +71,30 @@ to suggest modifications or additions, keeping the design goals in mind.
 
 If an argument to any of the methods is listed as ''string|Text'',
 passing in a ''string'' value will have the same semantics as replacing
-the passed value with ''new Text($string)''. The locale from the Text
-object that this method is called on is also used for this new wrapped
-value, if necessary.
+the passed value with ''new Text($string)''. The locale and default collator
+from the Text object that this method is called on is also used for this new
+wrapped value, if necessary.
 
-==== Locales and Internationalisation ====
+==== Locales, Collators, and Internationalisation ====
 
-By default each string will have the "root" collator associated with it,
-but it is possible to configure a specific collator by using the
-''$collator'' argument in the constructor. The ''$collator'' is specified as
-a string describing an ICU locale name:
+By default each string will have the "root" locale and "standard" collator
+associated with it, but it is possible to configure a specific locale and
+collator by using the ''$collation'' argument in the constructor. Collation is in
+addition to the locale, and affects sorting and finding operations.
+
+The ''$collation'' is specified as a string describing an ICU locale/collation
+name:
 https://unicode-org.github.io/icu/userguide/collation/api.html#instantiating-the-predefined-collators
 
-For example, the locale (or collation) name ''en-u-ks-level1'' means
-case-insensitive sorting for the English locale. This will require
-extensive documentation.
+The methods on the Text object all use the ''$collation'' argument name.
 
-Numerical order collation (such as PHP's ''natsort()'') can be achieved
-by adding the ''kn'' flag to the locale name, such as in ''de-u-kn''
-(case-sensitive German, with numerics in value order).
+For example, the locale (and collation) name ''en-u-ks-level1'' means
+case-insensitive sorting (''ks-level1'') for the English locale (''en-u'').
+The format of this locale/collation name needs extensive documentation.
+
+Numerical order collation (such as PHP's ''natsort()'') can be achieved by
+adding the ''kn'' flag to the collator specification, such as in ''de-u-kn''
+(case-sensitive German ('''de-u''), with numerics in value order (''kn'')).
 
 Other options are described in BCP47:
 https://github.com/unicode-org/cldr/blob/main/common/bcp47/collation.xml
@@ -108,9 +113,9 @@ used in the function signatures to the methods on the ''Text'' class.
 
 ==== Construction ====
 
-This section lists all the methods that construct a Text object.
+This section lists all the method that construct a Text object.
 
-=== __construct(string $text, string $locale = 'root/standard') : \Text ===
+=== __construct(string $text, string $collation = 'root/standard') : \Text ===
 
 The constructor takes a UTF-8 encoded text, and stores this in an internal
 structure. The constructor will also convert the given text to Unicode
@@ -119,30 +124,43 @@ non-well-formed UTF-8 will result in an ''InvalidEncodingException''.
 The constructor will also strip out a BOM (Byte-Order-Mark) character,
 if present.
 
-=== static Text::create(string $text, string $locale = 'root/standard') : \Text ===
 
-The Symfony String package offers a static function to construct a String
+=== static Text::create(string $text, string $collation = 'root/standard') : \Text ===
+
+The Symfony String package, offers a static function to construct a String
 through a single-character function (''u''), which you can import into the
 file scope (with ''use'').
 
 This method solves a similar use, so that you can shorten ''new Text(…)'' to
-''t'' after having imported the method into the file's scope with (for example):
-''use \Text::create as t''.
+''t'' after having imported the method into the file's scope with:
+For example with ''use \Text::create as t''.
 
-=== static Text::join(array(string|Text) $elements, string|Text $separator, string $collator = NULL) : \Text ===
 
-Creates a new Text object by concatenating the Text element in
+=== static Text::concat(string|Text ...$elements) : \Text ===
+
+Creates a new Text object by concatenating all the given string/Text arguments
+into a new Text object. 
+
+If the ''$elements'' array is empty, an empty ''Text'' object with the
+''root'' locale and ''standard'' collation is created.
+
+
+=== static Text::join(iterable<string|Text> $elements, string|Text $separator, string $collation = NULL) : \Text ===
+
+Creates a new Text object by looping over all the string/Text elements in
 ''$elements'', inserting ''$separator'' in between each element.
 
 The semantics are like: ''implode(string $separator, array(string) $array)''
 
-If the ''$collator'' is not specified, it uses the collection of the first
-element in the ''$elements'' array. This will then also be set on the created
-object.
+If the ''$collation'' is not specified, it uses the collation of the first
+element from the ''$elements'' iterable. This will also be then set on the
+created object.
 
-If the ''$elements'' array is empty, an empty ''Text'' object with the
-''root'' locale is created.
+If the ''$elements'' iterator has no items, an empty ''Text'' object with the
+''root'' locale and ''standard'' collation is created.
 
+If the iterator produces a non-string/Text element, then a ''\ValueException''
+will be thrown.
 
 ==== Standard String Operations ====
 
@@ -180,25 +198,6 @@ inserting a break character.
 If ''$cutLongWords'' is set, no Text element will be larger than
 ''$maxWidth''.
 
-
-=== replaceText(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) : \Text ===
-
-Replaces occurrences of ''$search'' with ''$replace''.
-
-The locale of ''$search'' is used to find sub-strings that
-match, if it is a ''Text'' object, otherwise the locale embedded in the object
-that the method is called on.
-
-The ''$replaceFrom'' and ''$replaceTo'' arguments control which found
-items are being replaced. The ''$replaceFrom'' argument is the first
-argument that is being replaced (0-indexed), and ''$replaceTo'' is the
-last item. Positive numbers are counted from the first occurrence of
-''$search'' in the Text, and negative numbers from the last found
-occurrence.
-
-In order to find sub-strings case-insensitively, you can use the ''$collator''
-argument to ''Text::__construct'' of the ''$search'' argument.
-
 === reverse() : \Text ===
 
 Reverses a text, taking into account grapheme boundaries.
@@ -208,9 +207,9 @@ Reverses a text, taking into account grapheme boundaries.
 
 Methods to find text in other text.
 
-In all these methods, the locale of ''$search'' is used to find sub-strings that 
-match, if it is a ''Text'' object, otherwise the locale embedded in the object
-that the method is called on.
+In all these methods, the locale and collator of ''$search'' are used to find
+sub-strings that match, if it is a ''Text'' object, otherwise the locale and
+collator that are embedded in the object that the method is called on is used.
 
 
 === getPositionOfFirstOccurrence(string|Text $search, int $offset) : int|false ===
@@ -240,12 +239,15 @@ otherwise ''false''.
 Like: ''grapheme_strstr($this, $search)''
 (https://www.php.net/manual/en/function.grapheme-strstr.php)
 
-Alternative suggested names: ''startingWith''
+Alternative suggested names: ''startingWith'', ''startingAt''
 
 
 === returnFromLastOccurence(string|Text $search) : Text|false ===
 
 Like ''returnFromFirstOccurence'' but then from the end of the text.
+
+Alternative suggested names: ''startingWithLast'', ''startingAtLast''
+
 
 === contains(string|Text $search) ===
 
@@ -253,15 +255,13 @@ Returns true if the text ''$search'' can be found in the text.
 
 Like ''str_contains''.
 
-Alternative suggested names: ''startingWithLast''
-
 
 === endsWith(string|Text $search) : bool ===
 
 Compares the last ''$search.Length()'' graphemes of ''$this''.
 
 Case-insensitive comparison can be achieved by setting the right
-''$collator'' on ''$search''.
+''$collation'' on ''$search''.
 
 Could be constructed from ''getPositionOflastOccurrence()'' and
 ''length()'', but it's an often required method, and standard PHP has it
@@ -273,22 +273,41 @@ too.
 Compares the first ''$search.Length()'' graphemes of ''$this''.
 
 Case-insensitive comparison can be achieved by setting the right
-''$collator'' on ''$search''.
+''$collation'' on ''$search''.
 
 Could be constructed from ''getPositionOfFirstOccurrence()'',
 but it's an often required method, and standard PHP has it
 too.
 
+=== replaceText(string|Text $search, string|Text $replace, int $replaceFrom = 0, int $replaceTo = -1 ) : \Text ===
+
+Replaces occurrences of ''$search'' with ''$replace''.
+
+The ''$replaceFrom'' and ''$replaceTo'' arguments control which found
+items are being replaced. The ''$replaceFrom'' argument is the first
+argument that is being replaced (0-indexed), and ''$replaceTo'' is the
+last item. Positive numbers are counted from the first occurrence of
+''$search'' in the Text, and negative numbers from the last found
+occurrence.
+
+In order to find sub-strings case-insensitively, you can use the ''$collation''
+argument to ''Text::__construct'' of the ''$search'' argument.
+
 
 ==== Comparing Text Objects ====
 
-=== compareWith(Text $other, string $collator = NULL) : int ===
+=== compareWith(Text $other, string $collation = NULL) : int ===
 
-Uses the configured ''$collator'' of ''$this'' to compare it against
-''$other'', unless the ''$collator'' argument is specified as an override.
+Uses the configured ''$collation'' of ''$this'' to compare it against
+''$other'', unless the ''$collation'' argument is specified as an override.
 
 This same method is also used for comparing two Text objects as "compare
-handler". Here only the locale on ''$this'' is taken into account.
+handler" (an overloaded ''=='' operator). Here only the locale on ''$this'' is
+taken into account.
+
+=== equals(Text $other, string $collation = NULL) : boolean ===
+
+Alias for ''compareWith($other, $collation) === 0''.
 
 
 ==== Case Conversions ====
@@ -382,7 +401,7 @@ Uses the locale, just like the iterators.
 
 These functions return an iterator that can be used to iterator over the text.
 The return of the iterators are effected by the text's locale.
-i
+
 These are inspired by ICU4J's BreakIterators
 (https://unicode-org.github.io/icu-docs/apidoc/released/icu4j/com/ibm/icu/text/BreakIterator.html)
 and Intl's create*Instance methods on ''Intl\BreakIterator''
@@ -476,7 +495,6 @@ There will be no impact to SAPIs, existing extensions, nor Opcache.
 ===== Open Issues =====
 
   - Add a method a like mb_strcut, to extract a string of a maximum amount of bytes from a position, as encoded through UTF-8.
-  - Tidy up language related to locale/collator. As Tim Starling says: "If the input is an ICU locale string, then I think you should just call it locale. Then the user will be armed with the correct terminology when they go looking for more information in the ICU manual. In ICU, case conversion and BreakIterator need a locale, not a collator.
 
 ===== Questions and Answers =====
 
@@ -521,6 +539,11 @@ Nothing rejected yet.
 
 
 ===== Changes =====
+
+0.9.2 — 2022-12-21
+
+  * Tim Düsterhus: Added concat and equals methods; changed join to accept an iterator.
+  * Enhance explanation of locales and collations, and standardize on using ''$collator'' as an argument name everywhere.
 
 0.9.1 — 2022-12-16
 
