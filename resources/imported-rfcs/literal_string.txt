@@ -104,7 +104,7 @@ Most libraries will probably use something like //example2()// to test the value
 
 Libraries could also check their output (e.g. SQL to a database) is still a LiteralString, but this isn't a priority (libraries are rarely the source of Injection Vulnerabilities, it's usually the developer using them incorrectly).
 
-The original implementation provided the //is_literal()// function, which you can try at [[https://3v4l.org/#focus=rfc.literals|3v4l.org]].
+The original implementation provided the //is_literal()// function, which you can try at [[https://3v4l.org/#vrfc.literals|3v4l.org]].
 
 ===== Considerations =====
 
@@ -149,8 +149,6 @@ $html   = substr('<a href="#">#</a>', 0, $length);
 </code>
 
 If $url was used in a Content-Security-Policy, the query string needs to be removed, but as more of the string is removed, the more resources are allowed ("https:" basically allows resources from anywhere). With the HTML example, moving from the tag content to the attribute can be a problem (technically the HTML Templating Engine should be fine, but unfortunately libraries like Twig are not currently context aware, so you need to change from the default 'html' encoding to explicitly using 'html_attr' encoding).
-
-Trying to determine if the LiteralString flag should be passed through functions like //substr()// is complex. Having a security feature be difficult to reason about, gives a much higher chance of mistakes.
 
 Krzysztof Kotowicz has confirmed that, at Google, with "go-safe-html", string concatenation is allowed, but splitting is explicitly not supported because it "can cause issues"; for example, "arbitrary split position of a HTML string can change the context".
 
@@ -308,7 +306,7 @@ var_dump(sprintf('%.3f', 1.23)); // "1,230"
 
 ==== Other Functions ====
 
-There are a lot of candidates; for example, adding //strtoupper()// might be reasonable, but we need to consider the effect of every function, making the concept of a LiteralString more complex (e.g. //str_shuffle()// creating unpredictable results, or output varying based on the current locale).
+There are a lot of candidates; for example, adding //strtoupper()// might be reasonable, but we need to consider the effect of every function and context, making the concept of a LiteralString more complex (e.g. //str_shuffle()// creating unpredictable results, or output varying based on the current locale).
 
 The main request that's come up over the last year is to support //sprintf()//. While this is reasonable for basic concatenation (e.g. only using "%s"), it gets more complicated when coercing values to a different type, or when using formatting. That said, a future RFC might consider changing this (with the main focus being on the implications/risks).
 
@@ -392,7 +390,7 @@ Both [[https://github.com/vimeo/psalm/releases/tag/4.8.0|Psalm]] and [[https://g
 
 While I want more developers to use Static Analysis, it's highly unlikely every PHP developer will use these tools, and for all PHP code to be updated so Static Analysis can run the strictest checks, with no baseline (the [[https://www.jetbrains.com/lp/devecosystem-2021/php/|2021 JetBrains survey]], where 67% of developers used Laravel, only 33% used Static Analysis).
 
-Also, it can be tricky to get current Static Analysis tools to cover every case. For example, they don't currently support [[https://stackoverflow.com/questions/71861442/php-static-analysis-and-recursive-type-checking|recursive type checking]] (in contrast, [[https://github.com/craigfrancis/php-is-literal-rfc/blob/main/examples/sql-orm.php#L60|this is easy with a literal_check function]]).
+Also, it can be tricky to get current Static Analysis tools to cover every case. For example, they don't currently support [[https://stackoverflow.com/questions/71861442/php-static-analysis-and-recursive-type-checking|recursive type checking]]. In contrast, [[https://github.com/craigfrancis/php-is-literal-rfc/blob/main/examples/sql-orm.php#L60|this is easy with the is_literal_string() function]].
 
 ==== Taint Checking ====
 
@@ -447,7 +445,7 @@ And there is the [[https://wiki.php.net/rfc/sql_injection_protection|Automatic S
 
 Last year I wrote the [[https://wiki.php.net/rfc/is_literal|is_literal() RFC]], where the feedback was:
 
-  * "Ideally we would want to assign a variable to be of 'literal' type." [[https://externals.io/message/115306#115308|George P. Banyard]] (yep, done).
+  * "Ideally we would want to assign a variable to be of 'literal' type." [[https://externals.io/message/115306#115308|George P. Banyard]] (covered by this RFC).
   * "There is good progress in taint analysis" [[https://externals.io/message/115306#115455|Marco Pivetta]] (see the flaws noted with Taint Analysis above).
   * "I would like the ecosystem to pick up static analysis more" [[https://externals.io/message/115306#115455|Marco Pivetta]] (I do too, but I doubt we can get everyone using it all the time, at the strictest levels, and no baseline).
   * "the concatenation operation is basically kicking the can down the road [...] using a function like concat_literal() [...] provides immediate feedback" [[https://externals.io/message/115306#115308|George P. Banyard]] and "[literal_concat() makes] it easy to track down issues where they occur" [[https://externals.io/message/115306#115387|Dan Ackroyd]] (I've not found this to be the case, but re-writing all code to not use concatenation is a big change).
@@ -518,11 +516,11 @@ Accept the RFC
 
   - **Joe Watkins**, krakjoe, for writing the full implementation, including support for concatenation and integers, and helping me though the RFC process.
   - **Máté Kocsis**, mate-kocsis, for setting up and doing the performance testing.
-  - **Scott Arciszewski**, CiPHPerCoder, for checking over the RFC, and provided text on how we could implement integer support under a //is_noble()// name.
+  - **Scott Arciszewski**, CiPHPerCoder, for checking over the original RFC, and provided text on how we could implement integer support under a //is_noble()// name.
   - **Dan Ackroyd**, DanAck, for starting the [[https://github.com/php/php-src/compare/master...Danack:is_literal_attempt_two|first implementation]], which made this a reality, providing //literal_concat()// and //literal_implode()//, and followup on how it should work.
   - **Xinchen Hui**, who created the Taint Extension, allowing me to test the idea; and noting how Taint in PHP5 was complex, but "with PHP7's new zend_string, and string flags, the implementation will become easier" [[https://news-web.php.net/php.internals/87396|source]].
   - **Rowan Francis**, for proof-reading, and helping me make an RFC that contains readable English.
-  - **Rowan Tommins**, IMSoP, for re-writing this RFC to focus on the key features, and putting it in context of how it can be used by libraries.
+  - **Rowan Tommins**, IMSoP, for helping with the original RFC, focusing on the key features, and put it in context of how it can be used by libraries.
   - **Nikita Popov**, NikiC, for suggesting where the flag could be stored. Initially this was going to be the "GC_PROTECTED flag for strings", which allowed Dan to start the first implementation.
   - **Mark Randall**, MarkR, for suggestions, and noting that "interned strings in PHP have a flag", which started the conversation on how this could be implemented.
-  - **Sara Golemon**, SaraMG, for noting how this RFC had to explain how //is_literal()// is different to the flawed Taint Checking approach, so we don't get "a false sense of security or require far too much escape hatching".
+  - **Sara Golemon**, SaraMG, for noting that I'd need to explain how //is_literal()// is different to the flawed Taint Checking approach, so we don't get "a false sense of security or require far too much escape hatching".
