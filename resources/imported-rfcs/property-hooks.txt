@@ -715,58 +715,10 @@ Because the relationship is bidirectional, we need an additional semaphore to av
 
 ==== ORM change tracking ====
 
-This example also incorporates asymmetric visibility.  Note that it's glossing over internal details of the ORM's loading process, as those often involve wonky reflection anyway.  That's not what is being discussed here.
+Note that this example is glossing over internal details of the ORM's loading process, as those often involve wonky reflection anyway.  That's not what is being discussed here.
 
-<PHP>
-class Product
-{
-    public private(set) array $modified = [];
-    
-    public bool $hasChanges => !count($this->modified);
-    
-    public readonly string $sku;
-    
-    public string $name {
-        afterSet => $this->modified['name'] => $value;
-    }
-    public Color $color {
-        afterSet => $this->modified['color'] => $value;
-    }
-    public float $price {
-        afterSet => $this->modified['price'] => $value;
-    }
-}
+Consider a domain object defined like this:
 
-
-class ProductRepo
-{
-    public function save(Product $p)
-    {
-        // Here we're checking a boolean property that is computed on the fly.
-        if ($p->hasChanges) {
-            // We can get the list here, but not change it.
-            $fields = $p->modified;
-            
-            // Do something with an SQL builder to write just the changed properties,
-            // or build an EventSource event with just the changes, or whatever.
-        }
-    }
-}
-
-$repo = new ProductRepo();
-
-$p = $repo->load($sku);
-
-// This is type checked.
-$p->price = 99.99;
-
-// This is also type checked.
-$p->color = new Color('#ff3378');
-
-$repo->save($p);
-</PHP>
-
-This functionality could, certainly, be implemented with plain methods.  The important thing to note here is that to a consumer of ''Product'', the API is exactly the same as this class:
 
 <PHP>
 class Product
@@ -779,7 +731,7 @@ class Product
 }
 </PHP>
 
-Which means we could easily start off without change tracking and just have a plain and boring, easy to write object, and then add change tracking later without an API change.  We wouldn't need to write this, longer version "just in case":
+That is trivial to define, and to read.  By using ''{}'', however, it leaves open the potential to use hooks rather than needing to write this far longer version "just in case":
 
 <PHP>
 class Product
@@ -823,6 +775,64 @@ class Product
     }
 }
 </PHP>
+
+That means change tracking can be added to the object using hooks like this, without any change in the public-facing API:
+
+<PHP>
+class Product
+{
+    private array $modified = [];
+    
+    public bool $hasChanges => !count($this->modified);
+    
+    public readonly string $sku;
+    
+    public string $name {
+        afterSet => $this->modified['name'] => $value;
+    }
+    public Color $color {
+        afterSet => $this->modified['color'] => $value;
+    }
+    public float $price {
+        afterSet => $this->modified['price'] => $value;
+    }
+    
+    public function modifications(): array
+    {
+        return $this->modified;
+    {
+}
+
+
+class ProductRepo
+{
+    public function save(Product $p)
+    {
+        // Here we're checking a boolean property that is computed on the fly.
+        if ($p->hasChanges) {
+            // We can get the list here, but not change it.
+            $fields = $p->modifications();
+            
+            // Do something with an SQL builder to write just the changed properties,
+            // or build an EventSource event with just the changes, or whatever.
+        }
+    }
+}
+
+$repo = new ProductRepo();
+
+$p = $repo->load($sku);
+
+// This is type checked.
+$p->price = 99.99;
+
+// This is also type checked.
+$p->color = new Color('#ff3378');
+
+$repo->save($p);
+</PHP>
+
+
 
 ===== Backward Incompatible Changes =====
 
