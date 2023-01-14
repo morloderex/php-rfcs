@@ -1,0 +1,110 @@
+====== PHP RFC: Saner array_(sum|product)()  ======
+
+  * Version: 0.1
+  * Date: 2023-01-14
+  * Author: George Peter Banyard, <girgias@php.net>
+  * Status: Under Discussion
+  * Target Version: PHP 8.3
+  * Implementation: [[https://github.com/php/php-src/pull/10161]]
+  * First Published at: [[http://wiki.php.net/rfc/saner-array-sum-product]]
+
+===== Introduction =====
+
+PHP's standard library implements the <php>array_sum()</php> and <php>array_product()</php> which take an array of entries and adds/multiplies them together. These functions are higher order functions that perform a fold/reduction of their input array.
+
+PHP supports folding/reduction of arbitrary arrays via the <php>array_reduce()</php> function by taking a callable with two parameters and an initial value. As such, it is possible to implement the above-mentioned two functions in userland as follows:
+
+<PHP>
+// $output = array_sum($input)
+$output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+
+// $output = array_product($input)
+$output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+</PHP>
+
+If the entries in the input array are exclusively comprised of int and float values, then the behaviour between the built-in functions and their userland implementation is identical. However, if other types are part of the entries, the behaviour diverges.
+
+We believe that the behaviour between the two variants should be as close as possible, as we will use this as our design principle for addressing the discrepancies between both implementations.
+
+Therefore, we will first look at the behaviour of the <php>array_reduce()</php> version which the arithmetic operators with various types, then detail the current behaviour of the <php>array_sum()</php> and <php>array_product()</php> functions, and finally propose various changes to fix the discrepancies.
+
+==== Behaviour of the array_reduce() variants ===
+
+As the <php>array_reduce()</php> variants use arithmetic operators. It's crucial to understand how they perform with non numeric values. Arithmetic operators perform a numeric type juggling, which is described in the userland manual as:
+
+<blockquote>
+In this context if either operand is a float (or not interpretable as an int), both operands are interpreted as floats, and the result will be a float. Otherwise, the operands will be interpreted as ints, and the result will also be an int. As of PHP 8.0.0, if one of the operands cannot be interpreted a TypeError is thrown.
+</blockquote>
+
+
+The following types (other than int and float) are considered interpretable as int/float:
+
+  * ''null'', as ''0''
+  * ''bool'', where ''false'' is interpreted as ''0'', and ''true'' as ''1''
+  * ''string'', if it is numeric the string is converted to int/float and the standard behaviour is used
+  * ''object'' if it implements a ''do_operation'' handler that supports the operation, this is used. Otherwise, if it implements a custom ''cast_object'' handler which supports a numeric (but not an int or float) cast, the object is cast, and the standard behaviour is used. This is limited to internal objects. One such example is the GMP class.
+ 
+All other cases throw a ''TypeError''.
+
+
+==== Current behaviour of the array_sum() and array_product() functions ====
+
+The behaviour of these functions is relatively straight forward:
+
+First initialize the return value to ''0''/''1'' for <php>array_sum()</php> and <php>array_product()</php> respectively.
+
+Traverse the array entries:
+  * If the entry is of type ''array'' or ''object'': the entry is skipped
+  * Otherwise, the entry is cast to a number (int|float), and this value is added/multiplied to the return value.
+
+As such resource, array, non-numeric strings, and non-addable/multiplicate and non-numerically castable objects entries do not throw a ''TypeError'', behaviour which was made consistent in PHP 8.0.0 with the [[rfc:arithmetic_operator_type_checks|Stricter type checks for arithmetic/bitwise operators] RFC.
+
+===== Proposal =====
+
+The proposal is to use the same behaviour for <php>array_sum()</php> and <php>array_product()</php> as the <php>array_reduce()</php> variants with the caveat that if the return value would be an object it needs to be numerically castable to respect the current return type of ''int|float''.
+
+The new implementation reuses the engine functions that perform the arithmetic operations while still accepting, but emitting an <php>E_WARNING</php>, and implementing the current behaviours for values that are rejected by the arithmetic operators.
+
+===== Backward Incompatible Changes =====
+
+<php>E_WARNING</php>s are emitted for incompatible types.
+
+If traversing the array transforms the return value into an object, if that object is not numerically castable an <php>E_WARNING</php> is emitted and the initial return value is returned instead.
+
+Arrays that mix scalar values and objects may now produce different results, for example:
+<PHP>
+$a = [10, 15.6, gmp_init(25)];
+var_dump(array_sum($a));
+</PHP>
+Currently, results in: ''float(25.6)'' but with this proposal accepted would result in:
+<PHP>
+Deprecated: Implicit conversion from float 25.6 to int loses precision in %s on line %d
+int(50)
+</PHP>
+
+
+===== Proposed PHP Version =====
+
+Next minor version, i.e. PHP 8.3.0.
+
+===== Proposed Voting Choices =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+<doodle title="Accept Saner array_(sum|product)() RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Implementation =====
+
+GitHub pull request: https://github.com/php/php-src/pull/10161
+
+After the project is implemented, this section should contain
+
+  * the version(s) it was merged into
+  * a link to the git commit(s)
+  * a link to the PHP manual entry for the feature
+
+===== References =====
