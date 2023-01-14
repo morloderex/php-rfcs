@@ -13,19 +13,17 @@
 PHP's increment and decrement operators can have some surprising behaviours when used with types other than int and float. Various previous attempts (([[rfc:normalize_inc_dec|PHP RFC: Normalize increment and decrement operators]]))
 (([[rfc:alpanumeric_decrement|PHP RFC: Alphanumeric Decrement]]))
 (([[rfc:increment_decrement_fixes|PHP RFC: Increment/Decrement Fixes]]))
-have been made to improve the behaviour of these operators.
-But none have been implemented.
+have been made to improve the behaviour of these operators, but none have been implemented.
+The goal of this RFC is to normalize the behaviour of ''$v++'' and ''$v--'' to be the same as ''$v += 1'' and ''$v -= 1'', respectively.
 
-As a design principle, we will follow that the increment and decrement operators should behave like adding or subtracting 1 respectively.
-
-Therefore, we will first look at the behaviour of arithmetic operators with various types, then detail the current behaviour of the increment and decrement operators, and finally propose various changes to fix the dependencies.
+Therefore, we will first look at the behaviour of arithmetic operators with various types, then detail the current behaviour of the increment and decrement operators, and finally propose various changes to fix the discrepancies.
 
 ==== Behaviour of arithmetic operators ===
 
 Arithmetic operators perform a numeric type juggling, which is described in the userland manual as:
 
 <blockquote>
-In this context if either operand is a float (or not interpretable as an int), both operands are interpreted as floats, and the result will be a float. Otherwise, the operands will be interpreted as ints, and the result will also be an int. As of PHP 8.0.0, if one of the operands cannot be interpreted a TypeError is thrown.
+In this context if either operand is a float (or not interpretable as an int), both operands are interpreted as floats, and the result will be a float. Otherwise, the operands will be interpreted as ints, and the result will also be an int. As of PHP 8.0.0, if one of the operands cannot be interpreted a ''TypeError'' is thrown.
 </blockquote>
 
 
@@ -34,11 +32,56 @@ The following types (other than int and float) are considered interpretable as i
   * ''null'', as ''0''
   * ''bool'', where ''false'' is interpreted as ''0'', and ''true'' as ''1''
   * ''string'', if it is numeric the string is converted to int/float and the standard behaviour is used
-  * ''object'' if it implements a ''do_operation'' handler that supports the operation, this is used. Otherwise, if it implements a custom ''cast_object'' handler which supports a numeric (but not an int or float) cast, the object is casted and the standard behaviour is used. This is limited to internal objects. One such example is the GMP class.
- 
-All other cases throw a ''TypeError''.
+
+<PHP>
+var_dump(null + 1); // int(1)
+var_dump(null - 1); // int(-1)
+
+var_dump(false + 1); // int(1)
+var_dump(false - 1); // int(-1)
+
+var_dump(true + 1); // int(2)
+var_dump(true - 1); // int(0)
+
+var_dump("10" + 1); // int(11)
+var_dump("10" - 1); // int(9)
+var_dump("5.7" + 1); // float(6.7)
+var_dump("5.7" - 1); // float(4.7)
+</PHP>
+
+Resources, non-numeric strings, arrays (except when adding two arrays together), and objects that are instances of userland classes throw a ''TypeError''.
+
+Object values that are instances of an internal class that overload the arithmetic operator (by implementing the ''do_operation'' handler) will use the result of calling the handler.
+If an internal class implements a custom ''cast_object'' handler which supports a numeric ''_IS_NUMBER'' cast, the object is cast and the standard int/float behaviour is used.
+Otherwise, a ''TypeError'' is thrown.
+
+One example of an internal class that implements a ''do_operation'' handler is the GMP class.
+<PHP>
+$o = gmp_init(36);
+var_dump($o + 1);
+/*
+object(GMP)#2 (1) {
+  ["num"]=>
+  string(2) "37"
+}
+*/
+</PHP>
+
+The only examples of an internal class that does not implements a ''do_operation'' handler but implements an ''_IS_NUMBER'' cast in php-src are in Tidy extension (and are of dubious nature):
+<PHP>
+$o = tidy_parse_string("<p>Hello world</p>");
+var_dump($o + 1); // int(1)
+</PHP>
+
 
 Note: the empty string has **//never//** been considered numeric. (see: https://3v4l.org/uvLbV)
+
+Note: If an internal class implements a custom ''cast_object'' handler that supports an integer cast (via ''IS_LONG'') and/or a float cast (via ''IS_DOUBLE''), but //not// an ''_IS_NUMBER'' cast, no casting occurs and a ''TypeError'' is thrown.
+<PHP>
+$o = curl_init();
+var_dump((int) $o); // e.g. int(1)
+var_dump($o + 1); // Fatal error: Uncaught TypeError: Unsupported operand types: CurlHandle + int
+</PHP>
 
 ==== Current behaviour of the increment and decrement operators ====
 
@@ -47,20 +90,90 @@ The current behaviour of these operators is rather complex and depends on which 
   * the value is of type ''int'' or ''float'', the operation is performed
   * the value is of type ''array'' or ''resource'' then a ''TypeError'' is raised
   * the value is of type ''bool'', no action is performed on the value
-  * the value is of type ''object'' and it implements a ''do_operation'' handler that supports the addition and/or subtraction operation, then the corresponding operation is performed. Otherwise, a ''TypeError'' is raised. Examples of such internal objects are ''GMP'' or ''FFI\CData''.
   * the value is of type ''string'' and is numeric, then a standard numeric type cast is performed, and the ''int''/''float'' behaviour is utilized.
+
+<PHP>
+$int = 10;
+var_dump(++$int); // int(11)
+$int = 10;
+var_dump(--$int); // int(9)
+
+$float = 5.7;
+var_dump(++$float); // float(6.7)
+$float = 5.7;
+var_dump(--$float); // float(4.7)
+
+$false = false;
+var_dump(++$false); // bool(false)
+var_dump(--$false); // bool(false)
+$true = true;
+var_dump(++$true); // bool(true)
+var_dump(--$true); // bool(true)
+
+$stringInt = "10";
+var_dump(++$stringInt); // int(11)
+var_dump(--$stringInt); // int(9)
+$stringFloat = "5.7";
+var_dump(++$stringFloat); // float(6.7)
+var_dump(--$stringFloat); // float(4.7)
+</PHP>
+
+Object values that are instances of an internal class that overload the arithmetic operator (by implementing the ''do_operation'' handler) will use the result of calling the handler. Otherwise, a ''TypeError'' is thrown.
+<PHP>
+$o = gmp_init(36);
+var_dump(++$o);
+/*
+object(GMP)#2 (1) {
+  ["num"]=>
+  string(2) "37"
+}
+*/
+
+$o = tidy_parse_string("<p>Hello world</p>");
+var_dump(++$o); // Fatal error: Uncaught TypeError: Cannot increment tidy
+</PHP>
  
 For non-numeric ''string''s values and values of type ''null'' the behaviour is different between the increment and decrement operators.
 
 === Current behaviour of the decrement operator with values of type null and non-numeric string ===
 
-No action is performed, except if the value is the empty string, in which case the value is set to the integer ''-1''.
+If the value is of type ''null'', no action is performed.
+
+If the value is a non-numeric ''string'', no action is performed, except if the value is the empty string, in which case the result of the operation is the integer ''-1''.
+
+<PHP>
+$n = null;
+--$n;
+var_dump($n); // NULL
+
+$s = "foo";
+--$s;
+var_dump($s); // string(3) "foo"
+
+$e = "";
+--$e;
+var_dump($e); // int(-1)
+</PHP>
 
 === Current behaviour of the increment operator with values of type null and non-numeric string ===
 
-If the value is of type ''null'', the value is cast to the integer ''1''.
+If the value is of type ''null'', the result of the operation is the integer ''1''.
 
 If the value is a non-numeric ''string'' a PERL alphanumeric string increment is performed.
+
+<PHP>
+$n = null;
+++$n;
+var_dump($n); // int(1)
+
+$s = "foo";
+++$s;
+var_dump($s); // string(3) "fop"
+
+$e = "";
+++$e;
+var_dump($e); // string(1) "1"
+</PHP>
 
 Note: this means that the behaviour around the empty string differs between both operators. Because for ''++'' a PERL increment is used, the result is the string ''"1"''. This behaviour is identical in **//all//** versions of PHP.
 
@@ -82,10 +195,51 @@ int(-2)
 The proposal is to create a path so that in the next major version of PHP the increment and decrement operators behave identically to adding/subtracting 1 respectively.
 
 To achieve this, we propose the following changes to be made in the next minor version of PHP:
-  * Add support to increment/decrement objects that implement support for a ''_IS_NUMBER'' cast but do not implement a ''do_operation'' handle
-  * to emit <php>E_WARNING</php>s when the operators currently do not have any behaviour when they would if replace with a proper addition/subtraction (i.e. when the value is of type ''bool'' and ''null'' for the decrement operator).
-  * Deprecate using those operators with non-numeric strings.
 
+  * Add support to increment/decrement objects that implement support for a ''_IS_NUMBER'' cast but do not implement a ''do_operation'' handle
+<PHP>
+$o = tidy_parse_string("<p>Hello world</p>");
+var_dump(++$o); // int(1)
+</PHP>
+
+  * to emit <php>E_WARNING</php>s when the operators currently do not have any behaviour when they would if replace with a proper addition/subtraction (i.e. when the value is of type ''bool'' and ''null'' for the decrement operator).
+<PHP>
+$n = null;
+--$n; // Warning: Decrement on type null has no effect, this will change in the next major version of PHP
+var_dump($n); // NULL
+
+$false = false;
+--$false; // Warning: Decrement on type bool has no effect, this will change in the next major version of PHP
+var_dump($false); // bool(false)
+++$false; // Warning: Increment on type bool has no effect, this will change in the next major version of PHP
+var_dump($false); // bool(false)
+
+$true = true;
+--$true; // Warning: Decrement on type bool has no effect, this will change in the next major version of PHP
+var_dump($true); // bool(true)
+++$true; // Warning: Increment on type bool has no effect, this will change in the next major version of PHP
+var_dump($true); // bool(true)
+</PHP>
+
+
+  * Deprecate using those operators with non-numeric strings.
+<PHP>
+$empty = "";
+--$empty // Deprecated: Decrement on empty string is deprecated as non-numeric
+var_dump($empty); // int(-1)
+
+$s = "foo";
+--$s; // Deprecated: Decrement on non-numeric string has no effect and is deprecated
+var_dump($s); // string(3) "foo"
+
+$empty = "";
+++$empty // Deprecated: Increment on non-numeric string is deprecated
+var_dump($empty); // string(1) "1"
+
+$s = "foo";
+++$s; // Deprecated: Increment on non-numeric string is deprecated
+var_dump($s); // string(3) "fop"
+</PHP>
 
 In the next major version of PHP the following changes will take place:
   * Values of type ''bool'' and ''null'' are first cast to integers
@@ -110,7 +264,7 @@ The 3 operation specific one are:
   
 With the semantics proposed in this RFC the increment/decrement operators would be folded into the numeric type juggling context which reduces the semantic complexity of the language and possibly the engine/optimizer implementation in the next major version.
 
-The drawback of this approach is the deprecation, and thus removal, of the PERL increment feature. However, as supporting string decrements has been [[rfc:alpanumeric_decrement|rejected unanimously]]. It is only handling ASCII strings where the last byte is in the following ranges [0-9], [a-z], [A-Z], and doing nothing silently otherwise. We consider the value of reducing the semantic complexity of PHP higher than keeping support for this feature, which may be implemented more completely (such as Unicode support, and decrement like [[https://docs.raku.org/type/Str|Raku]]) with more rigorous behaviour in userland. 
+The drawback of this approach is the deprecation, and thus removal, of the PERL increment feature. However, as supporting string decrements has been [[rfc:alpanumeric_decrement|rejected unanimously]]. It is only handling ASCII strings where the last byte is in the following ranges [0-9], [a-z], [A-Z], and and silently doing nothing otherwise. We consider the value of reducing the semantic complexity of PHP higher than keeping support for this feature, which may be implemented more completely (such as Unicode support, and decrement like [[https://docs.raku.org/type/Str|Raku]]) with more rigorous behaviour in userland. 
 
 ===== Backward Incompatible Changes =====
 
