@@ -24,7 +24,7 @@ $output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
 
 If the entries in the input array are exclusively comprised of int and float values, then the behaviour between the built-in functions and their userland implementation is identical. However, if other types are part of the entries, the behaviour diverges.
 
-We believe that the behaviour between the two variants should be as close as possible, as we will use this as our design principle for addressing the discrepancies between both implementations.
+We believe that the behaviour between the two variants should be as close as possible, and we will use this as our design principle for addressing the discrepancies between both implementations.
 
 Therefore, we will first look at the behaviour of the <php>array_reduce()</php> version which the arithmetic operators with various types, then detail the current behaviour of the <php>array_sum()</php> and <php>array_product()</php> functions, and finally propose various changes to fix the discrepancies.
 
@@ -46,6 +46,45 @@ The following types (other than int and float) are considered interpretable as i
  
 All other cases throw a ''TypeError''.
 
+=== Examples ===
+
+Example with <php>GMP</php> objects:
+<PHP>
+$input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+// Userland implementation of array_sum($input)
+$output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+var_dump($output);
+/*
+object(GMP)#5 (1) {
+  ["num"]=>
+  string(2) "14"
+}
+*/
+
+// Userland implementation of array_product($input)
+$output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+var_dump($output);
+/*
+object(GMP)#6 (1) {
+  ["num"]=>
+  string(2) "90"
+}
+*/
+</PHP>
+
+Pathological example:
+<PHP>
+$input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+// Userland implementation of array_sum($input)
+$output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+var_dump($output); // TypeError
+
+// Userland implementation of array_product($input)
+$output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+var_dump($output); // TypeError
+</PHP>
 
 ==== Current behaviour of the array_sum() and array_product() functions ====
 
@@ -57,19 +96,86 @@ Traverse the array entries:
   * If the entry is of type ''array'' or ''object'': the entry is skipped
   * Otherwise, the entry is cast to a number (int|float), and this value is added/multiplied to the return value.
 
-As such resource, array, non-numeric strings, and non-addable/multiplicate and non-numerically castable objects entries do not throw a ''TypeError'', behaviour which was made consistent in PHP 8.0.0 with the [[rfc:arithmetic_operator_type_checks|Stricter type checks for arithmetic/bitwise operators] RFC.
+As such resource, array, non-numeric strings, and non-addable/multiplicate and non-numerically castable objects entries do not throw a ''TypeError'', behaviour which was made consistent in PHP 8.0.0 with the [[rfc:arithmetic_operator_type_checks|Stricter type checks for arithmetic/bitwise operators]] RFC.
+
+=== Examples ===
+
+Example with <php>GMP</php> objects:
+<PHP>
+$input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+$output = array_sum($input);
+var_dump($output); // int(0)
+
+$output = array_product($input);
+var_dump($output); // int(1)
+</PHP>
+
+Pathological example:
+<PHP>
+$input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+$output = array_sum($input);
+var_dump($output); // int(4)
+
+$output = array_product($input);
+var_dump($output); // int(3)
+</PHP>
 
 ===== Proposal =====
 
-The proposal is to use the same behaviour for <php>array_sum()</php> and <php>array_product()</php> as the <php>array_reduce()</php> variants with the caveat that if the return value would be an object it needs to be numerically castable to respect the current return type of ''int|float''.
+The proposal is to use the same behaviour for <php>array_sum()</php> and <php>array_product()</php> as the <php>array_reduce()</php> variants by reusing the engine functions that perform the arithmetic operations while still accepting, but emitting an <php>E_WARNING</php>, and implementing the current behaviours for values that are rejected by the arithmetic operators.
 
-The new implementation reuses the engine functions that perform the arithmetic operations while still accepting, but emitting an <php>E_WARNING</php>, and implementing the current behaviours for values that are rejected by the arithmetic operators.
+The one caveat is that if the return value would be an object (as is the case when folding over an array of <php>GMP</php> objects) then it must be numerically castable to respect the current return type of ''int|float''. If not, the initial value is returned (''0'' for <php>array_sum()</php> and ''1'' for <php>array_product()</php>).
+
+Therefore the previous two examples would result in the following behaviour:
+
+Example with <php>GMP</php> objects:
+<PHP>
+$input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+$output = array_sum($input);
+var_dump($output); // int(14)
+
+$output = array_product($input);
+var_dump($output); // int(90)
+</PHP>
+
+Pathological example:
+<PHP>
+$input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+$output = array_sum($input);
+var_dump($output);
+/*
+
+Warning: array_sum(): Addition is not supported on type resource in %s on line %d
+
+Warning: array_sum(): Addition is not supported on type stdClass in %s on line %d
+
+Warning: array_sum(): Addition is not supported on type array in %s on line %d
+int(10)
+*/
+
+$output = array_product($input);
+var_dump($output);
+/*
+
+Warning: array_product(): Multiplication is not supported on type resource in %s on line %d
+
+Warning: array_product(): Multiplication is not supported on type stdClass in %s on line %d
+
+Warning: array_product(): Multiplication is not supported on type array in %s on line %d
+int(18)
+*/
+</PHP>
+
 
 ===== Backward Incompatible Changes =====
 
 <php>E_WARNING</php>s are emitted for incompatible types.
 
-If traversing the array transforms the return value into an object, if that object is not numerically castable an <php>E_WARNING</php> is emitted and the initial return value is returned instead.
+If traversing the array transforms the return value into an object, if that object is not numerically castable an <php>E_WARNING</php> is emitted and the initial return value is returned instead, which may change the return value if scalar values were present in the array.
 
 Arrays that mix scalar values and objects may now produce different results, for example:
 <PHP>
