@@ -1,0 +1,121 @@
+====== PHP RFC: include cleanup ======
+  * Version: 0.1
+  * Date: 2023-01-18
+  * Author: Max Kellermann, max.kellermann@ionos.com
+  * Status: Draft (or Under Discussion or Accepted or Declined)
+  * First Published at: https://github.com/php/php-src/pull/10216
+
+===== Introduction =====
+The PHP code base has grown over more than 2 decades, which leaves some room for code cleanups. While attempting to fix several crash bugs in the JIT, I found that PHP's C headers (*.h) and the existing #include directives are inconsistent, incomplete and bloated; many things just worked by chance, not by design, because there were a few headers which just included everything.
+
+  * there are lots of undocumented headers without clear scope; what is the purpose/scope of zend.h and zend_API.h? What types should zend_types.h make available? Which types are supposed to live in zend_types.h and which ones are supposed to live in a type-specific header? What is zend_portability.h and what does ZEND_ASSERT have to do with portability? All those headers seemed confusing to me.
+  * many source files check for build option macros (e.g ZEND_DEBUG) but do not ensure that `php_config.h` or `zend_config.w32.h` is included; it is not documented what needs to be done to make those macros available; that can easily lead to silent corruption of the PHP executable if a header or include ordering gets changed
+  * reordering of #include lines must never cause C compiler failures, but that is a very common problem in the PHP code base
+  * there is a lot of code duplication for macro definitions, e.g. MAXPATHLEN is defined in 5 different headers in 3 different ways; PHPAPI is defined in 2 headers in different ways; this is yet another way to produce corrupt PHP executables by reordering #include lines
+  * it is all but obvious which header should be included to make certain symbols available
+  * e.g. if I want to work with zend_string instances, I expect to just include zend_string.h, but that header doesn't contain the definition, nor all necessary functions/macros; those are in zend_types.h, and so nobody includes zend_string.h; but anyway including zend_string.h would pull in everything else via zend.h
+  * ... and so on
+
+I wanted to help clean up this mess that had accumulated over two decades. After four PRs doing exactly that were widely welcomed and accepted, there was resistance from two individuals who demanded my changes to be reverted. This resistance surprised me, because I previously thought those code cleanups were common sense, and just nobody had so far taken the time to do it.
+
+===== Proposal =====
+I propose an addition to PHP's coding standard describing how C headers and #includes should be managed:
+
+  - Include only the headers (`*.h`) that are really needed.
+  - Use struct/union forward declarations to eliminate `#include` directives if possible.
+  - If some headers are needed only in some build configurations, enclose them in the same `#if` that also guards the use of its definitions.
+  - Each source file (`*.c`) should include its own header file first to ensure that the header's `#includes` are complete.
+  - Header inclusions are ordered this way: its own header first, then PHP headers, then third-party library headers, then system headers (e.g. libc, POSIX).
+
+(GitHub PR with the same contents: https://github.com/php/php-src/pull/10338)
+
+Then, the reverted cleanups should be reconsidered:
+
+  * https://github.com/php/php-src/pull/10216
+  * https://github.com/php/php-src/pull/10220
+  * https://github.com/php/php-src/pull/10279
+  * https://github.com/php/php-src/pull/10300
+
+I have already posted a new draft PR which contains all these, plus some more: https://github.com/php/php-src/pull/10345
+
+Advantages of this proposal:
+
+  * more correct code
+  * cleaner and more readable code (less obscurity in huge amounts of undocumented/unnecessary #includes)
+  * less fragile code (build fails early if you forget an #include; currently, removing one unnecessary #include in one header may break dozens of sources)
+  * reduced compile times (because the compiler processes less code)
+
+Disadvantages of this proposal:
+
+  * like every time code gets refactored, there may be regressions in build configurations not tested by the CI, like the DTrace build failure that was introduced by my work (which was trivial to fix)
+
+Criticism issued on this proposal:
+
+  * Dmitry Stogov disliked that I documented many #include directives ("good for review only") but did not object to cleaning up #include directives (https://github.com/php/php-src/pull/10216#issuecomment-1375140255)
+  * later Dmitry Stogov changed his mind, saying "This is just a useless permutation. [...] How is this clearly?" https://github.com/php/php-src/pull/10220#issuecomment-1383739816 which Derick Rethans agreed with ("It adds nothing but clutter." https://github.com/php/php-src/pull/10220#issuecomment-1383784480)
+  * Dmitry Stogov rejected the idea of forward declarations because "Functions may change their prototypes, unions may be turned into structures, etc" (https://github.com/php/php-src/pull/10338#discussion_r1071169392)
+
+
+===== Backward Incompatible Changes =====
+This proposal has no runtime effect. The PHP language is not affected, and the PHP executable will not change.
+
+At the C source code level, reducing #includes may break the build of third-party extensions which forgot to include a header that was previously implied by PHP, e.g. "errno.h" is included for no reason, and extensions may rely on that.
+
+If staying compatible with defective extensions is deemed important, these includes may be re-added to a header such as "php_compat.h", possibly with a way to opt-out. That way, broken extensions still build, but PHP itself still benefits from a smaller and more correct set of #includes.
+
+===== Proposed PHP Version(s) =====
+"master" branch (which may eventually become 8.3 or 9.0?).
+
+===== RFC Impact =====
+==== To SAPIs ====
+No runtime impact.
+
+The build of out-of-tree SAPIs may break for the same reasons as described above.
+
+==== To Existing Extensions ====
+No runtime impact.
+
+The build of out-of-tree extensiosn may break for the same reasons as described above.
+
+==== To Opcache ====
+No impact.
+
+Being an in-tree extension, opcache benefits from those code cleanups. My PR contains cleanup commits for opcache.
+
+==== New Constants ====
+Not applicable.
+
+==== php.ini Defaults ====
+Not applicable.
+
+===== Open Issues =====
+
+
+===== Unaffected PHP Functionality =====
+The PHP language is completely unaffected.
+
+===== Future Scope =====
+Not applicable. This is an incremental improvement to PHP's source code.
+
+===== Proposed Voting Choices =====
+  * Yes (clean up headers and #include directives)
+  * No (do not clean up headers and #include directives)
+
+Other questions that could possibly be decided on:
+  * Is it allowed to document an #include line with a code comment? (Yes/No)
+  * Is it allowed to split a large header, e.g. move zend_result to a separate header, to reduce dependencies on catch-all headers such as zend_types.h? (Yes/No)
+
+===== Patches and Tests =====
+
+===== Implementation =====
+https://github.com/php/php-src/pull/10338 tracks the specification.
+https://github.com/php/php-src/pull/10345 tracks my proposed implementation.
+
+===== References =====
+  * https://github.com/php/php-src/pull/10216
+  * https://github.com/php/php-src/pull/10220
+  * https://github.com/php/php-src/pull/10279
+  * https://github.com/php/php-src/pull/10300
+  * https://github.com/php/php-src/pull/10338
+  * https://github.com/php/php-src/pull/10345
+  * https://marc.info/?l=php-internals&m=167387060703714&w=2
