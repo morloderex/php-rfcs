@@ -23,12 +23,12 @@ A case with an associated value is called a Tagged Case.  An Enum Case that does
 
 Tagged cases are mutually exclusive with Scalar Cases.  If an Enum has at least one Tagged Case, it may not have any Scalar Cases and vice versa.  However, the same Enum may consist of any number of Tagged and Unit Cases.
 
-Associated values are defined using constructor property promotion.
+If two Tagged Case instances have the same associated value, the object instance will be reused.  That means two instances that have the same associated values will pass both a ''%%==%%'' check and a ''%%===%%'' check.
 
 <code php>
 enum Distance {
-    case Kilometers(public int $km);
-    case Miles(public int $miles);
+    case Kilometers(int $km);
+    case Miles(int $miles);
 }
 
 $my_walk = Distance::Miles(500);
@@ -37,14 +37,13 @@ $next_walk = Distance::Miles(miles: 500);
 
 print $my_walk->miles; // prints "500"
 
-$my_walk === $next_walk; // FALSE!
+$my_walk == $next_walk; // TRUE!
+$my_walk === $next_walk; // TRUE!
 </code>
 
-Tagged Cases may not implement a full constructor. However, they may list parameters that will be auto-promoted to properties using constructor promotion. The visibility modifier is required. Cases may not implement properties other than promoted properties.
+Tagged Cases may not implement a full constructor.  The associated values specified will be available as public readonly properties on the case object.  Associated values may have property-targeting attributes associated with them.
 
 The Enum Type itself may not define associated values. Only a Case may do so.
-
-Associated values are always read-only, both internally to the class and externally. Therefore, making them public does not pose a risk of 3rd party code modifying them inadvertently. They may, however, have attributes associated with them like any other property.
 
 On a Tagged Case enumeration, the ''%%cases()%%'' method is not available and will throw a ''%%TypeError%%''. Since Tagged Cases are technically unbounded, the method has no logical sense.
 
@@ -62,14 +61,14 @@ The (in)famous Maybe Monad (also known as Option, Optional, or Result) can be im
 enum Maybe {
   // This is a Unit Case.
   case None {
-    public function bind(callable $f) 
+    public function bind(callable $f)
     {
       return $this;
     }
   };
 
   // This is a Tagged Case.
-  case Some(private mixed $value) {
+  case Some(mixed $value) {
     // Note that the return type can be the Enum itself, thus restricting the return
     // value to one of the enumerated types.
     public function bind(callable $f): Maybe
@@ -78,14 +77,6 @@ enum Maybe {
       return $f($this->value);
     }
   };
-
-  // This method is available on both None and Some.
-  public function value(): mixed {
-    if ($this instanceof None) {
-      throw new Exception();
-    }
-    return $this->val;
-  }
 }
 </code>
 
@@ -103,12 +94,29 @@ enum Direction {
 }
 
 enum Command {
-  case Move(public CardinalDirection $direction, int $distance);
-  case Turn(public Direction $dir);
+  case Move(CardinalDirection $direction, int $distance);
+  case Turn(Direction $dir);
   case Shoot;
 }
 </code>
 
+=== Static analysis type tracking ===
+
+PHP's types could be represented with an enum like so:
+
+<PHP>
+enum Type
+{
+  case Int;
+  case Float;
+  case String;
+  case Array;
+  case Bool;
+  case Object(string $class);
+}
+</PHP>
+
+(I really have had to do something like that before.)  Combined with pattern matching, this would allow for a very robust way to handle objects being special and having additional context.
 
 ===== Backward Incompatible Changes =====
 
@@ -116,7 +124,7 @@ None, beyond what is already in the Enumerations RFC.
 
 ===== Proposed PHP Version(s) =====
 
-PHP 8.1.
+PHP 8.3.
 
 ===== Open Issues =====
 
