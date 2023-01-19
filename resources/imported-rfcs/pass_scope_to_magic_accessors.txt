@@ -1,1 +1,91 @@
-This RFC has moved to [[rfc:access_scope_from_magic_accessors]]
+====== PHP RFC: Pass Scope to Magic Accessors ======
+  * Version: 1.0
+  * Date: 2023-01-19
+  * Author: Nicolas Grekas <nicolasgrekas@php.net>, Ilija Tovilo <tovilo.ilija@gmail.com>
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/pass_scope_to_magic_accessors
+  * Implementation: https://github.com/iluuu1994/php-src/pull/46
+
+===== Introduction =====
+When using magic methods to access actual properties, respecting their declared visibility is often desired. Yet, accessing the calling scope to emulate the visibility restrictions is unreasonably difficult at the moment. This RFC proposes to pass the calling scope to magic accessors to make it trivial to get it.
+
+===== Proposal =====
+
+This RFC proposes to pass the calling scope to magic accessors: ''%%__get()%%'', ''%%__set()%%'', ''%%__isset()%%'', ''%%__unset()%%'', ''%%__call()%%'' and ''%%__callStatic()%%''.
+
+This would help to properly implement visibility-related logic. Right now, we have to call ''debug_backtrace()'' to write scope-sensitive logic, but it's very difficult to get it right: accounting for inheritance is hard (calling e.g. ''%%parent::__get()%%'' changes the outcome of ''debug_backtrace()'' inside this ''%%parent::__get()%%'' method.) Passing the calling scope would make this concern more evident and would solve the issue with inheritance. It would also fix the edge case of calling a magic method via ''ReflectionProperty::get/setValue()'', where looking up at ''debug_backtrace()'' needs special care to extract the calling scope. Last but not least, removing calls to ''debug_backtrace()'' would improve the performance of such magic accessors.
+
+Right now, the logic to access the calling scope is quite involving. This example doesn't handle chained inheritance calls:
+
+<PHP>
+class Foo extends Bar
+{
+	public function __get($name): mixed
+	{
+		$frame = debug_backtrace(\DEBUG_BACKTRACE_PROVIDE_OBJECT | \DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1];
+
+		$callingScope = $frame['class'] ?? null;
+
+		if (\ReflectionProperty::class === $callingScope) {
+			$callingScope = $frame['object']->class;
+		}
+
+		// Now we can implement visibility-related logic for accessing $name
+
+		// Let's say we want to call parent::__get() and it uses the same logic to extract the calling
+		// scope, it's now broken because instead of getting frame `[1]`, it should use frame `[2]`.
+		// But knowing this requires more non trivial logic. 
+	}
+}
+</PHP>
+
+If this RFC is accepted, we'll be able to do this instead:
+
+<PHP>
+class Foo extends Bar
+{
+	public function __get($name, ?string $callingScope = null): mixed
+	{
+		// $callingScope is populated with the value know by the engine
+
+		// Calling parent::__get($name, $callingScope) is done easily
+		// without resorting to any specific logic
+	}
+}
+</PHP>
+
+The PHP engine will pass the calling scope to magic accessors even if they don't declare the corresponding argument. The corresponding value will always be accessible via ''func_get_arg()''.
+
+This ensures that userland will be able to write code that works on both PHP <= 8.2 and PHP >= 8.3. (As a reminder, the engine forbids adding any extra arguments to magic methods: it's not allowed to declare a ''%%__get($name, $scope)%%'' on PHP <= 8.2.)
+
+For consistency with the checks in place for the currently accepted arguments, the engine will throw a fatal error when the new argument is declared with a type that is not compatible with ''string|null'.
+
+===== Proposed PHP Version =====
+
+PHP 8.3
+
+===== RFC Impact =====
+
+===== Unaffected PHP Functionality =====
+
+Existing magic accessors won't be required to declare the new argument.
+
+==== Backward Incompatible Changes ====
+
+None
+
+==== To Existing Extensions ====
+
+Extensions that declare magic accessors (e.g. soap) will need to declare the new argument.
+
+
+===== Proposed Voting Choices =====
+
+Pass calling scope to magic accessors: yes/no?
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
