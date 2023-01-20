@@ -1,10 +1,10 @@
 ====== PHP RFC: Path to Saner Increment/Decrement operators ======
 
-  * Version: 0.2
+  * Version: 0.3
   * Date: 2022-11-21
   * Author: George Peter Banyard, <girgias@php.net>
   * Status: Under Discussion
-  * Target Version: PHP 8.3 and PHP 9.0
+  * Target Version: PHP 8.3, PHP 8.(3+x), and PHP 9.0
   * Implementation: [[https://github.com/php/php-src/pull/10358]]
   * First Published at: [[http://wiki.php.net/rfc/saner-inc-dec-operators]]
 
@@ -190,6 +190,186 @@ int(-2)
 */
 </PHP>
 
+=== Details about the PERL String increment feature ===
+
+If the string to increment is the empty string, return the string ''"1"''.
+
+Otherwise, the last byte of the string is inspected:
+  * If it is in-between "a" and "y", "A" and "Y", or "0" and "8", the ASCII code point value is increased by one.
+  * If if is "z", "Z", or "9" replace it by "a", "A", and "0" respectively, then inspect the previous byte while holding a carry value of 1.
+  * Otherwise, do nothing.
+
+If, and only if, a carry value is held after having inspected the first byte of the string. The string is prepended the character "a", "A", or "1" depending on the value of the first byte ("z", "Z", and "9" respectively).
+
+Here are a couple examples demonstrating these rules:
+<PHP>
+<?php
+
+// Empty string
+$s = "";
+var_dump(++$s); // string(1) "1"
+
+// String increments are unaware of being "negative"
+$s = "-cc";
+var_dump(++$s); // string(3) "-cd"
+$s = "cc";
+var_dump(++$s); // string(2) "cd"
+
+// Carrying values of different cases/types
+$s = "Az";
+var_dump(++$s); // string(2) "Ba"
+$s = "aZ";
+var_dump(++$s); // string(2) "bA"
+$s = "A9";
+var_dump(++$s); // string(2) "B0"
+$s = "a9";
+var_dump(++$s); // string(2) "b0"
+
+// Carrying values until the beginning of the string
+$s = "Zz";
+var_dump(++$s); // string(3) "AAa"
+$s = "zZ";
+var_dump(++$s); // string(3) "aaA"
+$s = "9z";
+var_dump(++$s); // string(3) "10a"
+$s = "9Z";
+var_dump(++$s); // string(3) "10A"
+
+// Trailing whitespace
+$s = "Z ";
+var_dump(++$s); // string(2) "Z "
+
+// Leading whitespace
+$s = " Z";
+var_dump(++$s); // string(2) " A"
+
+// Whitespace in-between
+$s = "C Z";
+var_dump(++$s); // string(3) "C A"
+
+// Non-ASCII characters
+$s = "é";
+var_dump(++$s); // string(2) "é"
+$s = "あいうえお";
+var_dump(++$s); // string(15) "あいうえお"
+$s = "α";
+var_dump(++$s); // string(2) "α"
+$s = "ω";
+var_dump(++$s); // string(2) "ω"
+$s = "Α";
+var_dump(++$s); // string(2) "Β"
+$s = "Ω";
+var_dump(++$s); // string(2) "Ω"
+
+// With period
+$s = "foo1.txt";
+var_dump(++$s); // string(8) "foo1.txu"
+$s = "1f.5";
+var_dump(++$s); // string(4) "1f.6"
+
+// With multiple period
+$s = "foo.1.txt";
+var_dump(++$s); // string(9) "foo.1.txu"
+$s = "1.f.5";
+var_dump(++$s); // string(5) "1.f.6"
+</PHP>
+
+The behaviour is slightly different than that of [[https://docs.raku.org/type/Str|Raku]] (a PERL successor). It performs the string increment prior to the first ''FULL STOP .'' character, handles Unicode characters, performs the carry in a slightly differently way, and also does not do anything with empty strings.
+
+<code raku>
+sub var_dump(Str $v) {
+  say 'string(' ~  $v.encode('UTF-8').bytes ~ ') "' ~ $v ~ "\"\n";
+}
+
+# Empty string
+my $s = "";
+var_dump(++$s);
+
+# String increments are unaware of being "negative"
+$s = "-cc";
+var_dump(++$s); # string(3) "-cd"
+$s = "cc";
+var_dump(++$s); # string(2) "cd"
+
+# Carrying values of different cases/types
+$s = "Az";
+var_dump(++$s); # string(2) "Ba"
+$s = "aZ";
+var_dump(++$s); # string(2) "bA"
+$s = "A9";
+var_dump(++$s); # string(2) "B0"
+$s = "a9";
+var_dump(++$s); # string(2) "b0"
+
+# Carrying values until the beginning of the string
+$s = "Zz";
+var_dump(++$s); # string(3) "AAa"
+$s = "zZ";
+var_dump(++$s); # string(3) "aaA"
+$s = "9z";
+var_dump(++$s); # string(3) "10a"
+$s = "9Z";
+var_dump(++$s); # string(3) "10A"
+
+# Trailing whitespace
+$s = "Z ";
+var_dump(++$s); # string(2) "Z "
+
+# Leading whitespace
+$s = " Z";
+var_dump(++$s); # string(2) " A"
+
+# Whitespace in-between
+$s = "C Z";
+var_dump(++$s); # string(4) "C AA"
+
+# Non-ASCII characters
+$s = "é";
+var_dump(++$s); # string(2) "é"
+$s = "あいうえお";
+var_dump(++$s); # string(15) "あいうえお"
+$s = "α";
+var_dump(++$s); # string(2) "β"
+$s = "ω";
+var_dump(++$s); # string(4) "αα"
+$s = "Α";
+var_dump(++$s); # string(2) "Β"
+$s = "Ω";
+var_dump(++$s); # string(4) "ΑΑ"
+
+# With period
+$s = "foo1.txt";
+var_dump(++$s); # string(8) "foo2.txt"
+$s = "1f.5";
+var_dump(++$s); # string(4) "1g.5"
+
+# With multiple period
+$s = "foo.1.txt";
+var_dump(++$s); # string(9) "fop.2.txt"
+$s = "1.f.5";
+var_dump(++$s); # string(5) "2.f.5"
+</code>
+
+However, the biggest problem is with strings that can be interpreted as a number in scientific notation, because they will never be interpreted as an alphanumeric string to be incremented using the PERL increment feature, but converted to float first:
+<PHP>
+$s = "5d9";
+var_dump(++$s); // string(3) "5e0"
+var_dump(++$s); // float(6)
+</PHP>
+
+While Raku also supports arithmetic operations with strings that represent number in scientific notation, it does not perform any type juggling at all for the increment and decrement operators (therefore having the same behaviour as currently for boolean and its corresponding ''null'' type ''Nil'').
+
+Therefore the above snippet in Raku gives a consistent result:
+<code raku>
+sub var_dump(Str $v) {
+  say 'string(' ~  $v.encode('UTF-8').bytes ~ ') "' ~ $v ~ "\"\n";
+}
+
+my $s = "5d9";
+var_dump(++$s); // string(3) "5e0"
+var_dump(++$s); // string(3) "5e1"
+</code>
+
 ===== Summary of behavioural differences =====
 
 |             ^      ''+1''     ^      ''++''     ^     ''-1''      ^      ''--''     ^
@@ -202,10 +382,11 @@ int(-2)
 
 ===== Proposal =====
 
-The proposal is to create a path so that in the next major version of PHP the increment and decrement operators behave identically to adding/subtracting 1 respectively.
+The proposal is to create a path so that in the next major version of PHP the increment and decrement operators behave identically to adding/subtracting 1 respectively, while acknowledging that users rely on the PERL string increment feature.
 
 To achieve this, we propose the following changes to be made in the next minor version of PHP:
 
+  * Add the <php>str_increment()</php> and <php>str_decrement()</php> functions which implement a symmetrical but more rigorous and strict behaviour than the current PERL string increment feature has which is described in the sub-section below.
   * Add support to increment/decrement objects that implement support for a ''_IS_NUMBER'' cast but do not implement a ''do_operation'' handle
 <PHP>
 $o = tidy_parse_string("<p>Hello world</p>");
@@ -232,7 +413,7 @@ var_dump($true); // bool(true)
 </PHP>
 
 
-  * Deprecate using those operators with non-numeric strings.
+  * Deprecate using the decrement operator with non-numeric strings.
 <PHP>
 $empty = "";
 --$empty // Deprecated: Decrement on empty string is deprecated as non-numeric
@@ -241,11 +422,52 @@ var_dump($empty); // int(-1)
 $s = "foo";
 --$s; // Deprecated: Decrement on non-numeric string has no effect and is deprecated
 var_dump($s); // string(3) "foo"
+</PHP>
 
+  * Deprecate using the increment operator with strings that are not strictly alphanumeric.
+<PHP>
 $empty = "";
-++$empty // Deprecated: Increment on non-numeric string is deprecated
+++$empty // Deprecated: Increment on non-alphanumeric string is deprecated
 var_dump($empty); // string(1) "1"
 
+$s = "foo";
+++$s; // No Deprecation
+var_dump($s); // string(3) "fop"
+
+$s = "-cc";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); // string(3) "-cd"
+
+$s = "Z ";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); // string(2) "Z "
+
+$s = " Z";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); // string(2) " A"
+
+# Non-ASCII characters
+$s = "é";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); # string(2) "é"
+$s = "あいうえお";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); # string(15) "あいうえお"
+$s = "α";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); # string(2) "α"
+$s = "1f.5";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); # string(4) "1f.6"
+
+$s = "1.f.5";
+++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
+var_dump($s); # string(5) "1.f.6"
+</PHP>
+
+In a follow-up minor version of PHP the following changes will take place:
+  * Deprecate using the increment operator with non-numeric strings.
+<PHP>
 $s = "foo";
 ++$s; // Deprecated: Increment on non-numeric string is deprecated
 var_dump($s); // string(3) "fop"
@@ -255,11 +477,32 @@ In the next major version of PHP the following changes will take place:
   * Values of type ''bool'' and ''null'' are first cast to integers
   * Non-numeric string values throw a ''TypeError''
 
+==== Semantics of str_increment() and str_decrement() ====
+
+The signature of the functions are:
+<PHP>
+function str_increment(string $string): string {}
+function str_decrement(string $string): string {}
+</PHP>
+
+If <php>$string</php> is the empty string or not totally comprised of ASCII alphanumeric characters (''[a-zA-Z0-9]'') then a ValueError is thrown.
+
+If decrementing <php>$string</php> would result in an underflow (e.g. ''"AA"'' or ''"0"'') an out of range ValueError will be thrown. This follows Raku's behaviour.
+
+As those functions would not be performing any type juggling strings that can be interpreted as numbers in scientific notation will not be implicitly converted to float.
+
+<PHP>
+$s = "5d9";
+$s = str_increment($s);
+var_dump($s); // string(3) "5e0"
+$s = str_increment($s);
+var_dump($s); // string(3) "5e1"
+</PHP>
 
 ==== Cost/Benefit ====
 
-PHP currently has 6 main and 3 operation-specific type juggling contexts.
-The main 6 are documented in the userland manual on the type juggling page and are as follows:
+PHP currently has 6 main and 4 operation-specific type juggling contexts.
+The main 6 are documented in the userland manual on the [[https://www.php.net/manual/en/language.types.type-juggling.php|type juggling page]] and are as follows:
   * Numeric
   * String
   * Logical
@@ -267,36 +510,44 @@ The main 6 are documented in the userland manual on the type juggling page and a
   * Comparative
   * Function
 
-The 3 operation-specific contexts are:
+The 4 operation-specific contexts are:
   * Increment/Decrement operators
   * String offsets
   * Array offsets
+  * <php>exit</php> language construct
 
 With the semantics proposed in this RFC the increment/decrement operators would be folded into the numeric type juggling context which reduces the semantic complexity of the language and possibly the engine/optimizer implementation in the next major version.
 
-The drawback of this approach is the deprecation, and thus removal, of the PERL increment feature. However, the PERL increment only properly supports strings which are only comprised of the ASCII which represent a digit ([0-9]) or a letter ([a-zA-Z]).
+The drawback of this approach is the deprecation, and thus removal, of the PERL increment feature.
+However, the issues around strings that can be interpreted in scientific notation, the fact it only properly supports strings which are only comprised of the ASCII alphanumeric characters (''[a-zA-Z0-9]''),
+and adding support for string decrements was previously [[rfc:alpanumeric_decrement|rejected unanimously]],
+makes us believe the current semantics of the string increment feature are unsound.
 
+Therefore, we consider the value of reducing the semantic complexity of PHP higher than keeping support for this feature in its current form.
+The introduction of the <php>str_increment()</php> functions provides a migration paths for users relying on this feature that can easily be polyfilled in prior versions of PHP:
 <PHP>
-$s = "az";
-var_dump(++$s); // string(2) "ba"
-var_dump(++$s); // string(2) "bb"
-$s = "a z";
-var_dump(++$s); // string(3) "a a"
-var_dump(++$s); // string(3) "a b"
-$s = "a9";
-var_dump(++$s); // string(2) "b0"
-var_dump(++$s); // string(2) "b1"
-$s = "a 9";
-var_dump(++$s); // string(3) "a 0"
-var_dump(++$s); // string(3) "a 1"
-$s = "a é";
-var_dump(++$s); // string(4) "a é"
-var_dump(++$s); // string(4) "a é"
+function str_increment_polyfill(string $s): string {
+    if (is_numeric($s)) {
+        $offset = stripos($s, 'e');
+        if ($offset !== false) {
+            /* Using increment operator would cast the string to float
+             * Therefore we manually increment it to convert it to an "f"/"F" that doesn't get affected */
+            $c = $s[$offset];
+            $c++;
+            $s[$offset] = $c;
+            $s++;
+            $s[$offset] = match ($s[$offset]) {
+                'f' => 'e',
+                'F' => 'E',
+                'g' => 'f',
+                'G' => 'F',
+            };
+            return $s;
+        }
+    }
+    return ++$s;
+}
 </PHP>
-
-Moreover, adding support for string decrements was [[rfc:alpanumeric_decrement|rejected unanimously]].
-
-Therefore, we consider the value of reducing the semantic complexity of PHP higher than keeping support for this feature, which may be implemented more completely (such as Unicode support, and decrement like in [[https://docs.raku.org/type/Str|Raku]]) with more rigorous behaviour in userland. 
 
 ===== Backward Incompatible Changes =====
 
@@ -312,7 +563,7 @@ One possible future scope is to add support to both arithmetic operations and th
 
 ===== Proposed PHP Version =====
 
-Next minor version, i.e. PHP 8.3.0, and next major version, i.e. PHP 9.0.0.
+Next minor version, i.e. PHP 8.3.0, follow-up minor version, e.g. PHP 8.4.0, and next major version, i.e. PHP 9.0.0.
 
 ===== Proposed Voting Choices =====
 
@@ -326,7 +577,7 @@ Voting started on 2023-XX-XX and will end on 2023-XX-XX.
 
 ===== Implementation =====
 
-GitHub pull request: https://github.com/php/php-src/pull/10358
+GitHub pull request: [[https://github.com/php/php-src/pull/10358]]
 
 After the project is implemented, this section should contain
 
