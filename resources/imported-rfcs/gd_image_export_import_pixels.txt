@@ -1,0 +1,162 @@
+====== PHP RFC: gd imageexportpixels() and imageimportpixels() ======
+  * Version: 1
+  * Date: 2023-01-21
+  * Author: Thomas Hruska, cubic@php.net
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/gd_image_export_import_pixels
+
+===== Introduction =====
+When working with larger images in gd, exporting and importing pixels one pixel/color at a time with imagecolorat() and imagesetpixel() creates a lot of function call overhead just to manipulate an image one pixel at a time.  A lot of phone cameras produce images in excess of 3,000 pixel rows and columns.  This RFC adds two functions to gd to export pixels to and import pixels from a 2D array.
+
+An additional advantage of being able to export multiple pixels in a single call is the ability to perform more complex operations such as custom sub image detection and convolution algorithms more quickly when done in userland.  The result is far fewer calls to imagecolorat() and imagesetpixel() that only operate on single pixels.
+
+===== Proposal =====
+Two new functions for PHP gd:  imageexportpixels() and imageimportpixels().
+
+Working implementations of the functions being proposed can be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+==== imageexportpixels() ====
+
+%%array imageexportpixels(resource im, int x, int y, int width, int height)%%
+
+Export the colors/color indexes of a range of pixels as an array.
+
+  * $im - A resource/instance of GdImage (depending on PHP version).
+  * $x - The upper left corner x-coordinate to start from.
+  * $y - The upper left corner y-coordinate to start from.
+  * $width - A positive integer width.
+  * $height - A positive integer height.
+
+Returns:  A 2D array containing the exported pixel colors on success, emits a notice and returns a boolean of false on error.
+
+This function improves performance when working with gd images at the pixel level.  Calling `imagecolorat()` in a loop is slow.  For example, when processing a 3000x5000 pixel image, that's 15 million function calls to `imagecolorat()` to access every pixel of the image.  This function can rapidly export any portion of the image as a userland 2D array of integers.  Instead of 15 million PHP function calls, even one call per row would be a mere 5,000 function calls.
+
+Target audience:  All users who use gd to do image processing.
+
+Why it should be added to PHP:  Improved performance.  Also, PECL ImageMagick has a similar but more advanced function (Imagick::exportImagePixels()).
+
+==== imageimportpixels() ====
+
+%%bool imageimportpixels(resource im, int x, int y, array colors)%%
+
+Sets pixels to the specified colors in the 2D array.
+
+  * $im - A resource/instance of GdImage (depending on PHP version).
+  * $x - The upper left corner x-coordinate to start from.
+  * $y - The upper left corner y-coordinate to start from.
+  * $colors - A 2D array of integers representing pixel colors.
+
+Returns:  A boolean indicating whether or not the operation was successful.
+
+This function improves performance when working with gd images at the pixel level.  Calling `imagesetpixel()` in a loop is slow.  For example, when processing a 3000x5000 pixel image, that's 15 million function calls to `imagesetpixel()` to modify every pixel of the image.  This function can rapidly import any portion of the image from a userland 2D array of integers.  Instead of 15 million PHP function calls, even one call per row would be a mere 5,000 function calls.
+
+Target audience:  All users who use gd to do image manipulation.
+
+Why it should be added to PHP:  Improved performance.  Also, PECL ImageMagick has a similar but more advanced function (Imagick::importImagePixels()).
+
+===== Benchmark =====
+
+Traditional imagecolorat()/imagesetpixel() style code that retrieves a pixel, manipulates it, and then sets the new color.
+
+<code php>
+for ($y = 0; $y < 5000; $y++)
+{
+	for ($x = 0; $x < 3000; $x++)
+	{
+		$color = imagecolorat($img, $x, $y);
+
+		// Do some work here.
+		$color = ($color + 1) & 0x7FFFFFFF;
+
+		imagesetpixel($img, $x, $y, $color);
+	}
+}
+</code>
+
+<code>
+C:\php-sdk\phpdev\vs16\x64\php-8.2.1
+$ x64\Release_TS\php.exe test3.php
+1.2038149833679 sec
+</code>
+
+Performing the same amount of work using imageexportpixels()/imageimportpixels():
+
+<code php>
+for ($y = 0; $y < 5000; $y++)
+{
+	$pixels = imageexportpixels($img, 0, $y, 3000, 1);
+
+	foreach ($pixels[0] as &$color)
+	{
+		// Do some work here.
+		$color = ($color + 1) & 0x7FFFFFFF;
+	}
+
+	imageimportpixels($img, 0, $y, $pixels);
+}
+
+unset($color);
+</code>
+
+<code>
+0.63053297996521 sec
+</code>
+
+Up to 1.9 times faster.  Not as big of an improvement as I was hoping for but the time taken is cut almost in half on the test hardware.
+
+===== Backward Incompatible Changes =====
+Significant care was taken to not introduce any BC breaks.  As such, there shouldn't be any BC breaks as a result of these additions and enhancements.
+
+imageexportpixels() and imageimportpixels() will no longer be available as global function names.  May break existing userland software that defines global functions with these names.  Searching GitHub for those two function names turns up the following results: 
+
+  * imageexportpixels() - 2 results.  Just the test extension (qolfuncs).  No apparent naming conflicts.
+  * imageimportpixels() - 1 result.  Just the test extension (qolfuncs).  No apparent naming conflicts.
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x.
+
+===== RFC Impact =====
+
+  * To SAPIs:  Will be applied to all PHP environments.
+  * To Existing Extensions:  Additions made to ext/gd in the existing gd.c file.
+  * To Opcache:  None.
+  * New Constants:  No new constants introduced.
+  * php.ini Defaults:  No changes to php.ini introduced.
+
+===== Open Issues =====
+Issue 1 - Should a gd_image_ce export function be added to the gd extension as part of this RFC?  When PHP switched from using resources to gdImage, phpi_get_le_gd() was dropped but no replacement function was put in place.  As such, getting the gd_image_ce zend_class_entry to be able to use Z_PARAM_OBJECT_OF_CLASS(IM, gd_image_ce) is impossible without modifying the gd extension.  As a result, compiling the test code for these functions was far more difficult than it probably should have been.
+
+Issue 2 - Should imageexportpixels() $width and $height be nullable?
+
+Issue 3 - Should these functions also support color conversion to/from HSB/HSV/HSL/CMYK/etc. or this idea/issue moved to the Future Scope section of the RFC?  Color and LUT handling is a big can of worms (e.g. "How 'bright' is that color?" is fairly subjective), which appears to be largely outside the scope of what gd does.  Implementing this would notably increase each function's complexity while the rest of the gd extension seems to be mostly aimed at being as simple as possible.
+
+===== Future Scope =====
+TBD.
+
+===== Proposed Voting Choices =====
+The vote will require 2/3 majority with a vote on a per-function basis.
+
+===== Patches and Tests =====
+Working implementations of all the items being proposed can currently be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+This section will be updated to point to relevant pull request(s).  Most of the development and testing is basically done at this point, so turning the extension into a normal pull request should be reasonably straightforward.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  * Implementation PR: TODO
+  * Discussions on the php.internals mailing list:  https://externals.io/message/119238
+  * Announcement thread: TODO
+
+===== Rejected Features =====
+None at this time.
