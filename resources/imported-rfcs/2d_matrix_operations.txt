@@ -1,0 +1,206 @@
+====== PHP RFC: 2D Matrix Operations ======
+  * Version: 1
+  * Date: 2023-01-23
+  * Author: Thomas Hruska, cubic@php.net
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/2d_matrix_operations
+
+===== Introduction =====
+PHP has traditionally been weak in the area of mathematics and math operations beyond what the baseline C library supplies.  With the growth of machine learning (ML), PHP is extremely inadequate as a language of choice.  [[https://en.wikipedia.org/wiki/Matrix_(mathematics)|Matrix operations from linear algebra]] are the basis of ML and many other areas of scientific computing.  This RFC aims to add mat_add(), mat_sub(), and mat_mult() native functions to PHP for matrix addition, subtraction, and multiplication respectively.
+
+Matrix multiplication, in particular, is a natural O(N^3) algorithm.  Implementing even a simple matrix multiplication operation in PHP userland has less than desirable outcomes.  The mat_mult() native function is up to 46 times faster than the best PHP userland implementation (See Benchmark).
+
+Further, NumPy is one of the major reasons that people gravitate towards Python in academic settings over PHP.  NumPy has been used to make several major scientific discoveries and advancements.  Implementation of this RFC will begin to move the needle in the direction of PHP and thus keep PHP a more relevant choice for scientific computing tasks.
+
+===== Proposal =====
+A number of new global macros, inline global functions in Zend engine, and three new functions for PHP:  mat_add(), mat_sub(), and mat_mult().
+
+Working implementations of the functions being proposed can be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+==== Global Macros and Inline Functions ====
+Before getting to the three matrix operation functions, we need to first expand upon the existing set of macros available to PHP core and extension devs.  PHP does not appear to currently offer a way to iterate over two distinct arrays at the exact same time in a manner similar to ZEND_HASH_FOREACH().  ZEND_HASH_FOREACH(), the most popular, safe, and performant way to access an array, can only iterate over one array at a time.
+
+Side note:  PHP 8.2 introduced major changes to the fundamental HashTable structure such that it accepts either packed zvals or Buckets - most likely for performance reasons.  This affects the design of the relevant macros and inline functions.
+
+The list of macros and inline functions that need to be added to zend_hash.h or zend_types.h is far too long to put into this RFC, but can be seen here:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs/blob/master/qolfuncs.c#L1436]]
+
+The macros normalize access to nNumUsed, Bucket values, and the first, next, previous, last, and end element positions.  There are also two inline functions (zend_hash_get_next_zval() and zend_hash_get_prev_zval()) to safely normalize access to the next and previous zval via an opaque iterator.
+
+==== mat_add() ====
+
+%%array mat_add(array $a, array $b)%%
+
+Adds the values of two 2D matrices.
+
+  * $a - A 2D array.
+  * $b - A 2D array.
+
+Returns:  A 2D array with the values of each corresponding cell added together.
+
+This function performs a matrix addition operation on two matrices and returns the result.  It also exercises a number of new macros designed to iterate over HashTable structures.
+
+Target audience:  Users working with matrices.
+
+Why it should be added to PHP:  Performant matrix addition from linear algebra.
+
+==== mat_sub() ====
+
+%%array mat_sub(array $a, array $b)%%
+
+Subtracts the values of two 2D matrices.
+
+  * $a - A 2D array.
+  * $b - A 2D array.
+
+Returns:  A 2D array with the values of each corresponding cell subtracted together.
+
+This function performs a matrix subtraction operation on two matrices and returns the result.  Basically a copy of mat_add() but for subtraction.
+
+Target audience:  Users working with matrices.
+
+Why it should be added to PHP:  Performant matrix subtraction from linear algebra.
+
+==== mat_mult() ====
+
+%%mat_mult(array $a, array|float|int $b, [int $row = null])%%
+
+Multiplies the values of two 2D matrices or the values of a 2D matrix or row of the matrix with a scalar value.
+
+  * $a - A 2D array.
+  * $b - A 2D array or a numeric scalar value.
+  * $row - An integer specifying the number of the row to multiply the scalar value on (Default is null).
+
+Returns:  A 2D array with the resulting values of the multiplication operation.
+
+This function performs a matrix multiplication operation on one or two matrices and returns the result.  When using a scalar value, it can affect just one row with the $row parameter.
+
+Matrix multiplication of two matrices from linear algebra is a traditionally O(N^3) algorithm.  This function is max_execution_time aware to avoid consuming CPU resources beyond the execution time limit on all supported platforms.
+
+Target audience:  Users working with matrices.
+
+Why it should be added to PHP:  Performant matrix multiplication operations from linear algebra.
+
+=== mat_mult() Benchmark ===
+
+The best (see Notes below) PHP userland implementation of matrix multiplication is:
+
+<code php>
+// Makes a number of assumptions about the inputs for this function.
+function mat_mult_matrixonly_userland($a, $b)
+{
+	$c = array();
+
+	$arows = count($a);
+	$acols = count($b);
+	$bcols = count($b[0]);
+
+	for ($i = 0; $i < $arows; $i++)
+	{
+		$tmpa = $a[$i][0];
+		$b2 = &$b[0];
+
+		$c[$i] = array();
+		$c2 = &$c[$i];
+
+		for ($j = 0; $j < $bcols; $j++)
+		{
+			$c2[$j] = $tmpa * $b2[$j];
+		}
+
+		for ($k = 1; $k < $acols; $k++)
+		{
+			$tmpa = $a[$i][$k];
+			$b2 = &$b[$k];
+
+			for ($j = 0; $j < $bcols; $j++)
+			{
+				$c2[$j] += $tmpa * $b2[$j];
+			}
+		}
+	}
+
+	return $c;
+}
+</code>
+
+<code>
+C:\php-sdk\phpdev\vs16\x64\php-8.2.1
+$ x64\Release_TS\php.exe test.php
+Creating arrays...
+1375x1966 * 1966x1375
+mat_mult_matrixonly_userland():  85.441348075867 sec
+mat_mult():  1.8196060657501 sec
+</code>
+
+mat_mult() is up to 46 times faster than the best userland implementation.  The execution time appears to be on par with NumPy on similar hardware.
+
+Notes:  The userland implementation is one I came up with based on [[https://github.com/cubiclesoft/matrix-multiply|extensive testing]] and [[https://board.phpbuilder.com/d/10403480-converting-matlab-machine-learning-routines-to-php-need-matrix-operations/50|observation/estimates from measurements of PHP ML libraries]].  Some PHP ML userland libraries take up to 10 minutes to perform the above matrix multiplication operation making 1.5 minutes seem perfectly reasonable until we realize that it's still exceptionally slow.  The above userland implementation utilizes a deep understanding of PHP internals + a deep understanding of the best matrix multiply algorithms.  Matrix multiplication is a rabbit hole we probably should not wander down too far.  The desire to obsessively optimize O(N^3) is very strong.  The native implementation of mat_mult() in PHP should be simple, work, and notably improve performance over userland (above) but not necessarily be the absolutely fastest solution nor require another external library or specialized hardware (e.g. CBLAS, cuBLAS).
+
+===== Backward Incompatible Changes =====
+Significant care was taken to not introduce any BC breaks.  As such, there shouldn't be any BC breaks as a result of these additions and enhancements.
+
+mat_add(), mat_sub(), and mat_mult() will no longer be available as global function names.  May break existing userland software that defines global functions with these names.  Searching GitHub for those three function names turns up the following results:
+
+  * mat_add() - 7 results.  One global function in a repository called "php-noob."  No apparent naming conflicts.
+  * mat_sub() - 14 results.  One global function naming conflict in [[https://github.com/arun-thomas-abraham/EvCoord/blob/f860fd5a5ff2f42d9d5cb15d409bcaf652d36bf4/matrix%5B1%5D.php|this repo]].
+  * mat_mult() - 1 result.  Just the test extension (qolfuncs).  No apparent naming conflicts.
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x.
+
+===== RFC Impact =====
+
+  * To Zend:  New macros and inline functions added to zend_hash.h/zend_types.h.
+  * To SAPIs:  Will be applied to all PHP environments.
+  * To Existing Extensions:  Additions and changes made to ext/standard in the existing .c and .h files.
+  * To Opcache:  None.
+  * New Constants:  No new constants introduced.
+  * php.ini Defaults:  No changes to php.ini introduced.
+
+===== Open Issues =====
+Issue 1 - From G. P. B. "We already have a couple of issues supporting them that we probably should address those first, namely that multiplication is assumed to be commutative, something which is not true for matrices (see https://github.com/php/php-src/pull/9218)  Hoping I get back to argue about the former, it would make it possible to use objects and the fact extensions can overload operators to make dealing with matrices easier.  This is IMHO a better approach than using multidimensional arrays.  [redacted comment about 2x2 matrices]"  I think this was a drive-by observation based on the test suite, which, at the time, only showed 2x2 matrices.  Needs more analysis/clarification before proceeding.
+
+Issue 2 - It's possible that I missed macros/inline functions that already exist in Zend and would work equally well.  PHP has a ton of macros and ways of accomplishing something that it is easy to miss already implemented/working solutions.  Someone with more knowledge of the existing macros should take a look.
+
+Issue 3 - The names for the macros/inline functions for zend_hash.h/zend_types.h should be evaluated for naming consistency.
+
+Issue 4 - Decide where the new macros/inline functions should live:  zend_hash.h, zend_types.h, or split up between both.
+
+Issue 5 - Are there any additional features missing from these three functions that should be added now before they are adopted?  I wrote these functions based on Wikipedia articles, what I remember from a linear algebra class, and a very long, meandering forum thread.  As a result, they may not line up with how users expect to use the functions.
+
+===== Future Scope =====
+Perhaps other performance oriented features from NumPy or ML libraries will be deemed important to include such as Fast Fourier Transforms (FFTs).  IMO, everything through mid-level calculus and linear algebra should be accessible in the core of any language, especially if there are major performance benefits for doing so.  FFTs would therefore be out of scope and better relegated to a PECL extension.
+
+===== Proposed Voting Choices =====
+The vote will require 2/3 majority with a vote on a per-function basis.
+
+Any function passing the vote also includes the prerequisite global macros and inline Zend functions to enable the new functionality.
+
+===== Patches and Tests =====
+Working implementations of all the items being proposed can currently be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+This section will be updated to point to relevant pull request(s).  Most of the development and testing is basically done at this point, so turning the extension into a normal pull request should be reasonably straightforward.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  * External forum post(s):  [[https://board.phpbuilder.com/d/10403480-converting-matlab-machine-learning-routines-to-php-need-matrix-operations/]]
+  * Results for 18 different ANSI C/C++ matrix multiply algorithms:  [[https://github.com/cubiclesoft/matrix-multiply]]
+  * Implementation PR:  TODO
+  * Discussions on the php.internals mailing list:  https://externals.io/message/119238
+  * Announcement thread:  TODO
+
+===== Rejected Features =====
+None at this time.
