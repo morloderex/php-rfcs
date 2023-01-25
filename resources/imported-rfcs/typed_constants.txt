@@ -1,0 +1,211 @@
+====== PHP RFC: Typed constants ======
+
+  * Date: 2023-01-25
+  * Author: Benas Seliuginas <benas.molis.iml@gmail.com>, Máté Kocsis <kocsismate@php.net>
+  * Target version: PHP 8.3
+  * Status: Draft
+  * Implementation: https://github.com/php/php-src/pull/10444
+  * First published at: https://wiki.php.net/rfc/typed_class_constants
+
+===== Introduction =====
+
+Despite the type system of PHP greatly improving year after year, it is still not possible to declare types for constants, forcing developers instead to rely on ''is_*()'' functions (e.g. ''is_int()''). To resolve this issue and to provide consistency within the language, the following RFC proposes to introduce support for first-class constant type declarations.
+
+===== Proposal =====
+
+Under this RFC, code like:
+
+<code php>
+class Table {
+	protected const TABLE_NAME = 'Test';
+
+	...
+
+	public function delete(): void {
+		if (!is_string(static::TABLE_NAME)) {
+			throw new Exception('Type of TABLE::TABLE_NAME must be string');
+		}
+
+		$this->database->delete(static::TABLE_NAME);
+	}
+}
+</code>
+
+... may be written as:
+
+<code php>
+class Table {
+	protected const string TABLE_NAME = 'Test';
+
+	...
+
+	public function delete(): void {
+		$this->database->delete(static::TABLE_NAME);
+	}
+}
+</code>
+
+...without sacrificing any type-safety.
+
+Furthermore, types for global constants could also be declared:
+
+<code php>
+const ?int FOO = null;
+</code>
+
+==== Supported types ====
+
+Constant type declarations support all type declarations supported by PHP, with the exception of ''never'', ''void'', ''callable'', ''object'' and class names.
+
+Class types (including ''self'', ''static'' and ''parent'') are not supported, since all objects are mutable in PHP, but constants should never change at runtime. Therefore ''object'' and any other types containing classes are not supported. Thus, the following examples are not allowed:
+
+<code php>
+class Test {
+	// this is illegal (because type is object)
+	public const object A = 1;
+
+	// this is illegal (because type is a class name)
+	public const self B = 1;
+
+	// this is illegal (because the union type contains a class name)
+	public const object|int C = 1;
+}
+</code>
+
+Meanwhile, ''never'', ''void'' and ''callable'' types are not supported due to the same issues as discussed in the [[https://wiki.php.net/rfc/typed_properties_v2#supported_types|typed properties v2 RFC]].
+
+==== Strict and coercive typing modes ====
+
+The ''strict_types'' mode has no impact on behavior since class constants are immutable and thus, the type check will be performed anyways. This is consistent with the handling of the default value of typed properties.
+
+==== Inheritance and variance of class constants ====
+
+Class constants are covariant. This means that the type of a class constant is not allowed to be widen during inheritance. If the parent class constant is private, then the type may change arbitrarily.
+
+<code php>
+class Test {
+	private const int A = 1;
+	public const mixed B = 1;
+	public const int C = 1;
+}
+
+class Test2 extends Test {
+	// this is legal (because Test::A is private)
+	public const string A = 'a';
+
+	// this is legal
+	public const int B = 0;
+
+	// this is illegal
+	public const mixed C = 0;
+}
+</code>
+
+The reason why class constant types are covariant is that they are read-only, i. e. declared once. The change from ''int'' to ''mixed'' would imply that reads from the class constant may now return values of any type in addition to integers.
+
+==== Constant values ====
+
+Constant values have to match the type of the class constant. The only exception is that float class constants also accept integer constant values, consistently with the handling for parameter/property types.
+
+The following code illustrates legal and illegal constant values:
+
+<code php>
+class Test {
+	// this is legal
+	public const string A = 'a';
+	public const int B = 1;
+	public const float C = 1.1;
+	public const bool D = true;
+	public const array E = ['a', 'b'];
+
+	// this is legal
+	public const iterable F = ['a', 'b'];
+	public const mixed G = 1;
+	public const string|array H = 'a';
+	public const int|null I = null;
+
+	// this is legal (special exemption)
+	public const float J = 1;
+
+	// this is illegal
+	public const string K = 1;
+	public const int L = null;
+}
+</code>
+
+If the constant value is a non compile-time evaluable initializer expression, the constant value is not checked at compile-time. Instead it will be checked during constant-updating, which will either occur when an object of the class is instantiated or when the class constant is being fetched. As such, the following code is legal:
+
+<code php>
+class Test {
+	public const int TEST = TEST;
+}
+
+define('TEST', 1);
+
+// this prints 1
+echo Test::TEST;
+</code>
+
+If the constant held an illegal type, a ''TypeError'' exception would be generated during the object ''new Test()'' instantiation or when the class constant ''Test::TEST'' is being fetched.
+
+==== Reflection ====
+
+The ''ReflectionClassConstant'' class is extended by two methods:
+
+<code php>
+class ReflectionClassConstant implements Reflector {
+    ...
+
+    public function getType(): ?ReflectionType {}
+    public function hasType(): bool {}
+}
+</code>
+
+''getType()'' returns a ''ReflectionType'' if the class constant has a type, and null otherwise.
+''hasType()'' returns ''true'' if the class constant has a type, and false otherwise. The behavior matches that of ''getType()''/''hasType()'' for parameters/properties and ''getReturnType()''/''hasReturnType()'' for return types.
+
+Additionally, a new ''ReflectionGlobalConstant'' class is added:
+
+class ReflectionConstant implements Reflector {
+    public string $name;
+
+    private function __clone(): void {}
+
+    public function __construct(string $constant) {}
+
+    public function __toString(): string {}
+
+    public function getName(): string {}
+
+    public function getType(): ?ReflectionType {}
+
+    public function hasType(): bool {}
+
+    public function getValue(): mixed {}
+
+    public function getDocComment(): string|false {}
+}
+</code>
+
+===== Backwards incompatible changes =====
+
+None.
+
+===== Impact on extensions =====
+
+To preserve backwards compatibility with extensions, a new function ''zend_declare_typed_class_constant()'' is introduced while keeping the original ''zend_declare_class_constant_ex()'' function intact.
+
+===== Vote =====
+
+Both votes require 2/3 majority.
+
+<doodle title="Add support for typed class constants?" auth="kocsismate" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+
+<doodle title="Add support for typed global constants?" auth="kocsismate" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
