@@ -1,6 +1,6 @@
 ====== PHP RFC: Saner array_(sum|product)()  ======
 
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2023-01-14
   * Author: George Peter Banyard, <girgias@php.net>
   * Status: Under Discussion
@@ -30,7 +30,7 @@ Therefore, we will first look at the behaviour of the <php>array_reduce()</php> 
 
 ==== Behaviour of the array_reduce() variants ===
 
-As the <php>array_reduce()</php> variants use arithmetic operators. It's crucial to understand how they perform with non numeric values. Arithmetic operators perform a numeric type juggling, which is described in the userland manual as:
+As the <php>array_reduce()</php> variants use arithmetic operators. It's crucial to understand how they perform with non-numeric values. Arithmetic operators perform a numeric type juggling, which is described in the userland manual as:
 
 <blockquote>
 In this context if either operand is a float (or not interpretable as an int), both operands are interpreted as floats, and the result will be a float. Otherwise, the operands will be interpreted as ints, and the result will also be an int. As of PHP 8.0.0, if one of the operands cannot be interpreted a TypeError is thrown.
@@ -75,6 +75,7 @@ object(GMP)#6 (1) {
 
 Pathological example:
 <PHP>
+/* STDERR gets cast to 3 */
 $input = [true, STDERR, new stdClass(), [], gmp_init(6)];
 
 // Userland implementation of array_sum($input)
@@ -84,6 +85,24 @@ var_dump($output); // TypeError
 // Userland implementation of array_product($input)
 $output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
 var_dump($output); // TypeError
+</PHP>
+
+Certain FFI\CData types implements a ''do_operation'' handler for addition:
+<PHP>
+$x = FFI::new("int[2]");
+$x[0] = 10;
+$x[1] = 25;
+
+$input = [$x, 1];
+
+$output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+var_dump($output);
+/*
+object(FFI\CData:int32_t*)#4 (1) {
+  [0]=>
+  int(25)
+}
+*/
 </PHP>
 
 ==== Current behaviour of the array_sum() and array_product() functions ====
@@ -113,6 +132,7 @@ var_dump($output); // int(1)
 
 Pathological example:
 <PHP>
+/* STDERR gets cast to 3 */
 $input = [true, STDERR, new stdClass(), [], gmp_init(6)];
 
 $output = array_sum($input);
@@ -122,13 +142,26 @@ $output = array_product($input);
 var_dump($output); // int(3)
 </PHP>
 
+
+FFI example:
+<PHP>
+$x = FFI::new("int[2]");
+$x[0] = 10;
+$x[1] = 25;
+
+$input = [$x, 1];
+
+$output = array_sum($input);
+var_dump($output); // int(1)
+</PHP>
+
 ===== Proposal =====
 
 The proposal is to use the same behaviour for <php>array_sum()</php> and <php>array_product()</php> as the <php>array_reduce()</php> variants by reusing the engine functions that perform the arithmetic operations while still accepting, but emitting an <php>E_WARNING</php>, and implementing the current behaviours for values that are rejected by the arithmetic operators.
 
-The one caveat is that if the return value would be an object (as is the case when folding over an array of <php>GMP</php> objects) then it must be numerically castable to respect the current return type of ''int|float''. If not, the initial value is returned (''0'' for <php>array_sum()</php> and ''1'' for <php>array_product()</php>).
+The one caveat is that objects must implement a numeric cast for them to be added/multiplied, this is done to respect the current return type of ''int|float''.
 
-Therefore, the previous two examples would result in the following behaviour:
+Therefore, the previous three examples would result in the following behaviour:
 
 Example with <php>GMP</php> objects:
 <PHP>
@@ -168,14 +201,29 @@ Warning: array_product(): Multiplication is not supported on type stdClass in %s
 Warning: array_product(): Multiplication is not supported on type array in %s on line %d
 int(18)
 */
+
+</PHP>
+FFI example:
+<PHP>
+$x = FFI::new("int[2]");
+$x[0] = 10;
+$x[1] = 25;
+
+$input = [$x, 1];
+
+$output = array_sum($input);
+var_dump($output); // int(1)
+/*
+
+Warning: array_sum(): Addition is not supported on type FFI\CData in %s on line %d
+int(1)
+*/
 </PHP>
 
 
 ===== Backward Incompatible Changes =====
 
 <php>E_WARNING</php>s are emitted for incompatible types.
-
-If traversing the array transforms the return value into an object, if that object is not numerically castable an <php>E_WARNING</php> is emitted and the initial return value is returned instead, which may change the return value if scalar values were present in the array.
 
 Arrays that contain objects may now produce different results, for example:
 <PHP>
@@ -184,8 +232,7 @@ var_dump(array_sum($a));
 </PHP>
 Currently, results in: ''float(25.6)'' but with this proposal accepted would result in:
 <PHP>
-Deprecated: Implicit conversion from float 25.6 to int loses precision in %s on line %d
-int(50)
+int(50.6)
 </PHP>
 
 
