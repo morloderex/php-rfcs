@@ -169,11 +169,50 @@ In addition to the 6 functions related to integer generation, the global Mt19937
 The proposed deprecation and removal of <php>mt_srand()</php> will affect these functions, as they will no longer be seedable, thus a decision needs to be taken with regard to the behavior of these functions, if the global Mt19937 is removed. There are two options:
 
   * Deprecate and remove <php>array_rand()</php>, <php>shuffle()</php>, <php>str_shuffle()</php>. A drop-in replacement is available by using <php>\Random\Randomizer</php>
-  * Migrate <php>array_rand()</php>, <php>shuffle()</php>, <php>str_shuffle()</php> to use the CSPRNG internally. The functions will still be available, but no longer seedable.
+  * Migrate <php>array_rand()</php>, <php>shuffle()</php>, <php>str_shuffle()</php> to use the CSPRNG internally. The functions will still be available, but no longer seedable. This also adds new failure cases, because the CSPRNG might fail.
 
 <doodle title="What to do with the non-integer functions using the global Mt19937 if the previous vote passes?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
    * Deprecate and remove together with mt_srand()
    * Convert to CSPRNG
+</doodle>
+
+==== Deprecate calling ''ldap_connect'' with 2 parameters ====
+
+Author: Andreas Heigl <heiglandreas@php.net>
+
+Currently there are three ways one can call <php>ldap_connect</php>.
+
+  * With a string <php>$uri</php>
+  * With a string <php>$host</php> and an int <php>$port</php>,
+  * With even more parameters for those that did compile PHP with OracleLDAP.
+
+The 3rd way of calling it is not even documented in the docs as it is a very niche edge-case that would only confuse most people.
+
+The 2nd way of calling the function is based on the since some years deprecated underlying ''ldap_open'' function. Internally we already moved to the underlying ''ldap_initialize''-function that requires passing an LDAP-URI. For that we are already converting the passed host and port into an LDAP-URI of the form ''%%ldap://$host:$port%%''.
+
+This already illustrates one of the issues that this way of calling the function implies: It is not possible to use ''ldaps'' as a schema using that way of calling <php>ldap_connect</php> as it will always use ''ldap'' as schema. No matter which port is passed.
+
+A second reason why we should deprecate calling <php>ldap_connect</php> with two parameters is, that it does not allow one to pass multiple ldap-servers as it is possible using the LDAP-URI.
+
+The impact of the BCb reak should be rather small as there are not many users actually using the LDAP-extension and there is a clear and easy migration path for those that use it: Instead of calling
+
+<php>ldap_connect($host, $port)</php>
+
+one calls
+
+<php>ldap_connect("ldap://$host:$port??369")</php>
+
+Also most of the users should not be affected at all as they are using 3rd party libraries that are already only using an LDAP-URI when calling <php>ldap_connect</php> like <php>Laminas\Ldap</php> or <php>Symfony\Ldap</php>
+
+The documentation at https://www.php.net/ldap_connect also explicitly states (since 2018) that using host and port is considered deprecated.
+
+Named parameters also only support <php>ldap_connect(uri: 'ldap://example.com')</php>. Calling <php>ldap_connect(host:'example.com', port:369)</php> will throw an error.
+
+There already is a [[https://github.com/php/php-src/pull/5177|PR open]] that implements the deprecation so that for the PHP8.3 releases each call to <php>ldap_connect</php> with 2 parameters will emit a deprecation message so that people have enough time to adapt their code before we can actually remove using two parameters in PHP9. 
+
+<doodle title="Deprecate calling ldap_connect with 2 parameters $host and $port" auth="heiglandreas" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * Yes
+   * No
 </doodle>
  
 ===== Backward Incompatible Changes =====
