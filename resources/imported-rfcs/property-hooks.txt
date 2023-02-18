@@ -48,7 +48,7 @@ class User {
 
 That is much nicer, but comes at a cost: If we later want to add additional behavior (such as validation or pre-processing), there's nowhere to do so.  That currently leaves two options:
 
-  - Either re-add ''getName()'' and ''setName()'' methods, making the property private or protected.  This would be an API break.
+  - Re-add ''getName()'' and ''setName()'' methods, making the property private or protected.  This would be an API break.
   - Use <php>__get</php> and <php>__set</php>.  As shown below, this is verbose, ugly, error prone, and breaks static analysis tools.
 
 <PHP>
@@ -113,61 +113,11 @@ This code introduces a new non-empty requirement, but does not change the outwar
 
 This RFC allows attaching one or more of a fixed set of "hooks" to declared properties.  Some hooks are mutually-dependent, while others are effectively independent.  The hooks proposed by this RFC cover most common cases, but in concept more could be added in the future.
 
-The sections below attempt to "build up" the hook design piece by piece.  Some common expected patterns are also included later; this section attempts to be a complete description of the semantic logic.
+For a property to use a hook, it must replace its trailing '';'' with a code block denoted by ''{ }''.  Inside the block are one or more hook implementations, for which the order is explicitly irrelevant.  It is a syntax error to have an empty hook block.
 
-==== Enabling hooks ====
+Hooks may only be applied to typed object properties.  They may not be used on static properties or untyped properties.  This limitation is mainly to simplify the implementation.
 
-Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property.  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property.  However, that may technically count as a BC break when adding a hook to a previously-defined property.  For that reason, the syntax allows enabling hooks without defining any; the only effect of doing so is to disallow acquiring a reference to the property.
-
-A property may enable hooks by replacing its '';'' with ''{}'', indicating that zero or more hooks may be included in the brackets in the future.
-
-<code php>
-class Point {
-    public int $x {}
-    public int $y;
-}
-</code>
-
-In this case, the ''$x'' parameter has enabled hooks, and therefore no reference to it may be obtained.  The ''$y'' parameter has not, and so a reference to it may be obtained.  Otherwise there is no difference in behavior.
-
-The hook block may also be used in constructor property promotion.
-
-<code php>
-class Point {
-    public function __construct(public int $x {}, public int $y {})
-}
-</code>
-
-To simplify the implementation, hooks may only be implemented on typed properties.  Additionally, hooks may only be used on object properties.  They may not be used on static class properties.  Nothing in this RFC affects static class properties.
-
-Of note, a default value for the property, if any, goes before the hook list.  That is:
-
-<PHP>
-class Point {
-    public int $x = 5 {}
-    public int $y = 5 {}
-}
-</PHP>
-
-As an important effect of this change, array properties may not be assigned to in-place if hooks are enabled.  That's because doing so requires directly modifying the property without going through a place where hooks can be implemented.  However, the array may be requested, modified, and reassigned.  In code:
-
-<code php>
-class MyList {
-    public array $values = [] {}
-}
-
-$l = new MyList();
-
-// This will fail.
-$l->values[] = 1;
-
-// But this is allowed.
-$a = $l->values;
-$a[] = 1;
-$l->values = $a;
-</code>
-
-While not ideal, it is an unavoidable impact of disabling direct access to a property.  See the Examples section below for an example alternative for working with arrays.
+Hooks may not be applied to properties typed ''array''.  See the section below for an explanation.
 
 ==== get and set ====
 
