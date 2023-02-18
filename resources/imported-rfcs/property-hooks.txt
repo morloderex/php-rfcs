@@ -119,6 +119,15 @@ Hooks may only be applied to typed object properties.  They may not be used on s
 
 Hooks may not be applied to properties typed ''array''.  See the section below for an explanation.
 
+Of note, a default value for the property, if any, goes before the hook list.  That is:
+
+<PHP>
+class Point {
+    public int $x = 5 { beforeSet => $value ?: throw new \InvalidArgumentException(); }
+    public int $y = 5 { beforeSet => $value ?: throw new \InvalidArgumentException(); }
+}
+</PHP>
+
 ==== get and set ====
 
 The ''get'' and ''set'' hooks overwrite the PHP default read and write behavior.  They may be implemented individually or together.  If either one is implemented, PHP will not create any storage property on the object.  The developer is on their own to implement whatever storage behavior is appropriate.
@@ -887,7 +896,62 @@ PHP 8.3.
 ===== RFC Impact =====
 
 ===== Open Issues =====
-Make sure there are no open issues when the vote starts!
+
+There are two design decisions that the authors have made that could be revisited if there is consensus to the contrary.
+
+==== Pre-marking hook support ====
+
+It is arguable that adding a hook to a property in a child class that does not have one in the parent class, or adding a hook to a public property in version 2 of a class, constitutes an API change or LSP violation, as doing so disables references.  Given how rarely object references are used the authors do not feel this is a significant issue.
+
+However, it would be possible to "pre-activate" hooks on a property, and disallow child classes from adding hooks unless that has been done.  That would entail an empty hook block, like so:
+
+<code php>
+class Point {
+    public int $x {}
+    public int $y;
+}
+</code>
+
+In this case, the ''$x'' parameter has enabled hooks, and therefore no reference to it may be obtained but a child of ''Point'' may add hooks to ''$x''.  The ''$y'' parameter has not, and so a reference to it may be obtained.
+
+The authors feel this is too much extra mental overhead for a very small edge case, but will accept the consensus on this point.
+
+==== Limited array support ====
+
+As noted above, array properties do not support hooks, as they require references to work as expected and references are incompatible with hooks.
+
+However, it would be possible to support hooks but disallow the ''[]'' operator.  In that case, the only operation allowed would be completely replacing the array, or obtaining a copy of it, like so:
+
+<code php>
+class MyList {
+    public array $values = [] {
+        // Ensure no empty values.
+        beforeSet {
+            if (array_filter($value) != $value) {
+                throw new \InvalidArgumentException('Only truthy values allowed');
+            }
+            return $value;
+        }
+    }
+}
+
+$l = new MyList();
+
+// This will fail.
+$l->values[] = 1;
+
+// But this is allowed.
+$a = $l->values;
+$a[] = 1;
+$l->values = $a;
+
+// This will throw an exception due to the hook.
+$a = $l->values;
+$a[] = false;
+$l->values = $a;
+</code>
+
+This is somewhat clumsy, but would be possible.  At this time, the authors feel it is better to skip entirely for simplicity, but will accept the consensus on this point.
 
 ===== Unaffected PHP Functionality =====
 
