@@ -482,9 +482,7 @@ Which is, all things considered, not too bad for the level of power it gives.
 
 A child class may define or redefine individual hooks on a property by redefining the property and just the hooks it wishes to override.  The type and visibility of the property are subject to their own rules independently of this RFC.
 
-A child class may also add hooks to a property that had none, nor opted in to hooks.
-
-ILIJA: Not sure about this one, as it could be an LSP issue the same as disabling references is.  Thoughts?
+A child class may also add hooks to a property that had none.
 
 <code php>
 class Point
@@ -503,12 +501,81 @@ class PositivePoint extends Point
 
 Each hook overrides parent class implementations independently of each other.
 
+=== Accessing parent storage ===
+
+If a child class implements a ''get'' or ''set'' hook on a property that did not have those in the parent class, the child will have no automatic storage for that property.  The parent, however, will.  The parent storage may be accessed with the ''parent::'' keyword.
+
+<PHP>
+class P 
+{
+    public string $prop = 'prop';
+}
+
+class C extends P 
+{
+    public string $prop { set => parent::$prop = strtoupper($value); }
+}
+
+$p = new P();
+$p->prop = "a";
+
+// prints "a"
+print $p->prop . PHP_EOL;
+
+$c = new C();
+$c->prop = 'a';
+
+// prints "A"
+print $c->prop . PHP_EOL;
+</PHP>
+
+Child classes are under no obligation to use the parent's stored property, but may if they wish.  Of note, the non-overridden ''get''/''set'' behavior is the same as in the parent.  That is, the following can be considered the "no op" override:
+
+<PHP>
+class P 
+{
+    public string $prop = 'prop';
+}
+
+class C extends P 
+{
+    public string $prop {
+        get => parent::$prop; 
+        set => parent::$prop = $value;
+    }
+}
+</PHP>
+
+=== Accessing parent hooks ===
+
+A hook in a child class may access the parent class's hook it is overriding by using the ''parent::'' keyword.  If not accessed this way, the parent class's hook is ignored.  This behavior is consistent with how all methods work.
+
+<PHP>
+class P
+{
+    public string $prop { beforeSet => strtolower($value); }
+}
+
+class C extends P
+{
+    public string $prop { beforeSet => ucfirst(parent::beforeSet($value)); }
+}
+
+$c = new C();
+
+$c->prop = "HELLO";
+
+// Prints "Hello"
+print $c->prop;
+</PHP>
+
+=== Final hooks ===
+
 Hooks may also be declared ''final'', in which case they may not be overridden.
 
 <code php>
 class User 
 {
-    
     public string $username {
         final beforeSet($value) => strtolower($value);
     }
@@ -527,7 +594,13 @@ class Manager extends User
 
 If the property itself is declared ''final'', then hooks could not be overridden anyway.  Therefore, declaring hooks ''final'' on a property that is declared ''final'' will throw an error.
 
-ILIJA: Do we also want abstract hooks?  Nikita's RFC had it, but I'm not sure if they make sense. 
+=== abstract hooks ===
+
+ILIJA: Still need to revisit this.
+
+==== Property magic constant ====
+
+Within a property hook, the special constant <php>__PROPERTY__</php> is automatically defined.  Its value will be set to the name of the property.  This is mainly useful for repeating self-referential code.  See the "ORM change tracking" example below for a complete use case.
 
 ===== Reflection =====
 
@@ -537,33 +610,9 @@ ILIJA: Oh dear oh dear...
 
 This section includes a collection of examples the authors feel are representative of how hooks can and will be used.  It is non-normative, but gives a sense of how hooks can be used to improve a code base.
 
-==== Hooked Array properties ====
-
-While array properties with hooks cannot be appended to directly due to the reference issue, they can still be used with a method, as is common today:
-
-<PHP>
-class C 
-{
-    private array $_foos;
-    public array $foos { get => $this->_foos; }
-
-    public function addFoo(mixed $foo): static
-    {
-        $this->_foos[] = $foo;
-        return $this;
-    }
-}
-
-$c = new C();
-$c->addFoo('foo');
-var_dump($c->foos); // ['foo']
-</PHP>
-
-In practice the ''addFoo()'' method could have arbitrary other capabilities, such as enforcing types, allowing variadics, etc.  In a way this is a sort of "back door asymmetric visibility" for array properties.
-
 ==== Derived properties ====
 
-As in the examples above, this example demonstrates a virtual property that is calculated on the fly off of other values.
+This example demonstrates a virtual property that is calculated on the fly off of other values.
 
 <PHP>
 class User
@@ -673,7 +722,7 @@ This example combines with the previous.  It allows only select HTTP methods thr
 
 At times, two properties must be kept in sync with each other.  Updating them in place (or creating a new object with-er style) is fine, but updating one must update the other.  
 
-As an example, consider a Request object (similar to PSr-7), where the ''uri'' property's ''host'' field must be kept in sync with the ''header'' list's ''host'' field.  Today, and even with asymmetric visibility, that would require a pair of set methods.  With property hooks, that relationship can be built into the properties directly.
+As an example, consider a Request object (similar to PSR-7), where the ''uri'' property's ''host'' field must be kept in sync with the ''header'' list's ''host'' field.  Today, and even with asymmetric visibility, that would require a pair of set methods.  With property hooks, that relationship can be built into the properties directly.
 
 <PHP>
 class Request
@@ -718,13 +767,13 @@ class Product
 {
     public readonly string $sku;
     
-    public string $name {}
-    public Color $color {}
-    public float $price {}
+    public string $name;
+    public Color $color;
+    public float $price;
 }
 </PHP>
 
-That is trivial to define, and to read.  By using ''{}'', however, it leaves open the potential to use hooks rather than needing to write this far longer version "just in case":
+That is trivial to define, and to read.  However, it leaves open the potential to use hooks rather than needing to write this far longer version "just in case":
 
 <PHP>
 class Product
@@ -781,13 +830,13 @@ class Product
     public readonly string $sku;
     
     public string $name {
-        afterSet => $this->modified['name'] = $value;
+        afterSet => $this->modified[__PROPERTY__] = $value;
     }
     public Color $color {
-        afterSet => $this->modified['color'] = $value;
+        afterSet => $this->modified[__PROPERTY__] = $value;
     }
     public float $price {
-        afterSet => $this->modified['price'] = $value;
+        afterSet => $this->modified[__PROPERTY__] = $value;
     }
     
     public function modifications(): array
