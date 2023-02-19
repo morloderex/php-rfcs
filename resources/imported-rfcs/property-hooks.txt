@@ -496,8 +496,8 @@ A child class may also add hooks to a property that had none.
 <code php>
 class Point
 {
-    public int $x {}
-    public int $y {}
+    public int $x;
+    public int $y;
 }
 
 class PositivePoint extends Point
@@ -603,9 +603,113 @@ class Manager extends User
 
 If the property itself is declared ''final'', then hooks could not be overridden anyway.  Therefore, declaring hooks ''final'' on a property that is declared ''final'' will throw an error.
 
-=== abstract hooks ===
+==== Interfaces ====
 
-ILIJA: Still need to revisit this.
+A key goal for property hooks is to obviate the need for getter/setter methods in the majority case.  While straightforward for classes, many value objects also conform to an interface.  That interface, therefore, also needs to be able to specify what properties it includes.
+
+This RFC therefore also adds the ability for interfaces to declare public properties, asymmetrically.  An implementing class may provide the property via a normal property or a virtual property (with ''get''/''set'' hooks).  Either one is sufficient to satisfy the interface.
+
+<PHP>
+interface I
+{
+    // An implementing class MUST have a publicly-readable property,
+    // but whether or not it's publicly settable is unrestricted.
+    public string $readable { get; }
+    
+    // An implementing class MUST have a publicly-writeable property,
+    // but whether or not it's publicly settable is unrestricted.
+    public string $writeable { set; }
+    
+    // An implementing class MUST have a property that is both publicly
+    // readable and publicly writeable.
+    public string $both { get; set; }
+}
+
+// This class implements all three properties as traditional, un-hooked
+// properties. That's entirely valid.
+class C1 implements I
+{
+    public string $readable;
+    
+    public string $writeable;
+    
+    public string $both;
+}
+
+// This class implements all three properties using just the hooks
+// that are requested.  This is also entirely valid.
+class C2 implements I
+{
+    private string $written = '';
+    private string $all = '';
+
+    // Uses only a get hook to create a virtual property.
+    // This satisfies the "public get" requirement. It is not
+    // writeable, but that is not required by the interface.
+    public string $readable => strtoupper($this->writeable);
+  
+    // The interface only requires the property be settable,
+    // but also including get operations is entirely valid.
+    public string $writeable {
+        get => $this->written;
+        set => $this->written = $value;
+    }
+  
+    // This property requires both read and write be possible,
+    // so we need to either implement both, or allow it to have
+    // the default behavior.
+    public string $both {
+        get => $this->all;
+        set => $this->all = $value;
+    }
+  
+    // This would also be an entirely valid way to satisfy the
+    // interface.
+    public string $both {
+        beforeSet => strtolower($value);
+    }
+}
+</PHP>
+
+Interfaces are only concerned with public access, so the presence of non-public properties is both unaffected by an interface and cannot satisfy an interface.  This is the same relationship as for methods.  The ''public'' keyword on the property is required for syntax consistency, but other visibilities are not supported.
+
+==== Abstract properties ====
+
+An abstract class may declare an ''abstract'' property, for all the same reasons as an interface.  However, abstract properties may also be declared ''protected'', just as with abstract methods.  In that case, it may be satisfied by a property that is readable/writeable from either ''protected'' or ''public'' scope.  Abstract ''private'' properties are not allowed and will result in a compile-time error, just as with methods.
+
+<PHP>
+abstract class A
+{
+    // Extending classes must have a publicly-gettable property.
+    abstract public string $readable { get; }
+    
+    // Extending classes must have a protected- or public-writeable property.
+    abstract protected string $writeable { set; }
+    
+    // Extending classes must have a protected or public symmetric property.
+    abstract protected string $both { get; set; }
+}
+
+class C extends A
+{
+    private string $written = '';
+
+    // This satisfies the requirement and also makes it settable, which is valid.
+    public string $readable;
+    
+    // This would NOT satisfy the requirement, as it is not publicly readable.
+    protected string $readable;
+
+    // This satisfies the requirement exactly, so is sufficient. It may only
+    // be written to, and only from protected scope.    
+    protected string $writeable {
+      set => $this->written = $value;
+    }
+  
+    // This expands the visibility from protected to public, which is fine.
+    public string $both;
+}
+</PHP>
 
 ==== Property magic constant ====
 
@@ -955,13 +1059,9 @@ This is somewhat clumsy, but would be possible.  At this time, the authors feel 
 
 ===== Unaffected PHP Functionality =====
 
-This RFC has been designed alongside asymmetric visibility in such a way that either one can pass or fail on its own, and whatever passes is still useful.  Both may also pass, and they will naturally dovetail together.
+
 
 ===== Future Scope =====
-
-==== Properties in interfaces ====
-
-Nikita's original property accessor RFC included the ability to define properties as part of an interface, and specifically that a property needed to be readable and/or writeable.  The authors of this RFC have omitted that feature for now.  It is a good and useful feature that would be valuable to add, but it's better to keep this RFC focused on just the hooks themselves.  The authors would support such an RFC in the future, and time permitting may consider it themselves.
 
 ==== isset and unset hooks ====
 
