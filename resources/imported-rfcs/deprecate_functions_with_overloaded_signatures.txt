@@ -11,9 +11,10 @@ Signature overloading may be a very familiar concept for Java developers for ins
 
 If our aim is to find consistency between internal and userland code (and it really is), we should either add native support for signature overloading, or phase out the overloaded internal function signatures. As the former is widely known to be [[https://github.com/Danack/RfcCodex/blob/master/method_overloading.md|impossible to implement in an effective way]], the latter solution is the right choice. it's important to mention that maintaining consistency is not the only motivation why we should get rid of this long standing issue.
 
-Before PHP 8.0, overloaded signatures didn't cause a big harm, except for making the usability of the functions in questions worse as well as their behavior more surprising. However, as of PHP 8.0, having a clear default value handling semantics is much more important than before due to the following reasons:
-  * Since PHP 8.0, ''ReflectionParameter'' supports retrieving the default parameter values of internal functions when the default value exists
-  * [[rfc:named_params|PHP RFC: Named Arguments]] supports skipping optional parameters (as in implicitly passing its default value) when the default value exists
+Before PHP 8.0, overloaded signatures didn't cause a big harm, except for making the usability of the functions in question worse as well as their behavior more surprising due to the fact that these functions usually don't have meaningful parameter names and clear default value handling semantics. However, as of PHP 8.0, these are ever more important due to the following reasons:
+  * Since PHP 8.0, ''ReflectionParameter'' supports retrieving the default parameter values of internal functions, but only when the default value exists
+  * In case of some overloaded functions, some parameters cannot be named appropriately, since they do completely different things in case of the different signatures (see [[https://www.php.net/manual/en/function.session-set-save-handler.php|session_set_save_handler()]] for example). Even though this imposes some problems for the documentation, it's mainly an issue when using [[rfc:named_params|PHP RFC: Named Arguments]], because a parameter can only have a single name, so it's not possible to convey their true meaning by referring to them by their name.
+  * Furthermore, [[rfc:named_params|PHP RFC: Named Arguments]] supports skipping optional parameters (as in implicitly passing its default value), but only when the default value exists.
   * For ~2 years now, the online manual at [[https://php.net|php.net]] is semi-automatically updated based on the exact signatures known by php-src, which are collected via the [[https://externals.io/message/105970|so-called stubs]]. Unfortunately, overloaded functions cannot be updated via our tooling, leaving these signatures outdated, displaying the wrong parameter names and types, as well as missing proper default values.
 
 After the named arguments RFC was accepted, dozens (if not hundreds) of functions were fixed in PHP 8.0 so that they started to behave according to a clear default parameter value handling semantics. Usually, this required us to make the parameters nullable, but sometimes it was enough to make a few small adjustments to the parameter parsing code. As all the easier cases are fixed for quite a long time, this RFC tries to tackle the ones with some BC impact.
@@ -378,7 +379,6 @@ class ReflectionMethod
    * No
 </doodle>
 
-
 ==== ReflectionProperty::setValue() ====
 
 ''ReflectionProperty::setValue()'' currently supports three signatures:
@@ -416,6 +416,47 @@ class ReflectionProperty
 </code>
 
 <doodle title="Deprecate and remove the above mentioned signature of ReflectionProperty::setValue()?" auth="kocsismate" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+==== session_set_save_handler() ====
+
+''session_set_save_handler()'' currently supports two signatures:
+
+<code php>
+function session_set_save_handler(
+    callable $open,
+    callable $close,
+    callable $read,
+    callable $write,
+    callable $destroy,
+    callable $gc,
+    ?callable $create_sid = null,
+    ?callable $validate_sid = null,
+    ?callable $update_timestamp = null): mixed {}
+
+function session_set_save_handler(object $session_handler, bool $register_shutdown = true): mixed {}
+</code>
+
+This RFC proposes to add a new function as a replacement for the 2nd signature in PHP 8.3, and deprecate calling ''session_set_save_handler()'' with less than 3 parameters in the next to next minor PHP version (possibly PHP 8.4). Finally, the deprecated signature would become unsupported in the next major PHP version (possibly PHP 9.0), resulting in the following methods:
+
+<code php>
+function session_set_save_handler(
+    callable $open,
+    callable $close,
+    callable $read,
+    callable $write,
+    callable $destroy,
+    callable $gc,
+    ?callable $create_sid = null,
+    ?callable $validate_sid = null,
+    ?callable $update_timestamp = null): mixed {}
+
+function session_set_save_handler_object(SessionHandlerInterface $session_handler, bool $register_shutdown = true): mixed {}
+</code>
+
+<doodle title="Deprecate and then remove the above mentioned signature of session_set_save_handler()?" auth="kocsismate" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
