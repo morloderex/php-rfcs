@@ -7,17 +7,35 @@
 
 ===== Introduction =====
 
-Signature overloading may be a very familiar concept for Java developers for instance, but PHP doesn't natively support it in userland. In spite of this fact, many internal functions are implemented due to historical reasons so that they can be expressed only with multiple signatures. The vast majority of such cases are caused by accepting varying number of parameters, among a few cases when some methods are static and instance methods in the same time. In Java, being able to support multiple parameter types requires overloading function signatures, but it's not the case anymore with PHP since the introduction of union types.
+[[https://www.mygreatlearning.com/blog/method-overloading-in-java/|Method overloading]] may sound very familiar for Java developers, but PHP doesn't natively support this concept. In spite of this fact, due to historical reasons, many internal PHP functions and methods are implemented so that they can only be expressed with multiple signatures - making them overloaded after all.
 
-If our aim is to find consistency between internal and userland code (and it really is), we should either add native support for signature overloading, or phase out the overloaded internal function signatures. As the former is widely known to be [[https://github.com/Danack/RfcCodex/blob/master/method_overloading.md|impossible to implement in an effective way]], the latter solution is the right choice. it's important to mention that maintaining consistency is not the only motivation why we should get rid of this long standing issue.
+In Java, being able to support multiple parameter types requires overloading function signatures, but it's not the case anymore with PHP since the introduction of union types. However, the predominant type of overloading is caused by functions accepting a varying number of parameters. Usually, these functions don't have clear default value handling semantics. But what does this mean in practice? A function has clear default value handling semantics if it has well-defined parameter default values, meaning that it behaves the same way when:
+  * no optional parameters are explicitly passed to it (so their default values are implicitly used)
+  * any of their optional parameters is explicitly passed its default value
 
-Before PHP 8.0, overloaded signatures didn't cause a big harm, except for making the usability of the functions in question worse as well as their behavior more surprising due to the fact that these functions usually don't have meaningful parameter names and clear default value handling semantics. However, as of PHP 8.0, these are ever more important due to the following reasons:
+<code php>
+function foo($bar = null) {
+    ...
+}
+
+foo();
+foo(null);
+
+// The two foo() invocations must behave the same way
+</code>
+
+
+Besides, PHP has a few unconventionally overloaded methods whose behavior depend on whether they are accessed statically or as an instance method.
+
+From year to year, PHP has less and less inconsistencies between internal and userland code, so in order to continue the effort, we should either add native support for signature overloading, or phase out the overloaded internal function signatures. As the former solution is widely known to be [[https://github.com/Danack/RfcCodex/blob/master/method_overloading.md|impossible to implement in an effective way]], the latter solution is the preferred choice of this RFC. Maintaining consistency is not the only motivation why we should get rid of this long standing issue though.
+
+Before PHP 8.0, overloaded signatures didn't cause a big harm, except for making the usability of the functions in question worse as well as their behavior more surprising due to the fact that these functions usually don't have meaningful parameter names and clear default value handling semantics. However, as of PHP 8.0, these have become ever more important due to the following reasons:
   * Since PHP 8.0, ''ReflectionParameter'' supports retrieving the default parameter values of internal functions, but only when the default value exists
   * In case of some overloaded functions, some parameters cannot be named properly, since they do completely different things in case of the different signatures (see [[https://www.php.net/manual/en/function.session-set-save-handler.php|session_set_save_handler()]] for example). Even though this imposes some problems for the documentation, it's mainly an issue when using [[rfc:named_params|PHP RFC: Named Arguments]], because a parameter can only have a single name, so it's not possible to convey their true meaning by referring to them by their name.
   * Furthermore, [[rfc:named_params|PHP RFC: Named Arguments]] supports skipping optional parameters (as in implicitly passing their default value), but only when the default value exists.
-  * For ~2 years now, the online manual at [[https://php.net|php.net]] is semi-automatically updated based on the exact signatures known by php-src, which are collected via the [[https://externals.io/message/105970|so-called stubs]]. Unfortunately, overloaded functions cannot be updated via our tooling, leaving these signatures outdated, displaying the wrong parameter names and types, as well as missing proper default values.
+  * For ~2 years now, the online manual at [[https://php.net|php.net]] is semi-automatically updated based on the exact signatures known by php-src, which are collected via the [[https://externals.io/message/105970|so-called stubs]]. Unfortunately, overloaded functions cannot be updated with our tooling, leaving these signatures outdated, displaying the wrong parameter names and types, as well as missing proper default values.
 
-After the named arguments RFC was accepted, dozens (if not hundreds) of functions were fixed in PHP 8.0 so that they started to behave according to a clear default parameter value handling semantics. Usually, this required us to make the parameters nullable, but sometimes it was enough to make a few small adjustments to the parameter parsing code. As all the easier cases are fixed for quite a long time, this RFC tries to tackle the ones with some BC impact.
+After the named arguments RFC was accepted, dozens (if not hundreds) of functions were fixed in PHP 8.0 so that they started to behave according to clear default parameter value handling semantics. Usually, this required us to make the parameters nullable, but sometimes it was enough to make a few small adjustments to the parameter parsing code. As all the easier cases are fixed for quite a long time, this RFC tries to tackle the ones with some BC impact.
 
 ===== Proposal =====
 
@@ -72,7 +90,7 @@ class DatePeriod
 {
     ...
 
-    public function createFromInterval(DateTimeInterface $start, DateInterval $interval, DateTimeInterface $end, int $options = 0): static {}
+    public static function createFromInterval(DateTimeInterface $start, DateInterval $interval, DateTimeInterface $end, int $options = 0): static {}
 
     public static function createFromRecurrences(DateTimeInterface $start, DateInterval $interval, int $recurrences, int $options = 0): static {}
 
@@ -145,7 +163,9 @@ function get_class(object $object): string {}
 function get_class(): string {}
 </code>
 
-These are due to the [[rfc:get_class_disallow_null_parameter|PHP RFC: get_class() disallow null parameter]] RFC which was implemented for PHP 7.2. The ''get_parent_class()'' function behaves consistently:
+These are due to the [[rfc:get_class_disallow_null_parameter|PHP RFC: get_class() disallow null parameter]] RFC which was implemented in PHP 7.2. As it can be seen from the RFC, the parameter of ''get_class'' doesn't have a well-defined default value anymore.
+
+To make things worse, the ''get_parent_class()'' function behaves the same way:
 
 <code php>
 function get_parent_class(object|string $object_or_class): string {}
@@ -201,7 +221,7 @@ class IntlCalendar
     public function set(int $field, int $value): bool {}
 
     public function setDate(int $year, int $month, int $dayOfMonth): void {}
-    
+
     public function setDateTime(int $year, int $month, int $dayOfMonth, int $hour, int $minute, ?int $second = null): void {}
 
     ...
@@ -333,7 +353,7 @@ class Phar
 }
 </code>
 
-''Phar::setStub($resource, $length)'' reads the input resource into memory as a string and then continues evaluation just like if a string was passed. That's why this signature is trivial to replace to ''$phar->setStub(stream_get_contents($resource));''
+''Phar::setStub($resource, $length)'' reads the input resource into memory as a string and then continues evaluation just like if a string was passed. That's why this signature is trivial to replace with ''$phar->setStub(stream_get_contents($resource));''
 
 As the implementation of ''Phar::setStub()'' is "aliased" to ''PharData::setStub()'', this RFC proposes to implement the above mentioned changes in case of ''PharData::setStub()'' as well.
 
