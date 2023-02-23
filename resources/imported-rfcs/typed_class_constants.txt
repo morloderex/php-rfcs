@@ -9,7 +9,7 @@
 
 Despite the huge efforts put into improving the type system of PHP year after year, it is still not possible to declare constant types. This is less of a concern for global constants, but can indeed be a source of bugs and confusion for class constants:
 
-By default, child classes can override class constants of their parents, so theoretically speaking, it's a mistake to make assumptions about class constant values and types, unless either their class or [[rfc:final_class_const|the constants themselves are final]]:
+By default, child classes can override class constants of their parents, so sometimes it is not easy to assume what the value and the type of a class constant, unless either their defining class or [[rfc:final_class_const|the constants themselves are final]]:
 
 <code php>
 interface I {
@@ -25,40 +25,32 @@ class Bar extends Foo {
 }
 </code>
 
-However, it would be useful in some cases to restrict the type of class constants without making them ''final''. And that's when typed class constants may help.
+As demonstrated above, it may come in handy to restrict the type of class constants without making them ''final''.
 
 ===== Proposal =====
 
-This RFC proposes to add support for declaring class and interface constant types:
+This RFC proposes to add support for declaring class, interface, as well as enum constant types:
 
 <code php>
+enum E {
+    const string TEST = "Test1";   // E::TEST is a string
+}
+
 interface I {
-    const string TEST = "Test";   // I::TEST really is a string now
+    const string TEST = E::TEST;   // I::TEST is still a string
 }
 
 class Foo implements I {
-    const string TEST = "Test2";  // Foo::TEST must also be a string
+    const string TEST = "Test2";  // Foo::TEST must also be a string, but the value can change
 }
+
 </code>
 
 ==== Supported types ====
 
-Class constant type declarations support all type declarations supported by PHP, with the exception of ''void'', ''callable'', ''never'', as well as ''self'' and ''static''.
+Class constant type declarations support all type declarations supported by PHP, with the exception of ''void'', ''callable'', ''never''.
 
-The ''void'', ''callable'' types are not supported due to the issues discussed in the [[https://wiki.php.net/rfc/typed_properties_v2#supported_types|typed properties v2 RFC]]. Similarly to the previous types, ''never''  is not applicable in the context of constants.
-
-On the other hand, the ''static'' type is not supported due to technical limitations: if a class ''A'' has a class constant ''B'' of type ''static'' which references a global constant ''C'' of type ''A'' (or any other child class) then it's not possible to resolve the types since they reference each other.
-
-<code php>
-class A {
-    public const self CONST1 = C;
-}
-
-
-define("C", new A()); // Error: Undefined constant "C"
-</code>
-
-The same problem arises with the ''self'' type and when the class itself (''A'') is referenced.
+The ''void'', ''callable'' types are not supported due to the issues discussed in the [[https://wiki.php.net/rfc/typed_properties_v2#supported_types|typed properties v2 RFC]]. Similarly to the previous types, ''never'' is not applicable in the context of constants.
 
 ==== Strict and coercive typing modes ====
 
@@ -168,6 +160,32 @@ None.
 None.
 
 To preserve backwards compatibility with extensions, a new function ''zend_declare_typed_class_constant()'' is introduced while keeping the original ''zend_declare_class_constant_ex()'' function intact.
+
+
+===== Future scope =====
+
+Currently, the value of class constants cannot be instances of their own declaring class. In order to illustrate the problem better, here is an example of such code:
+
+<code php>
+class A {
+    public const CONST1 = C;
+}
+
+const C = new A();
+// Error: Undefined constant "C"
+</code>
+
+This is a not-yet well-known limitation of [[rfc:new_in_initializers|PHP RFC: New in initializers]]. In the context of the current RFC, this means that ''self'', ''static'', or the class name itself (''A'') is not possible to use with class constants in practice. On the other hand, enum constants can be used with the above mentioned types:
+
+<code php>
+enum E {
+    public const E CONST1 = E::Foo;
+    public const self CONST2 = E::Foo;
+    public const static CONST3 = E::Foo;
+
+    case Foo;
+}
+</code>
 
 ===== Vote =====
 
