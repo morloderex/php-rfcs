@@ -1,0 +1,411 @@
+====== PHP RFC: Define proper semantics for range() function  ======
+
+  * Version: 0.1
+  * Date: 2023-03-13
+  * Author: George Peter Banyard, <girgias@php.net>
+  * Status: Under Discussion
+  * Target Version: PHP 8.3
+  * Implementation: [[https://github.com/php/php-src/pull/10826]]
+  * First Published at: [[http://wiki.php.net/rfc/proper-range-semantics]]
+
+===== Introduction =====
+
+PHP's standard library implements the <php>range()</php> function, which generates an array of values going from a <php>$start</php> value to an <php>$end</php> value, by default it advances in steps of ''1'' but this behaviour can be changed by passing the <php>$step</php> parameter.
+In principle, the <php>range()</php> function only works with integer, float, and string <php>$start</php> and <php>$end</php> values, but in reality this is not the case. Moreover, even within those expected types the behaviour can be quite strange.
+
+==== Current Behaviour of range() ===
+
+The current behaviour is quite complex, and it might be easier to just read the implementation, but it roughly goes as follows:
+
+First, check if the <php>$step</php> argument is negative, if it is multiply by ''-1''.
+
+Then check the boundary arguments:
+
+  * If both start and end values are strings with at least one byte (e.g. <php>range('A', 'Z');</php>, <php>range('AA', 'BB');</php>, or <php>range('15', '25');</php>):
+    * If one of the inputs is a float numeric string, or the <php>$step</php> parameter is a float: go to the handle float input branch
+    * If one of the inputs is an integer numeric string: go to the generic handling branch
+    * Otherwise: discard every byte after the first one and return an array of ASCII characters going from the start ASCII code point to the end ASCII code point.
+  * If one of the start or end value is a float or the <php>$step</php> parameter is a float  (e.g. <php>range(10.5, 12);</php>, <php>range(1, 3, 1.5);</php>, or <php>range(1, 3, 1.0);</php>): cast start and end values to float and return an array of floats
+  * Otherwise (generic handling): cast start and end values to int and return an array of int.
+  
+The generic case will accept //any// type.
+
+Let us look at various examples to highlight the range of behaviour exhibited by <php>range()</php>
+
+
+=== Examples ===
+
+Example with expected values:
+<PHP>
+var_dump(range(1, 3));
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+
+var_dump(range(1.0, 3.0));
+array(3) {
+  [0]
+  float(1)
+  [1]
+  float(2)
+  [2]
+  float(3)
+}
+
+var_dump(range(1, 3, 1.5));
+array(2) {
+  [0]
+  float(1)
+  [1]
+  float(2.5)
+}
+
+
+var_dump(range(1.0, 3.0, 1.5));
+array(2) {
+  [0]
+  float(1)
+  [1]
+  float(2.5)
+}
+
+var_dump(range('10', '13'));
+array(4) {
+  [0]
+  int(10)
+  [1]
+  int(11)
+  [2]
+  int(12)
+  [3]
+  int(13)
+}
+
+var_dump(range('10.0', '13.0'));
+array(4) {
+  [0]
+  float(10)
+  [1]
+  float(11)
+  [2]
+  float(12)
+  [3]
+  float(13)
+}
+
+var_dump(range('10', '13', 1.5));
+array(3) {
+  [0]
+  float(10)
+  [1]
+  float(11.5)
+  [2]
+  float(13)
+}
+
+var_dump(range('10.0', '13.0', 1.5));
+array(3) {
+  [0]
+  float(10)
+  [1]
+  float(11.5)
+  [2]
+  float(13)
+}
+
+var_dump(range('A', 'E'));
+array(5) {
+  [0]
+  string(1) "A"
+  [1]
+  string(1) "B"
+  [2]
+  string(1) "C"
+  [3]
+  string(1) "D"
+  [4]
+  string(1) "E"
+}
+</PHP>
+
+Example showing the ASCII code point range:
+<PHP>
+var_dump(range('a', 'Z'));
+/*
+array(8) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "`"
+  [2]=>
+  string(1) "_"
+  [3]=>
+  string(1) "^"
+  [4]=>
+  string(1) "]"
+  [5]=>
+  string(1) "\"
+  [6]=>
+  string(1) "["
+  [7]=>
+  string(1) "Z"
+}
+*/
+</PHP>
+
+Example showing how to produce a decreasing range:
+<PHP>
+var_dump(range('E', 'A'));
+array(5) {
+  [0]
+  string(1) "E"
+  [1]
+  string(1) "D"
+  [2]
+  string(1) "C"
+  [3]
+  string(1) "B"
+  [4]
+  string(1) "A"
+}
+</PHP>
+
+Example showing how negative steps are multiplied by ''-1'':
+<PHP>
+var_dump(range(0, 10, -2));
+array(6) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(2)
+  [2]=>
+  int(4)
+  [3]=>
+  int(6)
+  [4]=>
+  int(8)
+  [5]=>
+  int(10)
+}
+</PHP>
+
+Example showing how string inputs can get cast to int/float:
+<PHP>
+var_dump(range('', 'Z'));
+array(1) {
+  [0]=>
+  int(0)
+}
+
+var_dump(range('A', 'E', 1.0));
+array(1) {
+  [0]=>
+  float(0)
+}
+</PHP>
+
+Examples with unexpected types:
+<PHP>
+/* Array */
+var_dump(range([5], [8]));
+array(1) {
+  [0]=>
+  int(1)
+}
+
+/* Resources */
+var_dump(range(STDIN, STDERR));
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+
+/* Int/Float castable object */
+$o1 = gmp_init(15);
+$o2 = gmp_init(20);
+var_dump(range($o1, $o2));
+array(6) {
+  [0]=>
+  int(15)
+  [1]=>
+  int(16)
+  [2]=>
+  int(17)
+  [3]=>
+  int(18)
+  [4]=>
+  int(19)
+  [5]=>
+  int(20)
+}
+
+/* Int/Float non-castable object */
+$o1 = new stdClass();
+$o2 = new stdClass();
+var_dump(range($o1, $o2));
+/*
+
+Warning: Object of class stdClass could not be converted to int in /tmp/preview on line 13
+
+Warning: Object of class stdClass could not be converted to int in /tmp/preview on line 13
+array(1) {
+  [0]=>
+  int(1)
+}
+*/
+</PHP>
+
+==== Issues surrounding usage of INF and NAN values ====
+
+Infinite values are handles as part of the range boundary checks, or for the <php>$step</php> parameter when checking that the step is less than the range being requested, and will throw ValueErrors.
+
+However, NAN values are not specifically handled and result in nonsensical ranges:
+<PHP>
+$nan = fdiv(0,0);
+
+var_dump(range($nan, 5));
+array(1) {
+  [0]=>
+  float(NAN)
+}
+
+var_dump(range(1, 5, $nan));
+array(0) {
+}
+</PHP>
+
+Where using a NAN values as a step even breaks the expectation that <php>range()</php> will return a non empty list.
+
+
+===== Proposal =====
+
+The proposal is to adjust the semantics of <php>range()</php> in various ways to throw exceptions outright or at least warn when passing unusable arguments to <php>range()</php>.
+
+The changes are as follows:
+
+  * If <php>$step</php> is a float but is compatible with ''int'' interpret it as an integer.
+  * Introduce and use a proper ZPP check for ''int|float|string'' <php>$start</php> and <php>$end</php> parameters, this will cause <php>TypeError</php>s to be thrown when passing objects, resources, and arrays to <php>range()</php>. It will also cause a deprecation warning to be emitted when passing ''null''.
+  * Throw value errors if <php>$start</php>, <php>$end</php>, or <php>$step</php> is a non-finite float (-INF, INF, NAN).
+  * Throw a more descriptive <php>ValueError</php> when <php>$step</php> is zero.
+  * Emit an <php>E_WARNING</php> when passing a negative <php>$step</php>
+  * Throw a <php>ValueError</php> when <php>$start</php> or <php>$end</php> is the empty string
+  * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> has more than one byte.
+  * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is cast to an integer because the other boundary input is a number or numeric string. (e.g. <php>range('5', 'z');</php> or <php>range(5, 'z');</php>)
+  * Emit an <php>E_WARNING</php> when <php>$step</php> is a float when trying to generate a range of characters.
+
+
+Therefore, the behaviour of some of the previous would result in the following behaviour:
+
+
+<PHP>
+var_dump(range('', 'Z'));
+/*
+Warning: range(): Argument #1 ($start) must not be empty, casted to 0 in %s on line %d
+
+Warning: range(): Argument #1 ($start) must be a string if argument #2 ($end) is a string, argument #2 ($end) converted to 0 in %s on line %d
+array(1) {
+  [0]=>
+  int(0)
+}
+*/
+
+var_dump(range('A', 'E', 1.0));
+array(5) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(1) "B"
+  [2]=>
+  string(1) "C"
+  [3]=>
+  string(1) "D"
+  [4]=>
+  string(1) "E"
+}
+</PHP>
+
+===== Impact Analysis =====
+
+Using Nikita Popov's [[https://github.com/nikic/popular-package-analysis|''popular-package-analysis'']] project and running a [[https://github.com/Girgias/popular-package-analysis/pull/1|rough analysis]] of the usage of <php>range()</php> on the top 1000 composer projects we get that out of around 450 calls to <php>range()</php>
+
+  - 154 calls are made out with literal number arguments
+  - 18 calls are made with literal string arguments
+  - 140 calls have at least one argument be the result of a plus (''+''), minus (''-''), or times (''*'') operation.
+  - 47 calls have at least one argument be a variable
+  - 25 calls have an argument made from a function that returns a number (<php>count()</php>, <php>min()</php>, or <php>max()</php>)
+  - 66 calls have at least an argument that comes from a class property, class method, function, or array dimension.
+  
+The calls that are non-trivial were manually checked and seem all valid.
+
+Only one example, a test case in Drupal, would have triggered an <php>E_WARNING</php> about using a negative step:
+<PHP>
+drupal/core/modules/views/tests/src/Functional/Handler/FieldWebTest.php:102
+Negative step is pointless
+range(5, 1, -1)
+</PHP>
+
+===== Backward Incompatible Changes =====
+
+<php>TypeError</php>s are thrown for incompatible types.
+
+<php>ValueError</php>s are thrown for INF, NAN, and empty string values.
+
+<php>E_WARNING</php>s are emitted for various issues.
+
+Calls to <php>range()</php> that have integer boundaries but a float step that is compatible as an integer will now return an array of integers instead of an array of float:
+<PHP>
+var_dump( range(1, 5, 2.0) );
+/* New Behaviour */
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(3)
+  [2]=>
+  int(5)
+}
+/* Current Behaviour */
+array(3) {
+  [0]=>
+  float(1)
+  [1]=>
+  float(3)
+  [2]=>
+  float(5)
+}
+</PHP>
+
+===== Proposed PHP Version =====
+
+Next minor version, i.e. PHP 8.3.0.
+
+===== Proposed Voting Choices =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+<doodle title="Accept Saner range() semantics RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Implementation =====
+
+GitHub pull request: https://github.com/php/php-src/pull/10826
+
+After the project is implemented, this section should contain
+
+  * the version(s) it was merged into
+  * a link to the git commit(s)
+  * a link to the PHP manual entry for the feature
+
+===== References =====
