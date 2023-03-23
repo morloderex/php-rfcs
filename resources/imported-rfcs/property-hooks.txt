@@ -421,80 +421,6 @@ class User
 }
 </code>
 
-==== Interaction with asymmetric visibility ====
-
-Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibilitiy on the ''get'' or ''set'' hook.
-
-That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
-
-However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate much more complex logic for both the engine and developers to determine if references should or should not be disabled on a property.  Both are poor options.
-
-For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the only viable option.
-
-==== Interaction with readonly ====
-
-''readonly'' properties have the effect of forcing private ''set'' scope, and limiting the property to a single ''set'' operation.  That behavior is independent of ''beforeSet''/''afterSet'' hooks, so they are compatible.  (They would fire for the one set operation, and never again.)
-
-However, ''readonly'' works by checking if the backing store value is uninitialized.  ''get'' and ''set'' hooks imply no backing store, so ''readonly'' cannot be compatible.
-
-For that reason, a ''readonly'' property with a ''get'' or ''set'' hook is disallowed and will throw a syntax error.  Other hooks are fine to combine with ''readonly''.
-
-==== Interaction with magic methods ====
-
-PHP 8.2 will invoke the <php>__get</php> or <php>__set</php> magic methods if a property is accessed and it is either not defined, OR it is defined but not visible from the calling scope.  The presence of hooks on a defined property does not change that behavior.  Naturally the property will be defined if it has hooks; however, if the property is not visible in the calling scope then <php>__get</php> or <php>__set</php> will be called just as if there were no hooks.
-
-Within the <php>__get</php> or <php>__set</php> methods, the property will be visible and therefore accessible.  Reads or writes to a hooked property will behave the same as from any other method, and thus hooks will still be invoked as normal.
-
-<PHP>
-class C
-{
-    private string $name {
-        beforeSet => ucfirst($value);
-    }
-    
-    public function __set($var, $val)
-    {
-        print "In __set\n";
-        $this->$var = $val;
-    }
-}
-
-$c = new C();
-
-$c->name = 'picard';
-
-// prints "In __set"
-// $c->name now has the value "Picard"
-</PHP>
-
-==== Interaction with isset() and unset() ====
-
-If a property implements hooks other than ''get'' or ''set'', then ''isset()'' is unaffected.
-
-If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php> today.
-
-If a property implements any hook, then ''unset()'' is disallowed and will result in an error.  Its semantics are unclear, and it rarely has a logical meaning anyway.
-
-==== Interaction with constructor property promotion ====
-
-As of PHP 8.0, properties may be declared inline with the constructor.  That creates an interesting potential for complexity if the property also includes hooks, as the hooks may be arbitrarily complex, and therefore long, leading to potentially tens of lines of code technically within the constructor's method signature.
-
-On the other hand, the ''beforeSet'' hook in particular is extremely useful for validation, including validation on promoted properties.  Making them incompatible would undercut the value of both tremendously.  That is true to a lesser extent for ''afterSet''.  (Properties with ''get'' and ''set'' hooks make little sense to include in promotion.)
-
-After much consideration, the authors have opted to allow hooks to be implemented within constructor property promotion.  While pathological examples could certainly be shown, we anticipate in practice that the impact will be far less.  In particular, the shorthand version of hook bodies and the ability to call out to private methods if they get complicated partially obviate the concern about syntactic complexity.
-
-For example, we predict the following to be the extent of most combinations of hooks and promotion:
-
-<code php>
-class User
-{
-  public function __construct(
-    public string $username { beforeSet => strtolower($username); }
-  ) {}
-}
-</code>
-
-Which is, all things considered, not too bad for the level of power it gives.
 
 ==== Inheritance ====
 
@@ -563,7 +489,7 @@ class C extends P
 
 The example shown here is essentially a "no op" implementation, but demonstrates how a property in a child class may add get/set hooks without having to implement its own storage.  If the parent property has no hooks (it is using automatic storage), a pass-through ''get'' and ''set'' hook is generated so the above code will always work.
 
-A more reaistic example could be:
+A more realstic example could be:
 
 <PHP>
 class Strings
@@ -768,6 +694,81 @@ class PoodleOwner extends DogOwner
     public Poodle $pet;
 }
 </PHP>
+
+==== Interaction with asymmetric visibility ====
+
+Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibilitiy on the ''get'' or ''set'' hook.
+
+That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
+
+However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate much more complex logic for both the engine and developers to determine if references should or should not be disabled on a property.  Both are poor options.
+
+For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the only viable option.
+
+==== Interaction with readonly ====
+
+''readonly'' properties have the effect of forcing private ''set'' scope, and limiting the property to a single ''set'' operation.  That behavior is independent of ''beforeSet''/''afterSet'' hooks, so they are compatible.  (They would fire for the one set operation, and never again.)
+
+However, ''readonly'' works by checking if the backing store value is uninitialized.  ''get'' and ''set'' hooks imply no backing store, so ''readonly'' cannot be compatible.
+
+For that reason, a ''readonly'' property with a ''get'' or ''set'' hook is disallowed and will throw a syntax error.  Other hooks are fine to combine with ''readonly''.
+
+==== Interaction with magic methods ====
+
+PHP 8.2 will invoke the <php>__get</php> or <php>__set</php> magic methods if a property is accessed and it is either not defined, OR it is defined but not visible from the calling scope.  The presence of hooks on a defined property does not change that behavior.  Naturally the property will be defined if it has hooks; however, if the property is not visible in the calling scope then <php>__get</php> or <php>__set</php> will be called just as if there were no hooks.
+
+Within the <php>__get</php> or <php>__set</php> methods, the property will be visible and therefore accessible.  Reads or writes to a hooked property will behave the same as from any other method, and thus hooks will still be invoked as normal.
+
+<PHP>
+class C
+{
+    private string $name {
+        beforeSet => ucfirst($value);
+    }
+    
+    public function __set($var, $val)
+    {
+        print "In __set\n";
+        $this->$var = $val;
+    }
+}
+
+$c = new C();
+
+$c->name = 'picard';
+
+// prints "In __set"
+// $c->name now has the value "Picard"
+</PHP>
+
+==== Interaction with isset() and unset() ====
+
+If a property implements hooks other than ''get'' or ''set'', then ''isset()'' is unaffected.
+
+If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php> today.
+
+If a property implements any hook, then ''unset()'' is disallowed and will result in an error.  Its semantics are unclear, and it rarely has a logical meaning anyway.
+
+==== Interaction with constructor property promotion ====
+
+As of PHP 8.0, properties may be declared inline with the constructor.  That creates an interesting potential for complexity if the property also includes hooks, as the hooks may be arbitrarily complex, and therefore long, leading to potentially tens of lines of code technically within the constructor's method signature.
+
+On the other hand, the ''beforeSet'' hook in particular is extremely useful for validation, including validation on promoted properties.  Making them incompatible would undercut the value of both tremendously.  That is true to a lesser extent for ''afterSet''.  (Properties with ''get'' and ''set'' hooks make little sense to include in promotion.)
+
+After much consideration, the authors have opted to allow hooks to be implemented within constructor property promotion.  While pathological examples could certainly be shown, we anticipate in practice that the impact will be far less.  In particular, the shorthand version of hook bodies and the ability to call out to private methods if they get complicated partially obviate the concern about syntactic complexity.
+
+For example, we predict the following to be the extent of most combinations of hooks and promotion:
+
+<code php>
+class User
+{
+  public function __construct(
+    public string $username { beforeSet => strtolower($username); }
+  ) {}
+}
+</code>
+
+Which is, all things considered, not too bad for the level of power it gives.
 
 ==== Interaction with serialization ====
 
