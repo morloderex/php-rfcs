@@ -956,7 +956,6 @@ Note that this example is glossing over internal details of the ORM's loading pr
 
 Consider a domain object defined like this:
 
-
 <PHP>
 class Product
 {
@@ -1069,7 +1068,115 @@ $p->color = new Color('#ff3378');
 $repo->save($p);
 </PHP>
 
+==== Definitional interfaces ====
 
+A common pattern for many PHP libraries is to have an interface that defines methods that return simple strings.  Alternatively, some define magic public properties, which have all the corresponding problems of public properties.
+
+The use of properties on interfaces obviates both issues.
+
+For example, this is a real interface out of a library maintained by one of the RFC authors, [[http://github.com/Crell/AttributeUtils|Crell/AttributeUtils]], and a typical class that implements it:
+
+<PHP>
+interface ParseProperties
+{
+    public function setProperties(array $properties): void;
+
+    public function includePropertiesByDefault(): bool;
+
+    public function propertyAttribute(): string;
+}
+
+#[\Attribute(\Attribute::TARGET_CLASS)]
+class ClassWithProperties implements ParseProperties
+{
+    public array $properties = [];
+
+    public function __construct(
+        public readonly int $a = 0,
+        public readonly int $b = 0,
+    ) {}
+
+    public function setProperties(array $properties): void
+    {
+        $this->properties = $properties;
+    }
+
+    public function includePropertiesByDefault(): bool
+    {
+        return true;
+    }
+
+    public function propertyAttribute(): string
+    {
+        return BasicProperty::class;
+    }
+}
+</PHP>
+
+The ''includePropertiesByDefault()'' and ''propertyAttribute()'' methods will, 99% of the time, be static strings.  But making them just a property today would both make them publicly editable and make the other 1% case, where one of the values should be dynamic, impossible or extremely difficult.
+
+This RFC would allow that to be simplified to: 
+
+<PHP>
+interface ParseProperties
+{
+    public function setProperties(array $properties): void;
+
+    public bool $includePropertiesByDefault { get; }
+
+    public string $propertyAttribute { get; }
+}
+
+#[\Attribute(\Attribute::TARGET_CLASS)]
+class ClassWithProperties implements ParseProperties
+{
+    public array $properties = [];
+
+    // This would be technically publicly editable
+    // unless asymmetric visibility is added.
+    public bool $includePropertiesByDefault = true;
+    
+    // This simulates public-read-only while still
+    // fulfilling the interface.
+    public bool $propertyAttribute => BasicProperty::class;
+
+    public function __construct(
+        public readonly int $a = 0,
+        public readonly int $b = 0,
+    ) {}
+
+    public function setProperties(array $properties): void
+    {
+        $this->properties = $properties;
+    }
+}
+</PHP>
+
+And should it become necessary to make either of them dynamic, that can be trivially done without any API change:
+
+<PHP>
+#[\Attribute(\Attribute::TARGET_CLASS)]
+class ClassWithProperties implements ParseProperties
+{
+    public array $properties = [];
+
+    public bool $includePropertiesByDefault => $this->include;
+    
+    public bool $propertyAttribute => $this->propertiesAs;
+
+    public function __construct(
+        public readonly int $a = 0,
+        public readonly int $b = 0,
+        private readonly $include = true;
+        private readonly $propertiesAs = BasicProperty::class,
+    ) {}
+
+    public function setProperties(array $properties): void
+    {
+        $this->properties = $properties;
+    }
+}
+</PHP>
 
 ===== Backward Incompatible Changes =====
 
