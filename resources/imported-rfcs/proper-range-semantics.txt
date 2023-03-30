@@ -1,6 +1,6 @@
 ====== PHP RFC: Define proper semantics for range() function  ======
 
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2023-03-13
   * Author: George Peter Banyard, <girgias@php.net>
   * Status: Under Discussion
@@ -151,7 +151,7 @@ array(5) {
 }
 </PHP>
 
-Example showing how negative steps are multiplied by ''-1'':
+Example showing how negative steps for increasing ranges are multiplied by ''-1'':
 <PHP>
 var_dump(range(0, 10, -2));
 array(6) {
@@ -351,8 +351,8 @@ The changes are as follows:
   * Introduce and use a proper ZPP check for ''int|float|string'' <php>$start</php> and <php>$end</php> parameters, this will cause <php>TypeError</php>s to be thrown when passing objects, resources, and arrays to <php>range()</php>. It will also cause a deprecation warning to be emitted when passing ''null''.
   * Throw value errors if <php>$start</php>, <php>$end</php>, or <php>$step</php> is a non-finite float (-INF, INF, NAN).
   * Throw a more descriptive <php>ValueError</php> when <php>$step</php> is zero.
-  * Emit an <php>E_WARNING</php> when passing a negative <php>$step</php>
-  * Throw a <php>ValueError</php> when <php>$start</php> or <php>$end</php> is the empty string
+  * Throw a <php>ValueError</php> when passing a negative <php>$step</php> for increasing ranges.
+  * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is the empty string, and cast the value to ''0''
   * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> has more than one byte.
   * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is cast to an integer because the other boundary input is a number or numeric string. (e.g. <php>range('5', 'z');</php> or <php>range(5, 'z');</php>)
   * Emit an <php>E_WARNING</php> when <php>$step</php> is a float when trying to generate a range of characters.
@@ -378,7 +378,9 @@ array(5) {
 
 var_dump(range('', 'Z'));
 /*
-range(): Argument #1 ($start) must not be empty
+Warning: range(): Argument #1 ($start) must not be empty, casted to 0
+
+Warning: range(): Argument #1 ($start) must be a string if argument #2 ($end) is a string, argument #2 ($end) converted to 0
 */
 
 
@@ -405,6 +407,11 @@ array(1) {
   int(1)
 }
 */
+
+var_dump(range(0, 10, -2));
+/*
+range(): Argument #3 ($step) must be greater than 0 for increasing ranges
+*/
 </PHP>
 
 ===== Impact Analysis =====
@@ -420,18 +427,11 @@ Using Nikita Popov's [[https://github.com/nikic/popular-package-analysis|''popul
   
 The calls that are non-trivial were manually checked and seem all valid.
 
-Only one example, a test case in Drupal, would trigger an <php>E_WARNING</php> about using a negative step:
-<PHP>
-drupal/core/modules/views/tests/src/Functional/Handler/FieldWebTest.php:102
-Negative step is pointless
-range(5, 1, -1)
-</PHP>
-
 ===== Backward Incompatible Changes =====
 
 <php>TypeError</php>s are thrown for incompatible types.
 
-<php>ValueError</php>s are thrown for INF, NAN, and empty string values.
+<php>ValueError</php>s are thrown for INF, NAN, and negative step values for increasing ranges.
 
 <php>E_WARNING</php>s are emitted for various issues.
 
