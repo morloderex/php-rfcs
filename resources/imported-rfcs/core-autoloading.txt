@@ -2,8 +2,8 @@
 
   * Version: 0.1
   * Date: 2023-04-03
-  * Author: George Peter Banyard, <girgias@php.net>, Dan Ackroyd, <danack@basereality.com> 
-  * Status: Under Discussion
+  * Author: George Peter Banyard, <girgias@php.net>
+  * Status: Draft
   * Target Version: PHP 8.3
   * Implementation: [[https://github.com/php/php-src/pull/8294]]
   * First Published at: [[http://wiki.php.net/rfc/core-autoloading]]
@@ -15,7 +15,7 @@ However, the current autoloading mechanism does not support autoloading function
 
 The need for such a feature seems very clear as users will create "helper" classes with static methods to take advantage of autoloading via the class autoloading mechanism.
 
-A previous [[https://wiki.php.net/rfc/function_autoloading|draft RFC for function autoloading]] did not proceed to a vote, due to concerns on a performance hit related to global functions.
+A previous [[draft RFC for function autoloading|https://wiki.php.net/rfc/function_autoloading]] did not proceed to a vote, due to concerns on a performance hit related to global functions.
 This RFC has avoided that performance problem.
 
 This RFC proposes the introduction of autoloading for functions and an updated mechanism for classes which addresses some minor design issues with the current SPL design.
@@ -93,16 +93,16 @@ namespace bar {
 }
 </PHP>
 
-If a function named ''strlen'' exists in the namespace ''bar'' PHP would use that, otherwise PHP would 'fallback' to the <php>strlen()</php> function in the global namespace. Note, the <php>use function strlen;</php> syntax was introduced in PHP 5.6.
+If a function named ''strlen'' exists in the namespace ''bar'' PHP would use that, otherwise PHP would fallback to the <php>strlen()</php> function in the global namespace. Note, the <php>use function strlen;</php> syntax was introduced in PHP 5.6.
 
 This RFC preserves that fallback behaviour.
 
 When code tries to call a function that doesn't currently exist in the current namespace, the function autoloader mechanism will call the registered function autoloaders once with the fully namespaced function name.
 
-If an appropriately named function is not loaded during that call, the PHP engine will fallback that function to the global namespace.
+If an appropriately named function is not loaded during that call, the PHP engine will 'fallback' that function to the global namespace.
 If a function already exists with the global namespace name, that will be used, otherwise the function autoloader mechanism will call the registered function autoloaders once with the global function name.
 
-After a function in a namespace is resolved (i.e. a function is located in the current namespace either because it already exists, or a function autoload call loads it, or the global fallback occurs), the function will be 'pinned' to that function entry, and no more function autoload calls will be generated for that function in that namespace.
+After a function autoload attempt succeeds, the function will be 'pinned' to the function that was resolved on the first successful autoload attempt, and no more function autoload calls will be generated.
 
 This is possibly easier to understand through code:
 
@@ -184,8 +184,8 @@ As a result of the pinning, <php>function_exists()</php> will return true for fu
 
 The global fallback is not invoked for functions with absolute names. Absolute function names happen:
 
-  * In a PHP file that has an alias/import of a function, when that file is compiled, an absolute name is used for the function name.
-  * Functions that are directly invoked with an absolute name e.g. <php>\strlen("bar");</php>
+* In a PHP file that has an alias/import of a function, when that file is compiled, an absolute name is used for the function name.
+* Functions that are directly invoked with an absolute name e.g. <php>\strlen("bar");</php>
 
 For functions that are not invoked with an absolute function name, the function autoloader will be called once per function name per namespace. After that, the function will be pinned to the function that was resolved.
 
@@ -249,27 +249,6 @@ namespace Foo {
 
 Passing <php>spl_autoload_call()</php> to <php>spl_autoload_unregister()</php> is deprecated.
 
-The current RFC as proposed has a large BC break for the code:
-
-<PHP>
-
-namespace foo;
-
-var_dump(function_exists('foo\strlen'));
-var_dump(strlen('x'));
-var_dump(function_exists('foo\strlen'));
-
-if (true) {
-    function strlen($x) { return 42; }
-    var_dump(function_exists('foo\strlen'));
-}
-
-var_dump(strlen('x'));
-
-</PHP>
-
-Which needs to be thought about.
-
 ===== Proposed PHP Version =====
 
 Next minor version, i.e. PHP 8.3.
@@ -303,9 +282,7 @@ It may be eventually more accurate to use the word ''type'' rather than ''class'
 
 ==== Higher performance through maps ====
 
-There is an ongoing conversation, and a [[https://wiki.php.net/rfc/autoload_classmap|previous RFC]] about adding functions to have a native classmap/functionmap/typemap resolver written in C. That is outside the scope of this RFC.
-
-However, a basic implementation of that RFC has been created and can be tried with the implementation of this RFC: https://gitlab.com/Girgias/php-autoloading-maps-extension
+There is an ongoing conversation, and a [[previous RFC|https://wiki.php.net/rfc/autoload_classmap]] about adding functions to have a native classmap/functionmap/typemap resolver written in C. That is outside the scope of this RFC.
 
 ====== Deprecating the SPL autoloader functions ======
 
@@ -416,7 +393,7 @@ autoload_register_class(my_class_loader(...));
 
 For programs that do not have a function autoloader registered, there will be no autoloader to dispatch, so there will be almost no performance change.
 
-Whether or not a function autoloader is registered, resolving the function is only done once per function per namespace, assuming the function is either loaded or resolved through the global fallback.
+Whether or not a fuction autoloader is registered, resolving the function is only done once per function per namespace, assuming the function is either loaded or resolved through the global fallback.
 
 As the code example shows, after a successful attempt to autoload a function in a namespace, or the global function fallback occurs, the function is 'pinned' to that function, and subsequent use doesn't trigger autoloading.
 
