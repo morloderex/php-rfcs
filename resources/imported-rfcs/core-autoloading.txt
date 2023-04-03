@@ -1,0 +1,422 @@
+====== PHP RFC: New core autoloading mechanism with support for function autoloading ======
+
+  * Version: 0.1
+  * Date: 2023-04-03
+  * Author: George Peter Banyard, <girgias@php.net>
+  * Status: Draft
+  * Target Version: PHP 8.3
+  * Implementation: [[https://github.com/php/php-src/pull/8294]]
+  * First Published at: [[http://wiki.php.net/rfc/core-autoloading]]
+
+===== Introduction =====
+
+PHP has had support for class autoloading since PHP 5 and it is an extremely useful feature that is relied on to only load classes that are being used within the current request.
+However, the current autoloading mechanism does not support autoloading functions.
+
+The need for such a feature seems very clear as users will create "helper" classes with static methods to take advantage of autoloading via the class autoloading mechanism.
+
+A previous [[draft RFC for function autoloading|https://wiki.php.net/rfc/function_autoloading]] did not proceed to a vote, due to concerns on a performance hit related to global functions.
+This RFC has avoided that performance problem.
+
+This RFC proposes the introduction of autoloading for functions and an updated mechanism for classes which addresses some minor design issues with the current SPL design.
+
+===== Proposal =====
+
+The proposal consists of adding a better designed class autoloading mechanism and a new function autoloading mechanism, and aliasing the existing autoload functions to the new versions.
+
+The proposal does //not// include a default implementation for either the class or the function autoloading mechanism.
+
+==== New autoloading API ====
+
+=== Classes ===
+
+The API related to class autoloading is mostly identical to the existing SPL design with some minor design issues addressed. It introduces the following functions:
+
+  * <php>autoload_register_class(callable $callback, bool $prepend = false): void</php>
+  * <php>autoload_unregister_class(callable $callback): bool</php> for which <php>spl_autoload_unregister()</php> is an alias
+  * <php>autoload_call_class(string $class): void</php> for which <php>spl_autoload_call()</php> is an alias
+  * <php>autoload_list_class(): iterable</php> for which <php>spl_autoload_functions()</php> is an alias
+
+The <php>spl_autoload_register()</php> does not become an alias for <php>autoload_register_class()</php> to preserve BC by continuing to return <php>true</php>, allowing it to register the default SPL autoloader, and accepting the ignored second parameter, but they are both forwarded to an identical internal implementation.
+
+The <php>autoload_list_class()</php> has a formal type of <php>iterable</php> but continues to return an array for the time being.
+
+Secondly, the behaviour to pass <php>autoload_call_class()</php>/<php>spl_autoload_call()</php> to <php>autoload_unregister_class()</php> as a magic value to empty the autoloader list will be deprecated.
+
+It will still be possible to unregister all autoloaders by traversing the list returned by <php>autoload_list_class()</php> and call <php>autoload_unregister_class()</php> on each entry.
+
+=== Functions ===
+
+The API related to function autoloading introduces the following functions:
+
+  * <php>autoload_register_function(callable $callback, bool $prepend = false): void</php> - Register given function as a function autoloader implementation
+  * <php>autoload_unregister_function(callable $callback): bool</php> - Unregister given function as a function autoloader implementation
+  * <php>autoload_call_function(string $function): void</php> - Try all registered function autoloader functions to load the requested function
+  * <php>autoload_list_function(): iterable</php>  - Return all registered function autoloader functions
+
+The 'class autoloader' list and 'function autoloader' list are separate lists.
+
+==== Modified function ====
+
+The <php>function_exists()</php> function will be modified by adding a <php>$autoload</php> parameter which defaults to <php>true</php> same as the <php>class_exists()</php> function.
+
+==== Intended usage ====
+
+For most people who are writing their own autoloader, the usage would look this:
+
+<PHP>
+function my_function_loader(string $function_name) {
+	// This callback only receives requests to load functions
+	// do the needful to load function $function_name
+}
+
+function my_class_loader(string $class_name) {
+	// This callback only receives requests to load classes
+	// do the needful to load class $class_name
+}
+
+autoload_register_function(my_function_loader(...));
+autoload_register_class(my_class_loader(...));
+</PHP>
+
+i.e. separate autoloader callback receive 'Foo' for class 'Foo' and 'foo' for function 'foo', and there is no ambiguity what is being autoloaded, even though the names are the same.
+
+==== Function autoloading mechanism ====
+
+When namespaces were introduced in PHP 5.3.0, to avoid requiring leading slashes before all basic functions, function calls in a namespace would 'fallback' to the global scope.
+
+e.g. for the code:
+
+<PHP>
+namespace bar {
+    echo "length of hmm is " . strlen("hmm") . "\n";
+}
+</PHP>
+
+If a function named ''strlen'' exists in the namespace ''bar'' PHP would use that, otherwise PHP would fallback to the <php>strlen()</php> function in the global namespace. Note, the <php>use function strlen;</php> syntax was introduced in PHP 5.6.
+
+This RFC preserves that fallback behaviour.
+
+When code tries to call a function that doesn't currently exist in the current namespace, the function autoloader mechanism will call the registered function autoloaders once with the fully namespaced function name.
+
+If an appropriately named function is not loaded during that call, the PHP engine will 'fallback' that function to the global namespace.
+If a function already exists with the global namespace name, that will be used, otherwise the function autoloader mechanism will call the registered function autoloaders once with the global function name.
+
+After a function autoload attempt succeeds, the function will be 'pinned' to the function that was resolved on the first successful autoload attempt, and no more function autoload calls will be generated.
+
+This is possibly easier to understand through code:
+
+<PHP>
+namespace {
+    function loader($name) {
+        echo "function loader called with '$name'\n";
+
+        if (strcasecmp($name, 'foo') === 0 && function_exists('foo') === false) {
+            // use eval to avoid foo already being defined
+            eval('function foo() {
+                echo "I am foo in global namespace.\n";
+            }');
+        }
+
+        if (strcasecmp($name, 'Quux\foo') === 0 && function_exists('Quux\foo') === false) {
+            // use eval to avoid foo already being defined
+            eval('
+            namespace Quux {
+              function foo() {
+               echo "I am foo in Quux namespace.\n";
+              }
+            }');
+        }
+    }
+
+    autoload_register_function('loader');
+
+    foo(); // Autoload called in global namespace
+}
+
+namespace bar {
+    foo(); // Autoload called in bar namespace
+
+    for ($i = 0; $i < 3; $i += 1) {
+        foo(); // Autoload not called, as function already pinned for namespace
+    }
+}
+namespace bar {
+    foo(); // Autoload not called, as function already pinned for namespace
+}
+
+namespace Quux {
+    foo(); // Autoload called in Quux namespace
+    foo(); // Autoload not called, as function already pinned for namespace
+    non_existent_function(); // Autoload called twice, once with namespace, once without
+}
+
+
+// Output is
+function loader called with 'foo'
+I am foo in global namespace.
+function loader called with 'bar\foo'
+I am foo in global namespace.
+I am foo in global namespace.
+I am foo in global namespace.
+I am foo in global namespace.
+I am foo in global namespace.
+function loader called with 'Quux\foo'
+I am foo in Quux namespace.
+I am foo in Quux namespace.
+function loader called with 'Quux\non_existent_function'
+function loader called with 'non_existent_function'
+
+Fatal error: Uncaught Error: Call to undefined function Quux\non_existant_function()...
+</PHP>
+
+The position of this RFC is that this behaviour is correct both from a performance point-of-view, and a 'being able to reason about code' point-of-view.
+
+Having the function autoloader called on each use of an unqualified function call in a namespace would be a performance hit that would be unacceptable to most PHP users.
+
+Having it possible for what appears to be the same function call, to actually be dispatched to different functions, would be far too surprising a behaviour to the RFC authors.
+
+As a result of the pinning, <php>function_exists()</php> will return true for functions in namespaces that have been pinned to a global function. In the above example <php>function_exists('bar\foo')</php> would return true, after the first use of it in the namespace. This is the correct behaviour from both a "will this trigger autoloading (no)" and a "is it safe to get reflection about that function" point of view, though arguably from other positions it might be less correct.
+
+==== Details of global fallback and absolute function names  ====
+
+(Note, this section is mostly just clarification of how PHP currently works, and how function autoloading fits in with that. It is not proposing a change to the global fallback.)
+
+The global fallback is not invoked for functions with absolute names. Absolute function names happen:
+
+* In a PHP file that has an alias/import of a function, when that file is compiled, an absolute name is used for the function name.
+* Functions that are directly invoked with an absolute name e.g. <php>\strlen("bar");</php>
+
+For functions that are not invoked with an absolute function name, the function autoloader will be called once per function name per namespace. After that, the function will be pinned to the function that was resolved.
+
+Again, this is possibly easier to understand through code:
+
+<PHP>
+namespace {
+    function loader($name) {
+        echo "function loader called with '$name'\n";
+    }
+
+    autoload_register_function('loader');
+}
+
+namespace Foo {
+    use function strlen;
+    use function Bar\strcmp;
+
+    // As the function strlen is imported and so has an absolute
+    // function name, and already exists once PHP starts up no
+    // call to the autoloader happens
+    echo "strlen length is " . strlen('strlen') . "\n";
+
+    // As the function strpos is not imported, there is a
+    // single call to the autoloader with 'Foo/strpos' as the
+    // name. As no function is loaded, the fallback to \strpos
+    // occurs, and the name 'Foo/strpos' is pinned to '\strpos'
+    echo "pos position is " . strpos("strpos", "pos") . "\n";
+
+    // As 'Foo/strpos' is now pinned to '\strpos' no autoload call occurs
+    echo "pos position is " . strpos("strpos", "pos") . "\n";
+    echo "pos position is " . strpos("strpos", "pos") . "\n";
+    echo "pos position is " . strpos("strpos", "pos") . "\n";
+
+    // As '\substr' is an absolute function name, and already
+    // exists once PHP starts up, no call to the autoloader happens
+    echo "absolute substr: " . \substr("haystack", 3) . "\n";
+
+    // The function 'Bar\strcmp' is imported as an absolute function name,
+    // so no global fallback occurs. There is a single call to the function
+    // autoloader to load 'Bar\strcmp' and then the program errors due to
+    // an "undefined function Bar\strcmp"
+    strcmp('aaa', 'bbb');
+}
+
+// Output is:
+//
+// strlen length is 6
+// function loader called with 'Foo\strpos'
+// pos position is 3
+// pos position is 3
+// pos position is 3
+// pos position is 3
+// absolute substr: stack
+// function loader called with 'Bar\strcmp'
+//
+// Fatal error: Uncaught Error: Call to undefined function Bar\strcmp()
+</PHP>
+
+===== Backward Incompatible Changes =====
+
+Passing <php>spl_autoload_call()</php> to <php>spl_autoload_unregister()</php> is deprecated.
+
+===== Proposed PHP Version =====
+
+Next minor version, i.e. PHP 8.3.
+
+
+===== Open Issues =====
+
+==== Accuracy of the naming ====
+
+The use of the word ''class'' in the API is currently accurate, but it seems likely that at some point PHP will have type aliases e.g.
+
+<PHP>
+type number = int | float;
+</PHP>
+
+When that happens, and you have some code that uses that type alias:
+
+<PHP>
+function add(number $x, number $y) {
+    return $x + $y;
+}
+</PHP>
+
+then if the type alias hadn't already been loaded, PHP would need to load it.
+
+Loading any of parameter, return, or property type would need to go through the callback that is passed to <php>autoload_register_class()</php>, but as 'number' would be a type alias rather than a class, that would be a slightly incorrect name.
+
+It may be eventually more accurate to use the word ''type'' rather than ''class'' i.e. <php>autoload_register_type()</php>, but it's probably more confusing right now.
+
+===== Future scope =====
+
+==== Higher performance through maps ====
+
+There is an ongoing conversation, and a [[previous RFC|https://wiki.php.net/rfc/autoload_classmap]] about adding functions to have a native classmap/functionmap/typemap resolver written in C. That is outside the scope of this RFC.
+
+====== Deprecating the SPL autoloader functions ======
+
+Although at some point the current SPL autoloader functions could be deprecated and then removed in a later version of PHP, there is little cost in leaving those functions as aliases (and an internally redirected call) to the updated functions. Because of that, this RFC does not propose deprecating them in PHP 8.3, and instead leaves that to a future RFC.
+
+====== Constant and stream autoloading ======
+
+It would be possible to add autoloading for constants and streams, however to limit the scope of this RFC it only adds support for functions.
+
+
+===== F.A.Q. =====
+
+==== Why change the function names from SPL? ====
+
+At some point, the SPL may be decoupled from PHP core. As autoloading should be part of core PHP, and not part of a library, moving the function names to not include SPL seems appropriate.
+
+==== Is the behaviour of class autoloading changed? ====
+
+No. At least, not intentionally other than deprecating the magic behaviour of autoload_unregister_class when it is passed a special value, to unregister all class loaders, everything should work the same. If you see a change, please report a bug.
+
+==== Why the separate autoloader callbacks? ====
+
+=== Performance ===
+
+By having separate autoloader callbacks for functions and classes, there is a tiny performance gain in not having to check what the type is inside the callback.
+
+Although this is trivial per application, as it would benefit every PHP application that uses autoloading this is probably a non-trivial amount of energy saved.
+
+=== Future proof internally ===
+
+Currently the two autoloaders (class and function) have the same signature.
+
+It is possible to imagine that an autoloader for a different feature, might require a different signature for the autoloader.
+
+One example would be a hypothetical implementation for supporting generics;
+
+<PHP>
+
+function my_generic_autoloader(string $name, string ...$types) {
+	// generate code for generic class on the fly from a template
+}
+
+autoload_register_generic_generator(my_generic_autoloader(...));
+
+
+$intStack = new GenericStack<int>();
+// This calls my_generic_autoloader with the parameters 'GenericStack' and 'int'
+</PHP>
+
+
+Having the different autoloader by separate callbacks avoids the future problem of trying to hack around the parameters having different values/meanings depending on the feature being loaded.
+
+=== Future proof for users ===
+
+As there would be two features that are autoloadable, some people would write their code like this:
+
+<PHP>
+function my_autoloader(string $name, Type $type)
+{
+	if ($type === Type::function) {
+		// do your function autoloading here..
+	} else {
+		// Well it must be a class!
+	}
+}
+</PHP>
+
+
+This code would need updating when a new feature was autoloadable. By having the separate callbacks, each of those callbacks will only ever receive the feature it is designed to work with.
+
+Designing the API to be safer from accidental misuse, is probably a good idea.
+
+=== What if I really would prefer an API that went through a single function? ===
+
+That can be done in userland like this:
+
+<PHP>
+enum Type {
+    case Class;
+    case Function;
+}
+
+function my_autoloader(string $name, Type $type)
+{
+	if ($type === Type::function) {
+		// do your function autoloading here..
+	} else if ($type === Type::class) {
+		// do your class autoloading here..
+	} else {
+		// Unknown type, throw error...
+	}
+}
+
+function my_function_loader(string $function_name) {
+	return my_autoloader(function_name, Type::function)
+}
+
+
+function my_class_loader(string $class_name) {
+	return my_autoloader(function_name, Type::class)
+}
+
+autoload_register_function(my_function_loader(...));
+autoload_register_class(my_class_loader(...));
+</PHP>
+
+=== What is the change in performance overhead for function autoloading? ===
+
+For programs that do not have a function autoloader registered, there will be no autoloader to dispatch, so there will be almost no performance change.
+
+Whether or not a fuction autoloader is registered, resolving the function is only done once per function per namespace, assuming the function is either loaded or resolved through the global fallback.
+
+As the code example shows, after a successful attempt to autoload a function in a namespace, or the global function fallback occurs, the function is 'pinned' to that function, and subsequent use doesn't trigger autoloading.
+
+It is possible to trigger the autoloader multiple times for the same class/function if you catch the Error for class/function not found, and repeat the attempt to use the class/function that doesn't exist, but that is outside of most normal coding practices.
+
+===== Proposed Voting Choices =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+<doodle title="Accept New core autoloading mechanism with support for function autoloading RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Implementation =====
+
+GitHub pull request: https://github.com/php/php-src/pull/8294
+
+After the project is implemented, this section should contain
+
+  * the version(s) it was merged into
+  * a link to the git commit(s)
+  * a link to the PHP manual entry for the feature
+
+===== References =====
