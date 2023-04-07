@@ -7,11 +7,30 @@
 
 ===== Introduction =====
 
-With the advent of standards using quasi-immutable objects, like [[https://www.php-fig.org/psr/psr-7/|PSR-7]], "wither" methods became increasingly widely used. Even though [[rfc:readonly_properties_v2|PHP RFC: Readonly properties 2.0]] provided a foundational building block for quasi-immutable objects, it didn't provide any easy way to modify readonly properties during cloning. Until now, this problem made it very cumbersome to use readonly properties for any non-basic use-cases.
+With the advent of standards promoting "quasi-immutable" objets, like [[https://www.php-fig.org/psr/psr-7/|PSR-7]], "wither" methods became increasingly widely used. This practice is the "de facto" standard to modify the object state without altering the currently existing references to an object. A "wither" method copy-pasted from [[https://github.com/laminas/laminas-diactoros/blob/da227941abf1216f082535aacabc20759189d017/src/Response.php#L147|Diactoros]] basically looks like this:
+
+<code php>
+class Response implements ResponseInterface {
+    // ...
+    public function withStatus($code, $reasonPhrase = ''): Response
+    {
+        $new = clone $this;
+        $new->setStatusCode($code, $reasonPhrase);
+        return $new;
+    }
+    // ...
+}
+</code>
+
+"Quasi-immutable" above denotes the fact that these objects are not entirely immutable, since workarounds exist to modify their state. As of PHP 8.1 though, [[rfc:readonly_properties_v2|PHP RFC: Readonly properties 2.0]] provides a foundational building block for preventing these workarounds: by adding the ''readonly'' modifier to a property, one can make sure that once initialized, it cannot be modified anymore. This would allow PSR-7 implementations to properly enforce their immutability.
+
+Unfortunately, readonly properties had too strict constraints before PHP 8.3: they were readonly at the class level, while in practice, they should rather have been at the object level. The former effectively means that after initialization, a property is unmodifiable, while the latter means that it is unmodifiable during the life-cycle on an object.
+
+Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was accepted for PHP 8.3, readonly properties became
 
 ===== Proposal =====
 
-The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods with less code, no matter if the properties in question are readonly or non-readonly.
+The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods with less code, no matter if the properties in question are readonly or not. Since readonly properties are now modifiable during cloning, this syntax would allow them to be reassigned without. 
 
 ===== Reflection =====
 
