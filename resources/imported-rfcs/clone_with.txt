@@ -22,15 +22,35 @@ class Response implements ResponseInterface {
 }
 </code>
 
-By using this approach, one can effectively implement immutable classes. As the "quasi" above indicates it, they are not entirely immutable, since workarounds exist to modify the state of these objects even with our efforts. As of PHP 8.1 though, [[rfc:readonly_properties_v2|PHP RFC: Readonly properties 2.0]] provides a foundational building block for preventing these workarounds: by adding the ''readonly'' modifier to a property, one can make sure that once initialized, it cannot be modified anymore. This would allow PSR-7 implementations to properly enforce their immutability.
+By using this approach, one can effectively implement immutable objects. As the "quasi" above indicates, these objects are not entirely immutable, since workarounds exist for modifying their state. As of PHP 8.1 though, [[rfc:readonly_properties_v2|PHP RFC: Readonly properties 2.0]] provides a foundational building block for preventing these workarounds: by adding the ''readonly'' modifier to a property, one can make sure that once initialized, it cannot be modified anymore. This would allow PSR-7 implementations to properly enforce their immutability.
 
-Unfortunately, PSR-7 implementations cannot make use of readonly properties, unless they employ a cumbersome workaround: by always instantiating a new class instance rather than using cloning as described above. This is because readonly properties have too strict constraints: they are readonly at the property level, while in order to be useful in practice, they should be only at the object level. The former means that after initialization, a property is unmodifiable throughout its entire life span, while the latter means that it is unmodifiable during the life cycle of an object.
+Unfortunately, PSR-7 implementations cannot make use of readonly properties yet, unless they always instantiate a new class instance rather than using cloning as described above. This cumbersome workaround would be required because readonly properties have too strict constraints: they are readonly at the property level, while in order to be useful in practice, they should be readonly only at the object level. The former means that after initialization, a property is unmodifiable throughout its entire life span, while the latter means that it is unmodifiable during the life cycle of an object. The main difference between the two approaches is whether a property is modifiable after the object is cloned.
 
-Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was (partially) accepted for PHP 8.3, readonly properties became modifiable during the execution of the ''__clone()'' magic method. This was the first step towards achieving object-level readonliness, however the general problem was not solved yet.
+Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was (partially) accepted for PHP 8.3, readonly properties became modifiable during the execution of the ''__clone()'' magic method, allowing deep cloning of readonly properties. This was the first step towards achieving object-level readonliness, however the general problem of supporting safe modification of readonly properties was not solved yet.
 
 ===== Proposal =====
 
-The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods with less code, no matter if the properties in question are readonly or not. Since readonly properties are now modifiable during cloning, this syntax would allow them to be reassigned without. 
+The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods with less code, no matter if the modified properties are readonly or not. 
+
+Using "clone with", the above example can be rewritten as
+
+<code php>
+class Response implements ResponseInterface {
+    // ...
+    public function withStatus($code, $reasonPhrase = ''): Response
+    {
+        return clone $this with {
+            code: $ode,
+            reasonPhrase: $reasonPhrase
+        };
+    }
+    // ...
+}
+</code>
+
+In case of readonly properties, this syntax expresses that
+
+Since readonly properties are now modifiable during cloning, this syntax would allow them to be reassigned without. 
 
 ===== Reflection =====
 
