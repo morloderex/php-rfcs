@@ -11,11 +11,14 @@ With the advent of standards promoting "quasi-immutable" objects, like [[https:/
 
 <code php>
 class Response implements ResponseInterface {
+    public int $statusCode;
+    public string $reasonPhrase;
     // ...
     public function withStatus($code, $reasonPhrase = ''): Response
     {
         $new = clone $this;
-        $new->setStatusCode($code, $reasonPhrase);
+        $new->statusCode = $code;
+        $new->reasonPhrase = $reasonPhrase;
         return $new;
     }
     // ...
@@ -30,17 +33,19 @@ Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was (partially) a
 
 ===== Proposal =====
 
-The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods with less code, no matter if the modified properties are readonly or not. 
+The current proposal aims to add support for a new language construct called "clone with" by extending the ''clone'' operator, that would make it possible to write "wither" methods for any kind of instance properties (typed/untyped, readonly/non-readonly) with less code.
 
-Using "clone with", the above example can be rewritten as
+Using "clone with", the above example can be rewritten the following way:
 
 <code php>
 class Response implements ResponseInterface {
+    public readonly int $statusCode;
+    public readonly string $reasonPhrase;
     // ...
     public function withStatus($code, $reasonPhrase = ''): Response
     {
         return clone $this with {
-            code: $ode,
+            statusCode: $code,
             reasonPhrase: $reasonPhrase
         };
     }
@@ -48,9 +53,40 @@ class Response implements ResponseInterface {
 }
 </code>
 
-In case of readonly properties, this syntax expresses that
+This syntax expresses that the ''Response::$statusCode'' and ''Response::$reasonPhrase'' properties are  modified right after ''$this'' is cloned, leaving the original object intact. This way, it becomes possible to atomically clone and modify readonly properties multiple times:
 
-Since readonly properties are now modifiable during cloning, this syntax would allow them to be reassigned without. 
+<code php>
+$response = new Response(200);
+$response->withStatus(201)->withStatus(202);
+</code>
+
+Furthermore, "clone with" respects visibility rules and type constraints, just like how any regular assignment does:
+
+<code php>
+class Foo {
+    public int $a;
+    protected int $b;
+    private $c;
+    public readonly int $d;
+}
+
+class Bar extends Foo {
+    public function withC() {
+        return clone $this with {c: 1};
+    }
+
+    public function withD() {
+        return clone $this with {d: 1};
+    }
+}
+
+$bar = new Bar();
+
+clone $bar with {a: "abc"} // Fatal error due to type mismatch
+clone $bar with {b: 1}     // Fatal error due to accessing a protected property from the global scope
+$bar->withC();             // Fatal error due to accessing a private property from a child class
+$bar->withD();             // Fatal error due to modifying a readonly property from a child class
+</code>
 
 ===== Reflection =====
 
