@@ -134,7 +134,7 @@ Default values are assigned to the property without invoking hooks.  While that 
 
   - Performance, as 99.99% of the time the default value will be valid.
   - 99.99% of the time, the default value will be valid unless the developer was especially lazy.
-  - There are very rare edge cases where having an out-of-validity default value may be appropriate, and the developer is doing so deliberately and consciously.
+  - Running hooks on object creation results in similar order-of-actions questions as [[https://wiki.php.net/rfc/new_in_initializers#unsupported_positions|non-static initializers on properties]].  In short, since hook bodies can be arbitrary code they could cause arbitrary side effects, and it is not at all clear what the lest-surprising way of handling that is.  The new-in-intializers RFC opted to avoid the issue entirely, and we believe that is the best course of action here as well.
 
 ==== get and set ====
 
@@ -202,7 +202,7 @@ $u->fullName = 'Ilija Tovilo';
 print $u->getFirst();
 </code>
 
-The ''set'' hook body is an arbitrarily complex method body, which accepts one argument and has a void return.  The argument is implicitly typed to the same type as the property, but may not be specified explicitly.
+The ''set'' hook body is an arbitrarily complex method body, which accepts one argument.  The argument is implicitly typed to the same type as the property, but may not be specified explicitly.  Its return type is unspecified, and will be silently discarded.
 
 ILIJA: I'm still open to allowing this to be enforced on return, not on set, so that the set hook can type-normalize a value.  Is that doable? Can I convince you to allow that?
 
@@ -301,7 +301,7 @@ $p->name = 'Larry';
 $p->save();
 </code>
 
-The ''afterSet'' hook body is an arbitrarily complex method body, which accepts one untyped argument and is return void.
+The ''afterSet'' hook body is an arbitrarily complex method body, which accepts one untyped argument.  Its return value, if any, will be silently discarded.
 
 Specifying the argument name is optional.  If not specified, it defaults to ''$value''.
 
@@ -404,7 +404,7 @@ class User
         get => $this->first . " " . $this->last;
         set => [$this->first, $this->last] = explode(' ', $value);
         beforeSet => \ucfirst($value);
-        afterSet => $this->modified['first'] = true && $this->modified['last'] = true;
+        afterSet => $this->modified['first'] = true = $this->modified['last'] = true;
     }
 
     public function __construct(private string $first, private string $last) {}
@@ -501,7 +501,7 @@ class C extends P
 }
 </PHP>
 
-The example shown here is essentially a "no op" implementation, but demonstrates how a property in a child class may add get/set hooks without having to implement its own storage.  If the parent property has no hooks (it is using automatic storage), a pass-through ''get'' and ''set'' hook is generated so the above code will always work.
+The example shown here is essentially a "no op" implementation, but demonstrates how a property in a child class may add get/set hooks without having to implement its own storage.  If the parent property has no hooks (it is using automatic storage), the ''get()'' and ''set()'' operations will work directly on the parent's stored property.
 
 A more realstic example could be:
 
@@ -550,7 +550,7 @@ class Manager extends User
 
 A property may also be declared ''final''.  That has the effect of declaring all existing hooks ''final'' (if any), and forbidding a child class from declaring additional hooks.
 
-Declaring hooks ''final'' on a property that is declared ''final'' is redundant will throw an error.
+Declaring hooks ''final'' on a property that is declared ''final'' is redundant will throw an error.  (Note this is not a BC break, as final properties are only introduced by this RFC.)
 
 <PHP>
 class User 
@@ -712,17 +712,17 @@ class PoodleOwner extends DogOwner
 
 ==== Property magic constant ====
 
-Within a property hook, the special constant <php>__PROPERTY__</php> is automatically defined.  Its value will be set to the name of the property.  This is mainly useful for repeating self-referential code.  See the "ORM change tracking" example below for a complete use case.
+Within a property hook, the special constant <php>__PROPERTY__</php> is automatically defined.  Its value will be set to the name of the property.  This is mainly useful for repeating self-referential code.  See the "cached drived property" example below for a complete use case.
 
 ==== Interaction with asymmetric visibility ====
 
-Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibilitiy on the ''get'' or ''set'' hook.
+Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibility on the ''get'' or ''set'' hook.
 
 That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
 
-However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate much more complex logic for both the engine and developers to determine if references should or should not be disabled on a property.  Both are poor options.
+However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate more complex syntax to determine if references should or should not be disabled on a property.  Both are poor options.
 
-For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the only viable option.
+For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the only reasonable option.
 
 ==== Interaction with readonly ====
 
@@ -820,6 +820,10 @@ If an empty array is returned, it means there are no hooks defined.
 ''\ReflectionProperty'' also has a method ''getHook(string $hook): ?\ReflectionMethod'', which will return the corresponding ''\ReflectionMethod'' object, or null if it is not defined.
 
 The returned ''\ReflectionMethod'' objects will have the class the property is on as its declaring class (returned by ''getDeclaringClass()''.  Its return and parameter types will be as defined by the rules above in the hooks section.
+
+Hooks defined by a parent class's property will be included and available in both cases, the same as if they were defined on the property directly, unless overridden in the child class.
+
+Additionally, ''\ReflectionProperty'' is given a new method ''isVirtual(): bool'', which returns ''true'' if the property has no backing value, and ''false'' if it does.  (That is, all existing properties without hooks will return ''false''.)
 
 ===== Usage examples =====
 
