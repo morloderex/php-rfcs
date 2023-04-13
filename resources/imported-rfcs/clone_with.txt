@@ -60,6 +60,8 @@ $response = new Response(200);
 $response->withStatus(201)->withStatus(202);
 </code>
 
+==== Constraints ====
+
 Furthermore, "clone with" respects all visibility rules and type constraints, just like how regular assignments do:
 
 <code php>
@@ -88,6 +90,56 @@ $bar->withC();             // Exception due to accessing a private property from
 $bar->withD();             // Exception due to assigning a readonly property from a child class
 clone $bar with {e: []};   // Deprecation notice due to assigning to a dynamic property
 </code>
+
+==== Property name expressions ====
+
+So far, all "clone with" examples introduced in the current RFC used fixed property names which were referenced as identifiers followed by a colon ('':''), while the values to be assigned were expressions. This syntax is a very straightforward and concise way for the most basic case when "clone with" operates on a known property.
+
+However, in some cases it would be useful to reference property names as expressions, e.g. when one needs to use "clone with" in a foreach loop where the index is the property name and the loop variable is the value to be assigned. This is also possible using a slightly more verbose syntax:
+
+<code php>
+class Foo {
+    private $a;
+    private $b;
+    private $c;
+
+    /**
+     * @param array<string, mixed> $properties
+     */
+    public function withProperties(array $properties) {
+        $self = clone $this;
+
+        foreach ($properties as $name => $value) {
+            $self = clone $this with {$name => $value};
+        }
+
+        return $self;
+    }
+}
+
+$foo = new Foo();
+$foo->withProperties(["a" => 1, "b" => 2, "c" => 3]);
+</code>
+
+This time, both side of the assignment is an expression, separated by ''=>''. Not only variables, but any kind of expressions strictly evaluating to a string type are possible to use:
+
+<code php>
+$object = new stdClass();
+
+$object = clone $object with {"foo" => 1}; // the property name is a literal
+$object = clone $object with {strtolower("FO") . "o" => 1}; // the property name is an expression
+$object = clone $object with {PROPERTY_NAME => 1}; // the property name is a named constant
+</code>
+
+The last example demonstrates well why it's necessary to use different separator tokens (''=>'' vs. '':'') for the two cases: otherwise it wouldn't be clear if one references the property name indirectly via a global constant (the value of ''PROPERTY NAME'') or directly as an identifier (the ''$PROPERTY_NAME'' property).
+
+===== Rationale =====
+
+===== Why does "clone with" support two syntaxes? =====
+
+It's because the most often used  syntax ('':'')
+
+===== What about other implementations? =====
 
 ===== Reflection =====
 
