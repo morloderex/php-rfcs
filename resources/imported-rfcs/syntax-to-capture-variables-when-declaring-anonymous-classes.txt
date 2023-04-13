@@ -42,8 +42,9 @@ To transform the ''use'' clause into a regular anonymous class declaration, foll
   - For each captured variable in the use clause, add it as a parameter to the anonymous class constructor.
   - Declare a property with the same name as the captured variable in the anonymous class.
   - Set the default visibility of the property to ''public'' and the default type to ''mixed'' if not specified in the use clause (see below).
+  - If the anonymous class extends another class and a public or protected property with the same name exists on that parent class, the property declaration should be skipped unless the variable is explicitly aliased to a property (see below).
   - In the constructor, assign the captured variable to the corresponding property.
-  - If the anonymous class extends another class, list all parameters of the parent constructor after the parameters coming from captured variables and call the parent constructor with them, including implicit variadic values.
+  - If the anonymous class extends another class, list all parameters of the parent constructor after the parameters coming from captured variables and call the parent constructor with them, including implicit variadic values. Parameters from the parent that have the same name as captured parameters should be listed only once on the resulting constructor.
 
 By default, captured variables are declared as ''public mixed''. However, the proposal allows for refining the visibility and type by using an extended syntax; it also allows for capturing by reference:
 <code php>
@@ -61,9 +62,19 @@ new class($foo, $bar, $biz, $a, $b) extends Foo {
 
 ===== Conflict Resolution =====
 
-To prevent conflicts, declaring both a constructor and a use clause should raise an error.
+Because anonymous classes are implemented as real classes with a special name in the PHP engine, they cannot hold any state by themselves. This means that the only way to bind a value to an instance of a class is via a property. No other storage is possible at the class level because that would create a memory leak since captured values could never be released.
 
-An error should also be raised if the name of a captured variable collides with the name of a parameter of the parent constructor.
+The proposed syntax avoids this issue by defining how a ''use'' statement could be turned into a regular constructor. If we were to allow declaring both ''use'' and ''%%__construct%%'' together, we would then need to define how to merge both. This would introduces a lot of extra cases to handle:
+
+  * If there's no constructor, create one;
+  * If there is a constructor with other arguments, merge the argument lists; since there will then be an explicit argument list to "new
+class()", merge those lists as well;
+  * Maybe different handling if those other arguments are already using constructor promotion, so merge those too;
+  * If there are existing lines in the constructor body, combine those with the auto-generated assignments.
+
+That's a lot of added complexity for a syntax that aims at reducing code boilerplate.
+
+To skip this complexity and also because declaring a ''use'' while also declaring a constructor should save little to no boilerplate, this RFC specifies that declaring both a constructor and a ''use'' clause should raise an error.
 
 ===== Backward Incompatible Changes =====
 
