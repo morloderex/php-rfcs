@@ -121,28 +121,11 @@ For a property to use a hook, it must replace its trailing '';'' with a code blo
 
 Hooks may not be applied to properties typed ''array''.  See the section below for an explanation.
 
-Of note, a default value for the property, if any, goes before the hook list.  That is:
-
-<PHP>
-class Point {
-    public int $x = 5 { beforeSet => $value ?: throw new \InvalidArgumentException(); }
-    public int $y = 5 { beforeSet => $value ?: throw new \InvalidArgumentException(); }
-}
-</PHP>
-
-Default values are assigned to the property without invoking hooks.  While that technically means they bypass any validation done in a ''beforeSet'' hook (see below), we believe that is the best course of action for three reasons:
-
-  - Performance, as 99.99% of the time the default value will be valid.
-  - 99.99% of the time, the default value will be valid unless the developer was especially lazy.
-  - Running hooks on object creation results in similar order-of-actions questions as [[https://wiki.php.net/rfc/new_in_initializers#unsupported_positions|non-static initializers on properties]].  In short, since hook bodies can be arbitrary code they could cause arbitrary side effects, and it is not at all clear what the lest-surprising way of handling that is.  The new-in-intializers RFC opted to avoid the issue entirely, and we believe that is the best course of action here as well.
-
 ==== get and set ====
 
 The ''get'' and ''set'' hooks overwrite the PHP default read and write behavior.  They may be implemented individually or together.  If either one is implemented, PHP will not create any storage property on the object.  The developer is on their own to implement whatever storage behavior is appropriate.
 
 A property that implements either a ''get'' or ''set'' hook is known as a "virtual property", as it has no materialized stored value by default.
-
-Virtual properties may not have default values.  Trying to define a default value on a virtual property will result in a compile error.
 
 === get ===
 
@@ -853,6 +836,16 @@ class User
 </code>
 
 Which is, all things considered, not too bad for the level of power it gives.
+
+==== Default values ====
+
+Default values on properties that implement hooks are not supported.  The main reason is the confusion and complexity around the question of when hooks should run; before or after the value is assigned?  Running hooks on object creation results in similar order-of-actions questions as [[https://wiki.php.net/rfc/new_in_initializers#unsupported_positions|non-static initializers on properties]].  In short, since hook bodies can be arbitrary code they could cause arbitrary side effects, and it is not at all clear what the lest-surprising way of handling that is.  The new-in-intializers RFC opted to avoid the issue entirely, and we believe that is the best course of action here as well.
+
+In practice, we do not expect this to be a significant issue, for a number of reasons.
+
+  - Default values make no logical sense on properties that implement a <php>get</php> or <php>set</php> hook.
+  - Default values may still be assigned in a constructor, in which case the order-of-actions question is self-evident and obvious.
+  - Default values may still be provided on a constructor promoted property that implements hooks.  That is because property promotion desugars to defining the property with no default, and then assigning a value to it in the constructor.  If the constructor happens to contain a default, that's fine.  The order-of-actions question is again self-evident and obvious.  (Including that hooks will run on the value as it is assigned.)
 
 ==== Interaction with serialization ====
 
