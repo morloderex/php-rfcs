@@ -1,1 +1,100 @@
-**Moved to https://wiki.php.net/rfc/property-capture**
+====== PHP RFC: Syntax to Capture Variables when Declaring Anonymous Classes ======
+
+  * Version: 1.0
+  * Date: 2023-04-13
+  * Author: Rowan Collins <rowan.collins@gmail.com>, Nicolas Grekas <nicolasgrekas@php.net>
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/syntax-to-capture-variables-when-declaring-anonymous-classes
+  * Implementation: TBD
+
+===== Introduction =====
+
+This RFC proposes the addition of an inline syntax for lexical (captured) variables when declaring anonymous classes in PHP. The goal is to simplify anonymous class declarations and make them more concise by allowing developers to capture variables from the outer scope directly.
+
+===== Proposed Syntax =====
+
+The proposed syntax adds a ''use'' clause to the anonymous class declaration, which captures the specified variables from the outer scope.
+<code php>
+new class($a, $b) use ($outer) extends Foo {
+    public function getIt() {
+        return $this->outer;
+    }
+}
+</code>
+
+This syntax is equivalent to the following:
+<code php>
+new class($outer, $a, $b) extends Foo {
+    public function __construct(public mixed $outer, $a, $b) {
+        parent::__construct($a, $b);
+    }
+
+    public function getIt() {
+        return $this->outer;
+    }
+}
+</code>
+
+===== Transformation Rules =====
+
+To transform the ''use'' clause into a regular anonymous class declaration, follow these rules:
+
+  - For each captured variable in the use clause, add it as a parameter to the anonymous class constructor.
+  - Declare a property with the same name as the captured variable in the anonymous class.
+  - Set the default visibility of the property to ''public'' and the default type to ''mixed'' if not specified in the use clause (see below).
+  - In the constructor, assign the captured variable to the corresponding property.
+  - If the anonymous class extends another class, list all parameters of the parent constructor after the parameters coming from captured variables and call the parent constructor with them, including implicit variadic values.
+
+By default, captured variables are declared as ''public mixed''. However, the proposal allows for refining the visibility and type by using an extended syntax; it also allows for capturing by reference:
+<code php>
+new class($a) use ($foo as private int $counter, $bar as readonly string, &$biz) extends Foo {}
+</code>
+
+The above example is equivalent to:
+<code php>
+new class($foo, $bar, $biz, $a, $b) extends Foo {
+    public function __construct(private int $counter, public readonly string $bar, public mixed &$biz, $a, $b) {
+        parent::__construct($a, $b);
+    }
+}
+</code>
+
+===== Conflict Resolution =====
+
+To prevent conflicts, declaring both a constructor and a use clause should raise an error.
+
+An error should also be raised if the name of a captured variable collides with the name of a parameter of the parent constructor.
+
+===== Backward Incompatible Changes =====
+
+This proposal introduces a new syntax for capturing variables in anonymous class declarations. It should not introduce any backward incompatible changes, as it does not affect existing code or syntax.
+
+===== Proposed PHP Version(s) =====
+
+This feature is proposed for the next minor version of PHP after the approval of this RFC, likely PHP 8.3.
+
+===== RFC Impact =====
+
+==== To Existing Extensions ====
+
+There should be no impact on existing extensions.
+
+==== To Opcache ====
+
+There should be no impact as the proposed syntax can be transformed at compile time into an equivalent existing AST.
+
+===== Open Issues =====
+
+None at the moment.
+
+===== Future Scope =====
+
+Possibly figure out a way to allow declaring both a ''use'' and a constructor.
+
+===== Voting =====
+
+The voting period starts on YYYY-MM-DD and ends on YYYY-MM-DD.
+
+===== Implementation =====
+
+TBD
