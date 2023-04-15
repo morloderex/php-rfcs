@@ -1,6 +1,6 @@
-====== PHP RFC: Property Capture for Anonymous Classes ======
-  * Version: 0.3
-  * Date: 2023-04-23
+====== PHP RFC: Your Title Here ======
+  * Version: 0.1
+  * Date: 2023-04-15
   * Author: Rowan Tommins (imsop@php.net)
   * Thanks: Nicolas Grekas (nicolasgrekas@php.net), Ilija Tovilo (tovilo.ilija@gmail.com)
   * Status: Draft
@@ -8,33 +8,13 @@
 
 ===== Introduction =====
 
-This RFC proposes the addition of an inline syntax for lexical (captured) variables when declaring anonymous classes in PHP. The goal is to simplify anonymous class declarations and make them more concise by allowing developers to capture variables from the outer scope directly. 
-
 Anonymous classes were introduced in PHP 7.0, using a syntax that allows declaring a class definition and constructing an instance in a single statement. However, unlike anonymous functions, it is not easy to "capture" values from the parent scope for use inside the class; they can only be passed in via an explicit constructor or other method.
 
 This RFC proposes a "property capture" syntax, where a property can be declared and initialised with <php>$instance = new class use($captured) {};</php> Optional access modifiers, type, and renaming are also supported, e.g. <php>$instance = new class use($localName as private readonly int $propertyName) {};</php>
 
-===== Semantics =====
-
-Capturing variables into an anonymous class instance requires two things:
-
-  - A way to refer to the captured variables inside the //class definition//, which is compiled once, when the statement is first run
-  - A way to associate values with these variables for //a particular instance//, which will vary each time the statement is run
-
-Rather than inventing new syntax and semantics for these, this proposal reuses existing object properties and constructor parameters, as follows:
-
-  - If a ''use'' clause is present, generate an empty constructor which will be added to the anonymous class.
-  - For each captured variable in the ''use'' clause, add it as a parameter to the constructor.
-  - Declare a property with the same name as the captured variable in the anonymous class, unless renamed in the ''use'' clause (see below).
-  - Set the default visibility of the property to ''public'' and the default type to ''mixed'' if not specified in the ''use'' clause (see below).
-  - In the constructor body, assign the captured variable to the corresponding property.
-  - When creating an //instance// of the anonymous class, pass the variables listed as parameters to the constructor.
-
-The implementation reuses a lot of mechanics from the existing Constructor Property Promotion mechanism, but this is considered an implementation detail, not a functional guarantee.
-
 ===== Syntax =====
 
-A new //''use'' clause// is introduced, immediately after the keywords "new class", with the syntax ''use ([&]<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
+A new "use clause" is introduced, immediately after the keywords "new class", with the syntax ''use (<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
 
 ==== Basic Form ====
 
@@ -52,374 +32,76 @@ This declares a class with public untyped properties ''$foo'' and ''$bar'', and 
 $foo = 1;
 $bar = 2;
 $anon = new class($foo, $bar) {
-    var $foo;
-    var $bar;
-    
+    public $foo;
+    public $bar;
     public function __construct($foo, $bar) {
         $this->foo = $foo;
         $this->bar = $bar;
     }
 };
 </code>
+
+==== Visibility Modifiers ====
 
 ==== Renaming ====
 
-By default, the property takes the same name as the outer variable, but this can be over-ridden using the syntax ''$varName as $propName''. This also allows the same local variable to be captured as the initial value for more than one property. For example:
-
-<code php>
-$foo = 1;
-$bar = 2;
-$anon = new class use ($foo as $one, $bar as $two, $bar as $three) {};
-</code>
-
-Is equivalent to:
-
-<code php>
-$foo = 1;
-$bar = 2;
-$anon = new class($foo, $bar, $bar) {
-    var $one;
-    var $two;
-    vat $three;
-    
-    public function __construct($one, $two, $three) {
-        $this->one = $one;
-        $this->two = $two;
-        $this->three = $three;
-    }
-};
-</code>
-
-==== Modifiers and Type ====
-
-The ''as'' keyword can also be used to modify the visibility and/or type of the declared property, either instead of or as well as renaming the property.
-
-The modifiers allowed are the same as for Constructor Property Promotion, which is used internally to declare the properties; that is currently:
-
-  * One of ''public'', ''protected'', or ''private''
-  * Optional ''readonly'', which must be combined with a type specification
-  * A type specification
-
-For example:
-
-<code php>
-$foo = 1;
-$bar = 2;
-$anon = new class use ($foo as private, $bar as protected readonly int, $bar as ?int $alsoBar) {};
-</code>
-
-Is equivalent to:
-
-<code php>
-$foo = 1;
-$bar = 2;
-$anon = new class($foo, $bar, $bar) {
-    private $foo;
-    protected readonly int $bar;
-    var ?int $alsoBar;
-    
-    public function __construct($foo, $bar, $alsoBar) {
-        $this->foo = $foo;
-        $this->bar = $bar;
-        $this->alsoBar = $alsoBar;
-    }
-};
-</code>
-
-==== Capture by Reference ====
-
-It is possible to capture a variable by reference, by prefixing it with <php>&</php>. For example:
-
-<code php>
-$foo = 1;
-$anon = new class use (&$foo as $fooProp) {};
-$foo = 2;
-echo $anon->fooProp;
-</code>
-
-Will print <php>2</php>. It is equivalent to:
-
-<code php>
-$foo = 1;
-$anon = new class($foo) {
-    var $one;
-    
-    public function __construct(&$one) {
-        $this->one =& $one;
-    }
-};
-$foo = 2;
-echo $anon->fooProp;
-</code>
-
-===== Examples =====
-
-**TODO - expand**
-
-Create a struct-like object with readonly public properties:
-
-<code php>
-$id = get_next_id();
-$name = get_name();
-$user = new readonly class use ($id, $name) {};
-echo "{$user->id}: {$user->name}";
-$user->id = 42; // ERROR: Cannot modify readonly property $id
-</code>
-
-Decorate a [[https://www.php-fig.org/psr/psr-3/|PSR-3]] logger, adding some context to all entries logged:
-
-<code php>
-use Psr\Log\{LoggerInterface,LoggerTrait};
-
-function decorate_logger(LoggerInterface $logger, string $contextKey, mixed $contextValue): LoggerInterface {
-   return new class 
-        use ($logger as private $innerLogger, $contextKey as private, $contextValue as private) 
-        implements LoggerInterface
-   {
-        public function log($level, string|\Stringable $message, array $context = []): void {
-            $context[$this->contextKey] = $this->contextValue;
-            $this->innerLogger->log($level, $message, $context);
-        }
-   };
-}
-</code>
+===== Restrictions and Errors =====
 
 ===== Reflection =====
 
-The constructor, its parameters, and the properties, all appear as normal if the anonymous class is reflected, but can be detected with two new methods:
-
-  * ''ReflectionParameter::isCaptured(): bool''
-  * ''ReflectionProperty::isCaptured(): bool''
-
-Although internally they are declared using Constructor Property Promotion, the parameters and properties return ''false'' from ''ReflectionParameter::isPromoted'' and ''ReflectionProperty::isPromoted'', as they are not written that way by the user.
-
-The generated constructor itself is not marked, partly due to implementation concerns that a limited number of bits remain available in the ''fn_flags'' bitmask.
-
-===== Restrictions =====
-
-The following new errors follow from the use of properties, rather than a new mechanism, to access the captured values:
-
-  * "Redefinition of captured property", e.g. <php>new class use($foo, $foo) {}</php> or <php>new class use($foo as $a, $bar as $a) {}</php>
-  * "Captured property $a conflicts with existing property", e.g. <php>new class use($foo) { public $foo; }</php>
-
-The following new errors follow from the current implementation's use of a generated constructor:
-
-  * "Cannot declare custom constructor for anonymous class with captured properties", e.g. <php>new class use($foo) { public function __construct() {} }</php>
-  * "Cannot pass constructor arguments to anonymous class with captured properties", e.g. <php>new class($foo) use($bar) {}</php>
-
-Various alternatives to this restriction exist, discussed below. Throwing an Error now does not rule out any of these alternatives being implemented in future versions.
-
-==== Current Workaround ====
-
-The restrictions on custom constructors can be worked around by adding a normal instance method, and calling it immediately.
-
-That is, given a current definition like this:
-
-<code php>
-$anon = new class($a, $b, $c) extends SomeOtherClass {
-    private $a;
-    public function __construct($a, $b, $c) {
-        $this->a = $a;
-        do_something($b);
-        parent::__construct($c);
-    }
-};
-</code>
-
-You could instead write this:
-
-<code php>
-$anon = new class use($a) extends SomeOtherClass {
-    public function init($b, $c) {
-        do_something($b);
-        parent::__construct($c);
-    }
-};
-$anon->init($b, $c);
-</code>
-
-==== Alternative 1: Merging Constructors ====
-
-It would be possible in principle to detect an existing constructor, and merge both its argument list and body with the generated code. That is, the above example could be written as:
-
-<code php>
-# NOT supported in current proposal
-$anon = new class($b, $c) use($a) extends SomeOtherClass {
-    public function __construct($b, $c) {
-        do_something($b);
-        parent::__construct($c);
-    }
-};
-</code>
-
-The principle difficulty here is finding a point in the compilation process where the explicit constructor can be easily detected but still modified.
-
-It also leads to additional error conditions, which would give confusing errors if not specifically checked for:
-
-  * If too few or too many parameters are passed in the ''new class(...)'' list, they would interact with the generated parameters for captured properties.
-  * If the captured properties are added to the end of the parameter list, constructor parameters with default values would be disallowed.
-
-==== Alternative 2: Automatically Calling Parent Constructor ====
-
-Another possibility is that any parameters passed to the ''new class'' statement could be automatically passed to the parent constructor; so this:
-
-<code php>
-# NOT supported in current proposal
-$anon = new class($foo) use($bar) extends SomeOtherClass {};
-</code>
-
-would be equivalent to this:
-
-<code php>
-$anon = new class($foo, $bar) extends SomeOtherClass {
-    var $bar;
-    public function __construct($foo, $bar) {
-        $this->bar = $bar;
-        parent::__construct($foo);
-    }
-};
-</code>
-
-This seems to avoid the need to look up and manipulate the existing constructor definition, but discovering a parent constructor is actually even more difficult, as inheritance is only resolved after compilation. That leads to a few difficulties:
-
-  * It would be possible for the parent class to have a constructor with an incompatible signature, or no constructor at all
-  * The above example uses the input ''$foo'' to name the constructor parameter, but this could be any expression, e.g. <php>$anon = new class(42 + some_function()) use ($bar) extends SomeOtherClass {};</php>. As such, the parameters would actually have to use generated names of some sort.
-
-Again, this leads to new error conditions which may be hard to understand to a user who doesn't know the details of the implementation.
-
-It would also not be very consistent with the rest of the language, which neither generates nor requires calls to parent constructors.
-
-==== Alternative 3: Generating a Different Method ====
-
-Similar to the workaround above, the logic for setting captured property values could be generated in a method other than the constructor, e.g. ''%%__capture%%''. 
-
-That is, compile <php>$anon = new class use ($foo) {};</php> to this:
-
-<code php>
-$anon = new class {
-    var $foo;
-    public function __capture($foo) {
-        $this->foo = $foo;
-    }
-};
-$anon->__capture($foo);
-</code>
-
-That would allow this:
-
-<code php>
-# NOT supported in current proposal
-$anon = new class($b, $c) use($a) extends SomeOtherClass {
-    public function __construct($b, $c) {
-        do_something($b);
-        parent::__construct($c);
-    }
-};
-</code>
-
-To be equivalent to this:
-
-<code php>
-$anon = new class($b, $c) extends SomeOtherClass {
-    var $a;
-    public function __construct($b, $c) {
-        do_something($b);
-        parent::__construct($c);
-    }
-    public function __capture($a) {
-        $this->a = $a;
-    }
-};
-$anon->__capture($a);
-</code>
-
-The main complexity here is generating the additional method call - in the above example, it is shown as called on the local variable ''$anon'', but in practice, it could happen anywhere in an expression, e.g. <php>some_function(new class($a) use($b) { ... });</php>.
-
-==== Alternative 3b: Initialising Before the Constructor Call ====
-
-A variation on the above would be to inject the extra method call (or the assignments themselves) immediately //before// the constructor is called.
-
-Although it would give slightly nicer semantics, this would likely be even more challenging to implement, since the object creation and constructor call are both part of the ''NEW'' opcode handler, so the additional logic would need to be added there, or in variant with a new opcode.
-
-==== Alternative 4: Calling an Additional Magic Method ====
-
-Another variation would be to have the constructor generated as in the current implementation, but call out to another magic method for the user to define additional constructor behaviour, effectively:
-
-<code php>
-public function __construct($foo) {
-    $this->foo = $foo;
-    if ( method_exists($this, '__afterConstruct') ) {
-        $this->__afterConstruct();
-    }
-}
-</code>
-
-If arguments are not supported, the advantage of this over existing workarounds is very slight. If they are supported, it would run into many of the same difficulties outlined in previous sections.
-
 ===== Backward Incompatible Changes =====
-
-None. The new syntax is not currently valid PHP, and the behaviour of existing anonymous class declarations is unchanged.
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
 
 Next PHP 8.x (hopefully 8.3)
 
 ===== RFC Impact =====
-==== To Existing Extensions ====
+==== To SAPIs ====
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
-Extensions manipulating the AST may encounter the new node kinds ''ZEND_AST_PROP_CAPTURE_LIST'' and ''ZEND_AST_PROP_CAPTURE'', representing the list of properties and constructor parameters which are generated in the compiler.
+==== To Existing Extensions ====
+Will existing extensions be affected?
 
 ==== To Opcache ====
-None anticipated, but expert review on this point would be welcomed.
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
 
-===== Unaffected Functionality =====
+Please explain how you have verified your RFC's compatibility with opcache.
 
-All existing features of anonymous classes are retained, and can be combined with the new ''use'' clause, apart from the restrictions mentioned above. That includes:
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
 
-  * Inheriting parent classes
-  * Implementing interfaces
-  * Using traits
-  * Implementing any method other than ''%%__construct%%''
-  * Declaring the entire class ''readonly''
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
+
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
 
+==== Constructor Support ====
+
 ==== Arbitrary Expressions ====
 
-When a renamed property is indicated with the ''$variable as $property'' syntax, there is no technical need to name a local variable, rather than an arbitrary expression. In other words, it would be possible to allow this:
-
-<code php>
-$anon = new class use (self::ID as $id, get_some_value() * 2 as private $something) {};
-</code>
-
-Which would be equivalent to this:
-
-<code php>
-$anon = new class(self::ID, get_some_value() * 2) {
-    public function __construct(
-        public $id,
-        private $something
-    ) {}
-}
-</code>
-
-==== Extension to Anonymous Functions ====
-
-Taking the above a step further, the ''use'' clause on anonymous functions could be extended in the same way, producing locally-scoped variables based on the captured values:
-
-<code php>
-$callback = function() use (self::ID as $id, get_some_value() * 2 as $something) {
-    do_something($id, $something);
-};
-</code>
-
 ===== Proposed Voting Choices =====
-
-Add property capture to anonymous classes, with the syntax and semantics proposed, in PHP 8.3 (Yes / No, two-thirds majority required for acceptance)
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
 ===== Patches and Tests =====
+Links to any external patches and tests go here.
 
-https://github.com/php/php-src/pull/11123
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -432,3 +114,4 @@ After the project is implemented, this section should contain
 Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
