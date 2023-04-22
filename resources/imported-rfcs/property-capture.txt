@@ -23,10 +23,10 @@ Capturing variables into an anonymous class instance requires two things:
 
 Rather than inventing new syntax and semantics for these, this proposal reuses existing object properties and constructor parameters, as follows:
 
-  - If a use clause is present, generate an empty constructor which will be added to the anonymous class.
-  - For each captured variable in the use clause, add it as a parameter to the constructor.
-  - Declare a property with the same name as the captured variable in the anonymous class, unless renamed in the use clause (see below).
-  - Set the default visibility of the property to ''public'' and the default type to ''mixed'' if not specified in the use clause (see below).
+  - If a ''use'' clause is present, generate an empty constructor which will be added to the anonymous class.
+  - For each captured variable in the ''use'' clause, add it as a parameter to the constructor.
+  - Declare a property with the same name as the captured variable in the anonymous class, unless renamed in the ''use'' clause (see below).
+  - Set the default visibility of the property to ''public'' and the default type to ''mixed'' if not specified in the ''use'' clause (see below).
   - In the constructor body, assign the captured variable to the corresponding property.
   - When creating an //instance// of the anonymous class, pass the variables listed as parameters to the constructor.
 
@@ -34,7 +34,7 @@ The implementation reuses a lot of mechanics from the existing Constructor Prope
 
 ===== Syntax =====
 
-A new "use clause" is introduced, immediately after the keywords "new class", with the syntax ''use (<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
+A new //''use'' clause// is introduced, immediately after the keywords "new class", with the syntax ''use (<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
 
 ==== Basic Form ====
 
@@ -152,6 +152,21 @@ $foo = 2;
 echo $anon->fooProp;
 </code>
 
+===== Examples =====
+
+**TODO**
+
+===== Reflection =====
+
+The constructor, its parameters, and the properties, all appear as normal if the anonymous class is reflected, but can be detected with two new methods:
+
+  * ''ReflectionParameter::isCaptured(): bool''
+  * ''ReflectionProperty::isCaptured(): bool''
+
+Although internally they are declared using Constructor Property Promotion, the parameters and properties return ''false'' from ''ReflectionParameter::isPromoted'' and ''ReflectionProperty::isPromoted'', as they are not written that way by the user.
+
+The generated constructor itself is not marked, partly due to implementation concerns that a limited number of bits remain available in the ''fn_flags'' bitmask.
+
 ===== Restrictions =====
 
 Because it generates both property declarations and a constructor, the new syntax has a few restrictions, which are indicated with new Errors thrown by the compiler:
@@ -195,7 +210,7 @@ $anon->init($b, $c);
 It would be possible in principle to detect an existing constructor, and merge both its argument list and body with the generated code. That is, the above example could be written as:
 
 <code php>
-# NOT supported in proposal
+# NOT supported in current proposal
 $anon = new class($b, $c) use($a) extends SomeOtherClass {
     public function __construct($b, $c) {
         do_something($b);
@@ -216,7 +231,7 @@ It also leads to additional error conditions, which would give confusing errors 
 Another suggestion is that any parameters passed to the ''new class'' statement could be automatically passed to the parent constructor; so this:
 
 <code php>
-# NOT supported in proposal
+# NOT supported in current proposal
 $anon = new class($foo) use($bar) extends SomeOtherClass {};
 </code>
 
@@ -224,7 +239,7 @@ would be equivalent to this:
 
 <code php>
 $anon = new class($foo, $bar) extends SomeOtherClass {
-    private $bar;
+    var $bar;
     public function __construct($foo, $bar) {
         $this->bar = $bar;
         parent::__construct($foo);
@@ -243,18 +258,64 @@ It would also not be very consistent with the rest of the language, which neithe
 
 ==== Alternative 3: Generating a Different Method ====
 
+Similar to the workaround above, the logic for setting captured property values could be generated in a method other than the constructor, e.g. ''%%__capture%%''. 
+
+That is, compile <php>$anon = new class use ($foo) {};</php> to this:
+
+<code php>
+$anon = new class {
+    var $foo;
+    public function __capture($foo) {
+        $this->foo = $foo;
+    }
+};
+$anon->__capture($foo);
+</code>
+
+That would allow this:
+
+<code php>
+# NOT supported in current proposal
+$anon = new class($b, $c) use($a) extends SomeOtherClass {
+    public function __construct($b, $c) {
+        do_something($b);
+        parent::__construct($c);
+    }
+};
+</code>
+
+To be equivalent to this:
+
+<code php>
+$anon = new class($b, $c) extends SomeOtherClass {
+    var $a;
+    public function __construct($b, $c) {
+        do_something($b);
+        parent::__construct($c);
+    }
+    public function __capture($a) {
+        $this->a = $a;
+    }
+};
+$anon->__capture($a);
+</code>
+
+The main complexity here is generating the additional method call - in the above example, it is shown as called on the local variable ''$anon'', but in practice, it could happen anywhere in an expression, e.g. <php>some_function(new class($a) use($b) { ... });</php>.
+
 ==== Alternative 4: Calling an Additional Magic Method ====
 
-===== Reflection =====
+Another variation would be to have the constructor generated as in the current implementation, but call out to another magic method for the user to define additional constructor behaviour, effectively:
 
-The constructor, its parameters, and the properties, all appear as normal if the anonymous class is reflected, but can be detected with two new methods:
+<code php>
+public function __construct($foo) {
+    $this->foo = $foo;
+    if ( method_exists($this, '__afterConstruct') ) {
+        $this->__afterConstruct();
+    }
+}
+</code>
 
-  * ''ReflectionParameter::isCaptured(): bool''
-  * ''ReflectionProperty::isCaptured(): bool''
-
-Although internally they are declared using Constructor Property Promotion, the parameters and properties return ''false'' from ''ReflectionParameter::isPromoted'' and ''ReflectionProperty::isPromoted'', as they are not written that way by the user.
-
-The generated constructor itself is not marked, partly due to implementation concerns that a limited number of bits remain available in the ''fn_flags'' bitmask.
+If arguments are not supported, the advantage of this over existing workarounds is very slight. If they are supported, it would run into many of the same difficulties outlined in previous sections.
 
 ===== Backward Incompatible Changes =====
 
@@ -272,22 +333,33 @@ Extensions manipulating the AST may encounter the new node kinds ''ZEND_AST_PROP
 ==== To Opcache ====
 None anticipated, but expert review on this point would be welcomed.
 
+===== Unaffected Functionality =====
+
+All existing features of anonymous classes are retained, and can be combined with the new ''use'' clause, apart from the restrictions mentioned above. That includes:
+
+  * Inheriting parent classes
+  * Implementing interfaces
+  * Using traits
+  * Implementing any method other than ''%%__construct%%''
+  * Declaring the entire class ''readonly''
 
 ===== Future Scope =====
 
 ==== Arbitrary Expressions ====
 
+**TODO**
+
+==== Extension to Anonymous Functions ====
+
+**TODO**
+
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
+
+Add property capture to anonymous classes, with the syntax and semantics proposed, in PHP 8.3 (Yes / No, two-thirds majority required for acceptance)
 
 ===== Patches and Tests =====
-Links to any external patches and tests go here.
 
-If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
-
-Make it clear if the patch is intended to be the final patch, or is just a prototype.
-
-For changes affecting the core language, you should also provide a patch for the language specification.
+**TODO**
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -300,4 +372,3 @@ After the project is implemented, this section should contain
 Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
-Keep this updated with features that were discussed on the mail lists.
