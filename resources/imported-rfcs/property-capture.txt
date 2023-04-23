@@ -1,6 +1,6 @@
 ====== PHP RFC: Property Capture for Anonymous Classes ======
-  * Version: 0.2
-  * Date: 2023-04-22
+  * Version: 0.3
+  * Date: 2023-04-23
   * Author: Rowan Tommins (imsop@php.net)
   * Thanks: Nicolas Grekas (nicolasgrekas@php.net), Ilija Tovilo (tovilo.ilija@gmail.com)
   * Status: Draft
@@ -34,7 +34,7 @@ The implementation reuses a lot of mechanics from the existing Constructor Prope
 
 ===== Syntax =====
 
-A new //''use'' clause// is introduced, immediately after the keywords "new class", with the syntax ''use (<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
+A new //''use'' clause// is introduced, immediately after the keywords "new class", with the syntax ''use ([&]<var-name> as <modifiers> <type> <property-name>, ...)''. The ''<modifiers>'', ''<type>'', and ''<property-name>'' are all optional; if none is specified, the "as" keyword must be omitted.
 
 ==== Basic Form ====
 
@@ -197,14 +197,19 @@ The generated constructor itself is not marked, partly due to implementation con
 
 ===== Restrictions =====
 
-Because it generates both property declarations and a constructor, the new syntax has a few restrictions, which are indicated with new Errors thrown by the compiler:
+The following new errors follow from the use of properties, rather than a new mechanism, to access the captured values:
 
   * "Redefinition of captured property", e.g. <php>new class use($foo, $foo) {}</php> or <php>new class use($foo as $a, $bar as $a) {}</php>
   * "Captured property $a conflicts with existing property", e.g. <php>new class use($foo) { public $foo; }</php>
+
+The following new errors follow from the current implementation's use of a generated constructor:
+
   * "Cannot declare custom constructor for anonymous class with captured properties", e.g. <php>new class use($foo) { public function __construct() {} }</php>
   * "Cannot pass constructor arguments to anonymous class with captured properties", e.g. <php>new class($foo) use($bar) {}</php>
 
-==== Workarounds ====
+Various alternatives to this restriction exist, discussed below. Throwing an Error now does not rule out any of these alternatives being implemented in future versions.
+
+==== Current Workaround ====
 
 The restrictions on custom constructors can be worked around by adding a normal instance method, and calling it immediately.
 
@@ -256,7 +261,7 @@ It also leads to additional error conditions, which would give confusing errors 
 
 ==== Alternative 2: Automatically Calling Parent Constructor ====
 
-Another suggestion is that any parameters passed to the ''new class'' statement could be automatically passed to the parent constructor; so this:
+Another possibility is that any parameters passed to the ''new class'' statement could be automatically passed to the parent constructor; so this:
 
 <code php>
 # NOT supported in current proposal
@@ -330,6 +335,12 @@ $anon->__capture($a);
 
 The main complexity here is generating the additional method call - in the above example, it is shown as called on the local variable ''$anon'', but in practice, it could happen anywhere in an expression, e.g. <php>some_function(new class($a) use($b) { ... });</php>.
 
+==== Alternative 3b: Initialising Before the Constructor Call ====
+
+A variation on the above would be to inject the extra method call (or the assignments themselves) immediately //before// the constructor is called.
+
+Although it would give slightly nicer semantics, this would likely be even more challenging to implement, since the object creation and constructor call are both part of the ''NEW'' opcode handler, so the additional logic would need to be added there, or in variant with a new opcode.
+
 ==== Alternative 4: Calling an Additional Magic Method ====
 
 Another variation would be to have the constructor generated as in the current implementation, but call out to another magic method for the user to define additional constructor behaviour, effectively:
@@ -375,11 +386,32 @@ All existing features of anonymous classes are retained, and can be combined wit
 
 ==== Arbitrary Expressions ====
 
-**TODO**
+When a renamed property is indicated with the ''$variable as $property'' syntax, there is no technical need to name a local variable, rather than an arbitrary expression. In other words, it would be possible to allow this:
+
+<code php>
+$anon = new class use (self::ID as $id, get_some_value() * 2 as private $something) {};
+</code>
+
+Which would be equivalent to this:
+
+<code php>
+$anon = new class(self::ID, get_some_value() * 2) {
+    public function __construct(
+        public $id,
+        private $something
+    ) {}
+}
+</code>
 
 ==== Extension to Anonymous Functions ====
 
-**TODO**
+Taking the above a step further, the ''use'' clause on anonymous functions could be extended in the same way, producing locally-scoped variables based on the captured values:
+
+<code php>
+$callback = function() use (self::ID as $id, get_some_value() * 2 as $something) {
+    do_something($id, $something);
+};
+</code>
 
 ===== Proposed Voting Choices =====
 
