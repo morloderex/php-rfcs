@@ -29,7 +29,7 @@ By using this approach, one can effectively implement immutable objects. As the 
 
 Unfortunately, PSR-7 implementations cannot make use of readonly properties yet, unless they always instantiate a new class instance rather than using cloning as described above. This cumbersome workaround would be required because readonly properties have too strict constraints: they are readonly at the property level, while in order to be useful in practice, they should be readonly only at the object level. The former means that after initialization, a property is unmodifiable throughout its entire life span, while the latter means that it is unmodifiable during the life cycle of an object. The main difference between the two approaches is whether a property is modifiable after the object is cloned.
 
-Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was (partially) accepted for PHP 8.3, readonly properties became modifiable during the execution of the ''__clone()'' magic method, allowing deep cloning of readonly properties. This was the first step towards achieving object-level readonliness, however the general problem of supporting safe modification of readonly properties was not solved yet.
+Since [[rfc:readonly_amendments|PHP RFC: Readonly amendments]] was (partially) accepted for PHP 8.3, readonly properties became modifiable during the execution of the ''%%__clone()%%'' magic method, allowing deep cloning of readonly properties. This was the first step towards achieving object-level readonliness, however the general problem of supporting safe modification of readonly properties was not solved yet.
 
 ===== Proposal =====
 
@@ -133,6 +133,13 @@ $object = clone $object with {PROPERTY_NAME => 1}; // the property name is a nam
 
 The last example demonstrates well why it's necessary to use different separator tokens (''=>'' vs. '':'') for the two cases: otherwise it wouldn't be clear if one references the property name indirectly via the value of a global constant or directly as an identifier.
 
+
+==== Interaction with the __clone magic method ====
+
+If an object is being "cloned with" which has a ''%%__clone()%%'' magic method then the execution order is the following:
+  * ''%%__clone()%%'' is executed
+  * Afterwards, the clone with assignments are executed from left to right. Any properties - including the ones modified by the ''##__clone()##'' method - is modifiable again.
+
 ===== Alternatives =====
 
 Nicolas Grekas proposed [[https://twitter.com/nicolasgrekas/status/1561960616331546625/photo/1|an alternative idea]] which could also make it possible to reinitialize readonly properties:
@@ -154,9 +161,49 @@ According to which, the ''clone'' method modifier would implicitly clone ''$this
 Even though this is a pretty clever way to solve the original issue, it has some serious drawbacks:
   * One cannot control whether ''$this'' should really be cloned: e.g. if a property should only be modified based on certain conditions (e.g. validation), the object would potentially be cloned in vain, resulting in a performance loss.
   * The behavior of a "clone method" is counterintuitive for beginners as it needs some experience to be able to determine what ''$this'' actually refers to.
-  * Sometimes one also needs access to the original instance, but doing so would only be possible via workarounds (e.g. by introducing ''$that'' or a similar construct)
+  * Sometimes one also needs access to the original instance, but doing so would only be possible via workarounds (e.g. by introducing ''$that'' or a similar construct).
 
-The biggest advantage of Nicolas' proposal over "clone with" is that it could be made part of the interface contract whether a method modifies the object state. So the PSR-7 ''ResponseInterface'' could look like the following:
+<code php>
+class LinkedObject {
+    public function __construct(
+        private readonly LinkedObject $next,
+        private readonly int $number
+    ) {
+        $this->number = 1;
+    }
+
+    public clone function next(): LinkedObject {
+        $this->number++;
+
+        $that->next = $this;     // a hypothetical $that variable is needed here
+
+        return $this;
+    }
+}
+</code>
+
+The same code using "clone with":
+
+<code php>
+class LinkedObject {
+    public function __construct(
+        private readonly LinkedObject $next,
+        private readonly int $number
+    ) {
+        $this->number = 1;
+    }
+
+    public function next(): LinkedObject {
+        $self = clone $this with {number: $this->number + 1}
+
+        $this->next = $self;
+
+        return $self;
+    }
+}
+</code>
+
+The biggest advantage of Nicolas' proposal over "clone with" is that it could be made part of the interface contract whether a method doesn't modify the object state. So the PSR-7 ''ResponseInterface'' could look like the following:
 
 <code php>
 interface ResponseInterface extends MessageInterface
