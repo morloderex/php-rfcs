@@ -125,6 +125,56 @@ echo $result2; // Output: 15
 
 In this example, an ''OperatorInterface'' is defined with a single <php>__invoke()</php> method, which can be used to replace the <php>Closure</php> type on the <php>executeOperation()</php> function. The <php>castTo()</php> method is then used to create instances of the interface, with different behaviors implemented by closures. This approach provides a more type-safe and expressive way to handle closures while adhering to the required interface.
 
+=== Example 3: Decoupling URI template implementations using adapters ===
+
+This example demonstrates how the <php>castTo()</php> method can be used to create adapters for
+decoupling from different implementations of the URI template RFC from the Guzzle, Rize and League projects.
+
+<code php>
+
+// This interface would live in the consumer's code
+interface UriExpanderInterface {
+    public function expand(string $template, array $variables): string;
+}
+
+// GuzzleHttp\UriTemplate::expand() is compatible with UriExpanderInterface
+$guzzleExpander = GuzzleHttp\UriTemplate::expand(...)
+    ->castTo(UriExpanderInterface::class);
+
+// Rize\UriTemplate::expand() is missing a return type so we need to wrap it
+$rizeExpander = (fn (string $template, array $variables): string
+    => (new Rize\UriTemplate())->expand($template, $variables)
+)->castTo(UriExpanderInterface::class);
+
+// League\Uri\UriTemplate::expand() has a quite different signature so we need to adapt it
+$leagueExpander = (fn (string $template, array $variables): string
+    => (string) (new League\Uri\UriTemplate($template))->expand($variables)
+)->castTo(UriExpanderInterface::class);
+
+// Usage
+function getExpandedUrl(UriExpanderInterface $expander, string $template, array $variables): string {
+    return $expander->expand($template, $variables);
+}
+
+$template = "https://example.com/{path}";
+$variables = ['path' => 'users'];
+
+$guzzleExpandedUrl = getExpandedUrl($guzzleExpander, $template, $variables);
+$rizeExpandedUrl = getExpandedUrl($rizeExpander, $template, $variables);
+$leagueExpandedUrl = getExpandedUrl($leagueExpander, $template, $variables);
+
+// The 3 implementations return: "https://example.com/users"
+</code>
+
+In this example, an ''UriExpanderInterface''' is defined with an <php>expand()</php> method.
+3 different implementations of the interface are derived using the <php>castTo()</php> method.
+
+Finally, the <php>getExpandedUrl()</php> function is defined, which accepts an implementation of
+<php>UriExpanderInterface</php> and expands a URI template using the provided implementation.
+
+Guzzle, Rize and League URI template instances can be used interchangeably with this function,
+illustrating the decoupling and flexibility provided by using adapters created with the <php>castTo()</php> method.
+
 ==== Backward Incompatible Changes ====
 
 This proposal introduces no backward incompatible changes, as it only adds a new method to the <php>Closure</php> class.
