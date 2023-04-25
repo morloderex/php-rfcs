@@ -9,11 +9,11 @@
 
 ==== Introduction ====
 
-This RFC proposes a new method for the ''Closure'' class called ''castTo''. This method would allow developers to create an instance of a class that implements a specified interface and uses the closure as the implementation.
+This RFC proposes a new method for the <php>Closure</php> class called <php>castTo()</php>. This method would allow developers to create an instance of a class that implements a specified interface and uses the closure as the implementation.
 
 ==== Proposal ====
 
-A new method, ''castTo'', would be added to the ''Closure'' class with the following signature (generics added for extra clarity):
+A new method, <php>castTo()</php>, would be added to the <php>Closure</php> class with the following signature (generics added for extra clarity):
 
 <code php>
 /**
@@ -52,15 +52,17 @@ This feature could be useful in several scenarios where developers need to creat
 
   * **Testing and mocking**: This feature could help create mock objects on-the-fly for unit testing, especially when testing the interaction between objects and their dependencies. By using a closure to implement the interface, developers can quickly create lightweight, tailored mock objects without having to define additional classes.
 
-  * **Adapters**: In situations where the developer needs to adapt an existing object to a specific interface, this feature can provide a quick and convenient way to create an adapter using a closure without the need for a separate adapter class. This can be particularly helpful when working with external libraries or APIs.
+  * **Decoupling through Adapters**: In situations where the developer needs to adapt an existing object to a specific interface, this feature can provide a quick and convenient way to create an adapter using a closure without the need for a separate adapter class. This can be particularly helpful when working with external libraries or APIs.
 
   * **Single-method interfaces**: For single-method interfaces, this feature could provide a more concise way to create instances that implement the interface, without the overhead of defining a full class. This can lead to more readable and maintainable code when dealing with simple, single-method interfaces.
 
-  * **Rapid prototyping**: During the development phase, this feature can be helpful for quickly creating instances implementing specific interfaces, allowing developers to focus on the core business logic instead of writing boilerplate code.
+  * **Dynamic behavior**: In scenarios where the implementation of an interface needs to be changed at runtime, this feature can help create instances with dynamic behavior. By passing different closures to the <php>castTo()</php> method, developers can quickly create instances with varying behavior while still adhering to the required interfaces. Reciprocally this feature can help create instances implementing runtime-discovered interfaces.
 
-  * **Dynamic behavior**: In scenarios where the implementation of an interface needs to be changed at runtime, this feature can help create instances with dynamic behavior. By passing different closures to the createInstanceWithInterface method, developers can quickly create instances with varying behavior while still adhering to the required interface.
+  * **Providing a type-safe alternative to the <php>Closure</php> type**: instead of typing against the <php>Closure</php> type, developers could declare and use interfaces that have a single <php>__invoke()</php> method. While this is possible already, this is quite rare in practice because it comes at a high syntactic cost for end users, which are then required to define a full class. By allowing to quickly turn a closure into an implementation of such interfaces, the <php>castTo()</php> method would greatly reduce this boilerplate, leading to a wider adoption of type-safe code for closures.
 
-Here is an example that combines this proposal with the first-class callable syntax to provide a fallback ''TranslatorInterface'' implementation based on ''strtr()'' when needed:
+===== Example 1: Using a closure as a default implementation for a TranslatorInterface =====
+
+This example demonstrates how to use the <php>castTo()</php> method to create a default implementation for a ''TranslatorInterface'' using a closure. It combines this proposal with the first-class callable syntax.
 
 <code php>
 interface TranslatorInterface {
@@ -78,17 +80,60 @@ class SomeClass {
 }
 </code>
 
+In this example, a ''TranslatorInterface'' is defined with a <php>translate()</php> method. The ''SomeClass'' constructor has an optional parameter, <php>$translator</php>, which is an instance of ''TranslatorInterface''.
+
+If no custom implementation of ''TranslatorInterface'' is provided during the instantiation of ''SomeClass'', a default implementation is  derived using a closure created from the <php>strtr()</php> function.
+
+===== Example 2: Type-safe alternative to using <php>Closure</php> =====
+
+Imagine that you have the following function, that takes a closure and two number to do some operation on them:
+
+<code php>
+function executeOperation(Closure $operation, int $a, int $b): int {
+    return $operation($a, $b);
+}
+</code>
+
+This example demonstrates how the <php>castTo()</php> method can be used as a type-safe alternative to using the <php>Closure</php> type by creating an interface with a single <php>__invoke()</php> method:
+
+<code php>
+interface OperatorInterface {
+    public function __invoke(int $x, int $y): int;
+}
+
+function executeOperation(InvokableInterface $operation, int $a, int $b): int {
+    return $operation($a, $b);
+}
+
+$addition = function (int $x, int $y): int {
+    return $x + $y;
+};
+
+$multiplication = function (int $x, int $y): int {
+    return $x * $y;
+};
+
+$additionOperator = $addition->castTo(OperatorInterface::class);
+$multiplicationOperator = $multiplication->castTo(OperatorInterface::class);
+
+$result1 = executeOperation($additionOperator, 3, 5);
+$result2 = executeOperation($multiplicationOperator, 3, 5);
+
+echo $result1; // Output: 8
+echo $result2; // Output: 15
+</code>
+
+In this example, an ''OperatorInterface'' is defined with a single <php>__invoke()</php> method, which can be used to replace the <php>Closure</php> type on the <php>executeOperation()</php> function. The <php>castTo()</php> method is then used to create instances of the interface, with different behaviors implemented by closures. This approach provides a more type-safe and expressive way to handle closures while adhering to the required interface.
+
 ==== Backward Incompatible Changes ====
 
-This proposal introduces no backward incompatible changes, as it only adds a new method to the ''Closure'' class.
+This proposal introduces no backward incompatible changes, as it only adds a new method to the <php>Closure</php> class.
 
 ==== Open Issues ====
 
   * exact behavior when checks fail
   * behavior of the reflection API on resulting objects
   * would the engine allow implementing this without adding any extra frame in the call stack?
-  * would the engine allow implementing this for closures constructed from callables?
-  * would the engine allow implementing this for closures bound to an object and who's object doesn't implement the target interface?
 
 ==== Unaffected PHP Functionality ====
 
@@ -96,10 +141,10 @@ No existing PHP functionality would be affected by this proposal.
 
 ==== Future Scope ====
 
-  * Allow a closure to declare a single-method interface it implements, as in e.g. ''function () implements FooInterface {...}''. See https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
-  * When passing a closure to a parameter that is typed for a single-method interface, call <php>castTo</php> automatically.  That would effectively allow a form of callable typing by piggybacking on this functionality, especially if combined with interfaces that use <php>__invoke()</php>. See https://wiki.php.net/rfc/structural-typing-for-closures
+  * Allow a closure to declare a single-method interface it implements, as in e.g. <php>function () implements FooInterface {...}</php>. See https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+  * When passing a closure to a parameter that is typed for a single-method interface, call <php>castTo()</php> automatically.  That would effectively allow a form of callable typing by piggybacking on this functionality, especially if combined with interfaces that use <php>__invoke()</php>. See https://wiki.php.net/rfc/structural-typing-for-closures
 
-Both ideas are complementary to the one proposed in this RFC and don't conflict, neither technically nor feature-wise.
+Both ideas are complementary to the one proposed in this RFC.
 
 ==== Proposed PHP Version ====
 
@@ -108,3 +153,4 @@ This RFC targets PHP version 8.3.
 ==== Vote ====
 
 The vote will require a 2/3 majority to be accepted. Voting will start on [Vote start date] and end on [Vote end date].
+
