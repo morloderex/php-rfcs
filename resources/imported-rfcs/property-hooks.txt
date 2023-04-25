@@ -337,115 +337,6 @@ The <php>afterSet</php> hook is passed the previous value of the property.  If t
 
 The <php>beforeSet</php> and <php>beforeSet</php> hook bodies technically may write directly to the property itself.  If so, whatever the normal <php>set</php> behavior is will be used (that is, if a <php>set</php> hook is defined, it will be called), but <php>beforeSet</php>/<php>afterSet</php> will not be called recursively.  This behavior is consistent with how <php>__set</php> works.  That said, such self-assignment is generally not recommended, and should probably be treated as a bug by static analyzers.
 
-==== Scoping ====
-
-All hooks operate in the scope of the object being modified.  That means they have access to all public, private, or protected methods of the object, as well as any public, private, or protected properties, including properties that may have their own property hooks.  Accessing another property from within a hook does not bypass the hooks defined on that property.
-
-The most notable implication of this is that non-trivial hooks may stub out to an arbitrarily complex method if they wish.  For example:
-
-<code php>
-class Person {
-    public string $phone {
-        beforeSet { return $this->sanitizePhone($value); }
-    }
-    
-    private function sanitizePhone(string $value): string
-    {
-        $value = ltrim($value, '+');
-        $value = ltrim($value, '1');
-
-        if (!preg_match('/\d\d\d\-\d\d\d\-\d\d\d\d/', $value)) {
-            throw new \InvalidArgumentException();
-        }
-        return $value;
-    }
-}
-</code>
-
-==== References and arrays ====
-
-Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
-
-For the vast majority of properties this causes no issue.  The one exception is ''array'' properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
-
-Furthermore, providing a good API for an array modification seems impossible. The simplest approach would be to copy the array, modify it accordingly, and pass it to ''set'' hook. This would have a large and obscure performance penalty, and a ''set'' implementation would have no way of knowing which values had changed, leading to, for instance, code needing to revalidate all elements even if only one has changed.
-
-Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)'' where $keys is a list of keys. Assuming the user would like to apply the change to the array, they would need to iterate the keys, fetch the offset by-reference, and at the end assign the value to the last reference. This has terrible performance characteristics and is non-trivial to implement for the end-user.
-
-Both of these possible approaches also handle only explicit additions and modification.  They would not address appending (''[]'') or operations such as ''unset'', which would introduce even more complexity.
-
-Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties the use of ''[]'' on any property (with or without a key) will result in a runtime error being thrown.  This applies both to arrays and objects implementing ''ArrayAccess''.
-
-This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
-
-It is possible to change the whole array, like so:
-
-<code php>
-class MyList {
-    public array $values = [] {
-        // Ensure no empty values.
-        beforeSet {
-            if (array_filter($value) != $value) {
-                throw new \InvalidArgumentException('Only truthy values allowed');
-            }
-            return $value;
-        }
-    }
-    
-    public function addValue($key, $value): void
-    {
-        // This is easily encapsulated in a method.
-        $values = $this->values;
-        $values[$key] = $value;
-        $this->values = $values;
-    }
-}
-
-$l = new MyList();
-
-// This will fail.
-$l->values[] = 1;
-
-// But this is allowed.
-$a = $l->values;
-$a[] = 1;
-$l->values = $a;
-
-// This is fine.
-$a->addValue('foo', 'bar');
-
-// This will throw an exception due to the hook.
-$a = $l->values;
-$a[] = false;
-$l->values = $a;
-</code>
-
-In practice, a more appropriate and idiomatic usage of hooked arrays would be like so:
-
-<PHP>
-class C {
-    private array $_elements;
-    public array $elements {
-        get { return $this->_elements; }
-    }
-    public function addElement(string $element): void {
-        $this->_elements[] = $element;
-    }
-}
-</PHP>
-
-Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.
-
-<PHP>
-foreach ($someObjectWithHooks as $key => $value) {
-    // Works as expected.
-}
-
-foreach ($someObjectWithHooks as $key => &$value) {
-    // Throws an error
-}
-
-</PHP>
 
 ==== Abbreviated forms ====
 
@@ -529,6 +420,115 @@ class User
 }
 </code>
 
+==== Scoping ====
+
+All hooks operate in the scope of the object being modified.  That means they have access to all public, private, or protected methods of the object, as well as any public, private, or protected properties, including properties that may have their own property hooks.  Accessing another property from within a hook does not bypass the hooks defined on that property.
+
+The most notable implication of this is that non-trivial hooks may stub out to an arbitrarily complex method if they wish.  For example:
+
+<code php>
+class Person {
+    public string $phone {
+        beforeSet => $this->sanitizePhone($value);
+    }
+    
+    private function sanitizePhone(string $value): string
+    {
+        $value = ltrim($value, '+');
+        $value = ltrim($value, '1');
+
+        if (!preg_match('/\d\d\d\-\d\d\d\-\d\d\d\d/', $value)) {
+            throw new \InvalidArgumentException();
+        }
+        return $value;
+    }
+}
+</code>
+
+==== References and arrays ====
+
+Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
+
+For the vast majority of properties this causes no issue.  The one exception is ''array'' properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
+
+Furthermore, providing a good API for an array modification seems impossible. The simplest approach would be to copy the array, modify it accordingly, and pass it to ''set'' hook. This would have a large and obscure performance penalty, and a ''set'' implementation would have no way of knowing which values had changed, leading to, for instance, code needing to revalidate all elements even if only one has changed.
+
+Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)'' where $keys is a list of keys. Assuming the user would like to apply the change to the array, they would need to iterate the keys, fetch the offset by-reference, and at the end assign the value to the last reference. This has terrible performance characteristics and is non-trivial to implement for the end-user.
+
+Both of these possible approaches also handle only explicit additions and modification.  They would not address appending (''[]'') or operations such as ''unset'', which would introduce even more complexity.
+
+Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties the use of ''[]'' on any property (with or without a key) will result in a runtime error being thrown.  This applies both to arrays and objects implementing ''ArrayAccess''.
+
+This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
+
+It is possible to change the whole array, like so:
+
+<code php>
+class MyList {
+    public array $values = [] {
+        // Ensure no empty values.
+        beforeSet {
+            if (array_filter($value) != $value) {
+                throw new \InvalidArgumentException('Only truthy values allowed');
+            }
+            return $value;
+        }
+    }
+    
+    public function addValue($key, $value): void
+    {
+        // This is easily encapsulated in a method.
+        $values = $this->values;
+        $values[$key] = $value;
+        $this->values = $values;
+    }
+}
+
+$l = new MyList();
+
+// This will fail.
+$l->values[] = 1;
+
+// But this is allowed.
+$a = $l->values;
+$a[] = 1;
+$l->values = $a;
+
+// This is fine.
+$a->addValue('foo', 'bar');
+
+// This will throw an exception due to the hook.
+$a = $l->values;
+$a[] = false;
+$l->values = $a;
+</code>
+
+In practice, a more appropriate and idiomatic usage of hooked arrays would be like so:
+
+<PHP>
+class C {
+    private array $_elements;
+    public array $elements {
+        get => $this->_elements;
+    }
+    public function addElement(string $element): void {
+        $this->_elements[] = $element;
+    }
+}
+</PHP>
+
+Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.
+
+<PHP>
+foreach ($someObjectWithHooks as $key => $value) {
+    // Works as expected.
+}
+
+foreach ($someObjectWithHooks as $key => &$value) {
+    // Throws an error
+}
+
+</PHP>
 
 ==== Inheritance ====
 
