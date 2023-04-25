@@ -176,6 +176,49 @@ Finally, the <php>getExpandedUrl()</php> function is defined, which accepts an i
 Guzzle, Rize and League URI template instances can be used interchangeably with this function,
 illustrating the decoupling and flexibility provided by using adapters created with the <php>castTo()</php> method.
 
+==== Prototype implementation ====
+
+Using <php>eval()</php> and anonymous classes, it's already possible to create a function that turns a closure into an implementation of a single-method interface. Conceptually, this RFC could be coded this way:
+
+<code php>
+class Closure
+{
+    // [...] Closure is an internal class
+    
+    public function castTo(self $closure, string $interface): object
+    {
+        static $cache = [];
+
+        $cacheKey = <compute-key-from-$closure-and-$interface>
+
+        if (isset($cache[$cacheKey])) {
+            return $cache[$cacheKey]($closure);
+        }
+        
+        $method = <name-of-the-method-in-$interface>;
+        $signature = <signature-of-$closure>;
+        $return = str_ends_with($signature, '): never') || str_ends_with($signature, '): void') ? '' : 'return ';
+
+        $object = eval(<<<PHP
+            return new class (\$closure) implements {$interface} {
+                public function __construct(private readonly Closure \$closure) {
+                }
+                public function {$method}{$signature} {
+                    {$return}\$this->closure->__invoke(<list-of-arguments-in-$closure>);
+                }
+            };
+            PHP);
+
+        $cache[$key] = $object::class;
+
+        return $object;
+    }
+}
+</code>
+
+A working prototype implementation is provided by this package:
+https://github.com/tchwork/closure-caster/blob/main/src/function.php
+
 ==== Backward Incompatible Changes ====
 
 This proposal introduces no backward incompatible changes, as it only adds a new method to the <php>Closure</php> class.
