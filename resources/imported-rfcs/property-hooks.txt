@@ -98,12 +98,14 @@ Property hooks allow developers to introduce additional behavior in a way that i
 <PHP>
 class User 
 {
+    private $nameReal;
     public string $name {
-        beforeSet {
+        get => $this->nameReal;
+        set {
             if (strlen($value) === 0) {
                 throw new ValueError("Name must be non-empty");
             }
-            return $value;
+            $this->nameReal = $value;
         }
     }
 
@@ -117,7 +119,7 @@ This code introduces a new non-empty requirement, but does not change the outwar
 
 ===== Proposal Summary =====
 
-This RFC adds four "hooks" that may be implemented to intercept and modify the lifecycle of a property.  Taken together, they allow for a majority of common reasons to add "just in case" methods to a property to be implemented without methods, leading to shorter code and more flexibility to improve the code without a hard API break.  Hooks may be used individually or in combination.
+This RFC introduces two "hooks" to override the default "get" and "set" behavior of a property.  Although not included in this initial version, the design includes the ability to support more hooks in the future.  (See the Future Scope section below.)  Taken together, they allow for a majority of common reasons to add "just in case" methods to a property to be implemented without methods, leading to shorter code and more flexibility to improve the code without a hard API break.  
 
 <PHP>
 class User implements Named
@@ -132,18 +134,6 @@ class User implements Named
         
         // Overwrite the "write" action with arbitrary logic.
         set($value) => [$this->first, $this->last] = explode(' ', $value);
-
-        // Intercept the written value before it's 
-        // written to validate and optionally modify it.
-        beforeSet($value) {
-            if (strlen($value) === 0) {
-                throw new ValueError("Name must be non-empty");
-            }
-            return $value;
-        }
-        
-        // Take action after the property has been written.
-        afterSet => $this->isModified = true;
     }
 }
 </PHP>
@@ -167,23 +157,19 @@ class SimpleUser implements Named
 }
 </PHP>
 
-Taken together, these behaviors allow for much shorter, more robust code that provides clear locations for common behavior to be implemented.
+Taken together, these behaviors allow for much shorter, more robust code.
 
 ===== Detailed Proposal =====
-
-This RFC allows attaching one or more of a fixed set of "hooks" to declared properties.  Some hooks are mutually-dependent, while others are effectively independent.  The hooks proposed by this RFC cover most common cases, but in concept more could be added in the future.
 
 This RFC applies to object properties only, not static properties.  Static properties are unaffected by this RFC.
 
 For a property to use a hook, it must replace its trailing '';'' with a code block denoted by ''{ }''.  Inside the block are one or more hook implementations, for which the order is explicitly irrelevant.  It is a compile error to have an empty hook block.
 
-==== get and set ====
-
 The ''get'' and ''set'' hooks overwrite the PHP default read and write behavior.  They may be implemented individually or together.  If either one is implemented, PHP will not create any storage property on the object.  The developer is on their own to implement whatever storage behavior is appropriate.
 
 A property that implements either a ''get'' or ''set'' hook is known as a "virtual property", as it has no materialized stored value by default.
 
-=== get ===
+==== get ====
 
 If a ''get'' hook is implemented, then PHP will create no automatic storage for that property.  Instead, reads of that property will invoke the defined hook.
 
@@ -209,7 +195,7 @@ The ''get'' hook body is an arbitrarily complex method body, which MUST return a
 
 If a ''get'' hook is defined but no ''set'' hook, then any attempt to write to the property will result in an <php>Error</php> being thrown.
 
-=== set ===
+==== set ====
 
 If a ''set'' hook is implemented, then PHP will create no automatic storage for that property.  Instead, writes to that property will invoke the defined hook.
 
@@ -250,7 +236,46 @@ Specifying the argument name is optional.  If not specified, it defaults to ''$v
     }
 </code>
 
+
+A ''set'' hook may also be used for validation by throwing an exception should the value not meet some arbitrary criteria.
+
+<code php>
+class User {
+    private string $validUsername;
+    public string $username {
+        get => $this->validUsername;
+        set($value) {
+            if (strlen($value) > 10) throw new \InvalidArgumentException('Too long');
+            $this->validUsername = strtolower($value);
+        }
+    }
+}
+</code>
+
 A <php>set</php> hook may optionally declare an argument type that is contravariant (wider) from the type of the property.  That allows the <php>set</php> body to accept a more permissive set of values.  The type of the value returned by <php>get</php> must still conform to the declared type, however.
+
+That allows, for example, behavior like this:
+
+<PHP>
+use Symfony\Component\String\UnicodeString;
+
+class Person
+{
+    private UnicodeString $unicodeName;
+    public UnicodeString $name {
+        get {
+            return $this->unicodeName;
+        }
+        set(string|UnicodeString $value) {
+            $this->unicodeName = $value instanceof UnicodeString ? $value : new UnicodeString($value);        
+        }
+    }
+}
+</PHP>
+
+That allows both strings and <php>UnicodeString</php> objects to be passed in, but normalizes the value to <php>UnicodeString</php> to enforce a consistent and reliable type when reading it (either internally or externally).
+
+Due to technical limitations, type variance of the <php>set</php> parameter is not checked, so an incompatible "set" type is possible.  This behavior is not recommended, however.
 
 Although it is not often used, the <php>=</php> assignment operator is an expression that returns a value. The value returned is already slightly inconsistent, however.  In the case of typed properties, that is the value the property holds after the assignment, which may include type coercion. For a property assignment that triggers <php>__set</php>, there is no reasonably defined "value the property holds", so the value returned is always the right-hand-side of the expression.  The <php>set</php> hook has the same behavior as <php>__set</php>, for the same reason.
 
@@ -274,129 +299,9 @@ If a ''set'' hook is defined but no ''get'' hook, then any attempt to read from 
 
 In practice, most ''set'' implementations will also include a ''get'', but not all ''get'' implementations will include a ''set''.
 
-==== beforeSet ====
-
-The ''beforeSet'' hook intercepts values before they are assigned to a property, and optionally modifies them.  It does not affect PHP's storage of the value; that is, if only ''beforeSet'' is implemented, there will still be a real value stored on a real property on the object.  ''beforeSet'' is most useful for validation or sanitization.
-
-<code php>
-class User {
-    
-    public string $username {
-        beforeSet($value) {
-            return strtolower($value);
-        }
-    }
-}
-
-$u = new User();
-
-$u->username = "JamesKirk";
-
-// prints "jameskirk"
-print $u->username;
-</code>
-
-The ''beforeSet'' hook body is an arbitrarily complex method body, which accepts one optionally typed argument.  It MUST return a value, and that value MUST be type-compatible with the property.  In this example, the value is being sanitized to lowercase.  If the hook wishes to modify the value being saved conditionally, it may do so and sometimes return ''$value'' unmodified.
-
-Specifying the argument name is optional.  If not specified, it defaults to ''$value''.
-
-A ''beforeSet'' hook may also be used for validation by throwing an exception should the value not meet some arbitrary criteria.
-
-<code php>
-class User {
-    
-    public string $username {
-        beforeSet($value) {
-            if (strlen($value) > 10) throw new \InvalidArgumentException('Too long');
-            return strtolower($value);
-        }
-    }
-}
-</code>
-
-Whatever value is returned from ''beforeSet'' will be assigned to the property, either directly or through a defined ''set'' hook.
-
-A <php>beforeSet</php> hook may optionally declare an argument type that is contravariant (wider) from the type of the property.  That allows the <php>beforeSet</php> body to accept a more permissive set of values and fold it down to the type expected by the property.  The type of the value returned by <php>beforeSet</php> must still conform to the declared type, however.
-
-That allows, for example, behavior like this:
-
-<PHP>
-use Symfony\Component\String\UnicodeString;
-
-class Person
-{
-    public UnicodeString $name {
-        beforeSet(string|UnicodeString $value) {
-            return $value instanceof UnicodeString ? $value : new UnicodeString($value);        
-        }
-    }
-}
-</PHP>
-
-That allows both strings and <php>UnicodeString</php> objects to be passed in, but normalizes the value to <php>UnicodeString</php> to enforce a consistent and reliable type when reading it (either internally or externally).
-
-Due to technical limitations, type variance of the <php>beforeSet</php> parameter is not checked, so an incompatible "set" type is possible.  This behavior is not recommended, however.
-
-==== afterSet ====
-
-The ''afterSet'' hook intercepts values after they are assigned to a property.  The ''afterSet'' hook is mainly useful for logging, change tracking, and synchronizing changes between properties.
-
-<code php>
-class Person {
-    private array $modified = [];
-    
-    public string $name {
-        afterSet($oldValue) {
-            $this->modified['name'] = $this->name;
-        }
-    }
-
-    public int $age {
-        afterSet($oldValue) {
-            $this->modified['age'] = $this->age;
-        }
-    }
-    
-    public function save(): void
-    {
-        foreach ($this->isModified as $prop => $val) {
-            print "$prop was set to $val\n";
-        }
-    }
-}
-
-$p = new Person();
-
-$p->name = 'Larry';
-
-// prints: name was set to Larry
-$p->save();
-</code>
-
-The ''afterSet'' hook body is an arbitrarily complex method body, which accepts one untyped argument, which will be passed the previous value before the property was modified.  Its return value, if any, will be silently discarded.
-
-Specifying the argument name is optional.  If not specified, it defaults to ''$oldValue''.
-
-Accessing the new value, as shown here, can be done directly.  If a <php>get</php> hook is defined, that read will trigger the <php>get</php> hook.
-
-If the property is virtual, then before the <php>set</php> operation triggers the <php>get</php> hook will be called, and its value stored to later pass to <php>afterSet</php>.
-
-==== Hook interactions and edge cases ====
-
-Certain hook combinations and usages may lead to unanticipated behavior.  Many of them have therefore been forbidden.
-
-=== set, afterSet, but no get ===
-
-The <php>afterSet</php> hook is passed the previous value of the property.  If the property is virtual, there is no "previous value" defined.  Normally it will therefore call <php>get</php> prior to assignment and use that result as the "old value."  If, however, there is no <php>get</php> hook defined that is impossible.  That combination is therefore forbidden.
-
-=== beforeSet and afterSet self-writes ===
-
-The <php>beforeSet</php> and <php>beforeSet</php> hook bodies technically may write directly to the property itself.  If so, whatever the normal <php>set</php> behavior is will be used (that is, if a <php>set</php> hook is defined, it will be called), but <php>beforeSet</php>/<php>afterSet</php> will not be called recursively.  This behavior is consistent with how <php>__set</php> works.  That said, such self-assignment is generally not recommended, and should probably be treated as a bug by static analyzers.
-
-
 ==== Abbreviated forms ====
 
-There are two shorthand notations supported, beyond the optional argument to ''set'', ''beforeSet'', and ''afterSet''.
+There are two shorthand notations supported, beyond the optional argument to ''set''.
 
 First, if a hook's body is a single expression, then the ''{ }'' and ''return'' statement may be omitted and replaced with ''=>'', just like with arrow functions.
 
@@ -433,7 +338,7 @@ class User
 }
 </code>
 
-Some hooks (''set'' and ''afterSet'') have a return value that is discarded.  That means they may also use the short-hand syntax, as whatever value the expression evaluates to will be ignored.  That is, the following is an example of legal syntax:
+As noted, the return value of ''set'', if any, is discarded.  That means it may also use the short-hand syntax, as whatever value the expression evaluates to will be ignored.  That is, the following is an example of legal syntax:
 
 <code php>
 class User
@@ -444,8 +349,6 @@ class User
     public string $fullName {
         get => $this->first . " " . $this->last;
         set => [$this->first, $this->last] = explode(' ', $value);
-        beforeSet => \ucfirst($value);
-        afterSet => $this->modified['first'] = $this->modified['last'] = true;
     }
 
     public function __construct(private string $first, private string $last) {}
@@ -468,11 +371,8 @@ class User
     
     public function setFullName(string $value): void
     {
-        $oldValue = $this->getFullName();
         $value = \ucfirst($value);
         [$this->first, $this->last] = explode(' ', $value);
-        $this->modified['first'] = true;
-        $this->modified['last'] = true;
     }
 }
 </code>
@@ -485,8 +385,11 @@ The most notable implication of this is that non-trivial hooks may sub-call to a
 
 <code php>
 class Person {
+    private string $validatedPhone;
+    
     public string $phone {
-        beforeSet => $this->sanitizePhone($value);
+        get => $this->validatedPhone;
+        set => $this->validatedPhone = $this->sanitizePhone($value);
     }
     
     private function sanitizePhone(string $value): string
@@ -506,7 +409,32 @@ class Person {
 
 Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
 
-For the vast majority of properties this causes no issue.  The one exception is ''array'' properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
+For example:
+
+<PHP>
+class Foo
+{
+    public int $bar;
+
+    private int $_baz;
+    public int $baz {
+        get => $this->_baz;
+        set => $this->_baz = $value;
+    }
+}
+
+$x = 42;
+
+$foo = new Foo();
+// This is fine; as $bar is a normal property.
+$foo->bar = &$x;
+
+// This will error, as $baz is a 
+// hooked property and so references are not allowed.
+$foo->baz = &$x;
+</PHP>
+
+For the vast majority of properties this causes no issue, as reading or writing to properties by reference is extremely rare.  The one exception is ''array'' properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
 
 Furthermore, providing a good API for an array modification seems impossible. The simplest approach would be to copy the array, modify it accordingly, and pass it to ''set'' hook. This would have a large and obscure performance penalty, and a ''set'' implementation would have no way of knowing which values had changed, leading to, for instance, code needing to revalidate all elements even if only one has changed.
 
@@ -522,13 +450,16 @@ It is possible to change the whole array, like so:
 
 <code php>
 class MyList {
+    private array $truthyValues = [];
     public array $values = [] {
+        get => $this->truthyValues;
+        
         // Ensure no empty values.
-        beforeSet {
+        set {
             if (array_filter($value) != $value) {
                 throw new \InvalidArgumentException('Only truthy values allowed');
             }
-            return $value;
+            $this->truthyValues = $value;
         }
     }
     
@@ -602,59 +533,39 @@ class Point
 
 class PositivePoint extends Point
 {
-  public int $x {
-      beforeSet($x) => $x >= 0 ? $x : throw new \InvalidArgumentException('Too small');
-  }
+    private int $positiveX;
+    public int $x {
+        get => $this->positiveX;
+        set($x) => $x >= 0 ? $this->positiveX = $x : throw new \InvalidArgumentException('Too small');
+    }
 }
 </code>
 
 Each hook overrides parent implementations independently of each other.
 
+If a child class adds hooks, any default set on the property is removed.  That is consistent with how inheritance works already; if a property is redeclared in a child, its default is removed or must be re-assigned.  Since hooked properties may not have default values, the default is omitted.  It may be re-assigned in the class's constructor if desired (in which case it would call the ''set'' hook).
+
 === Accessing parent hooks ===
 
-A hook in a child class may access the parent class's hook it is overriding by using the ''parent::$prop'' keyword.  If not accessed this way, the parent class's hook is ignored.  This behavior is consistent with how all methods work.
+A hook in a child class may access the parent class's hook it is overriding by using the ''parent::$prop'' keyword.  If not accessed this way, the parent class's hook is ignored.  This behavior is consistent with how all methods work.  This also offers a way to access the parent class's storage, if any.  That is, the above example could be rewritten:
 
 <PHP>
-class P
+class Point
 {
-    public string $prop { beforeSet => strtolower($value); }
+    public int $x;
+    public int $y;
 }
 
-class C extends P
+class PositivePoint extends Point
 {
-    public string $prop { beforeSet => ucfirst(parent::$prop::beforeSet($value)); }
-}
-
-$c = new C();
-
-$c->prop = "HELLO";
-
-// Prints "Hello"
-print $c->prop;
-</PHP>
-
-If the parent property has no ''beforeSet'' or ''afterSet'' hook defined when it is accessed, an error will be thrown.  This is also consistent with how methods work.
-
-For ''get''/''set'' hooks, this also offers a way to access the parent class's storage, if any.  
-
-<PHP>
-class P 
-{
-    public string $prop = 'prop';
-}
-
-class C extends P 
-{
-    public string $prop {
-        get => parent::$prop::get(); 
-        set => parent::$prop::set($value);
-    }
+  private int $positiveX;
+  public int $x {
+      set($x) => $x >= 0 ? parent::$x::set($x) : throw new \InvalidArgumentException('Too small');
+  }
 }
 </PHP>
 
-The example shown here is essentially a "no op" implementation, but demonstrates how a property in a child class may add get/set hooks without having to implement its own storage.  If the parent property has no hooks (it is using automatic storage), the ''get()'' and ''set()'' operations will work directly on the parent's stored property.
-
-A more realistic example could be:
+An example of overriding only a <php>get</php> hook could be:
 
 <PHP>
 class Strings
@@ -667,7 +578,7 @@ class CaseFoldingStrings extends Strings
     public bool $uppercase = true;
 
     public string $val {
-      get => $this->uppercase 
+        get => $this->uppercase 
           ? strtoupper(parent::$val::get()) 
           : strtolower(parent::$val::get());
     }
@@ -675,47 +586,6 @@ class CaseFoldingStrings extends Strings
 </PHP>
 
 Hooks may not access any other hook except their own parent on their own property.
-
-=== Final hooks ===
-
-Hooks may also be declared ''final'', in which case they may not be overridden.
-
-<code php>
-class User 
-{
-    public string $username {
-        final beforeSet($value) => strtolower($value);
-    }
-}
-
-class Manager extends User
-{
-    public string $username {
-        // This is allowed
-        afterSet => $this->modifications['username'] = true;
-        // But this is NOT allowed, because beforeSet is final in the parent.
-        beforeSet => strtoupper($value);
-    }
-}
-</code>
-
-A property may also be declared ''final''.  A final property may not be redeclared by a child class in any way, which precludes altering hooks or widening its access.
-
-Declaring hooks ''final'' on a property that is declared ''final'' is redundant will throw an error.
-
-<PHP>
-class User 
-{   
-    // Child classes may not add hooks of any kind to this property.
-    public final string $name;
-
-    // Child classes may not add any hooks or override beforeSet,
-    // but this beforeSet will still apply.
-    public final string $username {
-        beforeSet($value) => strtolower($value);
-    }
-}
-</PHP>
 
 ==== Interfaces ====
 
@@ -775,12 +645,7 @@ class C2 implements I
     public string $both {
         get => $this->all;
         set => $this->all = $value;
-    }
-  
-    // This would also be an entirely valid way to satisfy the
-    // interface.
-    public string $both {
-        beforeSet => strtolower($value);
+    
     }
 }
 </PHP>
@@ -827,23 +692,9 @@ class C extends A
 
 An abstract property on an abstract class may provide implementations for any hook, but must have either <php>get</php> or <php>set</php> declared but not defined (as in the example above).  A property on an interface may not implement any hooks.
 
-<PHP>
-abstract class B
-{
-    // This requires that child classes have a settable property
-    // and enforces that the value is positive.
-    // The set could come from a set hook or declaring the property
-    // directly, in which case it has an automatic backing value.
-    abstract public int $value { 
-        set;
-        beforeSet => $value >=0 ? $value : throw new Exception();
-    }
-}
-</PHP>
-
 ==== Abstract property types ====
 
-Normal properties are neither covariant nor contravariant; their type may not change in a subclass.  The reason for that is "get" operations MUST be covariant, and "set" operations MUST be contravariant.  The only way for a property to satisfy both requirements is to be neither covariant or contravariant.
+Normal properties are neither covariant nor contravariant; their type may not change in a subclass.  The reason for that is "get" operations MUST be covariant, and "set" operations MUST be contravariant.  The only way for a property to satisfy both requirements is to be invariant.
 
 With abstract properties (on an interface or abstract class) it is possible to declare a property that has only a get or set operation.  As a result, abstract properties that have only a ''get'' operation required MAY be covariant.  Similarly, an abstract property that has only a ''set'' operation required MAY be contravariant.
 
@@ -898,11 +749,9 @@ For that reason, any concept of asymmetric visibility has been omitted from this
 
 ==== Interaction with readonly ====
 
-''readonly'' properties have the effect of forcing private ''set'' scope, and limiting the property to a single ''set'' operation.  That behavior is independent of ''beforeSet''/''afterSet'' hooks, so they are compatible.  (They would fire for the one set operation, and never again.)
+''readonly'' properties work by checking if the backing store value is uninitialized.  A virtual property has no backing store value to check.  While technically an inherited <php>readonly</php> property would allow accessing its parent's stored value, in practice it would be non-obvious when readonly works on properties with hooks. Moreover, providing a <php>get</php> hook on an overridden property would further complicate the notion of a "initialized" value.
 
-However, ''readonly'' works by checking if the backing store value is uninitialized.  ''get'' and ''set'' hooks imply no backing store, so ''readonly'' cannot be compatible.
-
-For that reason, a ''readonly'' property with a ''get'' or ''set'' hook is disallowed and will throw a syntax error.  Other hooks are fine to combine with ''readonly''.
+For that reason, a ''readonly'' property with a ''get'' or ''set'' hook is disallowed and will throw a syntax error.  That also means that a child class may not redeclare and add hooks to a <php>readonly property</php>, either.
 
 ==== Interaction with magic methods ====
 
@@ -913,8 +762,10 @@ Within the <php>__get</php> or <php>__set</php> methods, the property will be vi
 <PHP>
 class C
 {
+    private string $normalizedName;
     private string $name {
-        beforeSet => ucfirst($value);
+        get => $this->normalizedName;
+        set => $this->normalizedName = ucfirst($value);
     }
     
     public function __set($var, $val)
@@ -934,8 +785,6 @@ $c->name = 'picard';
 
 ==== Interaction with isset() and unset() ====
 
-If a property implements hooks other than ''get'' or ''set'', then ''isset()'' is unaffected.
-
 If a property implements ''get'', then ''isset()'' will invoke the ''get'' hook and return true if the value is non-null.  That is, ''isset($o->foo)'', where ''$foo'' has a ''get'' hook, is equivalent to ''!is_null($o->foo)''.  This behavior is consistent with how ''isset()'' interacts with <php>__get</php> today.
 
 If a property implements any hook, then ''unset()'' is disallowed and will result in an error.  Its semantics are unclear, and it rarely has a logical meaning anyway.
@@ -944,22 +793,11 @@ If a property implements any hook, then ''unset()'' is disallowed and will resul
 
 As of PHP 8.0, properties may be declared inline with the constructor.  That creates an interesting potential for complexity if the property also includes hooks, as the hooks may be arbitrarily complex, and therefore long, leading to potentially tens of lines of code technically within the constructor's method signature.
 
-On the other hand, the ''beforeSet'' hook in particular is extremely useful for validation, including validation on promoted properties.  Making them incompatible would undercut the value of both tremendously.  That is true to a lesser extent for ''afterSet''.  (Properties with ''get'' and ''set'' hooks make little sense to include in promotion.)
+This issue is somewhat obviated by the fact that use cases for promoted virtual properties are not common.  The primary use case would be a <php>set</php> hook that just does validation and nothing else.  With the current set of hooks that would still be rather clunky to implement and to read.
 
-After much consideration, the authors have opted to allow hooks to be implemented within constructor property promotion.  While pathological examples could certainly be shown, we anticipate in practice that the impact will be far less.  In particular, the shorthand version of hook bodies and the ability to call out to private methods if they get complicated partially obviate the concern about syntactic complexity.
+Swift has another hook which it calls ''willSet'', that triggers before the value is set but does not make the property virtual.  We believe this is a useful extension to the hooks proposal (see below).  At that time, we believe it would be sensible to allow hooks in constructors only to support a ''beforeSet'' hook or similar for validation.
 
-For example, we predict the following to be the extent of most combinations of hooks and promotion:
-
-<code php>
-class User
-{
-  public function __construct(
-    public string $username { beforeSet => strtolower($username); }
-  ) {}
-}
-</code>
-
-Which is, all things considered, not too bad for the level of power it gives.
+For the time being, however, we have opted to disallow mixing hooks with constructor property promotion.  This decision can and should be revisited in the future as more hooks are made available.
 
 ==== Default values ====
 
@@ -967,9 +805,8 @@ Default values on properties that implement hooks are not supported.  The main r
 
 In practice, we do not expect this to be a significant issue, for a number of reasons.
 
-  - Default values make no logical sense on properties that implement a <php>get</php> or <php>set</php> hook.
+  - Default values make little logical sense on properties that implement a <php>get</php> and <php>set</php> hook.
   - Default values may still be assigned in a constructor, in which case the order-of-actions question is self-evident and obvious.
-  - Default values may still be provided on a constructor promoted property that implements hooks.  That is because property promotion desugars to defining the property with no default, and then assigning a value to it in the constructor.  If the constructor happens to contain a default, that's fine.  The order-of-actions question is again self-evident and obvious.  (Including that hooks will run on the value as it is assigned.)
 
 ==== Interaction with serialization ====
 
@@ -977,13 +814,13 @@ The authors are not yet certain of the best approach for serializing properties 
 
 ===== Reflection =====
 
-The ''\ReflectionProperty'' object is given a new method ''getHooks(): hooks''.  ''getHooks()'' returns an array of ''\ReflectionMethod'' objects keyed by the hook they are for.  So for example, a property with a ''beforeSet'' and ''afterSet'' hook will return a 2 element array with keys ''beforeSet'' and ''afterSet'', each of which are a ''\ReflectionMethod'' object.  The order in which they are returned is explicitly undefined.
+The ''\ReflectionProperty'' object is given a new method ''getHooks(): hooks''.  ''getHooks()'' returns an array of ''\ReflectionMethod'' objects keyed by the hook they are for.  So for example, a property with both ''get'' and ''set'' hook will return a 2 element array with keys ''get'' and ''get'', each of which are a ''\ReflectionMethod'' object.  The order in which they are returned is explicitly undefined.
 
 If an empty array is returned, it means there are no hooks defined.
 
 ''\ReflectionProperty'' also has a method ''getHook(string $hook): ?\ReflectionMethod'', which will return the corresponding ''\ReflectionMethod'' object, or null if it is not defined.
 
-The returned ''\ReflectionMethod'' objects will have the class the property is on as its declaring class (returned by ''getDeclaringClass()''.  Its return and parameter types will be as defined by the rules above in the hooks section.
+The returned ''\ReflectionMethod'' objects will have the class the property is on as its declaring class (returned by ''getDeclaringClass()'').  Its return and parameter types will be as defined by the rules above in the hooks section.
 
 Hooks defined by a parent class's property will be included and available in both cases, the same as if they were defined on the property directly, unless overridden in the child class.
 
@@ -1091,45 +928,6 @@ var_dump($c->prop); // 84
 
 The authors request recommendations for how this should be handled.
 
-==== afterSet with uninitialized value ====
-
-One non-obvious edge case is what value to pass to <php>afterSet</php> when an uninitialized value is written to.  The "old value" in that case is explicitly undefined, by definition.  Options we've discussed include:
-
-  - Pass null; this has the drawback of needing the parameter to be nullable, and developers then need to care about that case.  Also, null may be a valid value in the type, making it hard to distinguish.
-  - Allow specifying a default value with type; This would be something like <php>afterSet (string|ErrCode $oldValue = ErrCode::FirstTime) { ... }</php>, where <php>ErrCode</php> is an enum, for example.  This would work, but it's a lot more work for developers as well as a bit more implementation complexity.
-  - Define a single-element standard enum specifically for this purpose, like <php>BeforeSet::Undefined</php>. That would be more consistent, but still more work for developers.
-  - Just don't call the hook the first time; this seems unwise, as some hook implementations don't care about the old value, but do need to run every time.
-
-The authors welcome feedback on this point.
-
-==== Double-short-hand for get-only properties ====
-
-The authors are split on the second short-hand version described above.  It's difficult to say in practice how commonly it will be used (we have different SWAG estimates of it at present) and it is not a critical feature so would not be difficult to add later.
-
-Specifically, we're talking about this:
-
-<code php>
-// This we fully agree should be kept.
-class User
-{
-    public function __construct(private string $first, private string $last) {}
-    
-    public string $fullName {
-        get => $this->first . " " . $this->last;
-    }
-}
-
-// This version is up for debate.
-class User
-{
-    public function __construct(private string $first, private string $last) {}
-    
-    public string $fullName => $this->first . " " . $this->last;
-}
-</code>
-
-Input on how useful this shorthand would be is welcome.
-
 ===== Proposed PHP Version(s) =====
 
 PHP 8.3.
@@ -1138,6 +936,16 @@ PHP 8.3.
 
 
 ===== Future Scope =====
+
+==== beforeSet ====
+
+Swift includes a property hook that runs prior to the set action.  We believe PHP would benefit from such a hook, as that is the most common use case for implementing a <php>set</php> hook.  Such a hook would allow the developer to modify the value before it gets saved, or throw an exception if it fails for some reason.  While both behaviors could be implemented by a <php>set</php> hook, this would avoid the need to create a stub <php>get</php> hook and side variable, as the examples above use.
+
+While the behavior of <php>beforeSet</php> would be fairly straightforward, its implementation is more intricate due to existing optimizations in the engine; there are numerous logic paths that would need to be accounted for.  For that reason it has been omitted from this initial scope.
+
+==== afterSet ====
+
+Swift also includes a property hook that runs after the set action, and is provided with the old value of the property.  That is mainly useful for auditing and logging, such as tracking which properties of an object have been modified.  There are complications in PHP to such a hook, mainly due to the uninitialized state of properties and what should be passed to the hook in that case.  If that problem can be sorted out, we believe it would be a useful addition.
 
 ==== isset and unset hooks ====
 
