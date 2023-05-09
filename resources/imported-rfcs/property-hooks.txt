@@ -456,52 +456,49 @@ Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)
 
 Both of these possible approaches also handle only explicit additions and modification.  They would not address appending (''[]'') or operations such as ''unset'', which would introduce even more complexity.
 
-Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties the use of ''[]'' on any property (with or without a key) will result in a runtime error being thrown.  This applies both to arrays and objects implementing ''ArrayAccess''.
+Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties attempting to write to a key of an array property that has hooks (using ''[]'' or ''['some key']'') will result in a runtime error being thrown.
 
-This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
+This restriction does not apply to <php>get</php> operations, as the hook would run to return the whole array, and then dereferencing off of it for an individual key is safe.
 
-It is possible to change the whole array, like so:
+To summarize in code:
 
-<code php>
-class MyList 
+<PHP>
+class C
 {
-    public array $values = [] {
-        // Ensure no empty values.
+    private bool $hasChanged = false;
+    
+    public array $arr {
+        get => $field + ['extra' => 'stuff'];
         set {
-            if (array_filter($value) != $value) {
-                throw new \InvalidArgumentException('Only truthy values allowed');
-            }
+            $this->hasChanged = true;
             $field = $value;
         }
     }
-    
-    public function addValue($key, $value): void
-    {
-        // This is easily encapsulated in a method.
-        $values = $this->values;
-        $values[$key] = $value;
-        $this->values = $values;
-    }
 }
 
-$l = new MyList();
+$c = new C();
 
-// This will fail.
-$l->values[] = 1;
+// OK, returns the whole array,
+// with the extra key on the end.
+print_r($c->arr);
 
-// But this is allowed.
-$a = $l->values;
-$a[] = 1;
-$l->values = $a;
+// OK; the hook returns the array by value,
+// then the 'beep' key accessed.
+print $c->arr['beep'];
 
-// This is fine.
-$a->addValue('foo', 'bar');
+// OK.  The entire array is overwritten,
+// and passed to set as $value to do with
+// as it pleases.
+$c->arr = ['new' => 'array'];
 
-// This will throw an exception due to the hook.
-$a = $l->values;
-$a[] = false;
-$l->values = $a;
-</code>
+// Error.
+$c->arr['beep'] = 'boop';
+
+// Error.
+$c->arr[] = 'narf';
+</PHP>
+
+This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
 
 In practice, a more appropriate and idiomatic usage of hooked arrays would be like so:
 
@@ -509,6 +506,7 @@ In practice, a more appropriate and idiomatic usage of hooked arrays would be li
 class C 
 {
     private array $_elements;
+
     public array $elements {
         get => $this->_elements;
     }
