@@ -6,30 +6,129 @@
 
 ===== Introduction =====
 
-Currently, in PHP, it is possible to get the name of nearly anything. You can retrieve the name of a class with ''get_class'' or ''::class'', you can extract the name of a function from ''(...)'', but there is one thing you cannot get the name of, and that is the name of a variable or static member during run time.
+Currently, it is possible to inspect virtually any aspect of running code, except there is no easy way to inspect the locally executing scope. For example, a developer can get the class of an object with ''get_class()'' or the name with ''MyClass::class'' or ''$myClass::class''. A developer can get the name of a parameter or property via reflection, however, when a developer needs to write a simple error message, that may be overkill, thus the variable name is usually hard-coded into the error message. This usually works fine until a developer refactors the code and forgets to change the name of the variable in the error message.
+
+''nameof()'' allows developers to quickly and easily access the name of a variable in the current scope, in a way that keeps error messages consistent.
+
+This RFC proposes a global ''nameof()'' function that allows a developer to get the name of virtually any user-named variable, property, const, or member, quickly and easily:
+
+<code PHP>
+echo nameof($variable); // variable
+echo nameof($object->property); // property
+echo nameof(Enum::Case); // Case
+echo nameof(Object::Const); // Const
+echo nameof(myFunction(...)); // myFunction
+echo nameof(MY_CONSTANT); // MY_CONSTANT
+</code>
+
+As named parameters become more prevalent, providing the end user with the name of the parameter is more important, in a way that it is easy to locate when refactoring, especially as part of a deprecation strategy:
+
+<code PHP>
+function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
+  // potentially many lines later...
+  if(is_called_with_deprecated_value($oldParam)) {
+    $logger->warn(nameof($oldParam) . ' is deprecated in the next version, please use ' . nameof($newParam);
+  }
+}
+</code>
+
+Further, using ''nameof()'' would allow simpler usage of attributes, abusing the silence operator (see error checking):
+
+<code PHP>
+// evaluates to #[EventHandler(callback: 'handler')]
+#[EventHandler(callback: @nameof(Operator::handler))]
+class Operator {
+  public function handler() {
+    // implementation
+  }
+}
+</code>
+
+It's important to note that some things have an ambiguous name that is a compile error:
+
+<code PHP>
+echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead)
+echo nameof($a === $b); // ??
+echo nameof($a($b)); // same as array access
+</code>
+
+All of these will generate a compile error: "Cannot get the name of an ambiguous expression."
 
 ===== Proposal =====
 
-This RFC proposes introducing a new global function called ''nameof'' that returns the names of variables and static members. This string can assist in error messages, array keys for static/enums, or reflection. The name is extracted during compile time, and works anywhere a static string would work.
+The ''nameof()'' function is not necessarily a function in the traditional sense and can be used anywhere a string literal can be used (such as to define static constants, array keys, and attributes). This means that there is an 'identity' for every valid ''nameof()'':
 
-This function returns the 'name of' a variable, property, function, or static member.
+<code PHP>
+${nameof($variable)} === $variable;
+$object->{nameof($object->property)} === $object->property;
+constant(Enum::class . '::' . nameof(Enum::Case)) === Enum::Case;
+constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
+(nameof(myFunction(...))() === myFunction();
+constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
+</code>
 
-====== Examples ======
+When getting the name of constants and functions, the name will NOT be the full name, but the lexical name. This means that if the name is ''use'''d, it will be that name. It's probably easiest to show this with an example:
 
-''nameof($variable) === 'variable';''
+<code PHP>
+namespace Name {
+    const MY_CONST = true;
+    function namedFunction() {}
+}
 
-''nameof($object->property) === 'property';''
+namespace Other {
+    echo nameof(\Name\MY_CONST); // \Name\MY_CONST
+    echo nameof(\Name\namedFunction(...)); // \Name\namedFunction
+}
 
-''nameof(Enum::Case) === 'Case';''
+namespace Using {
+    use const Name\MY_CONST as ;
+    use const Name\MY_CONST as ALIASED_CONST;
+    use function Name\namedFunction;
 
-''nameof(Object::Member) === 'Member';''
+    echo nameof(MY_CONST); // MY_CONST
+    echo nameof(ALIASED_CONST); // ALIASED_CONST
+    echo nameof(namedFunction(...)); // namedFunction
+}
+</code>
 
-''nameof(func(...)) === 'func';''
+===== Error Handling =====
 
-''nameof(some\func(...)) === 'some\func';''
+There are several ways to handle errors, each one has its own merits but ultimately will be left up as a secondary vote:
+
+1. No error handling
+
+In this case, there is no error handling. This would allow using ''nameof'' on things that don't exist. For example, no error would be output if a developer references a static property on an instant property:
+
+<code PHP>
+class MyClass {
+  public string $var;
+}
+nameof(MyClass::var); // no error, returns 'var'
+nameof($aVariable); // no error, returns 'aVariable'
+</code>
+
+The downside is that PHP won't natively inform a developer that they've used something that doesn't exist. The main benefit of this approach is that it would allow the community to come up with its own rules via static analysis tools.
+
+2. Warnings as usual
+
+In this case, PHP would output warnings and errors a developer would expect to see if they used something that doesn't exist:
+
+<code PHP>
+class MyClass {
+  public string $var;
+}
+nameof(MyClass::var); // returns 'var'
+// Uncaught Error: Undefined constant MyClass::var
+nameof($aVariable); // returns 'aVariable'
+// Warning: Undefined variable $aVariable
+</code>
+
+3. Warnings and a way to disable them
+
+Warnings/errors can be disabled via the 'silence operator' (''@'') to behave just like the first case. This is the best of both worlds, allowing developers to 'break the rules' to specify properties/functions without a reference to the object (''@nameof(Object::method(...))'' vs. ''nameof($object->method)'') but would require assistance via static analysis tooling to catch mistakes.
 
 ===== Backward Incompatible Changes =====
-What breaks, and what is the justification for it?
+There are no backward incompatible changes at this time except that `nameof` will become a reserved word.
 
 ===== Proposed PHP Version(s) =====
 
@@ -59,11 +158,13 @@ PHP will largely be unaffected by this change, except that a new global function
 None.
 
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
+This is a simple yes-or-no vote to include this feature. 2/3 majority required to pass.
+
+There is a subvote for the type of error checking to include. Majority wins.
 
 ===== Patches and Tests =====
 
-https://github.com/php/php-src/pull/11172/files
+experimental implementation: https://github.com/php/php-src/pull/11172/files
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
