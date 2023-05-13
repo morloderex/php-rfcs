@@ -1,5 +1,5 @@
 ====== PHP RFC: Implicit Move Optimisation ======
-  * Version: 0.2
+  * Version: 0.2.1
   * Date: 2023-05-13
   * Author: Niels Dossche (nielsdos), dossche.niels@gmail.com
   * Status: Draft
@@ -70,9 +70,27 @@ Every time "$a" is modified, the SSA variable needs to be "redefined". The count
 
 This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimisation occurs automatically: it eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function. The optimisation is only applied to local variables, because properties and array dimensions are not represented as SSA variables.
 
-The implementation pull request introduces this optimisation by setting a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and it unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
+The implementation pull request introduces this optimisation by setting a special flag on the opcodes for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and it unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
 
-When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. This happens using the NO_VAL flag. We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
+When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. This happens using the NOVAL flag. We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
+
+Because the optimisation unsets the PHP variable, we need a new SSA definition for the affected PHP variable. The SSA code from above will look like this with this optimisation:
+
+<code>
+main:
+     ; #0.CV0($array) NOVAL
+     ; #1.CV1($a) NOVAL
+0000 #2.CV0($array) = RECV 1
+0001 #3.CV1($a) = QM_ASSIGN #2.CV0($array)
+0002 INIT_FCALL 2 112 string("array_merge")
+0003 SEND_VAR #3.CV1($a) -> #4.CV1($a) NOVAL 1
+0004 SEND_VAL array(...) 2
+0005 #5.V3 = DO_ICALL
+0006 ASSIGN #4.CV1($a) NOVAL -> #6.CV1($a) NOVAL #5.V3
+0007 RETURN null
+</code>
+
+As we can see above, there is now a redefinition for "$a" ("#4.CV1($a)") in the SEND_VAR opcode. The optimisation pass sees that "#4.CV1($a)" has the NOVAL flag, which indicates its result is never used again. It also knows that "$a" may be an array. Therefore, the special flag is set on the SEND_VAR opcode.
 
 ==== Constraints ====
 
