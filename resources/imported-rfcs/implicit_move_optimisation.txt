@@ -27,17 +27,19 @@ main();
 
 The code example shows an array being passed to "my_function", which modifies the array and returns the modified result. However, due to the copy-on-write (CoW) mechanism, the variable "$my_array" is copied within "my_function" because the array's reference count is greater than 1 and it is modified. In this example, the copy is unnecessary because the result always overwrites the original array. The purpose of this RFC is to propose an optimisation for avoiding such unnecessary copies.
 
-A similar case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
-
 While this example may not highlight the significance of the copy cost, there are scenarios where it does matter, such as processing large data batches (e.g., ETL-like processes) or having more complex data manipulation functions. The reason for having a separate "main()" function in the example will become clear later in the proposal.
+
+A similar case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
 
 ===== Proposal =====
 
-This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimization occurs automatically: It eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function.
+This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimization occurs automatically: it eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function.
 
-The linked PR incorporates this optimisation by introducing a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
+The implementation pull request introduces this optimisation by setting a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and it unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
 
-When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
+When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition (*). We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
+
+(*) It's important to realise the difference between an SSA variable and a PHP variable. A PHP variable may map to N SSA variables. In short, the idea of SSA is that a variable is only defined once, and further modification require a redefinition of the variable into a new SSA variable.
 
 ==== Constraints ====
 
