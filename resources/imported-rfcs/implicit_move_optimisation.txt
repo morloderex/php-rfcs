@@ -29,7 +29,7 @@ The code example shows an array being passed to "my_function", which modifies th
 
 While this example may not highlight the significance of the copy cost, there are scenarios where it does matter, such as processing large data batches (e.g., ETL-like processes) or complex functions. The reason for creating a separate "main()" function will become clear later in the proposal.
 
-Another case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
+A similar case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
 
 ===== Proposal =====
 
@@ -88,8 +88,36 @@ function example_copy() {
 
 ==== Risks ====
 
+Every optimisation that gets added to PHP has the risk of introducing breakages. In particular, the type inference needs to be changed to reflect the move of a variable. Type inference is heavily used in the JIT engine, so there's a concern that this optimisation might cause bugs in the JIT. I haven't seen such bugs yet, and I would be surprised if there are because the type inference only differs if the SSA variable is never used again.
+
+The SSA construction change does introduce a **compile-time** performance decrease for WordPress because the optimiser performs extra work. However, the optimisation improves the **run-time** performance of WordPress slightly, which is what actually matters.
+
 ===== Backward Incompatible Changes =====
-What breaks, and what is the justification for it?
+
+There's a subtle BC break. Consider the following code:
+
+<code php>
+class Foo {
+    public function __destruct() {
+        var_dump(1);
+    }
+}
+
+function test(array $x) {
+    unset($x[0]);
+}
+
+function main() {
+    $x = [new Foo];
+    test($x);
+    var_dump(2);
+}
+
+main();
+</code>
+
+Without this optimisation this will first output 2, and then 1. But **with** the optimisation this will output 1 first, and then 2. This is because with the optimisation the array "$x" is destroyed after the call to "test" finishes as its lifetime was transferred to "test".
+It is hard to predict what the impact will be on real-world applications. In my opinion executing code with side-effects which needs to happen in a specific order is dangerous as-is, because even in current PHP no such guarantees are made if objects have cycles for example.
 
 ===== Proposed PHP Version(s) =====
 
