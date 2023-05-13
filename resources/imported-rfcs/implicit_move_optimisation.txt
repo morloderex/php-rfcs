@@ -25,19 +25,66 @@ function main() {
 main();
 </code>
 
-The code example shows an array being passed to "my_function", which modifies the array and returns the modified result. However, due to the copy-on-write (CoW) mechanism, the variable "$my_array" is duplicated within "my_function" because the array's reference count is greater than 1 and it is modified. In this example, the duplication is unnecessary since the result always overwrites the original array. The purpose of this RFC is to propose an optimisation for avoiding such unnecessary duplications.
+The code example shows an array being passed to "my_function", which modifies the array and returns the modified result. However, due to the copy-on-write (CoW) mechanism, the variable "$my_array" is copied within "my_function" because the array's reference count is greater than 1 and it is modified. In this example, the copy is unnecessary since the result always overwrites the original array. The purpose of this RFC is to propose an optimisation for avoiding such unnecessary copies.
 
 While this example may not highlight the significance of the copy cost, there are scenarios where it does matter, such as processing large data batches (e.g., ETL-like processes) or complex functions. The reason for creating a separate "main()" function will become clear later in the proposal.
 
+Another case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
+
 ===== Proposal =====
 
-This will be implemented as an addition to the existing DFA optimisation pass.
+This will be implemented as an addition to the existing optimisation pipeline.
 
 ==== RC1 functions ====
 
 ==== Constraints ====
 
 ==== Examples ====
+
+==== Alternatives ====
+
+You might wonder why we cannot just use references instead to prevent copies. It is my opinion that references are less ergonomic for developers. Furthermore, builtin functions such as "array_merge", "array_replace", etc., don't take a reference so those functions wouldn't be able to avoid a copy.
+
+For ergonomics, take a look at the following code example:
+
+<code php>
+function my_function(array &$my_array) {
+    $my_array[] = 3;
+    var_dump($my_array); // Do something interesting
+}
+
+function example_ref() {
+    $array = [0, 1, 2];
+    my_function($array); // No copy, I want to change the array
+}
+
+function example_copy() {
+    $array = [0, 1, 2];
+    $array_copy = array_merge($array, []); // copy the array
+    my_function($array_copy); // Operates on the copy
+    var_dump($array); // Should be the original
+}
+</code>
+
+In the function "example_ref", I want to modify "$array" in-place, while in "example_copy" I want the original array to stay the same. With references I have to explicitly copy the array if I want to keep the original. If we instead have an optimisation that can detect when it can modify in-place, then we can avoid references and the code becomes simpler (while still avoiding a copy):
+
+<code php>
+function my_function(array $my_array) {
+    $my_array[] = 3;
+    var_dump($my_array); // Do something interesting
+}
+
+function example_ref() {
+    $array = [0, 1, 2];
+    my_function($array); // No copy, I want to change the array
+}
+
+function example_copy() {
+    $array = [0, 1, 2];
+    my_function($array); // Operates on the copy
+    var_dump($array); // Should be the original
+}
+</code>
 
 ==== Risks ====
 
@@ -56,7 +103,7 @@ None.
 None.
 
 ==== To Opcache ====
-This proposal implements an extra optimisation in the DFA pass in the optimiser. There needed to be changes to SCCP, DFG, and SSA construction to account for the behaviour change in SEND_VAR. Specifically, the SEND_VAR opcode now redefines op1 because it can set its type to UNDEF.
+This proposal implements an extra optimisation in the DFA pass in the optimiser. There need to be changes to SCCP, DFG, type inference, and SSA construction to account for the behaviour change in SEND_VAR. The SEND_VAR opcode now redefines op1 because it can set its type to UNDEF. The type inference needs to reflect that as well.
 
 ==== New Constants ====
 None.
