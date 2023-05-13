@@ -1,5 +1,5 @@
 ====== PHP RFC: Implicit Move Optimisation ======
-  * Version: 0.1.1
+  * Version: 0.1.2
   * Date: 2023-05-13
   * Author: Niels Dossche (nielsdos), dossche.niels@gmail.com
   * Status: Draft
@@ -33,13 +33,44 @@ A similar case where this optimisation is beneficial is for variables which are 
 
 ===== Proposal =====
 
+We will first give some brief background information and then dive into the technical details of the proposal.
+
+=== Background ===
+
+During optimisation, opcache will transform the PHP opcodes into Static Single Assignment (SSA) form. This is a special representation in which every variable has a single definition. An SSA variable is thus not the same as a PHP variable. In fact, a PHP variable may correspond to many SSA variables because of the single definition requirement. Let's take a look at the following PHP code and how it looks in SSA form.
+
+<code php>
+function main(array $array) {
+    $a = $array;
+    $a = array_merge($a, [4]);
+}
+</code>
+
+This results in the following SSA code, with the type information removed for clarity.
+
+<code>
+main:
+     ; #0.CV0($array) NOVAL
+     ; #1.CV1($a) NOVAL
+0000 #2.CV0($array) = RECV 1
+0001 #3.CV1($a) = QM_ASSIGN #2.CV0($array)
+0002 INIT_FCALL 2 112 string("array_merge")
+0003 SEND_VAR #3.CV1($a) 1
+0004 SEND_VAL array(...) 2
+0005 #5.V3 = DO_ICALL
+0006 ASSIGN #3.CV1($a) -> #6.CV1($a) NOVAL #5.V3
+0007 RETURN null
+</code>
+
+Let's break it down. A variable that's actually in the code, like "$array" and "$a" is called a Compiled Variable (CV). CV0 refers to "$array" and CV1 regers to "$a". As an SSA variable may only be assigned once, but there are multiple assignments to "$a", "$a" is numbered in the SSA code. We have: "#0.CV0($array)", "#2.CV0($array)" for "$array"; and "#1.CV1($a)", "#3.CV1($a)", "#6.CV1($a)" for "$a". Every time "$a" is modified, the counter after the pound symbol will increase and from that point on the SSA variable to use for "$a" is the one with the incremented counter. This is called a redefinition of "$a". In particular, the PHP code `$a = array_merge($a, [4]);` results in using the SSA variable "#3.CV1($a)" and the assignment results in a new SSA variable "#6.CV1($a)".
+
+=== Technical Details ===
+
 This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimization occurs automatically: it eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function. The optimisation is only applied to local variables, because properties and array dimensions are not represented as SSA variables.
 
 The implementation pull request introduces this optimisation by setting a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and it unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
 
-When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition (*). We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
-
-(*) It's important to realise the difference between an SSA variable and a PHP variable. A PHP variable may map to N SSA variables. In short, the idea of SSA is that a variable is only defined once, and further modification require a redefinition of the variable into a new SSA variable.
+When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
 
 ==== Constraints ====
 
