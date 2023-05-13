@@ -25,19 +25,19 @@ function main() {
 main();
 </code>
 
-The code example shows an array being passed to "my_function", which modifies the array and returns the modified result. However, due to the copy-on-write (CoW) mechanism, the variable "$my_array" is copied within "my_function" because the array's reference count is greater than 1 and it is modified. In this example, the copy is unnecessary since the result always overwrites the original array. The purpose of this RFC is to propose an optimisation for avoiding such unnecessary copies.
-
-While this example may not highlight the significance of the copy cost, there are scenarios where it does matter, such as processing large data batches (e.g., ETL-like processes) or complex functions. The reason for creating a separate "main()" function will become clear later in the proposal.
+The code example shows an array being passed to "my_function", which modifies the array and returns the modified result. However, due to the copy-on-write (CoW) mechanism, the variable "$my_array" is copied within "my_function" because the array's reference count is greater than 1 and it is modified. In this example, the copy is unnecessary because the result always overwrites the original array. The purpose of this RFC is to propose an optimisation for avoiding such unnecessary copies.
 
 A similar case where this optimisation is beneficial is for variables which are passed to functions and then never used again the caller.
+
+While this example may not highlight the significance of the copy cost, there are scenarios where it does matter, such as processing large data batches (e.g., ETL-like processes) or having more complex data manipulation functions. The reason for having a separate "main()" function in the example will become clear later in the proposal.
 
 ===== Proposal =====
 
 This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimization occurs automatically: It eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function.
 
-The linked PR incorporates this optimization by introducing a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (when the data is modified) is avoided.
+The linked PR incorporates this optimisation by introducing a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (even when the data is modified) is avoided.
 
-How do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. We use this information, along with alias information, to determine when to set the flag. The flag is also only set if the variable may be an array or may be a string.
+When do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. We use this information, along with alias information, to determine when to set the flag. Furthermore, the flag can only be set if the variable may be an array or may be a string.
 
 ==== Constraints ====
 
@@ -48,10 +48,14 @@ The optimisation is not applied if the caller uses one of the following:
   * "func_get_args" etc.
   * Variable variables
   * "compact", "extract" etc.
-  * try-catch
+  * Try - catch/finally
 
-Furthermore, the optimisation is also not applied on the pseudo-main function of PHP, because of globals (in fact, no SSA-based optimisations take place in that case because of those complications).
-It is also not applied on arguments in the **caller**. This is because it could influence backtraces from exceptions or influence the result of "debug_get_backtrace".
+Furthermore, the optimisation is also not applied on the pseudo-main function of PHP, because of globals. In fact, no SSA-based optimisations take place in that case because of global complications.
+It is also not applied on arguments in the **caller**. This is because it could influence backtraces from exceptions or influence the result of "debug_get_backtrace". For example:
+
+<code php>
+
+</code>
 
 ==== Examples ====
 
@@ -72,6 +76,8 @@ For 30000 iterations **without** the optimisation, this takes 3.405s on my machi
 Other examples of builtin functions that are optimised for a reference count of 1 are "array_replace", "array_unique", and "array_intersect". More functions can follow in the future.
 
 ==== Alternatives ====
+
+There are two alternative solutions to the problem outlined in this proposal: references, or explicit moves. I will discuss each of them briefly and explain why I think they are not ergonomic solutions.
 
 === References ===
 
@@ -117,6 +123,11 @@ function example_copy() {
     var_dump($array); // Should be the original
 }
 </code>
+
+=== Explicit Moves ===
+
+An alternative is creating a new keyword "move", which the programmer can place manually in their code to perform the move optimisation manually. Ilija has prototyped this in the past, independently from this proposal.
+It is my opinion that having an optimisation applied automatically is more ergonomic and automatically benefits existing PHP code.
 
 ==== Risks ====
 
