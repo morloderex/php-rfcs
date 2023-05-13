@@ -50,6 +50,7 @@ It's important to note that some things have an ambiguous name that is a compile
 echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead)
 echo nameof($a === $b); // ??
 echo nameof($a($b)); // same as array access
+echo nameof($$a); // ask for $a or use the value of $a
 </code>
 
 All of these will generate a compile error: "Cannot get the name of an ambiguous expression."
@@ -66,6 +67,14 @@ constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
 (nameof(myFunction(...))() === myFunction();
 constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
 </code>
+
+There are a limited number of expressions that can resolve to a name using ''nameof()'':
+
+  * variables: ''nameof($var)'' resolves to 'var'
+  * properties: ''nameof($this->prop)'', ''nameof($a?->prop)'' resolves to 'prop'
+  * first-class callables: ''nameof(strlen(...))'' resolves to 'strlen'
+  * static properties and constants: ''nameof(A::Prop)'' resolves to 'Prop'
+  * constants: ''nameof(MY_CONST)'' resolves to 'MY_CONST'
 
 When getting the name of constants and functions, the name will NOT be the full name, but the lexical name. This means that if the name is ''use'''d, it will be that name. However, if the full name is used in the ''nameof()'', the full name is returned. It's probably easiest to show this with an example:
 
@@ -93,9 +102,35 @@ namespace Using {
 }
 </code>
 
+In other language implementations (such as C#), a full name usually isn't returned even if you pass one in. However, a 'full name' is rarely required and can often be constructed from parts, if required. However, as a convenience, in this implementation, if a 'full name' is requested entered, a full name is returned. This allows for the 'least surprises' since what you put in is what you get out.
+
+Additionally, consider traits and aliasing:
+
+<code PHP>
+trait A {
+  public function example() {}
+}
+
+trait B {
+  public function example() {}
+}
+
+class C {
+  use A, B {
+    A::example insteadof B;
+    B::example as exampleB;
+  }
+}
+
+$a = new C();
+echo nameof($a->exampleB(...)); // outputs: "exampleB"
+</code>
+
+In the example above, if we were to return the 'full name' of ''$a->exampleB(...)'' it would actually be 'B::example' but that isn't helpful in the context of class ''C''. By returning the lexical name, the developer gets the response they expect.
+
 ===== Error Handling =====
 
-There are several ways to handle errors, each one has its own merits but ultimately will be left up as a secondary vote:
+There are several ways to handle errors, each one has its own merits but ultimately will be left up as a secondary vote. It may not provide the **best** solution, but the author doesn't have a personal preference:
 
 1. No error handling
 
@@ -111,25 +146,21 @@ nameof($aVariable); // no error, returns 'aVariable'
 
 The downside is that PHP won't natively inform a developer that they've used something that doesn't exist. The main benefit of this approach is that it would allow the community to come up with its own rules via static analysis tools.
 
-2. Warnings as usual
+2. Warnings
 
-In this case, PHP would output warnings and errors a developer would expect to see if they used something that doesn't exist:
+In this case, PHP would output a warning: "nameof(<name>): does not exist." where <name> is the name the developer passed.
 
-<code PHP>
-class MyClass {
-  public string $var;
-}
-nameof(MyClass::var); // returns 'var'
-// Uncaught Error: Undefined constant MyClass::var
-nameof($aVariable); // returns 'aVariable'
-// Warning: Undefined variable $aVariable
-</code>
+Using a class name (or any other method that would normally trigger autoloading) that does not exist, will trigger autoloading and attempt to locate the class. If it is not found, a warning will be issued. If a variable does not exist in the current scope, a warning will be issued. If the referenced property/method/const cannot be located, a warning will be issued. If a function or constant cannot be located in the current scope, a warning will be issued.
 
-Warnings/errors can be disabled via the 'silence operator' (''@'') to behave just like the first case. This is the best of both worlds, allowing developers to 'break the rules' to specify properties/functions without a reference to the object (''@nameof(Object::method(...))'' vs. ''nameof($object->method)'') but would require assistance via static analysis tooling to catch mistakes.
+Warnings can be disabled via the 'silence operator' (''@'') to behave just like the first case. This is the best of both worlds, allowing developers to 'break the rules' to specify properties/functions without a reference to the object (''@nameof(Object::method(...))'' vs. ''nameof($object->method)'') but would require assistance via static analysis tooling to catch mistakes.
 
 3. Exceptions
 
-An exception model was considered, however, the author believes that it would break the concept of "using ''nameof'' wherever a string could be used" and wouldn't be practical for the engine to handle all of those cases.
+An exception model was considered, however, the author believes that it would break the concept of "using ''nameof'' wherever a string could be used". For example, if a name cannot be located, an exception would be thrown. This would be true in the case of simply defining an attribute with a non-existent name:
+
+#[EventHandler(handler: nameof(I_DO_NOT_EXIST))]
+
+which is probably undesirable and nearly impossible to handle in a graceful way.
 
 ===== Backward Incompatible Changes =====
 There are no backward incompatible changes at this time except that `nameof` will become a reserved word.
