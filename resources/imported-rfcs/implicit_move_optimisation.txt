@@ -33,12 +33,11 @@ A similar case where this optimisation is beneficial is for variables which are 
 
 ===== Proposal =====
 
-This optimisation will be implemented as an addition to the existing optimisation pipeline as an SSA-based optimisation.
-I call this optimisation an "implicit move". The "implicit" refers to the fact it happens without the programming having to do anything. The "move" refers to the fact that the lifetime and data is moved into the called function. This is inspired by Rust's and C++'s move semantics.
+This optimisation, known as "implicit move," will be added to the existing optimisation pipeline as an SSA-based optimization. The term "implicit" indicates that this optimization occurs automatically: It eliminates the need for PHP developers to take any specific action. The “move” refers to the fact that the lifetime and data is moved into the called function.
 
+The linked PR incorporates this optimization by introducing a special flag on the oplines for SEND_VAR and SEND_VAR_EX, indicating the possibility of an implicit move. A specialized VM handler is implemented to handle cases where this flag is set. It passes the array/string as an argument without creating a copy and unsets the original variable. As a result, the reference count of the array/string remains unchanged. If the data's reference count is 1, it remains as such when the callee executes. Therefore, the need for a copy (when the data is modified) is avoided.
 
-
-TODO: how does it work
+How do we set that flag? The SSA optimisation pipeline already detects when an SSA variable is never used after its definition. We use this information, along with alias information, to determine when to set the flag. The flag is also only set if the variable may be an array or may be a string.
 
 ==== Constraints ====
 
@@ -73,6 +72,8 @@ For 30000 iterations **without** the optimisation, this takes 3.405s on my machi
 Other examples of builtin functions that are optimised for a reference count of 1 are "array_replace", "array_unique", and "array_intersect". More functions can follow in the future.
 
 ==== Alternatives ====
+
+=== References ===
 
 You might wonder why we cannot just use references instead to prevent copies. It is my opinion that references are less ergonomic for developers. Furthermore, builtin functions such as "array_merge", "array_replace", etc., don't take a reference so those functions wouldn't be able to avoid a copy.
 
