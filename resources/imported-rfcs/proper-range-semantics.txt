@@ -1,6 +1,6 @@
 ====== PHP RFC: Define proper semantics for range() function  ======
 
-  * Version: 0.2
+  * Version: 0.3
   * Date: 2023-03-13
   * Author: George Peter Banyard, <girgias@php.net>
   * Status: Under Discussion
@@ -131,6 +131,17 @@ array(5) {
   string(1) "D"
   [4]
   string(1) "E"
+}
+
+
+var_dump(range('1', '3'));
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
 }
 </PHP>
 
@@ -340,6 +351,61 @@ array(0) {
 
 Where using a NAN value as a step even breaks the expectation that <php>range()</php> will return a non empty list.
 
+==== Issues surrounding usage of string digits ====
+
+If one of the boundary inputs is a string digit (e.g. ''"1"'') both inputs will be interpreted as numbers.
+This doesn't pose too much of an issue if both inputs are string digits as it will generate a list of integers.
+
+However, if the other input is a non-numeric string the expected behaviour of generating a list of ASCII characters is not upheld anymore:
+<PHP>
+var_dump( range("9", "A") );
+array(10) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(8)
+  [2]=>
+  int(7)
+  [3]=>
+  int(6)
+  [4]=>
+  int(5)
+  [5]=>
+  int(4)
+  [6]=>
+  int(3)
+  [7]=>
+  int(2)
+  [8]=>
+  int(1)
+  [9]=>
+  int(0)
+}
+</PHP>
+instead of the expected:
+<PHP>
+var_dump( range("9", "A") );
+array(9) {
+  [0]=>
+  string(1) "9"
+  [1]=>
+  string(1) ":"
+  [2]=>
+  string(1) ";"
+  [3]=>
+  string(1) "<"
+  [4]=>
+  string(1) "="
+  [5]=>
+  string(1) ">"
+  [6]=>
+  string(1) "?"
+  [7]=>
+  string(1) "@"
+  [8]=>
+  string(1) "A"
+}
+</PHP>
 
 ===== Proposal =====
 
@@ -354,8 +420,9 @@ The changes are as follows:
   * Throw a <php>ValueError</php> when passing a negative <php>$step</php> for increasing ranges.
   * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is the empty string, and cast the value to ''0''
   * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> has more than one byte if it is a non-numeric string.
-  * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is cast to an integer because the other boundary input is a number or numeric string. (e.g. <php>range('5', 'z');</php> or <php>range(5, 'z');</php>)
-  * Emit an <php>E_WARNING</php> when <php>$step</php> is a float when trying to generate a range of characters.
+  * Emit an <php>E_WARNING</php> when <php>$start</php> or <php>$end</php> is cast to an integer because the other boundary input is a number. (e.g. <php>range(5, 'z');</php>)
+  * Produce a list of characters if one of the boundary inputs is a string digit instead of casting the other input to int (e.g. <php>range('5', 'z');</php>)
+  * Emit an <php>E_WARNING</php> when <php>$step</php> is a float when trying to generate a range of characters, except if both boundary inputs are numeric strings (e.g. <php>range('5', '9', 0.5);</php> produces not warning).
 
 
 Therefore, the behaviour of some of the previous examples would result in the following behaviour:
@@ -374,6 +441,28 @@ array(5) {
   string(1) "D"
   [4]=>
   string(1) "E"
+}
+
+var_dump( range("9", "A") );
+array(9) {
+  [0]=>
+  string(1) "9"
+  [1]=>
+  string(1) ":"
+  [2]=>
+  string(1) ";"
+  [3]=>
+  string(1) "<"
+  [4]=>
+  string(1) "="
+  [5]=>
+  string(1) ">"
+  [6]=>
+  string(1) "?"
+  [7]=>
+  string(1) "@"
+  [8]=>
+  string(1) "A"
 }
 
 var_dump(range('', 'Z'));
