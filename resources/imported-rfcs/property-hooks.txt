@@ -413,25 +413,26 @@ class Person {
 
 Note that <php>$field</php> is only valid in the hook itself, not in a sub-called method.  That is, writing to <php>$field</php> from within <php>sanitizePhone()</php> would just write to a local variable by that name, not to the property.
 
-==== References and arrays ====
+==== References ====
 
-Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').  For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
+Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').
+
+For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
 
 For example:
 
 <PHP>
 class Foo
 {
-    public int $bar;
+    public string $bar;
 
-    private int $_baz;
-    public int $baz {
-        get => $this->_baz;
-        set => $this->_baz = $value;
+    public string $baz {
+        get => $field;
+        set => $field = strtoupper($value);
     }
 }
 
-$x = 42;
+$x = 'beep';
 
 $foo = new Foo();
 // This is fine; as $bar is a normal property.
@@ -442,15 +443,60 @@ $foo->bar = &$x;
 $foo->baz = &$x;
 </PHP>
 
-For the vast majority of properties this causes no issue, as reading or writing to properties by reference is extremely rare.  The one exception is ''array'' properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
+For the vast majority of properties this causes no issue, as reading or writing to properties by reference is extremely rare.  However, there are some edge cases where references to properties are necessary, if only for backward compatibility.
+
+There is one exception to the above: if a property is virtual, then there is no presumed connection between the get and set operations.  Since the <php>set</php> hook couldn't be expected to update-in-place anyway, we have chosen to allow references to be opt-in for the <php>get</php> hook on virtual properties, only.  To do so, the <php>get</php> hook may be prefixed with <php>&</php>, which will cause it to return a reference to whatever its body returns, rather than the value itself.  Subsequent writes to that reference will not trigger the <php>set</php> hook.
+
+That means the following is allowed:
+
+<PHP>
+class Foo
+{
+    private string $_baz;
+    
+    public string $baz {
+        &get => $this->_baz;
+        set => $this->_baz = strtoupper($value);
+    }
+}
+ 
+$foo = new Foo();
+
+// This invokes "set", and sets $_baz to "BEEP".
+$foo->baz = 'beep';
+
+// This assigns $x to be a reference directly to $_baz
+$x =& $foo->baz;
+
+// This assigns "boop" to $_baz, bypassing the set hook.
+$x = 'boop';
+</PHP>
+
+Setting by reference, however, is not supported, as its semantics are not well-defined.  This behavior mirrors how the magic methods <php>__get()</php> and <php>__set()</php> handle references.  (They are, in a sense, generic virtual properties.)
+
+Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.  (Note: We are still confirming that this can be caught properly; this part of the design may change before the RFC goes to a vote.)
+
+<PHP>
+foreach ($someObjectWithHooks as $key => $value) {
+    // Iterates all in-scope properties, using the 'get' operation if defined. 
+}
+
+foreach ($someObjectWithHooks as $key => &$value) {
+    // Throws an error if any in-scope property has a hook.
+}
+</PHP>
+
+==== Arrays ====
+
+There is an additional caveat regarding <php>array</php> properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any hooks that have been defined.
 
 Furthermore, providing a good API for an array modification seems impossible. The simplest approach would be to copy the array, modify it accordingly, and pass it to ''set'' hook. This would have a large and obscure performance penalty, and a ''set'' implementation would have no way of knowing which values had changed, leading to, for instance, code needing to revalidate all elements even if only one has changed.
 
-Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)'' where $keys is a list of keys. Assuming the user would like to apply the change to the array, they would need to iterate the keys, fetch the offset by-reference, and at the end assign the value to the last reference. This has terrible performance characteristics and is non-trivial to implement for the end-user.
+Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)'' where $keys is a list of keys (for example, <php>$foo['bar']['baz']</php>). Assuming the user would like to apply the change to the array, they would need to iterate the keys, fetch the offset by-reference, and at the end assign the value to the last reference. This has terrible performance characteristics and is non-trivial to implement for the end-user.
 
 Both of these possible approaches also handle only explicit additions and modification.  They would not address appending (''[]'') or operations such as ''unset'', which would introduce even more complexity.
 
-Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties attempting to write to a key of an array property that has hooks (using ''[]'' or ''['some key']'') will result in a runtime error being thrown.
+Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while hooks may be applied to array properties attempting to write to a key of a backed array property that has hooks (using ''[]'' or ''['some key']'') will result in a runtime error being thrown.
 
 This restriction does not apply to <php>get</php> operations, as the hook would run to return the whole array, and then dereferencing off of it for an individual key is safe.
 
@@ -477,7 +523,7 @@ $c = new C();
 print_r($c->arr);
 
 // OK; the hook returns the array by value,
-// then the 'beep' key accessed.
+// then the 'beep' key is accessed.
 print $c->arr['beep'];
 
 // OK.  The entire array is overwritten,
@@ -511,19 +557,7 @@ class C
 }
 </PHP>
 
-The "passthrough" <php>get</php> implementation creates a virtual property, which disables writing directly to the <php>$elements</php> property.
-
-Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.  (Note: We are still confirming that this can be caught properly; this part of the design may change before the RFC goes to a vote.)
-
-<PHP>
-foreach ($someObjectWithHooks as $key => $value) {
-    // Iterates all in-scope properties, using the 'get' operation if defined. 
-}
-
-foreach ($someObjectWithHooks as $key => &$value) {
-    // Throws an error if any in-scope property has a hook.
-}
-</PHP>
+The "passthrough" <php>get</php> implementation creates a virtual property, which disables writing directly to the <php>$elements</php> property.  As it is a virtual property, returning by reference would also be allowed, if desired.
 
 ==== Default values ====
 
