@@ -44,10 +44,10 @@ class Response implements ResponseInterface {
     // ...
     public function withStatus($code, $reasonPhrase = ''): Response
     {
-        return clone $this with {
-            statusCode: $code,
-            reasonPhrase: $reasonPhrase
-        };
+        return clone $this with [
+            "statusCode" => $code,
+            "reasonPhrase" => $reasonPhrase,
+        ];
     }
     // ...
 }
@@ -74,28 +74,28 @@ class Foo {
 
 class Bar extends Foo {
     public function withC() {
-        return clone $this with {c: 1};
+        return clone $this with ["c" => 1];
     }
 
     public function withD() {
-        return clone $this with {d: 1};
+        return clone $this with ["d" => 1];
     }
 }
 
 $bar = new Bar();
 
-clone $bar with {a: "abc"};// Exception due to type mismatch
-clone $bar with {b: 1};    // Exception due to accessing a protected property from the global scope
+clone $bar with ["a" => "abc"];// Exception due to type mismatch
+clone $bar with ["b" => 1];    // Exception due to accessing a protected property from the global scope
 $bar->withC();             // Exception due to accessing a private property from a child class
 $bar->withD();             // Exception due to assigning a readonly property from a child class
-clone $bar with {e: []};   // Deprecation notice due to assigning to a dynamic property
+clone $bar with ["e" => []];   // Deprecation notice due to assigning to a dynamic property
 </code>
 
 ==== Property name expressions ====
 
-So far, all "clone with" examples introduced in the current RFC used fixed property names which were referenced as identifiers followed by a colon ('':''), while the values to be assigned were expressions. This syntax is a very straightforward and concise way for the most basic case when "clone with" operates on a known property.
+So far, all "clone with" examples introduced in the current RFC used literal strings for referencing property names, while the values to be assigned were expressions.
 
-However, in some cases it would be useful to reference property names as expressions, e.g. when one needs to use "clone with" in a foreach loop where the index is the property name and the loop variable is the value to be assigned. This is also possible using a slightly more verbose syntax:
+However, in some cases it would be useful to reference property names as expressions, e.g. when one needs to use "clone with" in a foreach loop where the index is the property name and the loop variable is the value to be assigned. This is also possible:
 
 <code php>
 class Foo {
@@ -110,7 +110,7 @@ class Foo {
         $self = clone $this;
 
         foreach ($properties as $name => $value) {
-            $self = clone $this with {$name => $value};
+            $self = clone $this with [$name => $value];
         }
 
         return $self;
@@ -121,26 +121,26 @@ $foo = new Foo();
 $foo->withProperties(["a" => 1, "b" => 2, "c" => 3]);
 </code>
 
-This time, both side of the assignment is an expression, separated by ''=>''. Not only variables, but any kind of expressions strictly evaluating to a string type are possible to use:
+This time, both side of the assignment is a dynamic expression, separated by ''=>''. Not only variables, but any kind of expressions strictly evaluating to a string type are possible to use:
 
 <code php>
+const PROPERTY_NAME = "foo";
 $object = new stdClass();
 
-$object = clone $object with {"foo" => 1}; // the property name is a literal
-$object = clone $object with {strtolower("FO") . "o" => 1}; // the property name is an expression
-$object = clone $object with {PROPERTY_NAME => 1}; // the property name is a named constant
+$object = clone $object with ["foo" => 1]; // the property name is a literal
+$object = clone $object with [strtolower("FO") . "o" => 1]; // the property name is an expression
+$object = clone $object with [PROPERTY_NAME => 1]; // the property name is a named constant
 </code>
-
-The last example demonstrates well why it's necessary to use different separator tokens (''=>'' vs. '':'') for the two cases: otherwise it wouldn't be clear if one references the property name indirectly via the value of a global constant or directly as an identifier.
-
 
 ==== Execution order ====
 
 A "clone with" operation is executed in the following order:
-  * if the object has a ''%%__clone()%%'' magic method, then it is executed first
+  * If the object has a ''%%__clone()%%'' magic method, then it is executed first
   * Then the assignments in the ''with'' clause are executed from left to right. Any properties - including the ones modified by the ''%%__clone()%%'' method - are modifiable again.
 
 ===== Alternatives =====
+
+==== Clone method modifier ====
 
 Nicolas Grekas proposed [[https://twitter.com/nicolasgrekas/status/1561960616331546625/photo/1|an alternative idea]] which could also make it possible to reinitialize readonly properties:
 
@@ -194,7 +194,7 @@ class LinkedObject {
     }
 
     public function next(): LinkedObject {
-        $self = clone $this with {number: $this->number + 1}
+        $self = clone $this with [number: $this->number + 1]
 
         $this->next = $self;
 
@@ -217,6 +217,28 @@ interface ResponseInterface extends MessageInterface
 </code>
 
 The position of this RFC is that cloning the current object and making sure that its state is not modified should be done separately as opposed to what the ''clone'' modifier does: "clone with" deals with the former aspect, while a new ''readonly'' method modifier could handle the latter in the future. This separation is advantageous because the two features could be used on their own. That's one of the main reasons why this RFC prefers and implements "clone with".
+
+==== Clone callback ====
+
+Alexandru Pătrănescu and Nicolas Grekas suggested using a "clone callback" instead of the "clone with" syntax so that the callback would be evaluated right after the clone opcode, using the scope where it was triggered. An example:
+
+<code php>
+class Response implements ResponseInterface {
+    public readonly int $statusCode;
+    public readonly string $reasonPhrase;
+    // ...
+    public function withStatus($code, $reasonPhrase = ''): Response
+    {
+        return clone($this, function (Response $clone): void {
+            $clone->statusCode = $code;
+            $clone->reasonPhrase = $reasonPhrase;
+        });
+    }
+    // ...
+}
+</code>
+
+This idea is advantageous for its flexibility and due to the fact that its concept is already known. However, it falls short when it comes to the simplicity/expressiveness of the syntax, since the callback takes up many characters with its bells and whistles (type declarations, or the possible `static` modifier). Implementation-wise, its complexity and performance should be similar to the "clone with" solution, except that the callback has quite some performance overhead.
 
 ===== Reflection =====
 
