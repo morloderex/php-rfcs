@@ -1,92 +1,25 @@
 ====== PHP RFC: mb_str_pad ======
-  * Version: 0.1.2
+  * Version: 0.1
   * Date: 2023-05-19
   * Author: Niels Dossche (nielsdos), dossche.niels@gmail.com
-  * Status: [[https://github.com/php/php-src/commit/68591632b22289962127cf777b4c3aeaea768bb6|Implemented]]
-  * Target Version: PHP 8.3
-  * Implementation: https://github.com/php/php-src/pull/11284
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/mb_str_pad
 
 ===== Introduction =====
-In PHP, various string functions are available in two variants: one for byte strings and another for multibyte strings. However, a notable absence among the multibyte string functions is a mbstring equivalent of str_pad(). The str_pad() function lacks multibyte character support, causing issues when working with languages that utilize multibyte encodings like UTF-8. This RFC proposes the addition of such a function to PHP, which we will call mb_str_pad().
+Many string functions in PHP come in two different variants: one for byte strings, and one for multibyte strings. This RFC proposes the addition of mb_str_pad to PHP as a multibyte equivalent of the existing str_pad function. The current str_pad function lacks multibyte character support, causing issues when working with languages that utilize multibyte encodings like UTF-8.
 
 ===== Proposal =====
-This proposal aims to introduce a new mbstring function mb_str_pad(). Both the input string and the padding string may be multibyte strings. The function follows the same signature as the str_pad() function, except that it has an additional argument for the string encoding. The encoding argument works analogously to the encoding argument of other mbstring functions. The encoding applies to both $input and $pad_string. If the encoding is null, the default mbstring encoding is used. The $pad_type argument can take three possible values: STR_PAD_LEFT, STR_PAD_RIGHT, STR_PAD_BOTH. str_pad() uses the same constants.
+All the features and examples of the proposal.
 
-<code php>
-function mb_str_pad(string $string, int $length, string $pad_string = " ", int $pad_type = STR_PAD_RIGHT, ?string $encoding = null): string {}
-</code>
+To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain hows the proposal brings substantial value to be considered
+for inclusion in one of the world's most popular programming languages.
 
-This proposal defines character as code point, which is how the other mbstring functions define characters as well.
+Remember that the RFC contents should be easily reusable in the PHP Documentation.
 
-==== Error conditions ====
-
-mb_str_pad() has the same error conditions as str_pad():
-  * $pad must not be an empty string. Otherwise it will result in a value error.
-  * $pad_type must be one of STR_PAD_LEFT, STR_PAD_RIGHT, STR_PAD_BOTH. Otherwise it will result in a value error.
-
-There is one additional error condition that str_pad() doesn't have:
-  * $encoding must be a valid and supported character encoding, if provided.  Otherwise it will output a value error just like the other mbstring functions do with an invalid encoding. You'll find this error condition in many mbstring functions.
-
-==== Examples and Comparison Against str_pad() ====
-
-This section shows some examples and comparisons between str_pad() and mb_str_pad() output for multibyte strings.
-str_pad() has trouble with special characters or letters used in some languages because those are encoded in multiple bytes. The first example demonstrates this by using the word "Français". The word "Français" is 8 //characters// long, but 9 //bytes// long because the letter ç is encoded as two bytes. Therefore, in the following example, str_pad() will produce the wrong result whereas mb_str_pad() will produce the correct result.
-
-<code php>
-// This will pad such that the string will become 10 bytes long.
-var_dump(str_pad('Français', 10, '_', STR_PAD_RIGHT));   // BAD: string(10) "Français_"
-var_dump(str_pad('Français', 10, '_', STR_PAD_LEFT));    // BAD: string(10) "_Français"
-var_dump(str_pad('Français', 10, '_', STR_PAD_BOTH));    // BAD: string(10) "Français_"
-
-// This will pad such that the string will become 10 characters long, and in this case 11 bytes.
-var_dump(mb_str_pad('Français', 10, '_', STR_PAD_RIGHT));// GOOD: string(11) "Français__"
-var_dump(mb_str_pad('Français', 10, '_', STR_PAD_LEFT)); // GOOD: string(11) "__Français"
-var_dump(mb_str_pad('Français', 10, '_', STR_PAD_BOTH)); // GOOD: string(11) "_Français_"
-</code>
-
-The problems with str_pad() become even more prominent for languages which use a non-latin alphabet (like Greek for example).
-
-<code php>
-var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_RIGHT));    // BAD: string(35) "Δεν μιλάω ελληνικά."
-var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_LEFT));     // BAD: string(35) "Δεν μιλάω ελληνικά."
-var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_BOTH));     // BAD: string(35) "Δεν μιλάω ελληνικά."
-
-var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_RIGHT)); // GOOD: string(37) "Δεν μιλάω ελληνικά.__"
-var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_LEFT));  // GOOD: string(37) "__Δεν μιλάω ελληνικά."
-var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_BOTH));  // GOOD: string(37) "_Δεν μιλάω ελληνικά._"
-</code>
-
-We can also use emojis and symbols, which may have some uses in CLI applications. This is an example from the original feature request report.
-
-<code php>
-var_dump(str_pad('▶▶', 6, '❤❓❇', STR_PAD_RIGHT));    // BAD: string(6) "▶▶"
-var_dump(str_pad('▶▶', 6, '❤❓❇', STR_PAD_LEFT));     // BAD: string(6) "▶▶"
-var_dump(str_pad('▶▶', 6, '❤❓❇', STR_PAD_BOTH));     // BAD: string(6) "▶▶"
-
-var_dump(mb_str_pad('▶▶', 6, '❤❓❇', STR_PAD_RIGHT)); // GOOD: string(18) "▶▶❤❓❇❤"
-var_dump(mb_str_pad('▶▶', 6, '❤❓❇', STR_PAD_LEFT));  // GOOD: string(18) "❤❓❇❤▶▶"
-var_dump(mb_str_pad('▶▶', 6, '❤❓❇', STR_PAD_BOTH));  // GOOD: string(18) "❤❓▶▶❤❓"
-</code>
+If applicable, you may wish to use the language specification as a reference.
 
 ===== Backward Incompatible Changes =====
-Since this is a new function and no existing functions change, there is no behavioural backwards incompatibility. The only backwards compatible break occurs when a userland PHP project declares their own mb_str_pad() function without first checking if PHP doesn't already declare it. In that case, a fatal error "Cannot redeclare mb_str_pad()" will be thrown.
-
-I did a quick search using GitHub's [[https://github.com/search?q=mb_str_pad+lang%3Aphp&type=code|code search]] on "mb_str_pad" in PHP files, and found 326 matches (as of 2023-05-19). This also gives us an opportunity to look at how many correct vs incorrect implementations there are.
-
-Looking at the function / method //declarations// for "mb_str_pad":
-  * 47 in classes
-  * 12 free functions, checked if PHP doesn't already declare it
-  * 42 free functions, not checked (correctly)
-
-This means that for 42 implementations, the introduction of mb_str_pad() will cause a fatal error as described above. Fortunately, the users can simply remove their implementation, or guard it with a check to resolve the error.
-
-Let's also take a look at correctness:
-  * 36 likely correct implementations. I did not test or read them thoroughly, I just ran some inputs through them automatically.
-  * 65 implementations which break if the padding string is a multibyte string. Almost all these implementations are very similar to each other.
-
-As we can see it appears to be a function that's a little tricky to implement correctly.
-Note that these results don't include numbers for inline implementations or for implementations under a different name. Hence the reported numbers are quite low. It is very likely more implementations exist under different names, but that doesn't matter for a backwards compatibility check.
+None.
 
 ===== Proposed PHP Version(s) =====
 Next PHP 8.x (at the time of writing this is PHP 8.3).
@@ -96,7 +29,7 @@ Next PHP 8.x (at the time of writing this is PHP 8.3).
 None.
 
 ==== To Existing Extensions ====
-mbstring: A new function mb_str_pad() will be added to mbstring. The implementation of this function will leverage the existing internal functions of mbstring. No modifications will be made to any existing functions, and no new internal functions will be added. By reusing existing internal functions, the maintenance burden of mb_str_pad() stays quite low.
+mbstring: A new function mb_str_pad() will be added to mbstring. The implementation reuses existing internal functions of mbstring, so besides the new function no internal functions will be added. No existing functions change.
 
 ==== To Opcache ====
 None.
@@ -114,35 +47,23 @@ Make sure there are no open issues when the vote starts!
 Everything outside of mbstring.
 
 ===== Future Scope =====
-In the future we could add a string padding function that works on grapheme clusters instead of code points: grapheme_str_pad(). This should be added to ext/intl. This will of course require another RFC.
+None.
 
 ===== Proposed Voting Choices =====
-One primary yes/no vote to decide if the function may be introduced, requires 2/3 majority.
-
-Voting starts on 2023-06-05 20:00 GMT+2, and ends on 2023-06-19 20:00 GMT+2.
-
-<doodle title="mb_str_pad" auth="nielsdos" voteType="single" closed="true" closeon="2023-06-19T20:00:00+02:00">
-   * Yes
-   * No
-</doodle>
+One primary yes/no vote to decide if the function may be introduced.
 
 ===== Patches and Tests =====
 Implementation: https://github.com/nielsdos/php-src/tree/mb_str_pad
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
-  - the version(s) it was merged into: PHP 8.3
-  - a link to the git commit(s): https://github.com/php/php-src/commit/68591632b22289962127cf777b4c3aeaea768bb6
-  - a link to the PHP manual entry for the feature: Not yet available
-  - a link to the language specification section (if any): N/A
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
 
 ===== References =====
 Original issue report suggesting this feature: https://github.com/php/php-src/issues/10203
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
-
-===== Changelog =====
-
-  * 0.1.2: Clarify that we use the mbstring definition of character (i.e. code point) instead of grapheme cluster.
-  * 0.1.1: Initial version placed under discussion
