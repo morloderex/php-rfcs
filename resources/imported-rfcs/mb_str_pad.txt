@@ -6,10 +6,10 @@
   * First Published at: http://wiki.php.net/rfc/mb_str_pad
 
 ===== Introduction =====
-Many string functions in PHP come in two different variants: one for byte strings, and one for multibyte strings. This RFC proposes the addition of mb_str_pad() to PHP as a multibyte equivalent of the existing str_pad() function. The current str_pad() function lacks multibyte character support, causing issues when working with languages that utilize multibyte encodings like UTF-8.
+In PHP, various string functions are available in two variants: one for byte strings and another for multibyte strings. However, a notable absence among the multibyte string functions is a mbstring equivalent of str_pad(). The str_pad() function lacks multibyte character support, causing issues when working with languages that utilize multibyte encodings like UTF-8. This RFC proposes the addition of such a function to PHP, which we will call mb_str_pad().
 
 ===== Proposal =====
-The proposal is to introduce a new mbstring function mb_str_pad(). The function follows the same signature as the str_pad() function, except that it has an additional argument for the string encoding. The encoding argument works analogously to the other mbstring functions. The argument applies on both the $input string and the $pad_string. If null, the default mbstring encoding is used. The $pad_type argument can take three possible values: STR_PAD_LEFT, STR_PAD_RIGHT, STR_PAD_BOTH. str_pad() uses the same constants.
+The proposal is to introduce a new mbstring function mb_str_pad(). Both the input string and the padding string may be multibyte strings. The function follows the same signature as the str_pad() function, except that it has an additional argument for the string encoding. The encoding argument works analogously to the other mbstring functions. The argument applies on both the $input string and the $pad_string. If null, the default mbstring encoding is used. The $pad_type argument can take three possible values: STR_PAD_LEFT, STR_PAD_RIGHT, STR_PAD_BOTH. str_pad() uses the same constants.
 
 <code php>
 function mb_str_pad(string $string, int $length, string $pad_string = " ", int $pad_type = STR_PAD_RIGHT, ?string $encoding = null): string {}
@@ -27,16 +27,28 @@ There is one additional error condition that str_pad() doesn't have:
 ==== Examples and Comparison Against str_pad() ====
 
 This section shows some examples and comparison between str_pad() and mb_str_pad() output for UTF-8 strings.
-str_pad() already has trouble with special characters in some languages, because they are encoded in multiple bytes. The first example demonstrates this by using the word "Français". The word "Français" is 8 characters long, but 9 bytes long because the letter ç is encoded as two bytes. Therefore, using str_pad() will produce the wrong result, whereas mb_str_pad() produces the correct result.
+str_pad() has trouble with special characters or letters used in some languages, because those are encoded in multiple bytes. The first example demonstrates this by using the word "Français". The word "Français" is 8 characters long, but 9 bytes long because the letter ç is encoded as two bytes. Therefore, in the following example, str_pad() will produce the wrong result whereas mb_str_pad() produces the correct result.
 
 <code php>
-var_dump(mb_str_pad('Français', 9, '_', STR_PAD_RIGHT)); // GOOD: string(10) "Français_"
-var_dump(mb_str_pad('Français', 9, '_', STR_PAD_LEFT));  // GOOD: string(10) "Français_"
-var_dump(mb_str_pad('Français', 9, '_', STR_PAD_BOTH));  // GOOD: string(10) "Français_"
+var_dump(str_pad('Français', 10, '_', STR_PAD_RIGHT));   // BAD: string(9) "Français_"
+var_dump(str_pad('Français', 10, '_', STR_PAD_LEFT));    // BAD: string(9) "_Français"
+var_dump(str_pad('Français', 10, '_', STR_PAD_BOTH));    // BAD: string(9) "Français_"
 
-var_dump(str_pad('Français', 9, '_', STR_PAD_RIGHT));    // BAD: string(9) "Français"
-var_dump(str_pad('Français', 9, '_', STR_PAD_LEFT));     // BAD: string(9) "Français"
-var_dump(str_pad('Français', 9, '_', STR_PAD_BOTH));     // BAD: string(9) "Français"
+var_dump(mb_str_pad('Français', 10, '_', STR_PAD_RIGHT));// GOOD: string(10) "Français__"
+var_dump(mb_str_pad('Français', 10, '_', STR_PAD_LEFT)); // GOOD: string(10) "__Français"
+var_dump(mb_str_pad('Français', 10, '_', STR_PAD_BOTH)); // GOOD: string(11) "_Français_"
+</code>
+
+The problems with str_pad() become even more prominent for languages which use a non-latin alphabet.
+
+<code php>
+var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_RIGHT));    // BAD: string(35) "Δεν μιλάω ελληνικά."
+var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_LEFT));     // BAD: string(35) "Δεν μιλάω ελληνικά."
+var_dump(str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_BOTH));     // BAD: string(35) "Δεν μιλάω ελληνικά."
+
+var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_RIGHT)); // GOOD: string(37) "Δεν μιλάω ελληνικά.__"
+var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_LEFT));  // GOOD: string(37) "__Δεν μιλάω ελληνικά."
+var_dump(mb_str_pad('Δεν μιλάω ελληνικά.', 21, '_', STR_PAD_BOTH));  // GOOD: string(37) "_Δεν μιλάω ελληνικά._"
 </code>
 
 We can also use emojis and symbols, which may be useful for some CLI applications. This is an example from the original issue report.
