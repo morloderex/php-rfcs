@@ -1,0 +1,84 @@
+====== PHP RFC: Introduce array_group and array_group_pair grouping functions ======
+  * Date: 2023-06-01
+  * Author: Boro Sitnikovski, buritomath@gmail.com
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/array_group
+
+===== Introduction =====
+We consider the grouping of elements within an array a very basic and common functionality.
+
+(There is some [[https://externals.io/message/120451#120465|related discussion]] on the mailing list, discussing the idea of this RFC.)
+
+Almost all mainstream programming languages have a built-in grouping functionality:
+
+  * [[https://www.scala-lang.org/api/2.12.4/scala/collection/parallel/ParIterableLike$GroupBy.html|Scala]]
+  * [[https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/group|JavaScript]]
+  * [[https://hackage.haskell.org/package/groupBy-0.1.0.0/docs/Data-List-GroupBy.html|Haskell]]
+  * [[https://learn.microsoft.com/en-us/dotnet/api/system.linq.enumerable.groupby?view=net-7.0|.NET]]
+
+The way this has been approached in PHP in the past was to just implement a custom function and use it. This has several drawbacks:
+
+  * It affects the developer experience negatively, forcing developers to have repeated code across different codebases
+  * Performance reasons: [[https://gist.github.com/bor0/3fa539263335fa415faa67606a469f2e|A particular benchmark]] shows about 25% improvement in C over PHP code (more benchmarks can/will be added later)
+
+===== Proposal =====
+There are many ways to perform a grouping of an array. As [[https://externals.io/message/120451#120493|discussed on the mailing list]], two of the most common ones are:
+
+  * The JavaScript/Scala/etc. approach - A function accepting a callback that accepts one argument (the element) and returns a string, which indicates where this element will be stored in the final hash array. The final result will be a hashmap of string -> arrays.
+  * The Haskell approach - A function accepting a callback that accepts two arguments (previous element, current element) and returns a boolean - indicating the //relation// between these two elements and whether they should be grouped or not. The final result will be an array of arrays.
+
+To cover these two main considerations, we propose implementing both ''array_group'' and ''array_group_pair'', for the first and the second case respectively.
+
+<code PHP>
+function array_group(array $array, callable $callback): array {}
+
+function array_group_pair(array $array, callable $callback): array {}
+</code>
+
+An example of calling ''array_group'':
+
+<code PHP>
+$groups = array_group($arr1, function( $x ) {
+  return (string) strlen( $x );
+} );
+// Producing ['3' => ['one', 'two'], '5' => ['three']]
+</code>
+
+An example of calling ''array_group_pair'':
+
+<code PHP>
+$arr = [-1,2,-3,-4,2,1,2,-3,1,1,2];
+
+$groups = array_group_pair( $arr, function( $p1, $p2 ) {
+  return ($p1 > 0) == ($p2 > 0);
+} );
+// Producing [[-1],[2],[-3,-4],[2,1,2],[-3],[1,1,2]]
+</code>
+
+===== Backward Incompatible Changes =====
+Similarly to introducing any other function, this could cause breakages in codebases where the functions ''array_group'' or ''array_group_pair'' are redefined, in which case the user would receive the "Cannot redeclare function" error.
+
+Doing a quick GitHub search for [[array_group|https://github.com/search?q=array_group+lang%3Aphp&type=code]] shows about 1k such functions, and 0 functions for [[array_group_pair|https://github.com/search?q=array_group_pair+lang%3Aphp&type=code]].
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x (current version is 8.2.5).
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+Implementation: https://github.com/bor0/php-src/tree/add/array_group
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+RFC discussion on the mailing list: https://externals.io/message/120451
+
+===== Rejected Features =====
+
+Keep this updated with features that were discussed on the mail lists.
