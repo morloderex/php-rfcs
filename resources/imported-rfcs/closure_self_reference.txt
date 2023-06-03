@@ -1,6 +1,6 @@
 ====== PHP RFC: Closure self reference ======
-  * Version: 0.2
-  * Date: 2020-11-10
+  * Version: 1.0
+  * Date: 2023-06-03
   * Author: Danack
   * Status: Draft
   * First Published at: https://wiki.php.net/rfc/closure_self_reference
@@ -29,17 +29,138 @@ echo $this_is_the_original_fibonacci(10). "\n";
 
 i.e. a change to the variable outside the closure has modified the behaviour of the closure. That a closure can change behaviour like this violates the [[https://en.wikipedia.org/wiki/Principle_of_least_astonishment|Principle of least astonishment]]
 
+It would be better if it was possible to reference a closure inside itself, without having to `use` an external variable.
+
 ===== Proposal =====
 
 Allow closures to be aliased to a variable that can be used within the closure:
 
 <code php>
-$fibonacci = function (int $n) as $fibonacci {
+$fibonacci = function (int $n) as $fn {
     if ($n === 0) return 0;
     if ($n === 1) return 1;
-    return $fibonacci($n-1) + $fibonacci($n-2);
+    return $fn($n-1) + $fn($n-2);
+};
+
+echo $fibonacci(5);
+</code>
+
+Or as a short closure, aka arrow function:
+
+<code php>
+$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * $fn($num - 1) : $num;
+</code>
+
+===== Syntax choices =====
+
+There are a plethora of possible syntax choices. Those that have been though about about are:
+
+==== A constant ====
+
+It would be possible to define a constant that refers to the current closure e.g. __CLOSURE__
+
+<code php>
+$fibonacci = function (int $n) {
+    if ($n === 0) return 0;
+    if ($n === 1) return 1;
+    return __CLOSURE__($n-1) + __CLOSURE__($n-2);
+};
+
+$factorial = fn(int $num): int => $num > 1 ? $num * __CLOSURE__($num - 1) : $num;
+</code>
+
+
+==== Alias after function return type ====
+
+<code php>
+$fibonacci = function (int $n): int as $fn {
+    if ($n === 0) return 0;
+    if ($n === 1) return 1;
+    return $fn($n-1) + $fn($n-2);
 };
 </code>
+
+Due to parser limitations, this can't be used for short closures.
+
+
+==== A static function on the closure class ====
+
+e.g. Closure::current()
+
+<code php>
+$fibonacci = function (int $n) {
+    if ($n === 0) return 0;
+    if ($n === 1) return 1;
+    return (Closure::current())($n-1) + (Closure::current())($n-2);
+};
+
+$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * (Closure::current())($num - 1) : $num;
+</code>
+
+
+
+==== De-anonymize the function ====
+
+i.e. allow a variable name to be used after the keyword function before the parentheses containing the parameters:
+
+<code php>
+$fibonacci = function $fn(int $n) as $fn {
+    if ($n === 0) return 0;
+    if ($n === 1) return 1;
+    return $fn($n-1) + $fn($n-2);
+};
+
+$factorial = fn $fn(int $num) as $fn : int => $num > 1 ? $num * $fn($num - 1) : $num;
+</code>
+
+This has a large aesthetic downside of appearing to create the closure variable in the scope that the closure is declared in, rather than internal to the closure scope.
+
+
+==== Alias after use variables ====
+
+<code php>
+$fibonacci_offset = function (int $n) use ($offset) as $fn: int {
+    if ($n === 0) return $offset;
+    if ($n === 1) return 1;
+    return $fn($n-1) + $fn($n-2);
+};
+</code>
+
+<code php>
+$factorial = fn(int $num) as $fn: int => $num > 1 ? $num * $fn($num - 1) : $num;
+</code>
+
+
+
+==== Alias immediately after function parameters ====
+<code php>
+$fibonacci_offset = function (int $n) as $fn use($offset): int {
+    if ($n === 0) return $offset;
+    if ($n === 1) return 1;
+    return $fn($n-1) + $fn($n-2);
+};
+</code>
+
+<code php>
+$factorial = fn(int $num) as $fn : int => $num > 1 ? $num * $fn($num - 1) : $num;
+</code>
+
+
+===== Syntax choice =====
+
+The following syntaxes are excluded for the reasons listed:
+
+* A constant. Although this could work it has multiple aesthetic downsides of being verbose, ugly, and just not very language-y.
+
+* Alias after function return type. Can't be used for short closures due to parser limitations.
+
+* A static function on the closure class. Just not very language-y, quite verbose due to the extra ()'s needed
+
+* De-anonymize the function. This has a large aesthetic downside of appearing to create the closure variable in the scope that the closure is declared in, rather than internal to the closure scope.
+
+Which leaves the 'Alias after use variables' and 'Alias immediately after function parameters' as the acceptable options.
+
+As the authors find the 'Alias immediately after function parameters' easiest to read, that is the syntax that has been chosen.
 
 ===== Backward Incompatible Changes =====
 
@@ -47,7 +168,7 @@ None known.
 
 ===== Proposed PHP Versions =====
 
-8.1
+8.3
 
 ===== RFC Impact =====
 
@@ -66,7 +187,7 @@ Accept this RFC and make it possible to reference a closure from within itself u
 Links to any external patches and tests go here.
 
 ===== Implementation =====
-None yet.
+https://github.com/php/php-src/pull/11118
 
 ===== References =====
 Links to external references, discussions or RFCs
