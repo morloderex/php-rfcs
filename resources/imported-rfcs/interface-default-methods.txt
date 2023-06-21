@@ -1,5 +1,5 @@
 ====== PHP RFC: Interface Default Methods ======
-  * Version: 1.0
+  * Version: 2.0
   * Date: 2022-06-27
   * Author: Levi Morrison, levim@php.net
   * Status: Under Discussion
@@ -9,11 +9,13 @@
 ===== Introduction =====
 Over time, authors sometimes want to add methods to an interface. Today, this causes large breakages to every implementor. This RFC proposes a way to reduce the scale of breakage.
 
-Additionally, some times interfaces can implement some functionality of their interface in terms of other parts. For example, the interface ''Countable'' could implement <php>function isEmpty(): bool</php> by using <php>$this->count() == 0</php>. Today, traits are often used to accomplish this, but default interface implementation could be used instead.
+Additionally, sometimes interfaces can implement some functionality of their interface in terms of other parts of their interface. For example, the interface ''Countable'' could implement <php>function isEmpty(): bool</php> by using <php>$this->count() == 0</php>. Today, traits are often used to accomplish this, but a default interface implementation could be used instead, and would be simpler. When interfaces are designed with this technique in mind, it can enable productivity of the interface over time.
+
+For example, see [[https://doc.rust-lang.org/std/iter/trait.Iterator.html|Rust's Iterator trait]] which has more than 40 functions with default implementations and the implementor mostly needs to implement a single function, ''next(): Option<T>''. These functions with default behaviors have been stabilized over time with little to no breakage in practice. For example, ''for_each'' was added in v1.21 and ''map_while'' was added in v1.57.
 
 ===== Proposal =====
 
-Interface methods can now provide a default implementation.
+Interface methods can now provide a method body. This implementation will be used if the implementer does not otherwise provide an implementation. Default implementations are available for both instance and static methods.
 
 <PHP>
 interface Example {
@@ -27,6 +29,10 @@ interface Example {
   } 
 }
 </PHP>
+
+Interface methods can also now be <php>private</php> if they a have method body. The purpose here is to allow helper routines if the default implementations of the <php>public</php> methods need them.
+
+The methods with default implementations are inherited similarly to abstract base classes, as opposed to how traits behave. For instance, a private method on the interface is not accessible to the class which implements the interface; with a trait it would be.
 
 ==== Default Method Resolution ====
 
@@ -57,6 +63,37 @@ class Class1 implements Interface1, Interface2 {
 }
 
 (new Class1())->method1(); // Interface1::method1
+</PHP>
+
+==== Parent Scoping ====
+In interface default methods, you cannot use the <php>parent::</php> scoping mechanism. The following does not work:
+
+<PHP>
+interface Interface1 {
+    function method1() { echo __METHOD__, PHP_EOL; }
+}
+
+interface Interface2 extends Interface1 {
+    function method1() { parent::method1(); }
+}
+</PHP>
+
+The reason is that interfaces can extend multiple other interfaces e.g.
+
+<PHP>
+interface Interface3 extends Interface1, Interface2 {}
+</PHP>
+
+The name of the interface should be used instead:
+
+<PHP>
+interface Interface1 {
+    function method1() { echo __METHOD__, PHP_EOL; }
+}
+
+interface Interface2 extends Interface1 {
+    function method1() { Interface1::method1(); }
+}
 </PHP>
 
 ===== Backward Incompatible Changes =====
