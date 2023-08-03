@@ -1,0 +1,77 @@
+====== PHP RFC: Support optional suffix parameter in tempnam ======
+  * Version: 1.1
+  * Date: 2023-08-02
+  * Author: Athos Ribeiro, athoscribeiro@gmail.com
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/tempnam-suffix-v2
+  * Based on work by Stefan Neufeind, neufeind@php.net at https://wiki.php.net/rfc/tempnam-suffix
+
+===== Introduction =====
+The **tempnam** function allows users to optionally specify a **prefix** to be prepended to the generated filenames.
+
+It would be useful to allow users to also specify a **suffix** when generating temporary files. For instance, a suffix could provide even more semantic value or context for a user inspecting the generated files, and, in specific situations, could even provide more context for software processing such files.
+
+===== Proposal =====
+Add a new optional suffix parameter to the tempnam function, changing its signature from
+<code php>
+tempnam(string $directory, string $prefix): string|false
+</code>
+to
+<code php>
+tempnam(string $directory, string $prefix, string $suffix = ""): string|false
+</code>
+
+==== Example ====
+
+<code php>
+tempnam("/tmp", "application-");
+/* /tmp/application-xxxxxx */
+
+tempnam("/tmp", "", ".pdf");
+/* /tmp/xxxxxx.pdf */
+
+tempnam("/tmp", "application-", ".pdf");
+/* /tmp/application-xxxxxx.pdf */
+</code>
+
+===== Backward Incompatible Changes =====
+None with exception of changing the signature of the php_do_open_temporary_file function, which is not exported.
+
+===== Proposed PHP Version(s) =====
+next PHP 8.x".
+
+===== RFC Impact =====
+The suffix-parameter is optional. Thus it is transparent to any existing PHP-code in use.
+
+Only the internal API is affected because of the additional parameter which is added. Still, this only includes the addition of a new function (php_open_temporary_fd_ex2) and changing the signature of the php_do_open_temporary_file function, which is not exported.
+
+===== Open Issues =====
+  - The **tempnam** **prefix** paramter is sanitized through the **basename** function when path separators are present in the provided string, using only the last part of the provided path. For instance, **foo/bar** would become **bar**. We could not find the historical reasons for the **prefix** parameter to behave as described, but for consistency, we are currently using the same approach for the new **suffix** parameter.
+  - Only the 63 first characters passed to the **prefix** paramter are used. Although we could not find the historical reasons behind this decision, we are currently replicating the behavior for the new **suffix** parameter.
+  - **In windows systems**, none of the characters passed as a suffix will be appended to the file name (i.e., **the suffix parameter will be ignored**). This is due to the underlying function (and API) used to generate temporary files, which do not provide means to set a suffix. While we could provide a custom implementation (which could be proposed in a future RFC to provide more consistency for tempnam), the current windows API being used includes a .TMP extension to the generated files, which AFAICT, does matter in windows systems. I also found a related discussion in an old bug at https://bugs.php.net/bug.php?id=44222.
+
+===== Unaffected PHP Functionality =====
+All but tempnam and the internal php_do_open_temporary_file function.
+
+===== Future Scope =====
+* Re-work tempnam's windows implementation to match the default non-windows behaviors.
+
+===== Proposed Voting Choices =====
+Accept this RFC and accept an optional **suffix** parameter in the **tempnam** function? Yes / No
+
+===== Patches and Tests =====
+The following is a candidate for this proposal, which includes the assumptions presented in the Open Issues section above.
+
+https://github.com/php/php-src/pull/11685
+
+===== Implementation =====
+TBD
+
+===== References =====
+  * Original RFC by Stefan Neufeind: https://wiki.php.net/rfc/tempnam-suffix
+  * First discussion started by Stefan: https://marc.info/?l=php-internals&m=138946779304541
+  * First implementation proposal by Stefan: https://github.com/php/php-src/pull/575
+  * Old bug requesting related feature: https://bugs.php.net/bug.php?id=37613
+  * Old bug requesting related feature: https://bugs.php.net/bug.php?id=43898
+  * Current implementation proposal: https://github.com/php/php-src/pull/11685
+  * Old bug with discussion on differences in tempnam's windows implementation: https://bugs.php.net/bug.php?id=44222
