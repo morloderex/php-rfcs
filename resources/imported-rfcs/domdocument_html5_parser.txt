@@ -1,5 +1,5 @@
-====== PHP RFC: DOMDocument HTML5 parsing and serialization ======
-  * Version: 0.3.0
+====== PHP RFC: DOMDocument HTML5 parser ======
+  * Version: 0.1-dev
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Draft
@@ -8,102 +8,66 @@
 ===== Introduction =====
 
 PHP's DOM extension supports loading HTML documents using the methods <php>DOMDocument::loadHTML</php> and <php>DOMDocument::loadHTMLFile</php>.
-This uses libxml2's HTML parser under the hood to parse these documents into a libxml2 document tree that ext/dom uses.
-Unfortunately, this parser only supports HTML up to version 4.01. This is a problem because HTML5 has become the de facto standard for websites over the past decade.
-Introducing HTML5 parsing to PHP's DOM implementation is crucial for modernizing and enhancing PHP's capabilities in handling modern web content.
+This uses libxml2's HTML parser under the hood to parse these documents into a libxml2 tree.
+Unfortunately, this parser only supports HTML up to version 4.01. This is a problem, because HTML5 has become the de facto standard for websites over the past 10 years.
+Introducing HTML5 parsing to PHP's DOM implementation is crucial for modernizing and enhancing PHP's capabilities in handling web content.
 
-Using loadHTML(File) to load HTML5 content results in multiple parsing errors and incorrect document trees. These issues arise from changes in parsing rules between HTML4 and HTML5. Notably, the current parser does not recognize semantic HTML5 tags (e.g., main, article, section, ...) as valid tags. Then there's also problems with certain element nestings not allowed in HTML4, but allowed in HTML5, causing incorrect document trees.
-Another concern highlighted in PHP's bug tracker is the handling of closing tags within script contexts. With the common practice of embedding HTML within JavaScript, HTML4 parsers encounter problems with closing tags within JavaScript literals. Consequently, parsing through loadHTML(File) leads to incorrect document trees. The list of issues goes on and on. Not being able to parse HTML5 properly is one of the major pain points of our DOM extension.
+Using loadHTML(File) to process HTML5 content results in multiple parsing errors and incorrect document trees. These issues arise from changes in parsing rules between HTML4 and HTML5. Notably, the current parser does not recognize semantic HTML5 tags (e.g., main, article, section, ...) as valid tags. Then there's also problems with certain elements nestings not allowed in HTML4, but allowed in HTML5, causing incorrect document trees.
+Another concern highlighted in the bug tracker is the handling of closing tags within script contexts. With the common practice of embedding HTML within JavaScript, HTML4 parsers encounter problems when encountering a closing tag within a JavaScript variable. Consequently, parsing through loadHTML(File) leads to the production of inaccurate documents. HTML5 parsers, however, do not face this challenge. The list of issues goes on and on.
 
 There's an open issue at the libxml2 bugtracker to add HTML5 parsing support: https://gitlab.gnome.org/GNOME/libxml2/-/issues/211.
 However, it seems like this won't happen anytime soon.
-Furthermore, there are also problems with saving (also known as serializing) HTML5 documents due to subtle rule differences between HTML4 and HTML5. This RFC proposes a fully backwards compatible solution to deal with these problems.
-To solve the parsing issue, we will leverage an alternative HTML5 parser to create the libxml2 document tree. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions. To solve the serialization issue, an implementation for the HTML5 serialization algorithm will also be added. The new functionality will be available via a <php>DOMHTML5Document</php> class that extends <php>DOMDocument</php> and overrides the loadHTML(File) and saveHTML(File) methods.
+This RFC proposes leveraging an alternative HTML5 parser to create the libxml2 tree. This is done with the introduction of two new methods: <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php>. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions.
 
 ===== Proposal =====
 
-The most important requirement is that the new class must integrate seamlessly with the DOM extension. This means that using it must be a simple drop-in replacement. You will still be able to use all the existing APIs to manipulate and traverse DOM documents and nodes.
+The most important requirement is that the HTML5 parser must integrate seamlessly with the DOM extension. This means that using the HTML5 parser must be a simple drop-in replacement. You must still be able to use the methods you normally use to traverse and manipulate DOMDocuments without caveats. We propose the introduction of two new methods <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php> instead of replacing the existing ones. This ensures full backwards compatibility for applications that actually work with legacy HTML4 documents, and want the HTML4 behaviour (with all its peculiarities).
 
-This proposal introduces the <php>DOMHTML5Document</php> class that extends the <php>DOMDocument</php> class. The reason we introduce a new class instead of replacing the methods of the existing class is to ensure full backwards compatibility. There are applications that work with legacy HTML4 documents, and want the HTML4 behaviour. By keeping the DOMDocument class, nothing changes for existing code. Code that wants HTML5 functionality can use the <php>DOMHTML5Document</php> class.
+Note that unlike the existing load methods, these do not take an options parameter. The options for the existing load methods change the way the parser behaves (e.g. not adding implied html & body elements). These options deviate from the HTML spec. I will stick to the spec and therefore not introduce such option parameters. The only option that //might// be useful is LIBXML_NOERROR, which disables error reporting, but you can achieve this in other ways.
 
-Here's how its definition looks:
-<PHP>
-class DOMHTML5Document extends DOMDocument {
-    public function loadHTML(string $source, int $options = 0): bool {}
-    public function loadHTMLFile(string $filename, int $options = 0): bool {}
-    public function saveHTML(?DOMNode $node = null): string|false {}
-    public function saveHTMLFile(string $filename): int|false {}
-}
-</PHP>
+==== Background ====
 
-==== The options argument ====
-
-Just like the load methods of <php>DOMDocument</php>, their HTML5 counterparts also take an optional options argument. The options for the load methods change the way the parser behaves. The only two options that will have an effect for the new methods are <php>LIBXML_HTML_NOIMPLIED</php> and <php>LIBXML_NOERROR</php>. Here's an overview why the other options are not implemented and the reason why:
-
-^ Option                        ^ Reasoning                                          ^
-| <php>LIBXML_BIGLINES</php> \\ <php>LIBXML_PARSEHUGE</php>    | Not needed, this always works for the new methods. |
-| <php>LIBXML_COMPACT</php>     | This is a transparent optimization for the program, not implemented right now because it requires quite a few hacks. It can be implemented in the future |
-| <php>LIBXML_DTDATTR</php> \\ <php>LIBXML_DTDLOAD</php> \\ <php>LIBXML_DTDVALID</php> | There is only one valid DTD for HTML5, these options don't make sense. |
-| <php>LIBXML_HTML_NODEFDTD</php>     | Not needed, this is the default HTML5 behaviour. |
-| <php>LIBXML_NOBLANKS</php> | This doesn't remove blank nodes in all cases. There's rules that libxml2 follows based on whether the element accepts #PCDATA, and based on the position of the element. As HTML5 is not based on XML, there is no concept of #PCDATA. Hence, it is unclear how to implement this. |
-| <php>LIBXML_NOCDATA</php> \\ <php>LIBXML_NOEMPTYTAG</php> \\ <php>LIBXML_NOENT</php> \\ <php>LIBXML_NSCLEAN</php> \\ <php>LIBXML_XINCLUDE</php> \\ <php>LIBXML_SCHEMA_CREATE</php> | This is only valid in XML, the concept doesn't exist in HTML5. |
-| <php>LIBXML_NONET</php> | Not needed, the new methods never access the network. |
-| <php>LIBXML_NOWARNING</php> | Not needed, only errors are reported, there's no concept of a warning because this is not a conformance checker. |
-| <php>LIBXML_PEDANTIC</php> | Error reporting follows the spec, no custom modification is done. |
-
-==== Additional background info ====
-
-The DOM extensions supports both XML and HTML documents. It's built heavily upon libxml2's APIs and data structures, just like all XML-related PHP extensions within php-src. This is great for interoperability (e.g. with simplexml and xsl).
-Third-party extensions also use libxml2 APIs. For example, the [[https://pecl.php.net/package/xmldiff|xmldiff]] PECL extension peeks into the internals of DOMDocument to grab the libxml2 data structures and compare them.
-It is not possible to switch away from the libxml2 library as the underlying basis for the DOM extension because that will cause a major BC break.
+The DOM extensions supports both XML and HTML documents. It's built heavily upon libxml2's APIs and data structures, just like all XML-related PHP extensions within php-src. This is great for interopability (e.g. with simplexml and xsl).
+Third-party extensions also use libxml2 APIs. For example, the xmldiff PECL extension peeks into the internals of DOMDocument to grab the libxml2 data structures and compare them.
+It is not possible to switch away from the libxml2 library as the underlying basis for the DOM extension because of the major BC break.
 
 ==== Approach ====
 
-Parsing an HTML document via an HTML parser results in a document tree. The tree consists of HTML nodes. These nodes are structs on the heap created by the parser. In order to integrate an alternative parser into our DOM extension, these nodes need to be converted into libxml2 nodes. The resulting tree, after conversion, is then used in the DOM extension, just //as if// it had come from libxml2's parser.
+Parsing an HTML document via an HTML parser results in a document tree. The HTML nodes are structs on the heap as created by said parser. In order to integrate this into our DOM extension, these nodes need to be converted into libxml2 nodes.
 
-The conversion is fairly straight-forward. We perform a depth-first traversal on the tree, checking the node type and creating the corresponding libxml2 node. The traversal is performed using iteration instead of recursion to prevent stack overflows with deep trees. After this process is done, we throw away the old tree and are left with only the libxml2 tree.
-
-For serializing, I wrote code implementing the [[https://html.spec.whatwg.org/#serialising-html-fragments|HTML5 serialization algorithm]] using libxml2 nodes. I could've also developed a method of converting a libxml2 tree back to the original type of tree that the parser produced, but that's more complicated to implement and likely has slower performance.
+The conversion is fairly straight-forward. We perform a depth-first search on the tree, checking the node type and creating the corresponding libxml2 node. The search is performed using iteration instead of recursion to prevent stack overflows with deep trees. After this process is done, we throw away the old tree and are left with only the libxml2 tree. This libxml2 tree is then used in the DOM extension, just //as if// it had come from libxml2's parser itself.
 
 ==== Choosing an HTML5 parser ====
 
-We have to choose a suitable HTML5 parser. It should be spec-compliant, heavily tested, and fast.
-I propose to use [[https://github.com/lexbor/lexbor|Lexbor]]. According to its README, it satisfies our requirements. Furthermore, it already has bindings for Elixir, Crystal, Python, D, and Ruby. This shows that it has been used in practice in other serious projects.
+First, we have to choose a suitable HTML5 parser. It should be spec-compliant, heavily tested, and fast.
+I propose to use [[https://github.com/lexbor/lexbor|Lexbor]]. According to its README, it satisfies our requirements. Furthermore, it has bindings for Elixir, Crystal, Python, D, and Ruby. This shows that it has been used in practice in other serious projects.
 
 It is fully written in C99. That's ideal, because PHP is also using the C99 standard.
 One small complication is that this library is not available in package managers for almost all distros. Therefore, I propose to bundle it with PHP. This also gives us the freedom to incorporate a patch to expose the line and column numbers of HTML nodes such that the error messages are richer and the <php>DOMNode::getLineNo()</php> function will work properly.
-Bundling a library with PHP is not unprecedented, PHP already bundles e.g. pcre2lib, gd, libmagic, ...
+Bundling a library with PHP is not unprecedented, PHP bundles e.g. pcre2lib, gd, libmagic already.
 
-Lexbor also supports overriding the allocation routines. Therefore, we can make it work with PHP's memory limit. Something that is currently not done with libxml2.
+Lexbor also supports overriding the allocation routines. Therefore, we can make it work with PHP's memory limit.
 
 === Alternative considered HTML5 parsers ===
 
 Lexbor is one of several HTML5 parsers available. During my investigation, I considered two alternatives:
 
   * Gumbo: https://github.com/google/gumbo-parser.\\ A relatively well-known HTML5 parser developed by Google in C.\\ Unfortunately, it has been unmaintained since 2016, as indicated in its README, making it unsuitable for use.
-  * html5ever: https://github.com/servo/html5ever.\\ This is Servo's HTML5 parser, written in Rust.\\ I have implemented a [[https://github.com/nielsdos/html5ever-libxml2-bridge/blob/main/src/lib.rs|proof-of-concept conversion]] from html5ever to libxml2, and a [[https://github.com/nielsdos/php-src/commits/dom-bridge|proof-of-concept integration with PHP]] on my fork.\\ \\ I decided to not go with this option for a few reasons.\\ * Firstly, while writing it in Rust would enhance memory safety (especially for untrusted documents), introducing Rust as an additional dependency for PHP adds extra complexity. PHP's default-enabled extensions can currently be built using only C, but if we go this route this would change.\\ * Secondly, the implementation is incomplete, primarily the lack of character encoding support is problematic: it currently only supports UTF-8 documents. Moreover, logic for character encoding meta tags is absent.\\ * Lastly, observing the commit activity raises doubts about the ongoing activity of this project.
+  * html5ever: https://github.com/servo/html5ever.\\ This is Servo's HTML5 parser, written in Rust.\\ I have implemented a [[https://github.com/nielsdos/html5ever-libxml2-bridge/blob/main/src/lib.rs|proof-of-concept conversion]] from html5ever to libxml2, and a [[https://github.com/nielsdos/php-src/commits/dom-bridge|proof-of-concept integration with PHP]] on my fork.\\ \\ I decided to not go with this option for a few reasons.\\ * Firstly, while writing it in Rust would enhance memory safety (especially for untrusted documents), introducing Rust as an additional dependency for PHP adds extra complexity. PHP's default-enabled extensions can currently be built using only C, but if we go this route this would change.\\ * Secondly, the implementation is incomplete, primarily functioning effectively with UTF-8 documents. Support for other text encodings is lacking, necessitating a prior conversion. Moreover, reparsing logic for character encoding meta tags is absent.\\ * Lastly, observing the commit activity raises doubts about the ongoing activity of this project.
 
 Considering these factors, I opted against using the above two. Lexbor emerged as the better choice after this investigation.
 
-=== A note on conformance checkers ===
-
-I want to emphasize that the HTML5 parser is //not// a conformance checkers. Conformance checkers check for additional rules in addition to the parsing rules. Browsers, and the proposed class, //only// perform the parsing rules checks. An example of something that's fine for a HTML5 parser, but not fine for a conformance checker is the following document:
-
-''<!doctype html><html><head></head><body></body></html>''
-
-This is perfectly valid for a parser. Our implementation won't report any errors. Conformance checkers, however, will report the lack of a title element (amongst some other minor things).
-
 ==== Error handling ====
 
-When parsing a document, potential parse errors may occur. With the load methods of DOMDocument, a parser error results in an E_WARNING by default. //However//, you can use <php>libxml_use_internal_errors(true)</php> to store the errors inside an array. In this case, no warning will be generated and the parse errors may be inspected using <php>libxml_get_errors()</php> and <php>libxml_get_last_error()</php>.
+When parsing a document, potential parse errors may occur. With the existing load methods of DOMDocument, a parser error results in an E_WARNING by default. //However//, you can use <php>libxml_use_internal_errors(true)</php> to store the errors inside an array. In this case, no warning will be generated and the parse errors may be inspected using <php>libxml_get_errors()</php> and <php>libxml_get_last_error()</php>.
 
-The naming of these methods is a bit unfortunate because it leaks implementation details. Users shouldn't have to care that it's actually libxml2 under the hood producing these errors. The reality is that these error methods have become synonymous with "handling errors in DOMDocument / SimpleXML / ...".
-To offer a seamless HTML5 drop-in, my current implementation follows the same error handling as described above.
-That means, by default we will emit an E_WARNING. If <php>libxml_use_internal_errors(true)</php> is used then the errors will be stored, and can be retrieved in the same way as described above. This may seem unconventional since the errors originate from Lexbor rather than libxml2. However, we have good reasons to do so.
+The naming of these methods is a bit unfortunate. These methods have become almost synonymous with handling DOMDocument parse errors.
+To offer a seamless HTML5 parser replacement, my current implementation follows the same error handling as described above.
+That means, by default we will emit an E_WARNING, and if <php>libxml_use_internal_errors(true)</php> is used then the errors will be stored, and can be retrieved in the same way as described above. This may seem unconventional since the errors originate from Lexbor rather than libxml2.
 
 The alternative would be to introduce methods specific to getting the errors from the HTML5 parser.
 However, I do not believe that's a good idea because:
-  - The developers utilising these new parsing methods don't necessarily know that it uses Lexbor. So they expect the error handling behaviour to be the same as the existing methods.
+  - The users of these new parsing methods don't actually know that it uses Lexbor. So they expect the error handling behaviour to be the same as the existing ones.
   - The proposed approach makes it easier to use as a drop-in replacement.
   - If libxml2 ever introduces its own HTML5 parser, we can drop Lexbor and nothing changes for the end user w.r.t. error handling.
 
@@ -119,61 +83,44 @@ This function has been perceived as broken by the community due to it blocking l
 I don't know how the community perceives the interaction between loadHTMLFile and <php>libxml_set_external_entity_loader</php>.
 
 Unlike XML, HTML5 does not have a concept of external entities.
-The question I have is whether <php>libxml_set_external_entity_loader</php> should affect the new class's loadHTMLFile in the same way as it does for the existing class.
+The question I have is whether <php>libxml_set_external_entity_loader</php> should affect loadHTML5File in the same way as it does loadHTMLFile.
 The advantage would be consistency, but I don't know if this is what the community wants.
 I'm leaving this for a secondary vote for the community to decide on.
 
-==== Interoperability between DOMDocument and DOMHTML5Document ====
-
-Because <php>DOMHTML5Document</php> is a subclass of <php>DOMDocument</php>, all methods accepting a <php>DOMDocument</php> also accept a <php>DOMHTML5Document</php>. These functions can transparently work on HTML5 documents.
-If you want to restrict your code to only accept HTML5 documents, you can use the more stricter <php>DOMHTML5Document</php> type hint.
-
-However, what if you're using a library that returns a (non-HTML5) <php>DOMDocument</php> but you'd like a <php>DOMHTML5Document</php> (or vice versa)?
-You can solve this issue by using the <php>DOMDocument::importNode</php> or <php>DOMDocument::adoptNode</php> methods.
-
 ==== Parsing benchmarks ====
 
-You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOMHTML5Document::loadHTML</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
+You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOMDocument::loadHTML5()</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
 
 === Experimental setup ===
 
-I downloaded the homepages of the top 50 websites (excluding blank pages and NSFW pages) as listed according to [[https://www.similarweb.com/top-websites/|similarweb]]. This means 43 websites remain: 6 NSFW sites, and one blank page (microsoftonline.com) were removed.
-I created a PHP script that invokes each parser 300 times. I ran the experiment on an i7-4790 with 16GiB RAM.
+I downloaded the homepages of the top 50 websites (excluding blank pages and NSFW pages) as listed according to [[https://www.similarweb.com/top-websites/|similarweb].
+I created a PHP script that invokes each parser 1000 times. I ran the experiment on an i7-4790 with 16GiB RAM.
 
-=== Results ===
-
-The following graph shows the results. The blue bar shows the parse time in seconds for <php>DOMDocument</php>, and the orange bar does so for <php>DOMHTML5Document</php>. Lower is better.
+The following graph shows the results. The blue bar shows the parse time in seconds for loadHTML, and the orange bar does so for loadHTML5.
 The black vertical line indicates the minimum & maximum measured times for each bar.
-First of all, some measurements on the far left are very low. That's because those sites primarily generate their content using JavaScript. Hence, there are not many HTML nodes in the document. Some sites also show a geo-blocked page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that <php>DOMHTML5Document</php> is usually on par or faster than <php>DOMDocument</php>'s parser, despite having to do a conversion. For very short documents, the HTML5 parser can be a little bit slower because of the larger startup overhead.
+First of all, some measurements on the far left are very flow. That's because those sites primarily generate their content using JavaScript. Hence, there are not many HTML nodes in the document.
+Second, we can see that loadHTML5 is consistently faster than the existing loadHTML method, despite having to do a conversion.
 
 Based on this limited experiment, I conclude that the performance is acceptable.
 
 {{:rfc:domdocument_html5_parser:bench.png?400|}}
 
-==== Impact on binary size ====
+==== Effect on binary size and startup performance ====
 
 Incorporating any library will increase the binary size of the DOM extension. The Lexbor library is fairly big.
-The reality is however that a lot of the library is not actually used.
-Diving into each source file and ripping out functions that are not used is time-consuming and difficult however. Furthermore, this would make syncing upstream changes also more difficult.
-
-Inspecting the dom.so shared library using the size command yields the following results:
-
-^ before/after        ^ text       ^ data       ^ total       ^
-| before this patch   | 174.78 KiB | 15.18 KiB  | 192.24 KiB  |
-| after this patch    | 5347.72 KiB | 2012.19 KiB | 7362.44 KiB |
-
-The large data section is due to the large lookup tables for text encoding handling: Lexbor supports a lot of text encodings. The HTML5 parser spec requires quite a few character encodings to be supported by a compliant parser. This also has some influence on the text section, but another big part of it is simply all the parsing logic.
+TODO: not all functionality used
+TODO: measure with size
+TODO: measure startup
 
 ==== Completely alternative solution ====
 
-This section will list alternative solutions that I considered, but rejected.
+This section will list alternative solutions that I considered, but ultimately rejected.
 
 === Alternative DOM extension ===
 
-One might wonder why we don't just create an entirely new DOM extension, based on another library, with HTML5 support.
+One might wonder why we don't just create a new DOM extension, based on another library, with HTML5 support.
 There are a couple of reasons:
-  - Interoperability problems with other extensions (both within php-src and third-party).
+  - Interopability problems with other extensions (both first-party and third-party).
   - Fragmentation of userland.
   - Additional maintenance work and complexity.
   - I don't have time to do build this.
@@ -221,20 +168,18 @@ Everything outside of ext/dom is unaffected.
 This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 The Lexbor library also includes functionality outside of HTML parsing that we do not use right now.
-  - It contains a CSS selector parser, that transforms the expression into a list of actions we must follow to find the elements. This //could// make implementing querySelector(All) more easy.
+  - It contains a CSS selector parser, that transforms the expression into a list of actions we must follow to find the elements. This could make implementing querySelector(All) feasible.
   - It contains a WHATWG-compliant URL parser, which might be useful for extending PHP's URL pasing capabilities.
-  - There are more performance optimization opportunities.
 
 ===== Proposed Voting Choices =====
 
 There are two votes:
-  - Whether <php>DOMHTML5Document</php> should be introduced. This requires 2/3 majority.
-  - Whether <php>DOMHTML5Document::loadHTMLFile</php> should respect the resolver set by <php>libxml_set_external_entity_loader</php>. This requires 50% majority.
+  - Whether <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php> should be introduced. This requires 2/3 majority.
+  - Whether loadHTML5File should respect the resolver set by <php>libxml_set_external_entity_loader</php>. This requires 50% majority.
 
 ===== Patches and Tests =====
 
-  - Pull request: https://github.com/nielsdos/php-src/pull/32 (TODO: move this to php-src)
-  - Try it out yourself: https://gist.github.com/nielsdos/139099c54ddc4a43bc66f4c0b7ef02fc
+https://github.com/nielsdos/php-src/pull/32
 
 This does not yet include the external entity loader support.
 I want to wait until we have the results of the secondary vote before I spend time coding this part.
