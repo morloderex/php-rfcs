@@ -1,5 +1,5 @@
 ====== PHP RFC: DOMDocument HTML5 parser ======
-  * Version: 0.1.1
+  * Version: 0.2
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Draft
@@ -17,19 +17,32 @@ Another concern highlighted in PHP's bug tracker is the handling of closing tags
 
 There's an open issue at the libxml2 bugtracker to add HTML5 parsing support: https://gitlab.gnome.org/GNOME/libxml2/-/issues/211.
 However, it seems like this won't happen anytime soon.
-This RFC proposes leveraging an alternative HTML5 parser to create the libxml2 document tree. This will introduce two new methods: <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php>. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions.
+This RFC proposes leveraging an alternative HTML5 parser to create the libxml2 document tree. This will introduce two new methods: <php>DOMDocument::loadHTML5(string $html, int $options=0)</php> and <php>DOMDocument::loadHTML5File(string $path, int $options=0)</php>. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions.
 
 ===== Proposal =====
 
 The most important requirement is that the HTML5 parser must integrate seamlessly with the DOM extension. This means that using the HTML5 parser must be a simple drop-in replacement. You will still be able to use all the existing APIs to manipulate and traverse DOM documents and nodes.
 
-We propose the introduction of two new methods <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php> instead of replacing the existing ones. This ensures full backwards compatibility for applications that work with legacy HTML4 documents, and want the HTML4 behaviour.
-
-Note that unlike the existing load methods, these do not take an options parameter. The options for the existing load methods change the way the parser behaves (e.g. not adding implied html & body elements). These options deviate from the HTML parser spec. I will stick to the spec and therefore not introduce such option parameters. The only option that //might// be useful is LIBXML_NOERROR, which disables error reporting. However, you can achieve this in other ways too.
+We propose the introduction of two new methods <php>DOMDocument::loadHTML5(string $html, int $options=0)</php> and <php>DOMDocument::loadHTML5File(string $path, int $options=0)</php> instead of replacing the existing ones. This ensures full backwards compatibility for applications that work with legacy HTML4 documents, and want the HTML4 behaviour.
 
 Serializing the document back to a string or to a file will be possible with the existing <php>DOMDocument::saveHTML</php> and <php>DOMDocument::saveHTMLFile</php> methods.
 
-==== Background ====
+===== The options argument =====
+
+Just like the existing load methods, these two new methods also take an optional options argument. The options for the existing load methods change the way the parser behaves. The only two options that will have an effect are <php>LIBXML_HTML_NOIMPLIED</php> and <php>LIBXML_NOERROR</php>. Here's an overview why the other options are not implemented:
+
+^ Option                        ^ Reasoning                                          ^
+| <php>LIBXML_BIGLINES</php> \\ <php>LIBXML_PARSEHUGE</php>    | Not needed, this always works for the new methods. |
+| <php>LIBXML_COMPACT</php>     | This is a transparent optimization for the program, not implemented right now because it requires quite a few hacks. It can be implemented in the future |
+| <php>LIBXML_DTDATTR</php> \\ <php>LIBXML_DTDLOAD</php> \\ <php>LIBXML_DTDVALID</php> | There is only one valid DTD for HTML5, these options don't make sense. |
+| <php>LIBXML_HTML_NODEFDTD</php>     | Not needed, this is the default HTML5 behaviour. |
+| <php>LIBXML_NOBLANKS</php> | This doesn't remove blank nodes in all cases. There's rules that libxml2 follows based on whether the element accepts #PCDATA, and based on the position of the element. As HTML5 is not based on XML, there is no concept of #PCDATA. Hence, it is unclear how to implement this. |
+| <php>LIBXML_NOCDATA</php> \\ <php>LIBXML_NOEMPTYTAG</php> \\ <php>LIBXML_NOENT</php> \\ <php>LIBXML_NSCLEAN</php> \\ <php>LIBXML_XINCLUDE</php> \\ <php>LIBXML_SCHEMA_CREATE</php> | This is only valid in XML, the concept doesn't exist in HTML5. |
+| <php>LIBXML_NONET</php> | Not needed, the new methods never access the network. |
+| <php>LIBXML_NOWARNING</php> | Not needed, only errors are reported. |
+| <php>LIBXML_PEDANTIC</php> | Error reporting follows the spec, no custom modification is done. |
+
+==== Additional background info ====
 
 The DOM extensions supports both XML and HTML documents. It's built heavily upon libxml2's APIs and data structures, just like all XML-related PHP extensions within php-src. This is great for interopability (e.g. with simplexml and xsl).
 Third-party extensions also use libxml2 APIs. For example, the [[https://pecl.php.net/package/xmldiff|xmldiff]] PECL extension peeks into the internals of DOMDocument to grab the libxml2 data structures and compare them.
@@ -93,7 +106,7 @@ I'm leaving this for a secondary vote for the community to decide on.
 
 ==== Parsing benchmarks ====
 
-You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOMDocument::loadHTML5()</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
+You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOMDocument::loadHTML5</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
 
 === Experimental setup ===
 
@@ -187,7 +200,7 @@ The Lexbor library also includes functionality outside of HTML parsing that we d
 ===== Proposed Voting Choices =====
 
 There are two votes:
-  - Whether <php>DOMDocument::loadHTML5(string $html)</php> and <php>DOMDocument::loadHTML5File(string $path)</php> should be introduced. This requires 2/3 majority.
+  - Whether <php>DOMDocument::loadHTML5(string $html, int $options=0)</php> and <php>DOMDocument::loadHTML5File(string $path, int $options=0)</php> should be introduced. This requires 2/3 majority.
   - Whether loadHTML5File should respect the resolver set by <php>libxml_set_external_entity_loader</php>. This requires 50% majority.
 
 ===== Patches and Tests =====
