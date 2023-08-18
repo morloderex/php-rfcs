@@ -28,7 +28,12 @@ class Save
     {
         $io->info("Fetching history for '$rfcSlug'");
 
-        $history = $this->history->getHistory($rfcSlug);
+        $history = array_values($this->history->getHistory($rfcSlug));
+
+        if (count($history) === 0) {
+            $io->warning("Could not find history for '{$rfcSlug}'");
+        }
+
         $history = array_reverse($history);
         $file = $this->savePath . '/' . $rfcSlug . '.txt';
         $knownRevisions = $this->getKnownRevisionsForRfc($file, $rfcSlug);

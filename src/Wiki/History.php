@@ -51,6 +51,11 @@ class History
         $request = $this->requestFactory->createRequest('GET', $rfcHistoryUrl);
 
         $rfcPageResponse = $this->httpClient->sendRequest($request);
+
+        if ($rfcPageResponse->getStatusCode() !== 200) {
+            return $history;
+        }
+
         $contents = $this->tidy->repairString($rfcPageResponse->getBody()->getContents());
 
         $dom = new DOMDocument();
@@ -67,15 +72,14 @@ class History
 
         /** @var DOMNode $row */
         foreach ($rows as $row) {
-            $link = $xpath->query("a[@class='wikilink1']", $row)?->item(0);
-            $uri = $link?->attributes?->getNamedItem('href')?->nodeValue;
-            [ , $time] = str_contains($uri, '=') ? explode('=', $uri, 2) : [null, null];
+            $time = $xpath->query("span[@class='date']", $row)?->item(0)->textContent;
+            $revision = $xpath->query("input[@name='rev2[]']", $row)?->item(0)->attributes->getNamedItem('value')->value;
 
             $summarySpan = $xpath->query("span[@class='sum']", $row)?->item(0);
             $summary = str_replace(["\n", "\r"], ' ', trim((string) $summarySpan?->textContent));
             $summary = trim($summary, "\u{2013}- \n\r\t\v\0");
 
-            $userSpan = $xpath->query("span[@class='user']", $row)?->item(0);
+            $userSpan = $xpath->query("span[@class='user']", $row)?->item(0)->firstChild;
             $user = str_replace(["\n", "\r", "\t", "\v", "\0"], '', trim((string) $userSpan?->textContent));
 
             if (!array_key_exists($user, $this->people)) {
@@ -84,28 +88,36 @@ class History
                 $peopleResponse = $this->httpClient->sendRequest($peopleRequest);
                 $peopleContents = $peopleResponse->getBody()->getContents();
 
-                if ($peopleResponse->getStatusCode() !== 200 || str_contains($peopleContents, 'No such user')) {
-                    $this->people[$user] = ['name' => $user, 'email' => ''];
+                if ($peopleResponse->getStatusCode() !== 200 || str_contains($peopleContents, 'No such user')
+                    || str_contains($peopleContents, 'Something happened to main')
+                ) {
+                    $this->people[$user] = ['name' => $user, 'email' => 'unkown@php.net'];
                 } else {
                     preg_match('#<h1 property="foaf:name">(.*)</h1>#', $peopleContents, $matches);
                     $this->people[$user] = [
-                        'name' => trim($matches[1] ?? ''),
+                        'name' => trim($matches[1]),
                         'email' => $user . '@php.net',
                     ];
                 }
             }
 
             $history[] = [
-                'rev' => (int) $time,
-                'date' => (new DateTimeImmutable("@{$time}"))->format(self::GIT_DATE),
-                'author' => $this->people[$user]['name'],
-                'email' => $this->people[$user]['email'],
+                'rev' => (int) $revision,
+                'date' => (new DateTimeImmutable("@{$revision}"))->format(self::GIT_DATE),
+                'author' => $this->people[$user]['name'] ?? null,
+                'email' => $this->people[$user]['email'] ?? null,
                 'message' => $summary,
             ];
         }
 
-        $nextNav = $xpath->query("//div[@class='pagenav-next']");
-        if ($nextNav->count() > 0) {
+        $nextNumber = $xpath->query("//div[@class='pagenav-next']/form/div/input[@name='first']")?->item(0)
+            ?->attributes->getNamedItem('value')?->value ?? null;
+
+        if ($nextNumber !== null) {
+            if (((int) $nextNumber) <= $first) {
+                return $history;
+            }
+
             $history = $this->getHistory($rfcSlug, $first + self::FIRST_INCREMENT, $history);
         }
 
