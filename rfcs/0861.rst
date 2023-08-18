@@ -1,0 +1,134 @@
+List\unique() And Assoc\unique()
+================================
+
+:PHP-RFC: 0861
+:Title: List\unique() And Assoc\unique()
+:Author: Ilija Tovilo <ilutov@php.net>
+:Status: Draft
+:Type: Standards Track
+:Created: 2022-12-01
+:PHP-Version: 8.3
+:Version: 1.0
+
+Introduction
+------------
+
+The ``array_unique()`` function allows getting all unique values of a
+given array. Unfortunately, PHP has multiple definitions of equality and
+thus uniqueness. The most obvious one (i.e. ``$a === $b``) is not
+supported by ``array_unique()``.
+
+This RFC proposes adding two new functions, ``List\unique()`` and
+``Assoc\unique()`` as alternatives using strict equality (``===``)
+semantics, the former discarding and the latter preserving keys.
+
+.. code:: php
+
+   List\unique([1, 2, 3, 1, '2', 3.0, new Foo, ['bar']])
+   // > [1, 2, 3, '2', 3.0, Foo, ['bar']]
+
+   Assoc\unique(['foo' => 'foo', 'bar' => 'bar', 'baz' => 'foo'])
+   // > ['foo' => 'foo', 'bar' => 'bar']
+
+Proposal
+--------
+
+Two new functions are added to PHP:
+
+-  ``List\unique(bool $array): array``
+-  ``Assoc\unique(bool $array): array``
+
+Both functions return a new array containing unique values of the
+``$array`` parameter. ``List\unique()`` will return a list, meaning the
+array will have continuous keys, starting from 0. ``Assoc\unique()``
+will reuse the original arrays keys instead.
+
+Uniqueness is based on the strict equality operator (``===``). Any two
+values that are strictly equal are considered duplicates and thus only
+once added to the resulting array. References are preserved.
+
+Equality
+~~~~~~~~
+
+Removing duplicates from arrays is a common use case provided by many
+programming languages. PHPs ``array_unique()`` has been there for `~23
+years <https://github.com/php/php-src/commit/99f151f1bde0483944767cf0ed49d3270f61d326>`__.
+However, PHP has multiple definitions of equality, four in particular
+supported by ``array_unique()``:
+
+-  ``SORT_STRING`` - Converts values to strings and compares with
+   ``<``/``==``/``>``
+-  ``SORT_REGULAR`` - Compares values directly with ``<``/``==``/``>``
+-  ``SORT_NUMERIC`` - Converts values to doubles
+-  ``SORT_LOCALE_STRING`` - Converts values to strings and compares with
+   ``strcoll``
+
+Internally, ``array_unique()`` sorts the array to avoid comparing each
+value with every other value which would scale badly. For this reason,
+the second parameter ``$flags`` accepts the same ``SORT_*`` options as
+``sort()`` function and friends.
+
+None of these options support arrays and objects, and other primitive
+types are subject to subtle coercion issues. Additionally, coercion can
+lead to warnings that are likely undesirable, as the fact that these
+values are coerced for comparison is an implementation detail.
+
+Keys
+~~~~
+
+A common issue with many array functions is that they make no
+distinction between lists and associative arrays. Thus, it is often
+unclear whether a functions should discard or preserve keys. This is
+made evident by how the functions are used in user code, only
+considering them when some issue arises. This RFC proposes adding two
+separate functions specifically to force users to make a deliberate
+choice between the two, rather than doing so only after encountering
+issues with array keys.
+
+Implementation
+--------------
+
+The new functions use a temporary hashmap internally. The array is
+iterated and each value is added to the hashmap. If the value has not
+been added to the hashmap before, it is added to the resulting array. If
+it has been added, the value is skipped. These new functions have a time
+complexity of ``O(n)``, whereas ``array_unique()`` has ``O(n log n)``
+(with the exception of ``SORT_STRING`` which also has ``O(n)``).
+
+Backward Incompatible Changes
+-----------------------------
+
+There are no backwards-incompatible changes in this RFC.
+
+Alternative approaches
+----------------------
+
+Previously, adding a new ``ARRAY_UNIQUE_IDENTICAL`` constant that can be
+passed to ``array_unique()``\ s ``$flag`` parameter was discussed. The
+discussion has revealed that most people would prefer a new function
+over extending ``array_unique()`` with a flag that might be more
+difficult to discover.
+
+Vote
+----
+
+Voting opened on xxxx-xx-xx and closes on xxxx-xx-xx.
+
+Question: Add List\unique() and Assoc\unique() functions?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Additional Metadata
+-------------------
+
+:Implementation: https://github.com/php/php-src/pull/9882
+:Original Authors: Ilija Tovilo ilutov@php.net
+:Original PHP Version: PHP 8.3
+:Original Status: Under discussion
+:Slug: list_assoc_unique
+:Wiki URL: https://wiki.php.net/rfc/list_assoc_unique

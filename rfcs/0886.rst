@@ -1,0 +1,349 @@
+Saner Array_(sum|product)()
+===========================
+
+:PHP-RFC: 0886
+:Title: Saner Array_(sum|product)()
+:Author: George Peter Banyard <girgias@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-01-14
+:PHP-Version: 8.3
+:Version: 0.2
+
+Introduction
+------------
+
+PHP's standard library implements the ``array_sum()`` and
+``array_product()`` which take an array of entries and adds/multiplies
+them together. These functions are higher order functions that perform a
+fold/reduction of their input array.
+
+PHP supports folding/reduction of arbitrary arrays via the
+``array_reduce()`` function by taking a callable with two parameters and
+an initial value. As such, it is possible to implement the
+above-mentioned two functions in userland as follows:
+
+.. code:: php
+
+   // $output = array_sum($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+
+   // $output = array_product($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+
+If the entries in the input array are exclusively comprised of int and
+float values, then the behaviour between the built-in functions and
+their userland implementation is identical. However, if other types are
+part of the entries, the behaviour diverges.
+
+We believe that the behaviour between the two variants should be as
+close as possible, and we will use this as our design principle for
+addressing the discrepancies between both implementations.
+
+Therefore, we will first look at the behaviour of the ``array_reduce()``
+version which the arithmetic operators with various types, then detail
+the current behaviour of the ``array_sum()`` and ``array_product()``
+functions, and finally propose various changes to fix the discrepancies.
+
+Behaviour of the array_reduce() variants
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As the ``array_reduce()`` variants use arithmetic operators. It's
+crucial to understand how they perform with non-numeric values.
+Arithmetic operators perform a numeric type juggling, which is described
+in the userland manual as:
+
+    In this context if either operand is a float (or not interpretable
+    as an int), both operands are interpreted as floats, and the result
+    will be a float. Otherwise, the operands will be interpreted as
+    ints, and the result will also be an int. As of PHP 8.0.0, if one of
+    the operands cannot be interpreted a TypeError is thrown.
+
+The following types (other than int and float) are considered
+interpretable as int/float:
+
+-  ``null``, as ``0``
+-  ``bool``, where ``false`` is interpreted as ``0``, and ``true`` as
+   ``1``
+-  ``string``, if it is numeric the string is converted to int/float and
+   the standard behaviour is used
+-  ``object`` if it implements a ``do_operation`` handler that supports
+   the operation, this is used. Otherwise, if it implements a custom
+   ``cast_object`` handler which supports a numeric (but not an int or
+   float) cast, the object is cast, and the standard behaviour is used.
+   This is limited to internal objects. One such example is the GMP
+   class.
+
+All other cases throw a ``TypeError``.
+
+Examples
+^^^^^^^^
+
+Example with ``GMP`` objects:
+
+.. code:: php
+
+   $input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+   // Userland implementation of array_sum($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+   var_dump($output);
+   /*
+   object(GMP)#5 (1) {
+     ["num"]=>
+     string(2) "14"
+   }
+   */
+
+   // Userland implementation of array_product($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+   var_dump($output);
+   /*
+   object(GMP)#6 (1) {
+     ["num"]=>
+     string(2) "90"
+   }
+   */
+
+Pathological example:
+
+.. code:: php
+
+   /* STDERR gets cast to 3 */
+   $input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+   // Userland implementation of array_sum($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+   var_dump($output); // TypeError
+
+   // Userland implementation of array_product($input)
+   $output = array_reduce($input, fn($carry, $value) => $carry * $value, 1);
+   var_dump($output); // TypeError
+
+Certain FFI\CData types implements a ``do_operation`` handler for
+addition:
+
+.. code:: php
+
+   $x = FFI::new("int[2]");
+   $x[0] = 10;
+   $x[1] = 25;
+
+   $input = [$x, 1];
+
+   $output = array_reduce($input, fn($carry, $value) => $carry + $value, 0);
+   var_dump($output);
+   /*
+   object(FFI\CData:int32_t*)#4 (1) {
+     [0]=>
+     int(25)
+   }
+   */
+
+Current behaviour of the array_sum() and array_product() functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The behaviour of these functions is relatively straight forward:
+
+First initialize the return value to ``0``/``1`` for ``array_sum()`` and
+``array_product()`` respectively.
+
+Traverse the array entries:
+
+-  If the entry is of type ``array`` or ``object``: the entry is skipped
+-  Otherwise, the entry is cast to a number (int|float), and this value
+   is added/multiplied to the return value.
+
+As such resource, array, non-numeric strings, and
+non-addable/multiplicate and non-numerically castable objects entries do
+not throw a ``TypeError``, behaviour which was made consistent in PHP
+8.0.0 with the `Stricter type checks for arithmetic/bitwise
+operators </rfc/arithmetic_operator_type_checks>`__ RFC.
+
+.. _examples-1:
+
+Examples
+^^^^^^^^
+
+Example with ``GMP`` objects:
+
+.. code:: php
+
+   $input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+   $output = array_sum($input);
+   var_dump($output); // int(0)
+
+   $output = array_product($input);
+   var_dump($output); // int(1)
+
+Pathological example:
+
+.. code:: php
+
+   /* STDERR gets cast to 3 */
+   $input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+   $output = array_sum($input);
+   var_dump($output); // int(4)
+
+   $output = array_product($input);
+   var_dump($output); // int(3)
+
+FFI example:
+
+.. code:: php
+
+   $x = FFI::new("int[2]");
+   $x[0] = 10;
+   $x[1] = 25;
+
+   $input = [$x, 1];
+
+   $output = array_sum($input);
+   var_dump($output); // int(1)
+
+Proposal
+--------
+
+The proposal is to use the same behaviour for ``array_sum()`` and
+``array_product()`` as the ``array_reduce()`` variants by reusing the
+engine functions that perform the arithmetic operations while still
+accepting, but emitting an ``E_WARNING``, and implementing the current
+behaviours for values that are rejected by the arithmetic operators.
+
+The one caveat is that objects must implement a numeric cast for them to
+be added/multiplied, this is done to respect the current return type of
+``int|float``.
+
+Therefore, the previous three examples would result in the following
+behaviour:
+
+Example with ``GMP`` objects:
+
+.. code:: php
+
+   $input = [gmp_init(6), gmp_init(3), gmp_init(5)];
+
+   $output = array_sum($input);
+   var_dump($output); // int(14)
+
+   $output = array_product($input);
+   var_dump($output); // int(90)
+
+Pathological example:
+
+.. code:: php
+
+   $input = [true, STDERR, new stdClass(), [], gmp_init(6)];
+
+   $output = array_sum($input);
+   var_dump($output);
+   /*
+
+   Warning: array_sum(): Addition is not supported on type resource in %s on line %d
+
+   Warning: array_sum(): Addition is not supported on type stdClass in %s on line %d
+
+   Warning: array_sum(): Addition is not supported on type array in %s on line %d
+   int(10)
+   */
+
+   $output = array_product($input);
+   var_dump($output);
+   /*
+
+   Warning: array_product(): Multiplication is not supported on type resource in %s on line %d
+
+   Warning: array_product(): Multiplication is not supported on type stdClass in %s on line %d
+
+   Warning: array_product(): Multiplication is not supported on type array in %s on line %d
+   int(18)
+   */
+
+FFI example:
+
+.. code:: php
+
+   $x = FFI::new("int[2]");
+   $x[0] = 10;
+   $x[1] = 25;
+
+   $input = [$x, 1];
+
+   $output = array_sum($input);
+   var_dump($output); // int(1)
+   /*
+
+   Warning: array_sum(): Addition is not supported on type FFI\CData in %s on line %d
+   int(1)
+   */
+
+Backward Incompatible Changes
+-----------------------------
+
+``E_WARNING``\ s are emitted for incompatible types.
+
+Arrays that contain objects may now produce different results, for
+example:
+
+.. code:: php
+
+   $a = [10, 15.6, gmp_init(25)];
+   var_dump(array_sum($a));
+
+Currently, results in: ``float(25.6)`` but with this proposal accepted
+would result in:
+
+.. code:: php
+
+   int(50.6)
+
+Proposed PHP Version
+--------------------
+
+Next minor version, i.e. PHP 8.3.0.
+
+Proposed Voting Choices
+-----------------------
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2023-02-20 and will end on 2023-03-06.
+
+Question: Accept Saner array_(sum|product)() RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation
+--------------
+
+GitHub pull request: https://github.com/php/php-src/pull/10161
+
+Landed in PHP 8.3: Implemented via commit:
+https://github.com/php/php-src/commit/3b06618813fe0979850eaa1f4bed426edb5b3123
+
+After the project is implemented, this section should contain
+
+-  the version(s) it was merged into
+-  a link to the git commit(s)
+-  a link to the PHP manual entry for the feature
+
+References
+----------
+
+Additional Metadata
+-------------------
+
+:Implementation: https://github.com/php/php-src/pull/10161
+:Original Authors: George Peter Banyard, girgias@php.net
+:Original PHP Version: PHP 8.3
+:Original Status: `Implemented <https://github.com/php/php-src/commit/3b06618813fe0979850eaa1f4bed426edb5b3123>`__
+:Slug: saner-array-sum-product
+:Wiki URL: https://wiki.php.net/rfc/saner-array-sum-product

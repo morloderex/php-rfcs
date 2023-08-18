@@ -1,0 +1,566 @@
+Marking Overridden Methods (#[\Override])
+=========================================
+
+:PHP-RFC: 0864
+:Title: Marking Overridden Methods (#[\Override])
+:Author: Tim Düsterhus <timwolla@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-05-06
+:PHP-Version: 8.3
+:Version: 1.0
+
+Introduction
+------------
+
+When implementing an interface or inheriting from another class PHP
+performs various checks to ensure that implemented methods are
+compatible with the constraints imposed by the interface or parent
+class. However there is one thing it cannot check: Intent.
+
+PHP verifies that the signature of implemented methods is compatible
+with a given interface or an overridden method from a parent class but
+it cannot check whether a method is actually *intended* to implement the
+interface method or override the parent method or not and thus cannot
+assist the developer by detecting mistakes.
+
+The same is true for the human reader. While the human reader is able to
+determine intent by carefully looking the the code and possibly the VCS
+history, it would certainly be simpler if the intention by the original
+author would be explicitly expressed in a way that ensures that the
+information stays up to date.
+
+The following examples showcase possible situations where being able to
+express if a method is intended to override another method or implement
+an interface would make it easier to debug a mistake, to refactor and to
+clean up existing code. Another possible use case is to easily detect a
+possibly breaking change in a parent class that was provided by a
+library without needing to read the changelog in detail or missing some
+item in the list of changes. The examples are intended to match
+real-world use-cases to be more descriptive and thus include references
+to existing libraries or frameworks. By virtue of being an example they
+might not be fully functional or might not match best practices in a
+given ecosystem, though.
+
+Examples
+~~~~~~~~
+
+Using traits for default implementations of an interface:
+
+.. code:: php
+
+   <?php
+
+   interface Formatter {
+     public function format(string $input): string;
+     public function isSupported(string $input): bool;
+   }
+
+   trait DefaultFormatter {
+     public function format(string $input): string
+     {
+       return $input;
+     }
+
+     public function isSupported(string $Input): bool
+     {
+       return true;
+     }
+   }
+
+   final class LengthRestrictedFormatter {
+     use DefaultFormatter;
+     
+     public function __construct(private int $maxLength) {}
+     
+     /* The name of the method was misremembered as isValid() instead of
+      * isSupported(), but the default implementation in the trait will
+      * satisfy the interface, leading to erroneous behavior.
+      */
+     public function isValid(string $input): bool
+     {
+       return strlen($input) < $this->maxLength;
+     }
+   }
+
+Inheriting from a class and intentionally overriding a method:
+
+.. code:: php
+
+   <?php
+
+   namespace MyApp\Tests;
+
+   use PHPUnit\Framework\TestCase;
+
+   final class MyTest extends TestCase
+   {
+       protected bool $myProp;
+
+       /* A typo was introduced in setUp() and this method will never be called,
+        * as it is protected in a final class that does not reference it.
+        */
+       protected function setUpp(): void
+       {
+           $this->myProp = true;
+       }
+       
+       public function testItWorks(): void
+       {
+           $this->assertTrue($this->myProp);
+       }
+   }
+
+Implementing an interface that later deprecates and removes a method:
+
+.. code:: php
+
+   <?php
+
+   interface StringValidator {
+     public function validate(string $input): bool;
+   }
+
+   final class NonEmptyValidator implements StringValidator {
+     public function validate(string $input): bool
+     {
+       return $input !== '';
+     }
+     
+     /* Was this method part of a previous version of the interface and is
+      * no longer required or is it a specific feature of NonEmptyValidator?
+      * The name indicates that it likely was part of some interface, but
+      * we can't be sure.
+      */
+     public function getIdentifierForErrorMessage(): string
+     {
+       return 'string_must_not_be_empty';
+     }
+   }
+
+Inheriting from a class that later adds a new method.
+
+.. code:: php
+
+   <?php
+
+   namespace App\Models;
+
+   use Illuminate\Database\Eloquent\Model;
+   use Illuminate\Support\Facades\Http;
+
+   class RssFeed extends Model {
+     /* Laravel 5.4 added the refresh() method to Eloquent, but we already
+      * have a custom method with the same name and signature that does
+      * something entirely different.
+      */
+     public function refresh()
+     {
+       $this->message = Http::get($this->url);
+       $this->save();
+     }
+   }
+
+Proposal
+--------
+
+To be able to express the *intent* in code, a new ``#[\Override]``
+attribute shall be added. If this attribute is added to a method, the
+engine shall validate that a method with the same name exists in a
+parent class or any of the implemented interfaces. If no such method
+exists a compile time error shall be emitted.
+
+-  In both the “LengthFormatter” and the “MyTest” examples, applying the
+   attribute on the method in question would have detected the mistake
+   and emitted an error.
+-  For the “NonEmptyValidator” example the error message would indicate
+   that the interface changed and that the method can safely be removed,
+   because the public API of the class is meant to directly mirror the
+   interface’s API.
+-  For the “RssFeed” example the attribute would not *directly* be able
+   to prevent the mistake. However an IDE or static analysis tool might
+   emit a diagnosis to indicate that adding the attribute would now be
+   possible after upgrading the framework might have been able to
+   highlight the new method in the parent class. By emitting such a
+   diagnosis, the possibly breaking change due to developers expecting
+   the ``refresh()`` method to behave in a certain way would be
+   implicitly detectable.
+
+Semantics
+~~~~~~~~~
+
+The rule of thumb is: If changing the method signature would result in
+the ``Fatal error: Declaration of X must be compatible with Y`` error
+message, the ``#[\Override]`` attribute is satisfied and does not emit
+an error.
+
+-  Public and protected methods of a parent class or implemented
+   interface satisfy ``#[\Override]``.
+
+   -  Abstract methods satisfy ``#[\Override]``.
+   -  Static methods behave as instance methods.
+
+-  Private methods of a parent class do not satisfy ``#[\Override]``,
+   because they are no part of the externally visible API.
+-  ``__construct()`` of a parent class do not satisfy ``#[\Override]``,
+   because it's not part of the API of an already-constructed object.
+-  The attribute is ignored on traits, but:
+
+   -  Abstract methods in a ``use``\ d trait satisfy ``#[\Override]``.
+   -  Regular methods in a ``use``\ d trait that are “shadowed” by a
+      method in the class using the trait *do not* satisfy
+      ``#[\Override]``.
+   -  Methods from a ``use``\ d trait behave as if the method definition
+      was copied and pasted into the target class. Specifically the
+      ``#[\Override]`` attribute on a trait method requires the
+      existence of a matching method in a parent class or implemented
+      interface.
+
+-  ``#[\Override]`` works as expected on enums and anonymous classes.
+-  ``#[\Override]`` works as expected on interface. A matching method
+   needs to exist in a parent interface.
+
+Why an attribute and not a keyword?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This RFC proposes an attribute instead of a keyword, because contrary to
+other modifiers (e.g. visibility) that are part of the method signature,
+the attribute does not affect behavior or compatibility for users that
+further extend a given class and neither does it affect users that call
+the method. It is purely an assistance to the author of a given class.
+
+Furthermore using an attribute improves backwards compatibility, because
+no parser changes are required. The attribute can be added to codebases
+that need to support older PHP versions and existing analysis tools and
+IDEs will be able to make sense of the code, even if they do not
+understand the semantics of the attribute.
+
+Precedent in other programming languages
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+-  This RFC is directly modeled after Java's ``@Override`` annotation:
+   https://docs.oracle.com/javase/8/docs/api/java/lang/Override.html
+-  TypeScript has an ``override`` keyword as part of the method
+   signature:
+   https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-3.html#override-and-the---noimplicitoverride-flag
+-  C++ has an ``override`` specifier as part of the method signature:
+   https://en.cppreference.com/w/cpp/language/override
+-  C# has a *required* ``override`` modifier as part of the method
+   signature:
+   https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/override
+-  Kotlin has a *required* ``override`` modifier as part of the method
+   signature:
+   https://kotlinlang.org/docs/inheritance.html#overriding-methods
+-  Swift has a *required* ``override`` modifier as part of the method
+   signature:
+   https://docs.swift.org/swift-book/documentation/the-swift-programming-language/inheritance/#Overriding
+
+Static Analysis Tools and IDEs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Once the attribute is implemented, static analysis tools and IDEs should
+add a diagnosis that encourages the developer to add the attribute
+whenever possible. By doing so, the developer would be able to detect
+when a method is overridden by accident, as the tool would suggest
+adding the attribute where the developer did not expect it to be
+suggested.
+
+It goes without saying that the reverse is also true: Static analysis
+tools and IDEs should flag whenever the attribute is used where it would
+result in a Fatal Error when executing the code.
+
+Properties
+~~~~~~~~~~
+
+While overriding properties has similar implications as with methods,
+they are **not** part of this proposal.
+
+As of now properties may not be part of an interface and thus only
+properties of a parent class can be overridden. The type of properties
+is enforced to be invariant and properties do not have behavior
+attached. A property can only ever be overridden by a compatible
+property with possibly added attributes.
+
+These characteristics of properties imply that enforcing a specific
+property behavior is hard in the first place. Having the
+``#[\Override]`` attribute would not provide an actual benefit. A parent
+class could introduce a property with a matching name and type, but a
+different purpose. However the ``#[\Override]`` attribute cannot protect
+against this, as it does not enforce anything about the *absence* of a
+parent property.
+
+.. _examples-1:
+
+Examples
+~~~~~~~~
+
+Valid examples
+^^^^^^^^^^^^^^
+
+.. code:: php
+
+   class P {
+       protected function p(): void {}
+   }
+
+   class C extends P {
+       #[\Override]
+       public function p(): void {}
+   }
+
+.. code:: php
+
+   class Foo implements IteratorAggregate
+   {
+       #[\Override]
+       public function getIterator(): Traversable
+       {
+           yield from [];
+       }
+   }
+
+.. code:: php
+
+   trait T {
+       #[\Override]
+       public function t(): void {}
+   }
+
+.. code:: php
+
+   trait T {
+       #[\Override]
+       public function i(): void {}
+   }
+
+   interface I {
+       public function i(): void;
+   }
+
+   class Foo implements I {
+       use T;
+   }
+
+.. code:: php
+
+   interface I {
+       public function i();
+   }
+
+   interface II extends I {
+       #[\Override]
+       public function i();
+   }
+
+   class P {
+       public function p1() {}
+       public function p2() {}
+       public function p3() {}
+       public function p4() {}
+   }
+
+   class PP extends P {
+       #[\Override]
+       public function p1() {}
+       public function p2() {}
+       #[\Override]
+       public function p3() {}
+   }
+
+   class C extends PP implements I {
+       #[\Override]
+       public function i() {}
+       #[\Override]
+       public function p1() {}
+       #[\Override]
+       public function p2() {}
+       public function p3() {}
+       #[\Override]
+       public function p4() {}
+       public function c() {}
+   }
+
+Invalid examples
+^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+   class C
+   {
+       #[\Override]
+       public function c(): void {} // Fatal error: C::c() has #[\Override] attribute, but no matching parent method exists
+   }
+
+.. code:: php
+
+   interface I {
+       public function i(): void;
+   }
+
+   class P {
+       #[\Override]
+       public function i(): void {} // Fatal error: P::i() has #[\Override] attribute, but no matching parent method exists
+   }
+
+   class C extends P implements I {}
+
+.. code:: php
+
+   trait T {
+       #[\Override]
+       public function t(): void {}
+   }
+
+   class Foo {
+       use T; // Fatal error: Foo::t() has #[\Override] attribute, but no matching parent method exists
+   }
+
+.. code:: php
+
+   class P {
+       private function p(): void {}
+   }
+
+   class C extends P {
+       #[\Override]
+       public function p(): void {} // Fatal error: C::p() has #[\Override] attribute, but no matching parent method exists
+   }
+
+.. code:: php
+
+   trait T {
+       public function t(): void {}
+   }
+
+   class C {
+       use T;
+
+       #[\Override]
+       public function t(): void {} // Fatal error: C::t() has #[\Override] attribute, but no matching parent method exists
+   }
+
+.. code:: php
+
+   interface I {
+       #[\Override]
+       public function i(): void; // Fatal error: I::i() has #[\Override] attribute, but no matching parent method exists
+   }
+
+Backward Incompatible Changes
+-----------------------------
+
+``Override`` can no longer be used as a class name in the global
+namespace. A GitHub search for
+``"class Override " language:php symbol:override`` revealed a total of
+94 matches in source code. The majority of the matches are namespaced,
+but there are some occurrences in the global namespace.
+
+Proposed PHP Version(s)
+-----------------------
+
+Next minor (8.3).
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Extensions should possibly add the attribute to their methods where
+appropriate.
+
+To Opcache
+~~~~~~~~~~
+
+None.
+
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None.
+
+Open Issues
+-----------
+
+n/a
+
+Unaffected PHP Functionality
+----------------------------
+
+Any functionality that is not related to objects and classes is
+unaffected. Classes that do not leverage inheritance of implement
+interfaces are unaffected. The entire functionality is opt-in, so
+existing code is also unaffected.
+
+Future Scope
+------------
+
+-  An extra option (e.g. class level attribute or ``declare()``
+   directive) to emit errors whenever a method is overridden without the
+   overriding method having the attribute:
+   https://externals.io/message/120233#120522
+-  An extra parameter to indicate which class' or interface's method is
+   intended to be overridden: https://externals.io/message/120233#120391
+
+Proposed Voting Choices
+-----------------------
+
+Question: Implement the #[\Override] attribute as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Patches and Tests
+-----------------
+
+-  https://github.com/php/php-src/pull/9836
+
+Implementation
+--------------
+
+https://github.com/php/php-src/commit/49ef6e209d8fbcb4694ecd59b9078498f0dffb73
+
+References
+----------
+
+-  Implementation: https://github.com/php/php-src/pull/9836
+-  Java:
+   https://docs.oracle.com/javase/8/docs/api/java/lang/Override.html
+-  TypeScript:
+   https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-3.html#override-and-the---noimplicitoverride-flag
+-  C++: https://en.cppreference.com/w/cpp/language/override
+-  C#:
+   https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/override
+-  Kotlin:
+   https://kotlinlang.org/docs/inheritance.html#overriding-methods
+-  Swift:
+   https://docs.swift.org/swift-book/documentation/the-swift-programming-language/inheritance/#Overriding
+
+Rejected Features
+-----------------
+
+-  Adding flags to make the attribute act as a LSP check bypass:
+   https://externals.io/message/120233#120436
+
+Additional Metadata
+-------------------
+
+:Implementation: https://github.com/php/php-src/commit/49ef6e209d8fbcb4694ecd59b9078498f0dffb73
+:Original Authors: Tim Düsterhus, timwolla@php.net
+:Original PHP Version: PHP 8.3
+:Slug: marking_overriden_methods
+:Wiki URL: https://wiki.php.net/rfc/marking_overriden_methods
