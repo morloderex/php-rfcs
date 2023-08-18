@@ -9,12 +9,14 @@
 # 4. Pushes the new branch to the remote repository.
 #
 
+set -ex
+
 author_name="github-actions[bot]"
 author_email="41898282+github-actions[bot]@users.noreply.github.com"
 branch_prefix="auto-rfcs/"
 commit_message="auto-rfcs: Update RFCs"
 current_date=$(date +"%Y-%m-%d")
-remote_repo="https://${GITHUB_ACTOR}:${INPUT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git/"
+remote_repo="https://${INPUT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git/"
 branch_name="${branch_prefix}${current_date}"
 
 # Find the directory where this script is located (not where it's called from).
@@ -33,7 +35,7 @@ git commit -m "${commit_message}" --author="${author_name} <${author_email}>" --
 
 git push "${remote_repo}" "${branch_name}"
 
-exit 0
+exit 1
 
 ./rfc wiki:crawl --force
 
