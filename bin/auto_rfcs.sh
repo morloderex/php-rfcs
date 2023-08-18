@@ -31,7 +31,10 @@ touch file.txt
 
 git add .
 
-git commit -m "${commit_message}" --author="${author_name} <${author_email}>" --no-gpg-sign
+git config --global "${author_name}"
+git config --global "${author_email}"
+
+git commit -m "${commit_message}" --no-gpg-sign
 
 git push "${remote_repo}" "${branch_name}"
 
