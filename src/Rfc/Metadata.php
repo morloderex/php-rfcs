@@ -76,6 +76,7 @@ class Metadata
         'PHP 8.1' => self::STATUS_IMPLEMENTED,
         'PHP 8.2' => self::STATUS_IMPLEMENTED,
         'PHP 8.3' => self::STATUS_IMPLEMENTED,
+        'PHP 8.4' => self::STATUS_IMPLEMENTED,
         'Pending Implementation / Landing' => self::STATUS_ACCEPTED,
         'Process and Policy' => self::STATUS_ACTIVE,
         'Under Discussion' => self::STATUS_DRAFT,
@@ -96,6 +97,7 @@ class Metadata
         'PHP 8.1' => self::TYPE_STANDARDS_TRACK,
         'PHP 8.2' => self::TYPE_STANDARDS_TRACK,
         'PHP 8.3' => self::TYPE_STANDARDS_TRACK,
+        'PHP 8.4' => self::TYPE_STANDARDS_TRACK,
         'Process and Policy' => self::TYPE_PROCESS,
     ];
 
