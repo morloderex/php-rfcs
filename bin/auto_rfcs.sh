@@ -36,10 +36,6 @@ git config --global user.email "${author_email}"
 
 git commit -m "${commit_message}" --no-gpg-sign
 
-git push "${remote_repo}" "${branch_name}"
-
-exit 1
-
 ./rfc wiki:crawl --force
 
 has_changes=$(git rev-list main..@ --count)
@@ -60,7 +56,7 @@ git add .
 if ! git diff-index --quiet HEAD; then
     export GIT_COMMITTER_NAME="${author_name}"
     export GIT_COMMITTER_EMAIL="${author_email}"
-    git commit -m "${commit_message}" --author="${author_name} <${author_email}>" --no-gpg-sign
+    git commit -m "${commit_message}" --no-gpg-sign
 fi
 
 git push "${remote_repo}" "${branch_name}"
