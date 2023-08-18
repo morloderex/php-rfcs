@@ -27,14 +27,10 @@ cd "${__dir__}/../" || exit 1
 
 git checkout -b "${branch_name}"
 
-touch file.txt
-
 git add .
 
 git config --global user.name "${author_name}"
 git config --global user.email "${author_email}"
-
-git commit -m "${commit_message}" --no-gpg-sign
 
 ./rfc wiki:crawl --force
 
