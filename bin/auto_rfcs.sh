@@ -17,6 +17,9 @@ current_date=$(date +"%Y-%m-%d")
 remote_repo="https://${GITHUB_ACTOR}:${INPUT_GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git/"
 branch_name="${branch_prefix}${current_date}"
 
+echo $remote_repo
+exit 1
+
 # Find the directory where this script is located (not where it's called from).
 __dir__="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
