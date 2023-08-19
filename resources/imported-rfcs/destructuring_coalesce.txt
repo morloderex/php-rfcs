@@ -1,0 +1,170 @@
+====== PHP RFC: Destructuring Coalesce ======
+  * Version: 0.1
+  * Date: 2022-10-14
+  * Author: Bob Weinand <bwoebi@php.net>
+  * Status: Declined
+  * First Published at: http://wiki.php.net/rfc/destructuring_coalesce
+
+===== Introduction =====
+
+This RFC proposes adding an operator for default values in destructuring assignments.
+
+===== Proposal =====
+
+This RFC proposes the usage of the ''??'' coalescing operator in destructuring assignments, allowing for default values to be specified when an array key specified on the left-hand side does not exist or is null in the destructured array.
+
+In its simplest form the destructuring coalesce will be written as follows:
+<PHP>
+[$a ?? "default value"] = $array;
+</PHP>
+meaning that ''$a'' will contain "default value" if no key ''0'' exists in ''$array''.
+
+By extension, this also works in all of the following scenarios where destructuring is currently allowed:
+<PHP>
+["string key" => $a ?? "default value"] = $array;
+foreach ($array as [$a, $b ?? "default"]) {} // key 0 is required, key 1 may be absent
+[[$a ?? 1], [$b ?? 2]] = $array; // nested destructuring
+[[$a, $b] ?? [1, 2]] = $array; // if $array[0] is null or does not exist, $a will be 1 and $b will be 2
+</PHP>
+
+Also note that, equivalently to how ''??'' operates, the right-hand side is not evaluated at all, if the respective key exists and is not null in the source array.
+
+==== Use cases ====
+
+Exploding an externally provided string, e.g. a key-value pair separated by ''='':
+<PHP>
+$input = "key=value";
+[$key, $val ?? null] = explode('=', $input, 2);
+// $key = "key", $val = "value"
+
+$input = "onlykey";
+[$key, $val ?? null] = explode('=', $input, 2);
+// $key = "onlykey", $val = null, with no warning emitted
+</PHP>
+
+Safely having default values on an externally provided json:
+<PHP>
+$json = '{"name":"Bob Weinand","locality":"Luxembourg"}';
+list(
+    "name" => $name ?? "unknown",
+    "zipcode" => $zip ?? "not provided",
+    "locality" => $locality ?? "World"
+) = json_decode($json) ?: [];
+// $name = "Bob Weinand", $zip = "not provided", $locality = "Luxembourg"
+</PHP>
+
+Filling in ''null'' values on an array of data:
+<PHP>
+$data = [1, 2, null];
+list($a, $b, $c ?? 3) = $data;
+// $a = 1, $b = 2, $c = 3
+</PHP>
+
+==== Semantics ====
+
+The semantics of list destructuring are generally preserved.
+
+An expression like
+<PHP>
+[[$a]] = $array;
+</PHP>
+is currently equivalent to (with ''$tmp'' denoting a temporary variable):
+<PHP>
+$tmp = $array;
+$tmp = $tmp[0];
+$a = $tmp[0];
+</PHP>
+
+Thus an expression like
+<PHP>
+$array = [];
+[[$a ?? "default"]] = $array; // the first [0] dimension does not exist
+</PHP>
+will be equivalent to:
+<PHP>
+$tmp = $array;
+$tmp = $tmp[0]; // no coalesce here, emits an undefined key warning
+$a = $tmp[0] ?? "default";
+</PHP>
+
+Meaning that the existence of the container is always checked (producing undefined variable or key warnings if absent), only the the immediate entry which the coalesce operator is applied to never produces warnings if absent.
+
+It however is trivial to skip this check too, by defaulting the first nesting level to an empty array:
+<PHP>
+[[$a ?? "default"] ?? []] = $array;
+// equivalent to:
+$tmp = $array;
+$tmp = $tmp[0] ?? [];
+$a = $tmp[0] ?? "default";
+</PHP>
+
+Similarly, the following also emits a warning about the undefined variable:
+<PHP>
+[$a ?? "default"] = $undefinedVariable;
+// equivalent to:
+$tmp = $undefinedVariable;
+$a = $tmp[0] ?? "default";
+</PHP>
+
+Which can be coalesced away with:
+<PHP>
+[$a ?? "default"] = $undefinedVariable ?? [];
+// equivalent to
+$tmp = $undefinedVariable ?? [];
+$a = $tmp[0] ?? "default";
+</PHP>
+
+==== Discussion of undefined key warning in nested destructuring ====
+
+The ''??'' coalesce operator, when applied to an array expression, silences undefined key warnings for the whole of the left-hand expression.
+
+However, crucially, the current RFC binds its coalescing operation to the variable itself, respecting only the current dimension for key existence. This behaviour is tied to how array destructuring works: array keys are only fetched once. Meaning a construct like:
+<PHP>
+[[$a, $b, $c ?? "default"]] = $array;
+</PHP>
+only fetches ''$array[0]'' once, and then takes the ''0'', ''1'' and ''2'' keys from that fetched value. This is also consistent with the fact that only one warning is emitted upon non-existence of its direct container, even though all three values are fetched from ''$array[0]''.
+
+Further, an argument can here be made that the behaviour is idempotent with regards to what the exact nested contents are of the left-hand side. I.e. ''%%[[$a, $b]] = ...%%'' is handled identically to ''%%[[$a ?? 1, $b ?? 2]] = ...%%'', with respect to its first dimension.
+
+Additionally, this allows more fine-grained control over what exactly is expected to exist. While a feature for the general coalesce operator, making its usage more ergonomic, it's also a drawback, that a typo in the lowest dimension might be unnoticed, i.e. ''$variableExpectedToExist["dimension expected to possibly not exist"] ?? "default"'' does never emit a warning.
+
+With this proposal that issue does not exist and it is also not expected to be a major loss in ergonomics, as oftentimes, when you destructure, the base array is expected to exist.
+
+It actually even allows one to concisely express nested array access with key checking, i.e., supposing we currently write code like
+<PHP>
+$value = $array[0]["nested"][1] ?? "default";
+</PHP>
+and we expect everything to exist, except possibly the last ''[1]'' dimension, it can be written as follows:
+<PHP>
+[["nested" => [1 => $value ?? "default"]]] = $array;
+</PHP>
+checking for the existence of ''$array'', ''$array[0]'' and ''$array[0]["nested"]'' (and emitting warnings upon absence). The RFC author does not recommend writing code this way in general, but acknowledges that this is a possibility enabled by the outlined semantics.
+
+==== Discussion of syntax ====
+
+This RFC proposes using ''??'' as the default-operator for the simple fact that it actually does a coalescing operation. It is directly interpreted as a coalescing operation, with the same semantics: null and non existent keys are handled the same.
+
+Other languages like Javascript have constructs like ''({ key: value = default } = object);'', with an equals sign before the default value. In particular, this matches the semantics Javascript also has for function parameter defaults: undefined and non-existent values are handled the same. So this makes sense in Javascript, but not in PHP.
+
+===== Proposed PHP Version(s) =====
+
+PHP 8.3
+
+===== Compatibility =====
+
+There's no BC break, not even a parser change, only not emitting a compiler error for coalesce in destructuring assignments.
+
+===== Vote =====
+
+A 2/3 majority is required. The vote started 2022-11-07 and ended 2022-11-21.
+
+<doodle title="Add a destructuring coalesce feature as described?" auth="bwoebi" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Implementation =====
+
+https://github.com/php/php-src/pull/9747
+
+Includes support for JIT / Optimizer.

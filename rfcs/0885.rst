@@ -1,0 +1,148 @@
+Add SameSite Cookie Attribute Parameter
+=======================================
+
+:PHP-RFC: 0885
+:Title: Add SameSite Cookie Attribute Parameter
+:Author: George Peter Banyard <girgias@php.net>
+:Status: Draft
+:Type: Standards Track
+:Created: 2022-11-16
+:PHP-Version: 8.3
+:Version: 0.1
+
+Introduction
+------------
+
+The support for the SameSite cookie attribute has been added in PHP 7.3.
+However, it can only be set by passing an array of options with the
+``"samesite"`` key defined to the chosen value, this contrasts with all
+the other attributes.
+
+This RFC proposes to add a SameSite parameter to all relevant functions.
+
+Background and Motivation
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Support for the SameSite attribute was added in the `Same Site
+Cookie </rfc/same-site-cookie>`__ RFC, the vote was split between two
+implementations, the one which was implemented, changing the 3rd
+argument to accept an array of optional attributes referenced by keys,
+and adding a SameSite parameter.
+
+The proposal to add a SameSite parameter was unanimously declined,
+however, we believe this proposal should be revisited as PHP has changed
+and gained additional capabilities since version 7.3.
+
+One of the primary arguments against adding a parameter is that the
+function already has 6 optional parameters, and attempting to set the
+SameSite attribute would require providing all the other optional
+parameters. However, with the introduction of named arguments in PHP 8.0
+this is no more an issue.
+
+Moreover, parameters provide the benefit of type declarations, which can
+eliminate sources of bugs via the use of static analysis.
+
+Proposal
+--------
+
+The proposal consists of two parts. First, add the following
+enumeration:
+
+.. code:: php
+
+   enum SameSite {
+       case None;
+       case Lax;
+       case Strict;
+   }
+
+Which contains the 3 valid values for the SameSite attribute defined in
+the `IETF 6265 RFC
+draft <https://httpwg.org/http-extensions/draft-ietf-httpbis-rfc6265bis.html#name-the-samesite-attribute>`__.
+
+Secondly, add a ``SameSite $sameSite = SameSite::Lax`` parameter to:
+
+-  ``setcookie(string $name, string $value = "", array|int $expires_or_options = 0, string $path = "", string $domain = "", bool $secure = false, bool $httponly = false, SameSite $sameSite = SameSite::Lax)``
+-  ``setrawcookie(string $name, string $value = "", array|int $expires_or_options = 0, string $path = "", string $domain = "", bool $secure = false, bool $httponly = false, SameSite $sameSite = SameSite::Lax)``
+-  ``session_set_cookie_params(array|int $lifetime_or_options, ?string $path = null, ?string $domain = null, ?bool $secure = null, ?bool $httponly = null, SameSite $sameSite = SameSite::Lax)``
+
+Moreover, if attempting to set the SameSite attribute to None, the
+Secure attribute must be set, otherwise a ValueError will be raised.
+This behaviour aligns with section 5.6.19 of the `Draft IETF RFC
+6265bis <https://datatracker.ietf.org/doc/draft-ietf-httpbis-rfc6265bis/>`__:
+    19. If the cookie's "same-site-flag" is "None", abort these steps
+    and ignore the cookie entirely unless the cookie's secure-only-flag
+    is true.
+
+Implementation details
+~~~~~~~~~~~~~~~~~~~~~~
+
+Currently, if no SameSite attribute is set, the Set-Cookie header is
+emitted without any ``SameSite`` attribute relying on the default
+behaviour of user agents, which used to be ``SameSite=None`` but is
+being replaced by ``SameSite=Lax`` in the IETF RFC 6265bis Cookies: HTTP
+State Management Mechanism draft, and this behavioural change has
+already started in some user agents.
+
+As it is recommended to set this attribute, we align the default value
+with the draft internet standard. But to preserve BC at this stage, the
+default function value of Lax is not enforced. This would be similar to
+making this parameter nullable and accepting null, however, doing as
+such is undesirable because we would then need to deprecate passing null
+to this parameter.
+
+Backward Incompatible Changes
+-----------------------------
+
+This RFC does not contain any backwards incompatible changes for the PHP
+8 major release cycle.
+
+In PHP 9, the ``SameSite $sameSite = SameSite::Lax`` value will be
+enforced. Meaning, every cookie header set via the relevant function
+will contain the ``SameSite=Lax`` attribute.
+
+Proposed PHP Version
+--------------------
+
+Next minor version, i.e. PHP 8.3.
+
+Proposed Voting Choices
+-----------------------
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+
+Question: Accept Add SameSite cookie attribute parameter RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation
+--------------
+
+GitHub pull request: https://github.com/php/php-src/pull/10317
+
+After the project is implemented, this section should contain
+
+-  the version(s) it was merged into
+-  a link to the git commit(s)
+-  a link to the PHP manual entry for the feature
+
+References
+----------
+
+Additional Metadata
+-------------------
+
+:Implementation: https://github.com/php/php-src/pull/10317
+:Original Authors: George Peter Banyard, girgias@php.net
+:Original PHP Version: PHP 8.3
+:Original Status: Under Discussion
+:Slug: same-site-parameter
+:Wiki URL: https://wiki.php.net/rfc/same-site-parameter

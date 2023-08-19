@@ -1,127 +1,469 @@
-Sorting Enum
-============
+Deprecations For PHP 8.3
+========================
 
 :PHP-RFC: 0836
-:Title: Sorting Enum
-:Author: Jordan LeDoux <jordan.ledoux@gmail.com>, Larry Garfield <larry@garfieldtech.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2021-09-01
-:Version: 0.9
+:Title: Deprecations For PHP 8.3
+:Author: Christoph M. Becker <cmb@php.net>, George Peter Banyard <girgias@php.net>, Máté Kocsis <kocsismate@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2022-08-01
+:PHP-Version: 8.3
+:Version: 1.0
+
+::
+
+      * MT_RAND_PHP: https://github.com/php/php-src/commit/61251093ab5b1ebbe112362893ff8b9edba215e0
+      * <php>ldap_connect()</php>: https://github.com/php/php-src/commit/69a8b63ecf4fec1b35ef4da1ac9579321c45f97f
+      * <php>mb_strimwidth()</php>: https://github.com/php/php-src/commit/af3c220abbff2415ccd79aeac1888edfc106ffa6
+      * NumberFormater::TYPE_CURRENCY: https://github.com/php/php-src/commit/d65251e6e863684f8fc7ddc9c0fba7cf53483f7f
 
 Introduction
 ------------
 
-This RFC proposes to add a built-in Enumeration to PHP to specify the
-possible return values of sorting/comparison functions. This enumeration
-would be easier for developers to use than the existing magic constants,
-although support for those remains.
+The RFC proposes to deprecate the listed functionality in PHP 8.3 and
+remove it in PHP 9.
+
+The following list provides a short overview of the functionality
+targeted for deprecation, while more detailed explanation is provided in
+the Proposal section:
+
+-  Passing negative ``$width``\ s to ``mb_strimwidth()``
+-  The NumberFormatter::TYPE_CURRENCY constant
+-  Unnecessary ``crypt()`` related constants
+-  MT_RAND_PHP
+-  Global Mersenne Twister
 
 Proposal
 --------
 
-This RFC includes two changes, specifically.
+Each feature proposed for deprecation is voted separately and requires a
+2/3 majority. All votes refer to deprecation in PHP 8.3 and removal in
+PHP 9.0.
 
-One, the following Enumeration is defined in PHP's standard library.
+Passing negative $widths to mb_strimwidth()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Regarding the ``$width`` argument of ``mb_strimwidth()``, the PHP manual
+states: "Negative widths count from the end of the string." In other
+words, if ``$width`` is -2, then either two halfwidth characters or one
+fullwidth character should be trimmed from the end of the string.
+
+This feature was introduced in git revision 70187267b4 (January 2016),
+and was contributed by Francois Laupretre francois@php.net.
+
+Although I have not seen anything written by F. Laupretre to explain
+what the anticipated usage of the feature was, it seems to have very
+limited utility. ``mb_strimwidth()`` is typically used to trim strings
+down to a length which can be printed in a terminal without wrapping. It
+seems very unusual that anyone would want to set the terminal width of a
+string to "its current value less N". (One possibility is that the
+feature was introduced for consistency with other standard library
+functions which accept a negative argument to indicate "count back from
+the end of a string".)
+
+From the time the feature was merged until now, it has always had a bug
+when combined with a non-zero ``$from`` argument. The implementation
+does arithmetic which combines *codepoint counts* with *terminal width
+counts*, with erroneous results. (This is just like the proverbial
+"apples and oranges".) If there are any fullwidth characters in the
+prefix which is skipped because of non-zero ``$from``, then
+``mb_strimwidth()`` will not trim the requested width from the end of
+the string.
+
+It is notable that in 9 years, no user ever noticed and reported this
+bug. My guess is that almost no-one uses the negative width feature.
+This would explain why the bug was not noticed.
+
+To implement the feature correctly, without the bug mentioned above, an
+extra pass over the prefix of the input string identified by ``$from``
+would be needed to determine its terminal width. This operation requires
+O(n) time.
+
+When preparing this RFC, I searched the Internet for existing
+open-source software which uses ``mb_strimwidth()`` and reviewed over
+100 such projects. None of them used negative ``$width`` arguments.
+However, if readers are aware of existing projects which rely on the
+negative ``$width`` feature, please add that information here.
+
+Question: Deprecate passing negative $widths to mb_strimwidth()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+The NumberFormatter::TYPE_CURRENCY constant
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This constant is unused since it was added to PHP (in PHP 5.3 or
+before), likely it was meant to call
+``NumberFormatter::formatCurrency()``/``NumberFormatter::parseCurrency()``
+from ``NumberFormatter::format()``/``NumberFormatter::parse()``
+respectively. However, this was never implemented, likely because there
+is no way to pass the necessary currency argument.
+
+Question: Deprecate and remove the NumberFormatter::TYPE_CURRENCY constant
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Unnecessary crypt() related constants
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+There are a couple of constants which store some information about the
+current system related to the ``crypt()`` function:
+
+-  ``CRYPT_STD_DES``: whether standard DES salts are supported
+-  ``CRYPT_BLOWFISH``: whether BlowFish salts are supported
+-  ``CRYPT_EXT_DES``: whether extended DES salts are supported
+-  ``CRYPT_MD5``: whether MD5 salts are supported
+-  ``CRYPT_SHA256``: whether SHA-256 salts are supported
+-  ``CRYPT_SHA512``: whether SHA-512 salts are supported
+
+However, these constants are always ``1`` for a long time (at least 6
+years), because the above salts are supported on all systems. Therefore,
+they are unnecessary, and they give a false impression that the
+capabilities in question are conditionally available.
+
+Question: Deprecate and remove the CRYPT_\* constants?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-2:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+MT_RAND_PHP
+~~~~~~~~~~~
+
+Authors: Tim Düsterhus timwolla@php.net, Go Kudo zeriyoshi@php.net
+
+The implementation of Mt19937 ("Mersenne Twister") in PHP versions
+before 7.1 contains two bugs:
+
+-  ``mt_rand()`` without parameters returns different numbers than the
+   reference implementation, due to a typo in a variable name.
+-  ``mt_rand($min, $max)`` with a restricted range uses a broken scaling
+   algorithm based on floating point arithmetic. As doubles have only 53
+   Bits of precision, this will introduce a bias if a range larger than
+   53 Bits is requested.
+
+Both of these issues were fixed in PHP 7.1 by the `RNG fixes and changes
+RFC </rfc/rng_fixes>`__ that also aliased ``rand()`` to ``mt_rand()``.
+The ``MT_RAND_PHP`` constant was added to allow developers that rely on
+a specific sequence for a given seed to opt into the old implementation
+with the non-standard Mt19937 algorithm and the biased scaler.
+
+The object-oriented ``Mt19937`` engine that was introduced in the
+`Random Extension 5.x RFC </rfc/rng_extension>`__ in PHP 8.2 also
+supports the ``MT_RAND_PHP`` option to allow developers a smooth
+migration from the global instance of Mt19937 as used with ``mt_rand()``
+to the object-oriented ``Random\Randomizer``.
+
+Supporting the biased scaler with the object-oriented API requires a
+special case for Mt19937 in the internal implementation. It furthermore
+`required a fix (PR 9197) <https://github.com/php/php-src/pull/9197>`__,
+because the biased scaler in PHP 8.1 and earlier exhibits undefined
+behavior that was only caught by the newly added tests in PHP 8.2. Thus
+the behavior for certain inputs changed between PHP 8.1 and PHP 8.2 and
+could not be relied on even in older versions, as the results depend on
+the compiler used.
+
+The only purpose of the constant/broken mode is backwards compatibility,
+but this cannot be achieved, due to the bad scaler being broken by
+design and relying on undefined behavior. As such it fails at its sole
+purpose. The bad scaling is also intransparent to the developer, as it
+silently returns biased results for certain inputs.
+
+To clean up the special cases internal implementation and to clean up
+the API for the developer, ``MT_RAND_PHP`` should be deprecated.
+
+Question: Deprecate and remove the broken pre-PHP 7.1 Mt19937 implementation (MT_RAND_PHP)?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-3:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Global Mersenne Twister
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Authors: Tim Düsterhus timwolla@php.net, Go Kudo zeriyoshi@php.net
+
+Before PHP 8.2, PHP provided two kinds of random number generators. A
+seedable random number generator using the Mt19937 ("Mersenne Twister")
+algorithm and a cryptographically secure random number generator
+(CSPRNG). The former stores its state in an implicit global variable and
+the latter is not seedable. This made it hard to achieve reproducible
+results for testing, as the use of an implicit global variable makes it
+hard to determine what operation modify the Mt19937 state, thus changing
+future values.
+
+To fix this `Random Extension 5.x </rfc/rng_extension>`__ RFC for PHP
+8.2 introduces object-based random number algorithms (“Engines”) that
+store their entire state within an object. Generating numbers with one
+object, won't affect the sequence of another object.
+
+The API of the random extension that relates to the generation of random
+integers currently looks like the following:
+
+-  Global Mt19937
+
+   -  ``mt_rand()``
+   -  ``mt_srand()``
+   -  ``mt_getrandmax()``
+   -  ``rand()`` (alias for mt_rand() since PHP 7.1)
+   -  ``srand()`` (alias for mt_srand() since PHP 7.1)
+   -  ``getrandmax()`` (alias for mt_getrandmax() since PHP 7.1)
+
+-  CSPRNG
+
+   -  ``random_int()``
+
+-  ``\Random\Randomizer``
+
+   -  ``->getInt()``
+
+Thus there are three functions returning a random integer
+(``mt_rand()``, ``rand()``, ``random_int()``) and the object-based and
+pluggable ``Randomizer::getInt()``.
+
+The functions using the global Mt19937 instance are the worst choice:
+
+-  They are not cryptographically secure.
+-  They are not properly reproducible, because the state could be
+   changed unpredictably by any function call, e.g. when a library is
+   updated and adds additional calls to ``mt_rand()``.
+-  Any function calling ``mt_srand()`` with a fixed seed for whatever
+   reason, will ruin randomness for the remainder of the request.
+-  PHP's Mt19937 implementation only supports passing a single 32 bit
+   integer as the initial seed. Thus there are only ~4 billion possible
+   sequences of random integers generated by Mt19937. If a random seed
+   is used, collisions are expected with 50% probability after roughly
+   2**16 seeds (as per the birthday paradox). In other words: After
+   roughly 80000 requests without explicit seeding it is likely that a
+   seed and thus a sequence is reused.
+-  Both the quality of the returned randomness as well as the generation
+   performance of Mt19937 is worse than that of the Xoshiro256StarStar
+   and PcgOneseq128XslRr64 engines that are provided in the
+   object-oriented API.
+-  They are `functions with overloaded
+   signatures <deprecate_functions_with_overloaded_signatures>`__, which
+   are problematic for the reasons outlined in the “\ `Deprecate
+   functions with overloaded
+   signatures <deprecate_functions_with_overloaded_signatures>`__\ ”
+   RFC.
+
+But at the same time the functions using the global Mt19937 instance are
+the obvious choice for less experienced developers: The function names
+are the shortest ones and they appear to do the right thing at a first
+glance. Due to their age they also made their way into various tutorials
+and StackOverflow answers and thus code bases, possibly causing security
+issues when the use case would have required the use of
+cryptographically secure randomness. As an example a `GitHub
+Search <https://github.com/search?q=%22four+most+significant+bits+holds+version+number+4%22+language%3APHP&type=code&l=PHP>`__
+reveals that UUIDv4 implementations based on a `highly-voted Y2010
+StackOverflow answer <https://stackoverflow.com/a/2040279>`__ that uses
+``mt_rand()`` are not uncommon, as per above, UUID collisions are
+expected after 80000 requests if nothing else uses randomness within the
+request.
+
+The limitations of the global Mt19937 are effectively unfixable by
+modifying the existing functions, because developers expect to be able
+to retrieve a specific sequence with a given seed (even when considering
+that any function call could unpredictably change the state).
+
+To clean up the API and to guide developers to better alternatives, the
+global Mt19937 should be deprecated and then removed. The function-based
+API will then provide just the ``random_int()`` function which is the
+“secure by default” choice based on the CSPRNG. If reproducible
+sequences are required, the Xoshiro256StarStar and PcgOneseq128XslRr64
+engines of the object-oriented API provide high-quality randomness,
+great performance and much larger initial seeds.
+
+If reproducing existing Mt19937 sequences is required, the
+object-oriented API provides a drop-in replacement for the global
+Mt19937 using the ``\Random\Engine\Mt19937`` class.
+
+The following functions shall be deprecated:
+
+-  ``mt_rand()``
+-  ``mt_srand()``
+-  ``mt_getrandmax()``
+-  ``rand()``
+-  ``srand()``
+-  ``getrandmax()``
+
+A userland replacement can be written by leveraging ``$GLOBALS`` to
+store an ``\Random\Randomizer`` object with a ``\Random\Engine\Mt19937``
+engine (https://3v4l.org/B18he):
 
 .. code:: php
 
-   enum Ordering
-   {
-       case LeftGreater;
-       case RightGreater;
-       case Equal;
-       case Uncomparable;
+   <?php
+
+   function my_mt_srand(?int $seed = null) {
+       $GLOBALS['my_mt_rand'] = new \Random\Randomizer(new \Random\Engine\Mt19937($seed));
+   }
+   function my_mt_rand($min = null, $max = null) {
+       if (!isset($GLOBALS['my_mt_rand'])) {
+           $GLOBALS['my_mt_rand'] = new \Random\Randomizer(new \Random\Engine\Mt19937());
+       }
+
+       if ($min === null && $max === null) {
+           return $GLOBALS['my_mt_rand']->nextInt();
+       }
+
+       return $GLOBALS['my_mt_rand']->getInt($min, $max);
    }
 
-Second, all sorting and comparison functions that accept a user-supplied
-comparison function (``usort()``, ``uksort()``, etc.) are modified to
-allow the developer to return either an integer (as now) or an instance
-of ``Ordering``. The semantic meaning of the enum cases is equivalent to
-their integer versions.
+   mt_srand(1234);
+   my_mt_srand(1234);
 
-The primary benefit of this change is usability. It is very easy to
-forget which of 1 and -1 mean which sorting direction (one of the RFC
-authors has to look it up every single time), whereas a closed set of
-values naturally maps to an enumeration. An enumeration with named
-options is considerably more self-documenting.
+   var_dump(mt_rand());
+   var_dump(my_mt_rand());
+   var_dump(mt_rand(1, 1000));
+   var_dump(my_mt_rand(1, 1000));
 
-Uncomparable
-~~~~~~~~~~~~
+Question: Deprecate the global Mt19937?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PHP currently has no explicit way to indicate that two parameters are
-simply not logically comparable. In practice it rarely comes up (as most
-developers will only try sorting values that are in facts sortable), but
-it is a gap in the current design. However, the `User Defined Operator
-Overloads </rfc/user_defined_operator_overloads>`__ RFC, should it pass,
-would present additional cases where incompariable objects are compared.
+.. _voting-choices-4:
 
-PHP's current implicit mechanism is to return 1 when two values are
-uncomparable, regardless of which comes first. That is highly subtle and
-not well known, as well as logically suspect. Providing an explicit
-"this is not logical" return value is, as above, more self-documenting,
-more obvious to use, and offers the potential for slightly improved
-error handling in the engine.
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+In addition to the 6 functions related to integer generation, the global
+Mt19937 is also used for the following functions:
+
+-  ``array_rand()``
+-  ``shuffle()``
+-  ``str_shuffle()``
+
+The proposed deprecation and removal of ``mt_srand()`` will affect these
+functions, as they will no longer be seedable, thus a decision needs to
+be taken with regard to the behavior of these functions, if the global
+Mt19937 is removed. There are two options:
+
+-  Deprecate and remove ``array_rand()``, ``shuffle()``,
+   ``str_shuffle()``. A drop-in replacement is available by using
+   ``\Random\Randomizer``
+-  Migrate ``array_rand()``, ``shuffle()``, ``str_shuffle()`` to use the
+   CSPRNG internally. The functions will still be available, but no
+   longer seedable. This also adds new failure cases, because the CSPRNG
+   might fail.
+
+Question: What to do with the non-integer functions using the global Mt19937 if the previous vote passes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-5:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Deprecate together with mt_srand()
+-  Convert to CSPRNG
+
+Deprecate calling ``ldap_connect`` with 2 parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Andreas Heigl heiglandreas@php.net
+
+Currently there are three ways one can call ``ldap_connect``.
+
+-  With a string ``$uri``
+-  With a string ``$host`` and an int ``$port``,
+-  With even more parameters for those that did compile PHP with
+   OracleLDAP.
+
+The 3rd way of calling it is not even documented in the docs as it is a
+very niche edge-case that would only confuse most people.
+
+The 2nd way of calling the function is based on the since some years
+deprecated underlying ``ldap_open`` function. Internally we already
+moved to the underlying ``ldap_initialize``-function that requires
+passing an LDAP-URI. For that we are already converting the passed host
+and port into an LDAP-URI of the form ``ldap://$host:$port``.
+
+This already illustrates one of the issues that this way of calling the
+function implies: It is not possible to use ``ldaps`` as a schema using
+that way of calling ``ldap_connect`` as it will always use ``ldap`` as
+schema. No matter which port is passed.
+
+A second reason why we should deprecate calling ``ldap_connect`` with
+two parameters is, that it does not allow one to pass multiple
+ldap-servers as it is possible using the LDAP-URI.
+
+The impact of the BC break should be rather small as there are not many
+users actually using the LDAP-extension and there is a clear and easy
+migration path for those that use it: Instead of calling
+
+``ldap_connect($host, $port)``
+
+one calls
+
+``ldap_connect("ldap://$host:$port??369")``
+
+Also most of the users should not be affected at all as they are using
+3rd party libraries that are already only using an LDAP-URI when calling
+``ldap_connect`` like ``Laminas\Ldap`` or ``Symfony\Ldap``
+
+The documentation at https://www.php.net/ldap_connect also explicitly
+states (since 2018) that using host and port is considered deprecated.
+
+Named parameters also only support
+``ldap_connect(uri: 'ldap://example.com')``. Calling
+``ldap_connect(host:'example.com', port:369)`` will throw an error.
+
+There already is a `PR
+open <https://github.com/php/php-src/pull/5177>`__ that implements the
+deprecation so that for the PHP8.3 releases each call to
+``ldap_connect`` with 2 parameters will emit a deprecation message so
+that people have enough time to adapt their code before we can actually
+remove using two parameters in PHP9.
+
+Question: Deprecate and remove calling ldap_connect with 2 parameters $host and $port
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-6:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Backward Incompatible Changes
 -----------------------------
 
-The global namespace symbol "Ordering" is now taken.
-
-Proposed PHP Version(s)
------------------------
-
-PHP 8.2
-
-RFC Impact
-----------
-
-Open Issues
------------
-
-The specific case names are subject to inevitable bikeshedding.
-
-Future Scope
-------------
-
-This RFC very specifically does not remove or deprecate the existing
-integer returns for comparison functions. Those will continue to work
-exactly as now. Whether or not they should be removed in PHP 9 or 10 is
-a question for another time.
-
-Proposed Voting Choices
------------------------
-
-This is a simple yes/no vote, requiring 2/3 to pass.
-
-Patches and Tests
------------------
-
-Pending...
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-References
-----------
-
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
+For PHP 8.3 additional deprecation notices will be emitted. The actual
+removal of the affected functionality will happen no earlier than PHP
+9.0. For the Global Mersenne Twister specifically the removal will be
+left to an additional later vote, allowing to defer the removal based on
+the remaining usage.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Jordan LeDoux, jordan.ledoux@gmail.com; Larry Garfield, larry@garfieldtech.com
-:Slug: sorting_enum
-:Wiki URL: https://wiki.php.net/rfc/sorting_enum
+:Extra: , Implementation:
+:Original Authors: Christoph M. Becker cmb@php.net, George Peter Banyard girgias@php.net, Máté Kocsis kocsismate@php.net
+:Slug: deprecations_php_8_3
+:Wiki URL: https://wiki.php.net/rfc/deprecations_php_8_3

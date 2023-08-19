@@ -1,0 +1,145 @@
+====== PHP RFC: Miscellaneous Variable Functions ======
+  * Version: 1
+  * Date: 2023-01-28
+  * Author: Thomas Hruska, cubic@php.net
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/misc_variable_functions
+
+===== Introduction =====
+In general, PHP userland is not very good at or at least not consistent at exposing/accessing Zend engine internals.  This occurs both at the userland function level and the documentation level.  When someone goes to learn about PHP extension development for the first time, it takes a while to understand basic Zend engine concepts.  The proposed functions in this RFC straddle the boundary between Zend engine and userland to expose more of the engine internals to userland devs perhaps looking to make the leap into extension development or just improving their understanding of how zvals function under the hood for writing more optimal software.
+
+===== Proposal =====
+Working implementations of all the items being proposed can be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+==== refcount() ====
+
+%%int refcount(mixed &$value)%%
+
+Returns the userland internal reference count of a zval.
+
+  * $value - Any input variable to retrieve its refcount.
+
+Returns:  An accurate userland perspective normalized reference count of a zval.  Interned strings always return a refcount of 1.
+
+This function returns the accurate userland-oriented reference count of a variable.  Unlike debug_zval_dump(), it accomplishes this by passing the variable by reference instead of by value, correctly calculates the true reference count (reference refcount minus the Zend engine increment minus one + value refcount), and returns a straight integer value to the caller instead of a string.  Note that the way Zend engine works is still likely to cause confusion with how users might expect to see a refcount value.
+
+Weak references do not solve all refcounting problems.  When there is a balancing act to maintain, especially in flexible caching scenarios, weak references cannot be used.
+
+Target audience:  All users who need to implement flexible caching mechanisms such as "When 10,000 rows have been loaded into a cache, attempt to prune the cache down to about 5,000 rows."  Also useful for users to track down userland refcount-based memory consumption issues.  Also useful for extension developers working with zval references.
+
+Why it should be added to PHP:  No reasonable built-in function exists to get just the refcount of a variable.  debug_zval_dump() is insufficient, produces results that are incorrect, and doesn't always output the refcount.  Some libraries depend on the incorrect behavior of debug_zval_dump() (mostly because there's no dedicated function for getting just the refcount), so changing the function isn't exactly a viable solution.
+
+==== is_interned_string() ====
+
+%%bool is_interned_string(mixed $value)%%
+
+Finds whether the given variable is an interned (immutable) string.
+
+  * $value - Any input type to validate as an interned string.
+
+Returns:  A boolean of true if the string is interned (immutable), false otherwise.
+
+This function differentiates between the two internal types of strings in PHP core.  Interned (immutable) strings have a refcount of 1 and are never garbage collected while other strings are refcounted and garbage collected.
+
+Target audience:  Some userland developers looking to optimize string performance for specific scenarios.  Those looking to learn more about the underlying engine before diving into extension development.
+
+Why it should be added to PHP:  Language completeness.  Could also be useful for some userland devs for performance optimizations and learning more about how string zvals work.  Also potentially useful for verifying serious bugs in extensions from userland where an extension accidentally modifies an interned string.
+
+As a historical side note:  This function would have been handy to have for debugging [[rfc:working_with_substrings|str_splice()]].  The code accidentally modified interned strings at an early point of development.
+
+==== is_reference() ====
+
+%%bool is_reference(mixed &$value)%%
+
+Finds whether the type of a variable is a reference.
+
+  * $value - Any input variable to determine if it is a reference.
+
+Returns:  A boolean of true if the variable is a reference, false otherwise.
+
+This function determines whether or not a variable is a reference.
+
+The Zend engine VM only has two options for its opcodes for parameters:  Coerce a variable to a reference OR coerce a variable to a value.  There is no opcode for passing a variable to a function as-is.  If there were such an opcode, the number of functions that would benefit would be very low.  Fortunately, coercion to a reference is temporary during the function call and causes the refcount to be a minimum of two and is only higher if it is an actual reference variable.  However, the resulting behavior is that this function operates on a by-design side effect of Zend engine.  If Zend engine ever changes significantly in the distant future, this function could break in a way that won't necessarily be able to be fixed.
+
+While this function is useful for tracking down/verifying bugs related to references in userland software, please take the above caveat into consideration when you vote.
+
+Target audience:  All users.  While variable references generally enable faster application performance, lots of weird application bugs can crop up with references (e.g. forgetting to unset() before reusing a variable later).
+
+Why it should be added to PHP:  A useful debugging tool.  Also, language completeness.  However, it does rely on a side effect of how the engine functions.
+
+==== is_equal_zval() ====
+
+%%bool is_equal_zval(mixed &$value, mixed &$value2, [ bool $deref = true ])%%
+
+Compares two raw zvals for equality but does not compare data for equality.
+
+  * $value - Any input variable to determine if it has equality to $value2.
+  * $value2 - Any input variable to determine if it has equality to $value.
+  * $deref - Whether or not to compare data pointers (Default is true).
+
+Returns:  A boolean of true if the zvals are pointing at the same reference variable (for references) or data pointer.
+
+This function performs a low-level pointer zval equality comparison operation between $value and $value2.  Handy for looking at complex zval mechanisms behind the scenes of PHP.  Very different from the equality operator (%%===%%).
+
+Target audience:  Those looking to learn more about how zvals work under the hood, especially extension developers.  Also maybe useful for some userland devs looking to optimize some code.
+
+Why it should be added to PHP:  Language completeness.  Exposes some inner workings of zvals that are otherwise difficult to surface.
+
+===== Backward Incompatible Changes =====
+Significant care was taken to not introduce any BC breaks.  As such, there shouldn't be any BC breaks as a result of these additions and enhancements.
+
+refcount(), is_interned_string(), is_reference(), and is_equal_zval() will no longer be available as global function names.  May break existing userland software that defines global functions with these names.  Searching GitHub for those function names turns up the following results:
+
+  * refcount() - 311,681 results.  Appears to mostly be output from various test suites calling debug_zval_dump(), especially PHP's own test suite.  No apparent naming conflicts but with that many results, it's hard to be certain.
+  * is_interned_string() - 1 result.  Just the test extension (qolfuncs).  No apparent naming conflicts.
+  * is_reference() - 3,542 results.  Appears to mostly be a variable name in Phan.  No apparent naming conflicts.
+  * is_equal_zval() - 1 result.  Just the test extension (qolfuncs).  No apparent naming conflicts.
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x.
+
+===== RFC Impact =====
+
+    To SAPIs:  Will be applied to all PHP environments.
+    To Existing Extensions:  Additions and changes made to ext/standard and ext/hash in the existing .c and .h files.
+    To Opcache:  New global functions (refcount(), is_interned_string(), etc) to be added to the registered opcache function list like all the other registered global functions.
+    New Constants:  No new constants introduced.
+    php.ini Defaults:  No changes to php.ini introduced.
+
+===== Open Issues =====
+Issue 1 - Should the function name refcount() be changed to something else to avoid possible global namespace conflicts?  300,000+ results on GitHub is a lot.
+
+Issue 2 - How likely is it that Zend engine will change in such a way that is_reference() will break?
+
+Issue 3 - Are there other bits of Zend engine functionality that could be exposed as part of this RFC (i.e. additional functions) to round out the RFC some more?  Maybe something relevant from the bug tracker that comes up on occasion?
+
+===== Future Scope =====
+None at this time.
+
+===== Proposed Voting Choices =====
+The vote will require 2/3 majority with a vote on a per-function basis.
+
+===== Patches and Tests =====
+Working implementations of all the items being proposed can currently be found at:
+
+[[https://github.com/cubiclesoft/php-ext-qolfuncs]]
+
+This section will be updated to point to relevant pull request(s).  Most of the development and testing is basically done at this point so turning the extension into a normal pull request should be reasonably straightforward.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  * Implementation PR:  TODO
+  * Discussions on the php.internals mailing list:  https://externals.io/message/119238
+  * Announcement thread:  TODO
+
+===== Rejected Features =====
+None at this time.

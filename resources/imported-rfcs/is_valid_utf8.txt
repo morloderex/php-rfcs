@@ -1,0 +1,94 @@
+====== PHP RFC: is_valid_utf8() ======
+  * Version: 1
+  * Date: 2023-01-27
+  * Author: Thomas Hruska, cubic@php.net
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/is_valid_utf8
+
+===== Introduction =====
+UTF-8 is [[https://en.wikipedia.org/wiki/Popularity_of_text_encodings|the most popular character set encoding]] globally on the web.  Approximately 95% of all websites use it.  PHP powers approximately 77.4% of the dynamic web and yet there is no UTF-8 string validation function built into the language.  This RFC aims to introduce an is_valid_utf8() function for correctly determining if an input variable is indeed a strictly valid UTF-8 string.
+
+The Unicode specification is extremely difficult to implement correctly, which is why there is only one relatively complete library in existence, ICU, whose source code weighs in at around 25MB (compressed zip file).  Improperly handled Unicode strings can trigger a wide range of issues from unexpectedly failed database transactions to exploitable buffer overflows.  Many PHP applications assume that input strings are valid UTF-8 and generally don't consider the format of the input string as a source of potential vulnerabilities that could be exploited by malicious actors.  In addition, a number of control characters in the 0x0000 through 0x001F range can cause problems, have no particular benefit in webpages, and should probably be treated specially within an is_valid_utf8() function for PHP.
+
+Also, while we are at it, we should correctly handle an aspect of Unicode that can be abused in an unusual way that is relevant to web developers:  Combining code points.  A combining code point applies a code point to a previous non-combining code point.  The result allows for constructing characters that are not part of the Unicode standard.  However, this can be abused by starting with a non-combining code point and then bolting on hundreds of combining code points.  The result is an unreadable character with a whole lot of diacritics applied to it.  Rendered on the screen, the character can also span many lines of text making other content on the screen unreadable.  The name for this type of abuse is [[https://en.wikipedia.org/wiki/Zalgo_text|Zalgo text]].  However, using multiple sequential combining code points is still a valid use of Unicode.  Tibetan, for example, can use up to 8 combining code points.  If that were doubled by default, it allows for Unicode to expand naturally while also dealing with excessive combining code point abuse.
+
+===== Proposal =====
+A working implementation of the item being proposed can be found at:
+
+https://github.com/cubiclesoft/php-ext-qolfuncs
+
+==== is_valid_utf8() ====
+
+%%bool is_valid_utf8(string $value, [ bool $standard = false, int $combinelimit = 16 ])%%
+
+Finds whether the given value is a valid UTF-8 string.
+
+  * $value - Any input type to validate as a UTF-8 string.
+  * $standard - Whether or not to strictly adhere to the Unicode standard (Default is false - see Notes).
+  * $combinelimit - The maximum number of sequential combination code points to allow (Default is 16).
+
+Returns:  A boolean of true if the string is a valid UTF-8 string, false otherwise.
+
+This function determines whether or not a zval is a string and, if it is, whether or not it is valid UTF-8.  It also sets the IS_STR_VALID_UTF8 garbage collection flag on success for non-interned strings so that future calls against the same string take less time.
+
+The $standard option decides whether or not to allow the full 0x0000 through 0x007F character range.  There is significant risk with allowing certain control characters to reach databases, consoles, command-lines, etc.  This function, by default, limits the range to 0x0020 through 0x007E plus \r, \n, and \t.
+
+The $combinelimit limits [[https://en.wikipedia.org/wiki/Zalgo_text|Zalgo text]] to reasonable lengths.  Zalgo text abuses combination code points, which can make a webpage unreadable.  The maximum number of legitimate combination code points to date is 8 code points in Tibetan.  So this function doubles that by default.
+
+Target audience:  All users.
+
+Why it should be added to PHP:  Validating UTF-8 in userland requires processing one byte at a time, which is slow and better done in PHP core.  mb_check_encoding($string, "UTF-8") requires mbstring, which is not compiled in by default and doesn't have options for important protections that PHP should have out of the box.  Recursive regex checking is an even worse option and can crash PCRE.  Unicode is a complex Standard and most people get it wrong.  In addition, passing malformed UTF-8 to databases, processes, or various libraries can trigger security vulnerabilities.  UTF-8 is the most popular character set globally for the web.  PHP accepts UTF-8 user input but does not have a built-in UTF-8 validation function.
+
+===== Backward Incompatible Changes =====
+Significant care was taken to not introduce any BC breaks. As such, there shouldn't be any BC breaks as a result of these additions and enhancements.
+
+is_valid_utf8() will no longer be available as a global function name.  May break existing userland software that defines global functions with this name.  Searching GitHub for those function name turns up the following result:
+
+  * is_valid_utf8() - 3,632 results.  The test extension (qolfuncs) and a static variable name in a popular library ($is_valid_utf8).  No apparent naming conflicts.
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x.
+
+===== RFC Impact =====
+
+  * To SAPIs:  Will be applied to all PHP environments.
+  * To Existing Extensions:  Addition made to ext/standard in the existing type.c or string.c file.
+  * To Opcache:  New global function (is_valid_utf8()) to be added to the registered opcache function list like all the other registered global functions.
+  * New Constants:  No new constants introduced.
+  * php.ini Defaults:  No changes to php.ini introduced.
+
+===== Open Issues =====
+Issue 1 - Are there other areas of Unicode like Zalgo text that aren't context sensitive that should be handled by this function?
+
+Issue 2 - Should this function go into ext/standard/type.c or ext/standard/string.c?
+
+Issue 3 - Should this function also be a filter?
+
+===== Future Scope =====
+None at this time.
+
+===== Proposed Voting Choices =====
+The vote will require 2/3 majority.
+
+===== Patches and Tests =====
+A working implementation of the item being proposed can currently be found at:
+
+https://github.com/cubiclesoft/php-ext-qolfuncs
+
+This section will be updated to point to relevant pull request(s).  Most of the development and testing is basically done at this point, so turning the extension into a normal pull request should be reasonably straightforward.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  * Implementation PR:  TODO
+  * Discussions on the php.internals mailing list:  https://externals.io/message/119238
+  * Announcement thread:  TODO
+
+===== Rejected Features =====
+None at this time.

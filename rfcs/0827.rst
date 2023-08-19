@@ -1,94 +1,681 @@
-Open Release Manifests
-======================
+Constants In Traits
+===================
 
 :PHP-RFC: 0827
-:Title: Open Release Manifests
-:Author: Mark Randall
-:Status: Draft
-:Type: Unknown
-:Created: 2021-07-22
-:Version: 0.9
+:Title: Constants In Traits
+:Author: Shinji Igarashi <sji@sj-i.dev>, Stephen Reay <stephen@koalephant.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2022-06-21
+:PHP-Version: 8.2
+:Version: 0.2.1
+
+Introduction
+------------
+
+Traits `[1 <https://www.php.net/manual/en/language.oop5.traits.php>`__]
+are used for horizontal code reuse across classes, and currently allow
+the definition of methods and properties, but not constants. This means
+that it is not possible to define invariants expected by a trait in the
+trait itself. So currently, workarounds are required in some cases, such
+as defining constants in its composing class or an interface implemented
+by the composing class.
+
+This RFC proposes to allow defining constants in traits in the same
+manner that is currently possible for properties, with the following use
+cases in mind.
+
+-  Defining invariants used internally by methods in traits
+-  Defining constants as a public API
+
+Defining invariants used internally by methods in traits
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The main use case is the definition of invariants to be used by methods
+in traits. Currently, we can write codes like the following.
+
+.. code:: php
+
+   trait FooTrait {
+       public function doFoo(int $value): void {
+           if ($value > self::MAX_VALUE) {
+               throw new \Exception('out of range');
+           }
+       }
+   }
+
+   class FooClass {
+       private const MAX_VALUE = 42;
+       use FooTrait;
+   }
+
+This code requires that the constant definition used by the method in
+the trait be provided in the composing class. It can be said that the
+implementation detail of the trait is leaked to the composing class. It
+would be better if definitions of constants needed to make a trait work
+could be provided by the trait itself.
+
+Defining constants as a public API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One common use case for traits is to provide a default implementation
+that conforms to a specific interface.
+
+.. code:: php
+
+   interface FooInterface {
+       public const FLAG_1 = 1;
+       public function doFoo(int $flags): void;
+   }
+
+   trait FooTrait {
+       public function doFoo(int $flags): void {
+           if ($flags & self::FLAG_1) {
+               echo 'Got flag 1';
+           }
+       }
+   }
+
+   class FooClass implements FooInterface {
+       use FooTrait;
+   }
+
+Since the constant internally used by the trait in the above code is
+also part of the public API, it's natural to have the definition of this
+constant on the interface side. However, there is currently no way on
+the trait side to require that the composing class implements a specific
+interface. Such a feature should be discussed in a separate proposal.
+Aside from that, if traits could have the same constant definitions of
+the interface and guarantee that they are compatible, it would improve
+the completeness of the trait as a module, as it enables the
+"standalone" use of the trait without the specific interface.
 
 Proposal
 --------
 
-**THIS RFC RELATES TO THE RELEASE PROCESS AND SEEKS TO IDENTIFY
-ADDITIONAL DATA WHICH MAY BE SUITABLE TO PROVIDE**
+This RFC proposes to allow defining constants in traits. Trait constants
+can be defined in the same way as class constants, and are flattened
+into the definition of the composing class in the same way as property
+and method definitions in traits.
 
-This RFC proposes that all future PHP releases, including future
-versions of currently maintained releases, would be published alongside
-a standardised manifest file containing information on the release
-version, description, and changes.
+.. code:: php
 
-This RFC also proposes producing backdated manifest files for previous
-releases.
+   trait Foo {
+       public const FLAG_1 = 1;
+       protected const FLAG_2 = 2;
+       private const FLAG_3 = 2;
 
-These manifest files would be hosted in a suitable location accessible
-via HTTP (probably master or github), and would become the source of
-truth for PHP release information, upon which other data and services
-could be built.
+       public function doFoo(int $flags): void {
+           if ($flags & self::FLAG_1) {
+               echo 'Got flag 1';
+           }
+           if ($flags & self::FLAG_2) {
+               echo 'Got flag 2';
+           }
+           if ($flags & self::FLAG_3) {
+               echo 'Got flag 3';
+           }
+       }
+   }
 
-For a prototype of such data, please see:
-https://prototype-meta.php.net/releases/
+Prohibit direct access through a trait name
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Two types of manifests would be maintained, the first would be
-per-release and would contain all information that internals sees fit to
-include, but no less than:
+Trait constants cannot be accessed through the name of the trait in a
+form like TraitName::CONSTANT. This is in line with the deprecation of
+accessing static members of traits directly
+`[2 <https://wiki.php.net/rfc/deprecations_php_8_1#accessing_static_members_on_traits>`__].
+Trait constants must be accessed through the composing class. That is,
+they must be accessed through the composing class name, or its
+descendant class name, ``self``, ``static``, ``parent``, or its
+instance.
 
--  Version
--  Alpha / Beta / RC / Stable
--  Release date
--  Download locations for source code, including file hashes
--  A description (if applicable) with support for multiple languages.
--  A list of changes, grouped by module, where each change includes
-   additional metadata e.g. a bugfix number, CVE and CVSS, or author.
--  A list of flags to indicate essential considerations, such as if it
-   is a security release.
+.. code:: php
 
-Description Changes
-^^^^^^^^^^^^^^^^^^^
+   trait T {
+       public const CONSTANT = 42;
 
-Unlike current announcements, this manifest would NOT instruct users to
-download the release, or state if the release was security related or
-not. In many cases the description would be either empty or omitted
-entirely.
+       public function doSomething(): void {
+           // Fatal Error
+           echo T::CONSTANT;
 
-The rationale is simple: Information contained within existing release
-notifications is usually either redundant or rendered obsolete within a
-couple of months at most, e.g. each announcement includes a notice that
-users should upgrade to that version, even long after that version has
-been superseded by a newer release.
+           // OK
+           echo self::CONSTANT;
+           echo static::CONSTANT;
+           echo $this::CONSTANT;
+       }
+   }
 
-By stripping this verbiage from the manifest description, the data
-becomes more useful for both processing and as a long-term archive. The
-sites and services consuming the data can use its contents to generate
-their own descriptions, such as automatically flagging security issues,
-and only including text encouraging users to download it if it is the
-latest version.
+   class Base {
+       use Foo;
+   }
 
-Global History Manifest
-^^^^^^^^^^^^^^^^^^^^^^^
+   class Child extends Base {
+       public function doSomething(): void {
+           // OK
+           echo parent::CONSTANT;
+       }
+   }
 
-A second manifest would need to be generated that acted as a central
-lookup table for each of the releases, this would contain each branch,
-its support status including end of life dates, release managers, and
-the href to the XML / JSON of each point release. The latter of which
-should contain an attribute to indicate the most recent stable release.
+   // OK
+   echo Base::CONSTANT;
+   echo Child::CONSTANT;
+   echo (new Base)::CONSTANT;
+   $child = new Child;
+   echo $child::CONSTANT;
+
+   // Fatal Error
+   echo T::CONSTANT;
+
+Compatibility restrictions similar to properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Trait constants have the same compatibility restrictions as properties
+of traits. That is, if a trait constant of a given name appears in
+multiple places, such as in a composing class or in another trait in the
+composing class, they are only compatible if they have the same
+visibility and value; otherwise, they are treated as conflicts. If the
+definitions of the trait constants conflict, it triggers a fatal error.
+
+.. code:: php
+
+   trait T1 {
+       public const CONSTANT = 42;
+   }
+
+   // OK
+   class C1 {
+       use T1;
+       public const CONSTANT = 42;
+   }
+
+   // Fatal Error
+   class C2 {
+       use T1;
+       public const CONSTANT = 43;
+   }
+
+   // Fatal Error
+   class C3 {
+       use T1;
+       protected const CONSTANT = 42;
+   }
+
+   interface I {
+       public const CONSTANT = 43;
+   }
+
+   // Fatal Error
+   class C4 implements I {
+       use T1;
+   }
+
+   class Base {
+       public const CONSTANT = 43;
+   }
+
+   // Fatal Error
+   class Derived extends Base {
+       use T1;
+   }
+
+   // Fatal Error
+   trait T2 {
+       use T1;
+       public const CONSTANT = 43;
+   }
+
+Unlike properties, trait constants can be declared as final as with
+class constants, and the finality of trait constants is also used for
+this compatibility check.
+
+.. code:: php
+
+   trait T {
+       public final const CONSTANT = 42;
+   }
+
+   // OK
+   class C1 {
+       use T;
+       public final const CONSTANT = 42;
+   }
+
+   // Fatal Error
+   class C2 {
+       use T;
+       public const CONSTANT = 42;
+   }
+
+As in the case of trait properties, and unlike trait methods, no ``as``
+or ``insteadof`` conflict resolution is provided. Also, changing
+visibility in the composing class by ``as`` is not supported.
+
+.. code:: php
+
+   trait T1 {
+       public const CONSTANT = 42;
+   }
+   trait T2 {
+       public const CONSTANT = 43;
+   }
+
+   // Fatal Error
+   class C1 {
+       use T1 { CONSTANT as ALIAS; }
+   }
+
+   // Fatal Error
+   class C2 {
+       use T1, T2 {
+           T1::CONSTANT insteadof T2;
+           T1::CONSTANT as ALIAS;
+       }
+   }
+
+   // Fatal Error
+   class C3 {
+       use T1 {
+           CONSTANT as private;
+       }
+   }
+
+Can be used in Enum
+~~~~~~~~~~~~~~~~~~~
+
+Enumerations can use traits having constants, which behave as if the
+constants were defined within the enumeration.
+
+.. code:: php
+
+   trait T {
+       private const CONSTANT = 42;
+   }
+
+   // OK
+   enum E: int {
+       use T;
+
+       case CaseA = self::CONSTANT;
+   }
+
+Backward Incompatible Changes
+-----------------------------
+
+There are no backward-incompatible changes in this RFC.
+
+Proposed PHP Version(s)
+-----------------------
+
+PHP 8.2
+
+Discussions
+-----------
+
+Why were constants left out of traits initially
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It's an old story and no one remembers why, but it was probably simply
+overlooked as there was barely any mention of constants in traits in the
+old ML discussions
+`[3 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+const&q=b>`__]\ `[4 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+constant&q=b>`__]\ `[5 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+constants&q=b>`__]\ `[6 <https://marc.info/?l=php-internals&w=4&r=2&s=traits+const&q=b>`__]\ `[7 <https://marc.info/?l=php-internals&w=4&r=2&s=traits+constant&q=b>`__]\ `[8 <https://marc.info/?l=php-internals&w=4&r=3&s=traits+constants&q=b>`__].
+
+The response from the original author of the trait
+RFC\ `[9 <https://wiki.php.net/rfc/horizontalreuse>`__] is quoted below
+`[10 <https://externals.io/message/118039#118059>`__].
+
+    Hm. This isn’t something that I remember coming up specifically
+    back then. If it had been discussed in more detail, I’d probably
+    have included it in the RFC. So, my working assumption is: it
+    wasn’t something I really thought about.
+
+Why not provide conflict resolution like methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+While trait methods can use aliases with ``as`` and selection with
+``insteadof`` to resolve conflicts, there is not much benefit in
+allowing this to be used in constants in traits. Consider the following
+example.
+
+.. code:: php
+
+   trait ByteHandler {
+       private const BIT_MASK = 0b1111_1111;
+
+       public function truncateToByte(int $i): int {
+           return $i & BIT_MASK;
+       }
+   }
+
+   trait WordHandler {
+       private const BIT_MASK = 0b1111_1111_1111_1111;
+
+       public function truncateToWord(int $i): int {
+           return $i & BIT_MASK;
+       }
+   }
+
+   class C {
+       use ByteHandler, WordHandler {
+           ByteHandler::BIT_MASK insteadof WordHandler;
+           WordHandler::BIT_MASK as WORD_BIT_MASK;
+       }
+   }
+
+Creating an alias for a constant in a trait does not rewrite the method
+implementation in the trait to refer to that alias. Traits with constant
+definitions selected by the user can continue to refer to the correct
+invariants expected by the trait. However, for other traits the selected
+definition will be wrong invariants of the same name.
+``truncateToWord()`` in this case will truncate the value with an 8-bit
+bitmask, which will cause the WordHandler's expected invariants to be
+compromised, and this is clearly a bug.
+
+While the main use case of trait methods is to be invoked from outside
+of the trait, the main use case of a trait constant is to serve as a
+member that is referenced by methods in the trait. Therefore, the same
+way of conflict resolution as for methods is not very useful.
+
+Currently, PHP has held off on better conflict resolution for trait
+properties for the last decade, and simply marks multiple incompatible
+definitions as errors, as an obvious sign of a mistake. One idea to
+address this limitation is to introduce new visibility "trait local"
+that are only accessible within a given trait
+`[11 <https://externals.io/message/35800>`__]. This is beyond the scope
+of this proposal and would require a separate RFC.
+
+Constants in PHP can hold state through object constants and are more
+similar to properties than methods. Both constants and properties should
+have the same style of conflict resolution. Therefore, for now, this RFC
+only proposes that trait constants have the same restrictions as
+properties.
+
+Why are those compatibility checks performed on properties in the first place
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It's basically a way to deal with state conflicts in multiple
+inheritance.
+
+If we were to allow some "overrides" for trait properties, for example,
+we might have to decide which definitions would "win out" at each
+location.
+
+There can be more than one policy for handling state conflicts, and PHP
+has implemented one restricted approach for now and has not yet
+addressed another policy after that.
+
+It should be noted that in the original trait paper, traits have only
+behavior and no state, thereby avoiding the state conflict problem in
+multiple inheritance. In the original trait paper, it is assumed that
+the state is provided on the composing class side and accessed from
+traits through accessors
+`[12 <https://www.cs.cmu.edu/~aldrich/courses/819/Scha03aTraits.pdf>`__].
+This pure approach guides too much boilerplate in creating and using
+traits.
+
+Historically, there have been two typical approaches to state conflicts
+in multiple inheritance like the diamond problem: one is to merge states
+having the same name, and the other is to have an independent state for
+each ancestor in separate "paths" and provide a way to select one. Since
+different use cases require one or the other, programming languages
+sometimes have features that allow programmers to use these two methods
+selectively, such as virtual inheritance in C++.
+
+Where having a state becomes tricky is when conflicts occur. If there
+are no conflicts, it does not matter if a trait has state. And even if
+there is a conflict, if the programming language defaults to either
+merge or having an independent state, that default will work fine for
+half of the use cases.
+
+PHP strikes a balance in this problem, allowing traits to define
+properties, choosing to deal with conflicts by merging states, and also
+marking any conflicting definitions with different visibility or default
+values as an error, as a sign of an unintended name conflict
+`[13 <https://externals.io/message/51007#51072>`__].
+
+Why not introduce visibility changes like methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Trait methods can also change visibility on the composing class side via
+the ``as`` keyword.
+
+.. code:: php
+
+   trait T {
+       public function method(): void {}
+   }
+
+   class C {
+       use T {
+           method as public;
+       }
+   }
+
+Simply because it is not currently available for properties, this RFC
+doesn't propose to allow similar visibility changes for trait constants.
+
+A survey of the 1149 packages on packagist shows that at least 222
+locations in 26 packages use this feature for trait methods.
+
+We refrain from judging whether this is large or small, but there are
+probably cases where it is more convenient for composing classes to be
+able to decide which members to expose.
+
+We do not preclude the future introduction of this feature, but for the
+sake of simplicity, we do not include it in this RFC.
+
+In case it is to be introduced, it would be necessary to allow the same
+visibility change on the property side for consistency, and to provide a
+way to distinguish between a constant and a method with the same name in
+the trait, while maintaining consistency with the compatibility check
+behavior.
+
+Comparison to other languages
+-----------------------------
+
+Hack
+~~~~
+
+Hack gives priority to the definition of the trait used first when
+multiple trait constants conflict. If there is a conflict with a parent
+class, the parent class definition takes precedence, and if there is a
+conflict with an interface definition, it results in a type error.
+`[14 <https://docs.hhvm.com/hack/traits-and-interfaces/using-a-trait#resolution-of-naming-conflicts>`__]
+
+Java
+~~~~
+
+In Java, variables can be defined in interfaces, which are public,
+static, and final by default, i.e., equivalent to constants in PHP. If a
+Java class implements multiple interfaces at the same time and their
+variables conflict, this is not an error in itself, but the programmer
+must explicitly specify which definition to choose when referencing
+those variables. If the same interface definition appears more than once
+via the diamond problem, the member is inherited only once
+`[15 <https://docs.oracle.com/javase/specs/jls/se18/html/jls-9.html#jls-9.3>`__].
+
+Kotlin
+~~~~~~
+
+In Kotlin, a class can implement multiple interfaces at the same time,
+and properties can be defined in interfaces. However, interface
+properties do not have actual backing fields. That is, they are abstract
+by default and must have their actual state in the implementing class,
+or provide accessors, with collision resolution if necessary
+`[16 <https://kotlinlang.org/docs/interfaces.html#interfaces-inheritance>`__].
+
+Rust
+~~~~
+
+Rust has associated constants. Associated constants are constants
+associated with a type. If multiple definitions of the same name
+conflict, they must be disambiguated on reference using qualified paths
+`[17 <https://doc.rust-lang.org/reference/items/associated-items.html#associated-constants>`__]\ `[18 <https://doc.rust-lang.org/reference/paths.html#qualified-paths>`__].
+
+C++
+~~~
+
+In C++, multiple inheritance is possible, and equivalents of constants
+in PHP can be defined as static consts within classes. Members of the
+same name usually have different entities for each class, but by
+specifying virtual at the time of inheritance, the entities of common
+classes in diamond inheritance can be merged into one. If multiple
+member definitions of the same name conflict, they must be disambiguated
+on reference
+`[19 <https://timsong-cpp.github.io/cppwp/n4861/class.mi>`__]\ `[20 <https://timsong-cpp.github.io/cppwp/n4861/class.member.lookup>`__].
+
+Scala
+~~~~~
+
+Scala allows multiple traits to be used simultaneously on an object,
+linearized into a single inheritance hierarchy based on the order in
+which they are specified. Constants can be defined with the keyword
+``val``. Attempting to mix multiple traits with a constant of the same
+name will result in a compile error. This can be solved by overriding on
+the mixing class. Also, if the val of each trait is declared as override
+beforehand, it can be overridden automatically according to the order of
+linearization
+`[21 <https://www.scala-lang.org/files/archive/spec/2.13/05-classes-and-objects.html>`__].
+
+Vote
+----
+
+A 2/3 majority is needed for this RFC to pass. Voting started on 5. July
+2022 and end on 19. July 2022
+
+Question: Allow constants in traits as proposed?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Future Scope
 ------------
 
-Through this standardised source of truth, it will be possible to better
-iterate on how to present this data in other forms, such as by
-formatting it into HTML, and including it in APIs.
+Trait Local
+~~~~~~~~~~~
 
-This data would then also be used to generate the necessary pages and
-announcements for inclusion on the existing php.net website, rather than
-the current process of manually editing arrays inside PHP scripts.
+Since constants and properties of traits are primarily intended to be
+referenced from within traits, it is more useful to be able to restrict
+the scope to trait local and prevent conflicts in the first place. This
+is also true for methods that presume references from inside the trait
+itself, such as recursions.
+
+Stateful Traits
+`[22 <https://link.springer.com/chapter/10.1007/978-3-540-71836-9_4>`__]
+default to trait state as trait local, but allow the programmer to
+selectively use merge behavior as needed. On the contrary, since PHP
+defaults to merge behavior, there may be a future extension that allows
+trait local to be explicitly declared. This option has even been
+mentioned in the old discussions, but it has not caught the attention of
+many people and has been on hold for more than a decade
+`[11 <https://externals.io/message/35800>`__]. Perhaps it is time to
+reconsider this also.
+
+Requiring specific interfaces or classes on traits
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Hack can require that the composing class of a trait be a derived class
+of a specific class or an implementation of a specific interface
+`[23 <https://docs.hhvm.com/hack/traits-and-interfaces/trait-and-interface-requirements>`__].
+
+At the same time, Hack also allows to implement interfaces from traits.
+That is, if a class C uses a trait T that implements an interface I,
+then C is a subtype of I
+`[24 <https://github.com/facebook/hhvm/commit/6a2c5150edf4c6d3d1e015d665d85221b0975f45>`__]\ `[25 <https://github.com/facebook/hhvm/commit/6dac173dd5cc56c67303f7e6a46917f0aebad773>`__].
+Actually, trait constants in Hack were introduced as a syntactic sugar
+for traits that implement interfaces with constants
+`[26 <https://github.com/facebook/hhvm/commit/9dcc664cd19d71c849be8ce052b11175d275c331>`__].
+
+These can be other ways to tie properties or constants to traits, and
+this RFC does not preclude future implementation of any of them.
+
+Patches and Tests
+-----------------
+
+https://github.com/php/php-src/pull/8888
+
+References
+----------
+
+-  `[1 <https://www.php.net/manual/en/language.oop5.traits.php>`__] The
+   explanation of traits in the PHP manual
+-  `[2 <https://wiki.php.net/rfc/deprecations_php_8_1#accessing_static_members_on_traits>`__]
+   PHP RFC: Deprecations for PHP 8.1 \| Accessing static members on
+   traits
+-  `[3 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+const&q=b>`__]
+   marc.info \| search results of "trait+const" in the archive of
+   php-internals
+-  `[4 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+constant&q=b>`__]
+   marc.info \| search results of "trait+constant" in the archive of
+   php-internals
+-  `[5 <https://marc.info/?l=php-internals&w=4&r=1&s=trait+constants&q=b>`__]
+   marc.info \| search results of "trait+constants" in the archive of
+   php-internals
+-  `[6 <https://marc.info/?l=php-internals&w=4&r=2&s=traits+const&q=b>`__]
+   marc.info \| search results of "traits+const" in the archive of
+   php-internals
+-  `[7 <https://marc.info/?l=php-internals&w=4&r=2&s=traits+constant&q=b>`__]
+   marc.info \| search results of "traits+constant" in the archive of
+   php-internals
+-  `[8 <https://marc.info/?l=php-internals&w=4&r=3&s=traits+constants&q=b>`__]
+   marc.info \| search results of "traits+constants" in the archive of
+   php-internals
+-  `[9 <https://wiki.php.net/rfc/horizontalreuse>`__] Request for
+   Comments: Horizontal Reuse for PHP
+-  `[10 <https://externals.io/message/118039#118059>`__] externals.io \|
+   [RFC] [Under Discussion] Constants in traits \| The current
+   discussion about constants in traits
+-  `[11 <https://externals.io/message/35800>`__] externals.io \| How to
+   build a real Trait thing without exclusion and renaming \| The future
+   introduction of trait-local was considered and put on hold in the
+   initial discussion
+-  `[12 <https://www.cs.cmu.edu/~aldrich/courses/819/Scha03aTraits.pdf>`__]
+   Traits: Composable Units of Behaviour\* \| The original trait paper
+-  `[13 <https://externals.io/message/51007#51072>`__] externals.io \|
+   Traits and Properties \| Discussion of trait properties leading to
+   the current form
+-  `[14 <https://docs.hhvm.com/hack/traits-and-interfaces/using-a-trait#resolution-of-naming-conflicts>`__]
+   HHVM and Hack Documentation \| Traits And Interfaces: Using A Trait
+   \| Resolution of naming conflicts
+-  `[15 <https://docs.oracle.com/javase/specs/jls/se18/html/jls-9.html#jls-9.3>`__]
+   Java Language Specification \| 9.3. Field (Constant) Declarations
+-  `[16 <https://kotlinlang.org/docs/interfaces.html#interfaces-inheritance>`__]
+   Kotlin docs \| Interfaces Inheritance
+-  `[17 <https://doc.rust-lang.org/reference/items/associated-items.html#associated-constants>`__]
+   The Rust Reference \| Associated Constants
+-  `[18 <https://doc.rust-lang.org/reference/paths.html#qualified-paths>`__]
+   The Rust Reference \| Qualified paths
+-  `[19 <https://timsong-cpp.github.io/cppwp/n4861/class.mi>`__] Working
+   Draft, Standard for Programming Language C++ n4861 \| Multiple base
+   classes
+-  `[20 <https://timsong-cpp.github.io/cppwp/n4861/class.member.lookup>`__]
+   Working Draft, Standard for Programming Language C++ n4861 \| Member
+   name lookup
+-  `[21 <https://www.scala-lang.org/files/archive/spec/2.13/05-classes-and-objects.html>`__]
+   Scala Language Specification Version 2.13 \| Classes and Objects
+-  `[22 <https://link.springer.com/chapter/10.1007/978-3-540-71836-9_4>`__]
+   Stateful Traits
+-  `[23 <https://docs.hhvm.com/hack/traits-and-interfaces/trait-and-interface-requirements>`__]
+   HHVM and Hack Documentation \| Traits And Interfaces: Trait And
+   Interface Requirements
+-  `[24 <https://github.com/facebook/hhvm/commit/6a2c5150edf4c6d3d1e015d665d85221b0975f45>`__]
+   facebook/hhvm \| Allow traits to implement interfaces
+-  `[25 <https://github.com/facebook/hhvm/commit/6dac173dd5cc56c67303f7e6a46917f0aebad773>`__]
+   facebook/hhvm \| Allow traits to implement interfaces Add runtime
+   support for implementing interfaces from traits
+-  `[26 <https://github.com/facebook/hhvm/commit/9dcc664cd19d71c849be8ce052b11175d275c331>`__]
+   facebook/hhvm \| Allow constants in traits
+-  https://externals.io/message/110741 The initial discussion about
+   constants in traits
 
 Additional Metadata
 -------------------
 
-:Original Authors: Mark Randall
-:Slug: open_release_manifest
-:Wiki URL: https://wiki.php.net/rfc/open_release_manifest
+:Implementation: https://github.com/php/php-src/pull/8888
+:Original Authors: Shinji Igarashi sji@sj-i.dev, Stephen Reay stephen@koalephant.com
+:Slug: constants_in_traits
+:Wiki URL: https://wiki.php.net/rfc/constants_in_traits

@@ -1,114 +1,346 @@
-Add Http_parse_query As An Alternative To Parse_str
-===================================================
+Clone With
+==========
 
 :PHP-RFC: 0824
-:Title: Add Http_parse_query As An Alternative To Parse_str
-:Author: Kamil Tekiela <dharman@php.net>
+:Title: Clone With
+:Author: Máté Kocsis <kocsismate@php.net>
 :Status: Draft
 :Type: Standards Track
-:Created: 2021-06-23
-:PHP-Version: 8.2
+:Created: 2022-10-24
+:PHP-Version: 8.3
 :Version: 1.0
 
 Introduction
 ------------
 
-PHP offers a function for parsing query string into an array. The
-function historically has been a mockery as it allowed to register the
-values as global variables. Since PHP 8.0 this is no longer possible.
-The function still has two main downsides: a confusing name, and no
-return value (it returns by out parameter instead).
+With the advent of standards promoting "quasi-immutable" objects, like
+`PSR-7 <https://www.php-fig.org/psr/psr-7/>`__, "wither" methods became
+increasingly widely used. This practice is the "de facto" standard to
+modify the object state without altering the currently existing
+references to an object. A "wither" method copy-pasted from
+`Diactoros <https://github.com/laminas/laminas-diactoros/blob/da227941abf1216f082535aacabc20759189d017/src/Response.php#L147>`__
+basically looks like this:
 
 .. code:: php
 
-   $str = "first=value&arr[]=foo+bar&arr[]=baz";
+   class Response implements ResponseInterface {
+       public int $statusCode;
+       public string $reasonPhrase;
+       // ...
+       public function withStatus($code, $reasonPhrase = ''): Response
+       {
+           $new = clone $this;
+           $new->statusCode = $code;
+           $new->reasonPhrase = $reasonPhrase;
+           return $new;
+       }
+       // ...
+   }
 
-   parse_str($str, $output);
-   echo $output['first'];  // value
-   echo $output['arr'][0]; // foo bar
-   echo $output['arr'][1]; // baz
+By using this approach, one can effectively implement immutable objects.
+As the "quasi" above indicates, these objects are not entirely
+immutable, since workarounds exist for modifying their state. As of PHP
+8.1 though, `PHP RFC: Readonly properties
+2.0 </rfc/readonly_properties_v2>`__ provides a foundational building
+block for preventing these workarounds: by adding the ``readonly``
+modifier to a property, one can make sure that once initialized, it
+cannot be modified anymore. This would allow PSR-7 implementations to
+properly enforce their immutability.
+
+Unfortunately, PSR-7 implementations cannot make use of readonly
+properties yet, unless they always instantiate a new class instance
+rather than using cloning as described above. This cumbersome workaround
+would be required because readonly properties have too strict
+constraints: they are readonly at the property level, while in order to
+be useful in practice, they should be readonly only at the object level.
+The former means that after initialization, a property is unmodifiable
+throughout its entire life span, while the latter means that it is
+unmodifiable during the life cycle of an object. The main difference
+between the two approaches is whether a property is modifiable after the
+object is cloned.
+
+Since `PHP RFC: Readonly amendments </rfc/readonly_amendments>`__ was
+(partially) accepted for PHP 8.3, readonly properties became modifiable
+during the execution of the ``__clone()`` magic method, allowing deep
+cloning of readonly properties. This was the first step towards
+achieving object-level readonliness, however the general problem of
+supporting safe modification of readonly properties was not solved yet.
 
 Proposal
 --------
 
-The proposal is to create a new function as a copy of parse_str() but
-change the name to http_parse_query() and return the array instead of
-using the out parameter. The new function will take only one argument.
+The current proposal aims to add support for a new language construct
+called "clone with" by extending the ``clone`` operator, that would make
+it possible to write "wither" methods for any kind of instance
+properties (declared/dynamic, typed/untyped, readonly/non-readonly) with
+less code.
 
-The new function will also be maintained in the manual under
-https://www.php.net/manual/en/ref.url.php instead of
-https://www.php.net/manual/en/ref.strings.php
+Using "clone with", the above example can be rewritten the following
+way:
 
 .. code:: php
 
-   $str = "first=value&arr[]=foo+bar&arr[]=baz";
+   class Response implements ResponseInterface {
+       public readonly int $statusCode;
+       public readonly string $reasonPhrase;
+       // ...
+       public function withStatus($code, $reasonPhrase = ''): Response
+       {
+           return clone $this with [
+               "statusCode" => $code,
+               "reasonPhrase" => $reasonPhrase,
+           ];
+       }
+       // ...
+   }
 
-   $output = http_parse_query($str);
-   echo $output['first'];  // value
-   echo $output['arr'][0]; // foo bar
-   echo $output['arr'][1]; // baz
+This syntax expresses that the ``Response::$statusCode`` and
+``Response::$reasonPhrase`` properties are modified right after
+``$this`` is cloned, leaving the original object intact. This way, it
+becomes possible to clone and modify readonly properties, even multiple
+times:
 
-Open Points
------------
+.. code:: php
 
-Should PHP remove name mangling?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   $response = new Response(200);
+   $response->withStatus(201)->withStatus(202);
 
-As suggested on the mailing list, the name mangling does not serve any
-purpose anymore. It was a way to simplify variable access when register
-globals was used. Since PHP 8.0, this functionality is not available
-anymore, so the question is should we remove the name mangling from PHP
-parse functions completely (which would require a separate RFC and smart
-deprecation path) or should we remove it only from the new function?
+Constraints
+~~~~~~~~~~~
 
-If we should remove name mangling, what should happen to mismatched
-square brackets?
+Furthermore, "clone with" respects all visibility rules and type
+constraints, just like how regular assignments do:
 
-Should it be implemented in OOP way instead?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
 
-Maybe the replacement should be in a form of a full-fledged class with
-properties from two-way conversion from string to PHP array/object. What
-would such API look like? What functionality is missing currently from
-PHP? Do we need such API in core or can we just expose a function like
-http_parse_query() and let the rest be implemented in userland?
+   class Foo {
+       public int $a;
+       protected int $b;
+       private $c;
+       public readonly int $d;
+   }
 
-Future Scope
-------------
+   class Bar extends Foo {
+       public function withC() {
+           return clone $this with ["c" => 1];
+       }
 
-The parse_str() function will get deprecated in the next minor release
-and removed in the next major release.
+       public function withD() {
+           return clone $this with ["d" => 1];
+       }
+   }
+
+   $bar = new Bar();
+
+   clone $bar with ["a" => "abc"];// Exception due to type mismatch
+   clone $bar with ["b" => 1];    // Exception due to accessing a protected property from the global scope
+   $bar->withC();                 // Exception due to accessing a private property from a child class
+   $bar->withD();                 // Exception due to assigning a readonly property from a child class
+   clone $bar with ["e" => []];   // Deprecation notice due to assigning to a dynamic property
+
+Property name expressions
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+So far, all "clone with" examples introduced in the current RFC used
+literal strings for referencing property names, while the values to be
+assigned were expressions.
+
+However, in some cases it would be useful to reference property names as
+expressions, e.g. when one needs to use "clone with" in a foreach loop
+where the index is the property name and the loop variable is the value
+to be assigned. This is also possible:
+
+.. code:: php
+
+   class Foo {
+       private $a;
+       private $b;
+       private $c;
+
+       /**
+        * @param array<string, mixed> $properties
+        */
+       public function withProperties(array $properties) {
+           $self = clone $this;
+
+           foreach ($properties as $name => $value) {
+               $self = clone $self with [$name => $value];
+           }
+
+           return $self;
+       }
+   }
+
+   $foo = new Foo();
+   $foo->withProperties(["a" => 1, "b" => 2, "c" => 3]);
+
+This time, both side of the assignment is a dynamic expression,
+separated by ``=>``. Not only variables, but any kind of expressions
+strictly evaluating to a string type are possible to use:
+
+.. code:: php
+
+   const PROPERTY_NAME = "foo";
+   $object = new stdClass();
+
+   $object = clone $object with ["foo" => 1]; // the property name is a literal
+   $object = clone $object with [strtolower("FO") . "o" => 1]; // the property name is an expression
+   $object = clone $object with [PROPERTY_NAME => 1]; // the property name is a named constant
+
+Execution order
+~~~~~~~~~~~~~~~
+
+A "clone with" operation is executed in the following order:
+
+-  If the object has a ``__clone()`` magic method, then it is executed
+   first
+-  Then the assignments in the ``with`` clause are executed from left to
+   right. Any properties - including the ones modified by the
+   ``__clone()`` method - are modifiable again.
+
+.. code:: php
+
+   class Foo {
+       public int $bar = 0;
+
+       public function increment(): static
+       {
+           return clone $this with [
+               strtolower("BAR") => $this->bar + 1,
+               $this->bar => throw new Exception(),
+           ];
+       }
+       
+       public function __clone(): void
+       {
+           $this->bar = 0;
+       }
+   }
+
+   $foo = new Foo();
+   $foo->increment();
+
+Calling ``Foo::increment()`` in the above example will roughly do the
+following:
+
+-  Clone opcode
+
+   -  ``Foo`` is cloned and then ``Foo::__clone()`` is called
+
+-  Clone with assignment #1 opcode
+
+   -   ``strtolower("BAR")`` is evaluated to ``bar``
+   -  the right-hand side is evaluated to 1
+   -  ``Foo::$bar`` is assigned to 1
+
+-  Clone with assignment #2 opcode
+
+   -   ``$this->bar`` is not a string expression: a ``TypeError`` is
+      thrown
+   -  the right-hand side is not evaluated: ``Exception`` is not thrown
+
+Reflection
+----------
+
+The proposal doesn't have impact for reflection.
 
 Backward Incompatible Changes
 -----------------------------
 
-There will be no breaking change to existing functionality. The new
-function is designed to give users a way to move away from parse_str()
-so that we can deprecate it and remove it.
+If the proposal gets accepted, ``with`` becomes a semi-reserved keyword,
+just like "readonly", meaning that it cannot be used as a class or a
+global constant name, as well as a trait method alias (after the "as"
+keyword).
+
+Future scope
+------------
+
+The shorthand syntax for the property name was removed from the current
+proposal due to its weak support. However, we could introduce it later
+on as an abbreviated way to refer to property names as literal strings.
+This syntax could use an identifier followed by ``:`` on the left-hand
+side of the "clone with expressions". The initial example would look
+like the following this way:
+
+.. code:: php
+
+   class Response implements ResponseInterface {
+       public readonly int $statusCode;
+       public readonly string $reasonPhrase;
+       // ...
+       public function withStatus($code, $reasonPhrase = ''): Response
+       {
+           return clone $this with [
+               statusCode: $code,
+               reasonPhrase: $reasonPhrase,
+           ];
+       }
+       // ...
+   }
+
+Furthermore, it may be useful to add support for using either array
+expressions instead of the fixed array of "clone with assignments", or
+the spread operator later on. An example:
+
+.. code:: php
+
+   class Foo {
+       private $a;
+       private $b;
+       private $c;
+
+       /**
+        * @param array<string, mixed> $properties
+        */
+       public function withProperties(array $properties) {
+           // using an array expression after the "with":
+           return clone $this with $properties;
+
+           // or using the spread operator:
+           return clone $this with [...$properties];
+       }
+   }
+
+   $foo = new Foo();
+   $foo->withProperties(["a" => 1, "b" => 2, "c" => 3]);
+
+Clone callback
+~~~~~~~~~~~~~~
+
+Alexandru Pătrănescu and Nicolas Grekas suggested using a "clone
+callback" instead of the "clone with" syntax so that the callback would
+be evaluated right after the clone opcode, using the scope where it was
+triggered. An example:
+
+.. code:: php
+
+   class Response implements ResponseInterface {
+       public readonly int $statusCode;
+       public readonly string $reasonPhrase;
+       // ...
+       public function withStatus($code, $reasonPhrase = ''): Response
+       {
+           return clone $this with function (Response $clone) use ($code, $reasonPhrase): void {
+               $clone->statusCode = $code;
+               $clone->reasonPhrase = $reasonPhrase;
+           });
+       }
+       // ...
+   }
+
+This idea could be implemented as a followup syntax.
 
 Vote
 ----
 
-Simple yes/no vote.
-
-Question: Add new http_parse_query() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Discussion on internals
------------------------
+The vote requires 2/3 majority.
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/7344
-:Original Authors: Kamil Tekiela dharman@php.net
-:Original PHP Version: PHP 8.2
-:Original Status: Discussion
-:Slug: parse_str_alternative
-:Wiki URL: https://wiki.php.net/rfc/parse_str_alternative
+:Implementation: https://github.com/php/php-src/pull/9497
+:Original Authors: Máté Kocsis kocsismate@php.net
+:Original PHP Version: PHP 8.3
+:Original Status: Under Discussion
+:Slug: clone_with
+:Wiki URL: https://wiki.php.net/rfc/clone_with

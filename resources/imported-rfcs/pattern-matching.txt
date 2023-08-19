@@ -39,15 +39,21 @@ A pattern may be a type signature, including both class and primitive types as w
 
 <code php>
 $foo is string;    // Equivalent to is_string($foo)
-$foo is int|float; // Equivalent to is_int($foo) || is_float($foo)
+$foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
 $foo is Request;   // Equivalent to $foo instanceof Request
-$foo is User|int;  // Equivalent to $foo instanceof User || is_int($foo)
+$foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
 $foo is ?array;    // Equivalent to is_array($foo) || is_null($foo)
+
+// Equivalent to:
+// $foo instanceof User || ($foo instanceof Account && $foo instanceof Authenticated)
+$foo is (User|(Account&Authenticated))
 </code>
 
 A type match may be any syntax supported by a parameter type; in a sense, ''$foo is pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification."  As more complex type checks become allowed (such as intersection types, type aliases, etc.) they will become valid in a pattern as well.
 
-Type patterns respect the strict/weak typing mode of the file in which it is evaluated.
+Type patterns are always evaluated in strict mode, so as to be consistent with <php>is_int()</php> and its siblings.
+
+Compound type patterns require enclosing parenthesis to avoid ambiguity issues in the parser.
 
 === Literal pattern ===
 
@@ -83,7 +89,7 @@ $p instanceof Point && $p->y === 37 && $p->x === 2;
 
 Properties may be listed in any order.  A trailing comma is permitted.
 
-==== ''match()'' enhancement ====
+==== match() enhancement ====
 
 Pattern matching is frequently used in conjunction with branching structures, in particular with enumerations.  To that end, this RFC also enhances the ''match()'' structure.  Specifically, if the ''is'' keyword is used in ''match()'' then ''match()'' will perform a pattern match rather than an identity comparison.
 
@@ -152,10 +158,11 @@ Variable binding is especially useful in ''match()'' statements, where there is 
 
 <code php>
 $result = match ($p) is {
+  // These will match only some Point objects, depending on their property values.
   Point{x: 3, y: 9, %$z} => "x is 3, y is 9, z is $z",
   Point{%$z, %$x, y: 4} => "x is $x, y is 4, z is $z",
   Point{x: 5, %$y} => "x is 5, y is $y, and z doesn't matter",
-  // This will always match.
+  // This will match any Point object.
   Point{%$x, %$y, %$z} => "x is $x, y is $y, z is $z",
 };
 </code>
@@ -176,9 +183,35 @@ PHP 8.next (aka 8.1).
 
 ===== Open Issues =====
 
-Do any other patterns need to be included in the initial RFC?
+==== Include other patterns in the initial RFC? ====
+
+Do any other patterns need to be included in the initial RFC?  Are there any listed in Future Scope that are must-have for the initial release?
+
+==== Variable binding ====
 
 The % flag for binding is still an open question.  It would be necessary if we want to allow variables to be used in the pattern, but so far we haven't decided if variables belong in the pattern.  Open question for discussion.
+
+==== match() "is" placement ====
+
+The authors are split as to how the syntax for pattern matching <php>match()</php> should work.  There are two options:
+
+<code php>
+$result = match ($somevar) is {
+    Foo => 'foo',
+    Bar => 'bar',
+    Baz|Beep => 'baz',
+};
+</code>
+
+<code php>
+$result = match ($somevar) {
+    is Foo => 'foo',
+    is Bar => 'bar',
+    is Baz|Beep => 'baz',
+};
+</code>
+
+The former is shorter, and applies pattern matching to all arms.  The latter is more explicit, and would allow individual arms to be pattern matched or not depending on the presence of ''is''.  Of course, these options are not mutually exclusive and supporting both would be possible.  We are looking for feedback on this question.
 
 ===== Future Scope =====
 
@@ -237,6 +270,21 @@ $matches = [];
 preg_match('/^http:\/\/%$domain/', $foo, $matches);
 $domain == $matches[0];
 </code>
+
+==== Throwing alternative ====
+
+There may be cases where the desired result is not a boolean but an error condition.  One possible way to address that would be with a second keyword, <php>as</php>, which behaves the same as <php>is</php> but throws an Error rather than returning false.
+
+<PHP>
+
+// This either evaluates to true and assigns $username and $password to the matching properties of Foo, OR it evaluates to false.
+$foo is Foo { $username, $password };
+
+// This either evaluates to true and assigns $username and $password to the matching properties of Foo, OR it throws an Error.
+$foo as Foo { $username, $password };
+</PHP>
+
+Whither or not this alternative syntax would be useful in practice is unclear, so for now it is omitted.  It would be a reasonably straightforward addition in the future, however, if practical experience suggested it was useful.
 
 ===== Proposed Voting Choices =====
 
