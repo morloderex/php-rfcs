@@ -29,7 +29,13 @@ The left-hand side of ''is'' will be evaluated first until it is reduced to a si
 
 While patterns may resemble other language constructs, whatever follows ''is'' is a pattern, not some other instruction.
 
-''is'' may be used in any context in which a boolean result is permissible.  That includes variable assignment, ''if'' conditions, ''while'' conditions, ''match()'' statements, etc.
+''is'' may be used in any context in which a boolean result is permissible.  That includes variable assignment, ''if'' conditions, ''while'' conditions, ''match()'' expressions, etc.
+
+==== Pattern structure ====
+
+Patterns are a super-set of type definitions.  A pattern consists of one or more pattern segments, combined by <php>|</php> and <php>&</php> conjunctions.  If both are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.
+
+Additionally, if a pattern contains multiple segments, the entire pattern must also be enclosed in parentheses to help avoid parser ambiguity.  In practice, most patterns are expected to be single-segment.
 
 ==== Supported patterns ====
 
@@ -39,41 +45,57 @@ A pattern may be a type signature, including both class and primitive types as w
 
 <code php>
 $foo is string;    // Equivalent to is_string($foo)
-$foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
 $foo is Request;   // Equivalent to $foo instanceof Request
-$foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
 $foo is ?array;    // Equivalent to is_array($foo) || is_null($foo)
 
-// Equivalent to:
+// These are compound patterns, consisting of two sub-patterns each.
+$foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
+$foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
+
+// This is also a compound pattern. It is equivalent to:
 // $foo instanceof User || ($foo instanceof Account && $foo instanceof Authenticated)
 $foo is (User|(Account&Authenticated))
 </code>
 
-A type match may be any syntax supported by a parameter type; in a sense, ''$foo is pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification."  As more complex type checks become allowed (such as intersection types, type aliases, etc.) they will become valid in a pattern as well.
+A type match may be any syntax supported by a parameter type; in a sense, ''$foo is pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification."  Should more complex type checks become allowed (such as type aliases, etc.) they will become valid in a pattern as well.
 
 Type patterns are always evaluated in strict mode, so as to be consistent with <php>is_int()</php> and its siblings.
 
-Compound type patterns require enclosing parenthesis to avoid ambiguity issues in the parser.
-
 === Literal pattern ===
 
-Any literal may be a pattern.  This is a degenerate case and not generally useful, but is included for consistency when used with ''match()'' (see below).
+Any literal may be a pattern.  When used on its own it is not particularly useful (it's equivalent to <php>===</php>), but can be used in a compound pattern to more complex effect.  It is also valuable when used with ''match()'' (see below).
 
 <code php>
+// Simple degenerate case patterns.
 $foo is 5;         // Equivalent to $foo === 5
 $foo is 'yay PHP'; // Equivalent to $foo === 'yay PHP'
+$foo is null;      // Equivalent to $foo === null
+
+// More practical compound examples
+$foo is "beep"|"boop"; // Equivalent to $foo === "beep" || $foo === "boop"
+$foo is array|null; // Equivalent to is_array($foo) || $foo === null
 </code>
 
-Global constants are NOT permitted in a pattern.  They cannot be disambiguated from a class name, and are of minimal if any use in practice.
+Class constants may also be used in a literal match:
+
+<PHP>
+$foo is 'spade'|'heart'|self::Wild;
+</PHP>
+
+Global constants are NOT permitted in a pattern, as they cannot be easily disambiguated from a class name.  If desired, they could be disambiguated using a special character prefix to indicate "the next thing is a constant."  That is not included in the RFC at this time, however.
 
 === Object property pattern ===
 
-A pattern may also define an class and matches against scope-accessible properties of that object.  Only a single class type may be used, but any number of properties may be matched.  The properties must be accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
+A pattern may also define a class and matches against scope-accessible properties of that object.  Only a single class type may be used, but any number of properties may be matched.  The properties must be accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
 
 <code php>
 
 class Point {
-  public function __construct(public int $x, public int $y, public int $z) {}
+    public function __construct(
+        public int $x, 
+        public int $y, 
+        public int $z,
+    ) {}
 }
 
 $p = new Point(3, 4, 5);
@@ -85,6 +107,11 @@ $p instanceof Point && $p->x === 3;
 $p is Point {y: 37, x: 2,};
 // Equivalent to:
 $p instanceof Point && $p->y === 37 && $p->x === 2;
+
+// A multi-segment pattern that includes an object pattern.
+$ is (Point {x: 2}|null)
+// Equivalent to:
+$p instanceof Point && $p->x === 2 || $p === null;
 </code>
 
 Properties may be listed in any order.  A trailing comma is permitted.
@@ -121,18 +148,22 @@ In the currently supported patterns, it is only relevant for object pattern matc
 
 <code php>
 class Point {
-  public function __construct(public int $x, public int $y, public int $z) {}
+    public function __construct(
+        public int $x, 
+        public int $y, 
+        public int $z,
+    ) {}
 }
 
 $p = new Point(3, 4, 5);
 
 if ($p is Point {x: 3, y: %$y} ) {
-  print "x is 3 and y is $y.";
+    print "x is 3 and y is $y.";
 }
 // Equivalent to:
 if ($p instanceof Point && $p->x === 3) {
-  $y = $p->y;
-  print "x is 3 and y is $y.";
+    $y = $p->y;
+    print "x is 3 and y is $y.";
 }
 
 if ($p is Point {z: %$z, x: 3, y: %$y} ) {
@@ -140,9 +171,9 @@ if ($p is Point {z: %$z, x: 3, y: %$y} ) {
 }
 // Equivalent to:
 if ($p instanceof Point && $p->x === 3) {
-  $y = $p->y;
-  $z = $p->z;
-  print "x is 3 and y is $y and z is $z.";
+    $y = $p->y;
+    $z = $p->z;
+    print "x is 3 and y is $y and z is $z.";
 }
 </code>
 
@@ -169,15 +200,47 @@ $result = match ($p) is {
 
 Note that in this case, the variables ''$x'', ''$y'', and ''$z'' may or may not be defined after the ''match()'' statement executes depending on which pattern was matched.
 
+This last usage is especially important in the context of ADTs, where combining an ADT with a pattern-matching <php>match()</php> would allow for this:
+
+<PHP>
+// Example of what is possible with both pattern matching and ADTs,
+// though they are separate RFCs so the exact syntax is subject to change.
+
+enum Move {
+    case TurnLeft;
+    case TurnRight;
+    case Forward(int $amount);
+}
+
+match ($move) is {
+    Move::TurnLeft => $this->orientation--,
+    Move::TurnRight => $this->orientation++,
+    Move::Forward(%$amount) => $this->distance += $amount,
+};
+
+
+enum Option {
+    case None;
+    case Some(mixed $val);
+}
+
+match ($maybe) is {
+    Option::Some {%$val} => compute_something($val),
+    Option::None => 'default value',
+}
+</PHP>
+
+We view this RFC as a prerequisite for ADTs being useful in practice.
+
 ===== Backward Incompatible Changes =====
 
-A new keyword is added, ''is''.  That conflicts with a global constant named ''is''.
+A new keyword is added, ''is''.  That will conflict with any user-defined global constant named ''is''.
 
 No other BC breaks are expected.
 
 ===== Proposed PHP Version(s) =====
 
-PHP 8.next (aka 8.1).
+PHP 8.next (aka 8.4).
 
 ===== RFC Impact =====
 
@@ -244,20 +307,6 @@ $foo is >10;
 
 // Equivalent to:
 $foo > 10;
-</code>
-
-==== Boolean pattern combination ====
-
-<code php>
-$foo is 1 or 2;
-
-// Equivalent to:
-$foo === 1 || $foo === 2;
-
-$foo is User or 1..=5;
-
-// Equivalent to:
-$foo instanceof User || ($foo >= 0 && $foo <= 5);
 </code>
 
 ==== Regex pattern ====
