@@ -28,9 +28,9 @@ expressions do for strings. When properly applied, it can lead to very
 compact but still readable code, especially when combined with
 conditional structures such as ``match()``.
 
-Pattern matching is found in a number of languages, including Haskell,
-C#, ML, Rust, and Swift, among others. The syntax offered here is
-inspired primarily by C#, but is not intended as as direct port.
+Pattern matching is found in a number of languages, including Python,
+Haskell, C#, ML, Rust, and Swift, among others. The syntax offered here
+is inspired primarily by C#, but is not intended as as direct port.
 
 This RFC is part of the `Enumerations
 Epic </rfc/enumerations_and_adts>`__. It is a stepping stone toward full
@@ -61,7 +61,20 @@ While patterns may resemble other language constructs, whatever follows
 
 ``is`` may be used in any context in which a boolean result is
 permissible. That includes variable assignment, ``if`` conditions,
-``while`` conditions, ``match()`` statements, etc.
+``while`` conditions, ``match()`` expressions, etc.
+
+Pattern structure
+~~~~~~~~~~~~~~~~~
+
+Patterns are a super-set of type definitions. A pattern consists of one
+or more pattern segments, combined by ``|`` and ``&`` conjunctions. If
+both are used, patterns must be in Disjunctive Normal Form (And ORed
+list of ANDs), and each segment must be enclosed in parentheses. These
+are the same rules that apply to compound types already.
+
+Additionally, if a pattern contains multiple segments, the entire
+pattern must also be enclosed in parentheses to help avoid parser
+ambiguity. In practice, most patterns are expected to be single-segment.
 
 Supported patterns
 ~~~~~~~~~~~~~~~~~~
@@ -77,47 +90,61 @@ are all legal:
 .. code:: php
 
    $foo is string;    // Equivalent to is_string($foo)
-   $foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
    $foo is Request;   // Equivalent to $foo instanceof Request
-   $foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
    $foo is ?array;    // Equivalent to is_array($foo) || is_null($foo)
 
-   // Equivalent to:
+   // These are compound patterns, consisting of two sub-patterns each.
+   $foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
+   $foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
+
+   // This is also a compound pattern. It is equivalent to:
    // $foo instanceof User || ($foo instanceof Account && $foo instanceof Authenticated)
    $foo is (User|(Account&Authenticated))
 
 A type match may be any syntax supported by a parameter type; in a
 sense, ``$foo is pattern`` is equivalent to "would $foo pass a type
-check if passed to a parameter with this type specification." As more
-complex type checks become allowed (such as intersection types, type
-aliases, etc.) they will become valid in a pattern as well.
+check if passed to a parameter with this type specification." Should
+more complex type checks become allowed (such as type aliases, etc.)
+they will become valid in a pattern as well.
 
 Type patterns are always evaluated in strict mode, so as to be
 consistent with ``is_int()`` and its siblings.
 
-Compound type patterns require enclosing parenthesis to avoid ambiguity
-issues in the parser.
-
 Literal pattern
 ^^^^^^^^^^^^^^^
 
-Any literal may be a pattern. This is a degenerate case and not
-generally useful, but is included for consistency when used with
-``match()`` (see below).
+Any literal may be a pattern. When used on its own it is not
+particularly useful (it's equivalent to ``===``), but can be used in a
+compound pattern to more complex effect. It is also valuable when used
+with ``match()`` (see below).
 
 .. code:: php
 
+   // Simple degenerate case patterns.
    $foo is 5;         // Equivalent to $foo === 5
    $foo is 'yay PHP'; // Equivalent to $foo === 'yay PHP'
+   $foo is null;      // Equivalent to $foo === null
 
-Global constants are NOT permitted in a pattern. They cannot be
-disambiguated from a class name, and are of minimal if any use in
-practice.
+   // More practical compound examples
+   $foo is "beep"|"boop"; // Equivalent to $foo === "beep" || $foo === "boop"
+   $foo is array|null; // Equivalent to is_array($foo) || $foo === null
+
+Class constants may also be used in a literal match:
+
+.. code:: php
+
+   $foo is 'spade'|'heart'|self::Wild;
+
+Global constants are NOT permitted in a pattern, as they cannot be
+easily disambiguated from a class name. If desired, they could be
+disambiguated using a special character prefix to indicate "the next
+thing is a constant." That is not included in the RFC at this time,
+however.
 
 Object property pattern
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-A pattern may also define an class and matches against scope-accessible
+A pattern may also define a class and matches against scope-accessible
 properties of that object. Only a single class type may be used, but any
 number of properties may be matched. The properties must be accessible
 in the scope in which the pattern executes. That is, a pattern evaluated
@@ -130,7 +157,11 @@ parent but not private; etc.
 
 
    class Point {
-     public function __construct(public int $x, public int $y, public int $z) {}
+       public function __construct(
+           public int $x, 
+           public int $y, 
+           public int $z,
+       ) {}
    }
 
    $p = new Point(3, 4, 5);
@@ -142,6 +173,11 @@ parent but not private; etc.
    $p is Point {y: 37, x: 2,};
    // Equivalent to:
    $p instanceof Point && $p->y === 37 && $p->x === 2;
+
+   // A multi-segment pattern that includes an object pattern.
+   $ is (Point {x: 2}|null)
+   // Equivalent to:
+   $p instanceof Point && $p->x === 2 || $p === null;
 
 Properties may be listed in any order. A trailing comma is permitted.
 
@@ -191,18 +227,22 @@ pattern matching.
 .. code:: php
 
    class Point {
-     public function __construct(public int $x, public int $y, public int $z) {}
+       public function __construct(
+           public int $x, 
+           public int $y, 
+           public int $z,
+       ) {}
    }
 
    $p = new Point(3, 4, 5);
 
    if ($p is Point {x: 3, y: %$y} ) {
-     print "x is 3 and y is $y.";
+       print "x is 3 and y is $y.";
    }
    // Equivalent to:
    if ($p instanceof Point && $p->x === 3) {
-     $y = $p->y;
-     print "x is 3 and y is $y.";
+       $y = $p->y;
+       print "x is 3 and y is $y.";
    }
 
    if ($p is Point {z: %$z, x: 3, y: %$y} ) {
@@ -210,9 +250,9 @@ pattern matching.
    }
    // Equivalent to:
    if ($p instanceof Point && $p->x === 3) {
-     $y = $p->y;
-     $z = $p->z;
-     print "x is 3 and y is $y and z is $z.";
+       $y = $p->y;
+       $z = $p->z;
+       print "x is 3 and y is $y and z is $z.";
    }
 
 If the variable name to extract to is the same as the name of the
@@ -244,18 +284,52 @@ Note that in this case, the variables ``$x``, ``$y``, and ``$z`` may or
 may not be defined after the ``match()`` statement executes depending on
 which pattern was matched.
 
+This last usage is especially important in the context of ADTs, where
+combining an ADT with a pattern-matching ``match()`` would allow for
+this:
+
+.. code:: php
+
+   // Example of what is possible with both pattern matching and ADTs,
+   // though they are separate RFCs so the exact syntax is subject to change.
+
+   enum Move {
+       case TurnLeft;
+       case TurnRight;
+       case Forward(int $amount);
+   }
+
+   match ($move) is {
+       Move::TurnLeft => $this->orientation--,
+       Move::TurnRight => $this->orientation++,
+       Move::Forward(%$amount) => $this->distance += $amount,
+   };
+
+
+   enum Option {
+       case None;
+       case Some(mixed $val);
+   }
+
+   match ($maybe) is {
+       Option::Some {%$val} => compute_something($val),
+       Option::None => 'default value',
+   }
+
+We view this RFC as a prerequisite for ADTs being useful in practice.
+
 Backward Incompatible Changes
 -----------------------------
 
-A new keyword is added, ``is``. That conflicts with a global constant
-named ``is``.
+A new keyword is added, ``is``. That will conflict with any user-defined
+global constant named ``is``.
 
 No other BC breaks are expected.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.next (aka 8.1).
+PHP 8.next (aka 8.4).
 
 RFC Impact
 ----------
@@ -345,21 +419,6 @@ Range pattern
 
    // Equivalent to:
    $foo > 10;
-
-Boolean pattern combination
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: php
-
-   $foo is 1 or 2;
-
-   // Equivalent to:
-   $foo === 1 || $foo === 2;
-
-   $foo is User or 1..=5;
-
-   // Equivalent to:
-   $foo instanceof User || ($foo >= 0 && $foo <= 5);
 
 Regex pattern
 ~~~~~~~~~~~~~
