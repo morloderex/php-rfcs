@@ -134,9 +134,9 @@ new Foo() + match (1) {
 0011 RETURN int(1)
 </code>
 
-In particular, the opcode 0006 RETURN is always executed, leading to the 0009 ADD instruction and thus not consuming V0, leaking the Foo object. This problem may be avoided by emitting a FREE opcode before RETURN. The same issue can occur when breaking out of switch statements, continuing in loops, using goto, etc. This approach is implemented in [[https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking|this PR]]. However, it has proven to be much more complex for questionable benefit.
+The opcode 0006 (RETURN) is always executed, skipping the 0009 (ADD) instruction, not consuming V0 and thus leaking the Foo object. This problem may be avoided by emitting a FREE opcode before RETURN. The same issue can occur when breaking out of switch statements, continuing in loops, using goto, etc. This approach is implemented in [[https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking|this PR]]. However, it has proven to be much more complex for questionable benefit.
 
-Similarly, we run into an issue for this code.
+Similarly, we run into an issue in this code.
 
 <code php>
 foo()->bar(match (1) {
@@ -160,9 +160,9 @@ foo()->bar(match (1) {
 0012 RETURN int(1)
 </code>
 
-The 0007 RETURN skips over 0011 DO_FCALL. However, 0002 INIT_METHOD_CALL opcode has already received V0 (foo()) and increased its refcount to make sure it is not released before the method bar() is called on it. However, given that 0011 DO_FCALL is never executed, this value leaks.
+The 0007 (RETURN) instruction skips over 0011 (DO_FCALL). However, the 0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and increased its refcount to make sure the value is not released before the method bar() is called on it. Given that 0011 (DO_FCALL) is never executed, this value leaks.
 
-Both of these issues boil down to the fact that we have unfreed VARs when evaluating the match blocks, with the match blocks potentially skipping over their consuming opcodes. Disallowing the escaping of the match blocks prevents skipping over the consuming opcodes, and thus circumvents the issue.
+Both of these issues arise because there are unfreed VARs at the time the escaping control statements in the match blocks are executed, skipping over their consuming opcodes. Disallowing the escaping of the match blocks prevents skipping over the consuming opcodes, and thus circumvents the issue.
 
 ===== Vote =====
 
