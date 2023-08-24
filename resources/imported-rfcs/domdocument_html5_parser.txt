@@ -1,5 +1,5 @@
 ====== PHP RFC: DOMDocument HTML5 parsing and serialization ======
-  * Version: 0.3.2
+  * Version: 0.3.3
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Draft
@@ -18,21 +18,23 @@ Another concern highlighted in PHP's bug tracker is the handling of closing tags
 There's an open issue at the libxml2 bugtracker to add HTML5 parsing support: https://gitlab.gnome.org/GNOME/libxml2/-/issues/211.
 However, it seems like this won't happen anytime soon.
 Furthermore, there are also problems with saving (also known as serializing) HTML5 documents due to subtle rule differences between HTML4 and HTML5. This RFC proposes a fully backwards compatible solution to deal with these problems.
-To solve the parsing issue, we will leverage an alternative HTML5 parser to create the libxml2 document tree. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions. To solve the serialization issue, an implementation for the HTML5 serialization algorithm will also be added. The new functionality will be available via a <php>DOMHTML5Document</php> class that extends <php>DOMDocument</php> and overrides the loadHTML(File) and saveHTML(File) methods.
+To solve the parsing issue, we will leverage an alternative HTML5 parser to create the libxml2 document tree. This parser seamlessly integrates with the DOM extension, ensuring compatibility for all existing code and third-party extensions. To solve the serialization issue, an implementation for the HTML5 serialization algorithm will also be added. The new functionality will be available via a <php>DOM\HTML5Document</php> class that extends <php>DOMDocument</php> and overrides the loadHTML(File) and saveHTML(File) methods.
 
 ===== Proposal =====
 
 The most important requirement is that the new class must integrate seamlessly with the DOM extension. This means that using it must be a simple drop-in replacement. You will still be able to use all the existing APIs to manipulate and traverse DOM documents and nodes.
 
-This proposal introduces the <php>DOMHTML5Document</php> class that extends the <php>DOMDocument</php> class. The reason we introduce a new class instead of replacing the methods of the existing class is to ensure full backwards compatibility. There are applications that work with legacy HTML4 documents, and want the HTML4 behaviour. By keeping the DOMDocument class, nothing changes for existing code. Code that wants HTML5 functionality can use the <php>DOMHTML5Document</php> class.
+This proposal introduces the <php>DOM\HTML5Document</php> class that extends the <php>DOMDocument</php> class. The reason we introduce a new class instead of replacing the methods of the existing class is to ensure full backwards compatibility. There are applications that work with legacy HTML4 documents, and want the HTML4 behaviour. By keeping the DOMDocument class, nothing changes for existing code. Code that wants HTML5 functionality can use the <php>DOM\HTML5Document</php> class.
 
 Here's how its definition looks:
 <PHP>
-class DOMHTML5Document extends DOMDocument {
-    public function loadHTML(string $source, int $options = 0): bool {}
-    public function loadHTMLFile(string $filename, int $options = 0): bool {}
-    public function saveHTML(?DOMNode $node = null): string|false {}
-    public function saveHTMLFile(string $filename): int|false {}
+namespace DOM {
+	class HTML5Document extends \DOMDocument {
+	    public function loadHTML(string $source, int $options = 0): bool {}
+	    public function loadHTMLFile(string $filename, int $options = 0): bool {}
+	    public function saveHTML(?DOMNode $node = null): string|false {}
+	    public function saveHTMLFile(string $filename): int|false {}
+	}
 }
 </PHP>
 
@@ -123,17 +125,17 @@ The question I have is whether <php>libxml_set_external_entity_loader</php> shou
 The advantage would be consistency, but I don't know if this is what the community wants.
 I'm leaving this for a secondary vote for the community to decide on.
 
-==== Interoperability between DOMDocument and DOMHTML5Document ====
+==== Interoperability between DOMDocument and DOM\HTML5Document ====
 
-Because <php>DOMHTML5Document</php> is a subclass of <php>DOMDocument</php>, all methods accepting a <php>DOMDocument</php> also accept a <php>DOMHTML5Document</php>. These functions can transparently work on HTML5 documents.
-If you want to restrict your code to only accept HTML5 documents, you can use the more stricter <php>DOMHTML5Document</php> type hint.
+Because <php>DOM\HTML5Document</php> is a subclass of <php>DOMDocument</php>, all methods accepting a <php>DOMDocument</php> also accept a <php>DOM\HTML5Document</php>. These functions can transparently work on HTML5 documents.
+If you want to restrict your code to only accept HTML5 documents, you can use the more stricter <php>DOM\HTML5Document</php> type hint.
 
-However, what if you're using a library that returns a (non-HTML5) <php>DOMDocument</php> but you'd like a <php>DOMHTML5Document</php> (or vice versa)?
+However, what if you're using a library that returns a (non-HTML5) <php>DOMDocument</php> but you'd like a <php>DOM\HTML5Document</php> (or vice versa)?
 You can solve this issue by using the <php>DOMDocument::importNode</php> or <php>DOMDocument::adoptNode</php> methods.
 
 ==== Parsing benchmarks ====
 
-You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOMHTML5Document::loadHTML</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
+You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOM\HTML5Document::loadHTML</php> compare with the performance of <php>DOMDocument::loadHTML()</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
 
 === Experimental setup ===
 
@@ -142,10 +144,10 @@ I created a PHP script that invokes each parser 300 times. I ran the experiment 
 
 === Results ===
 
-The following graph shows the results. The blue bar shows the parse time in seconds for <php>DOMDocument</php>, and the orange bar does so for <php>DOMHTML5Document</php>. Lower is better.
+The following graph shows the results. The blue bar shows the parse time in seconds for <php>DOMDocument</php>, and the orange bar does so for <php>DOM\HTML5Document</php>. Lower is better.
 The black vertical line indicates the minimum & maximum measured times for each bar.
 First of all, some measurements on the far left are very low. That's because those sites primarily generate their content using JavaScript. Hence, there are not many HTML nodes in the document. Some sites also show a geo-blocked page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that <php>DOMHTML5Document</php> is usually on par or faster than <php>DOMDocument</php>'s parser, despite having to do a conversion. For very short documents, the HTML5 parser can be a little bit slower because of the larger startup overhead.
+Second, we can see that <php>DOM\HTML5Document</php> is usually on par or faster than <php>DOMDocument</php>'s parser, despite having to do a conversion. For very short documents, the HTML5 parser can be a little bit slower because of the larger startup overhead.
 
 Based on this limited experiment, I conclude that the performance is acceptable.
 
@@ -168,6 +170,13 @@ The large data section is due to the large lookup tables for text encoding handl
 ==== Naming ====
 
 I'm open to discussion about the name. I chose to use the HTML5 name because this is widely recognized as meaning "modern HTML technology". See also https://html.spec.whatwg.org/multipage/introduction.html#is-this-html5.
+
+The class is inside a new namespace called DOM. This follows the policy of the accepted [[rfc:namespaces_in_bundled_extensions|Namespaces in bundled PHP extensions]] RFC.
+This means we'll have DOM classes in the global namespace and a single class (i.e. <php>HTML5Document</php>) in the DOM namespace.
+This is awkward. I propose to solve this by creating namespace aliases for the existing DOM classes and constants, and (single) function. This would improve consistency and in the far far future may allow a complete transition to the namespaced variants. This part of the proposal is up for secondary vote.
+This means for example that there will be an alias <php>DOM\Document</php> for <php>DOMDocument</php>, an alias <php>DOM\Entity</php> for <php>DOMEntity</php> etc.
+There is a single function <php>dom_import_simplexml</php>, which can get an alias as <php>DOM\import_simplexml</php>.
+Similarly, the constants would lose their <php>DOM_</php> prefix in the namespace version, e.g. <php>DOM\INDEX_SIZE_ERR</php> will be an alias for <php>DOM_INDEX_SIZE_ERR</php>. Question is what to do with constant names that start with the <php>XML_</php> prefix. I'm open for debate on this.
 
 ==== Completely alternative solution ====
 
@@ -232,8 +241,9 @@ The Lexbor library also includes functionality outside of HTML parsing that we d
 ===== Proposed Voting Choices =====
 
 There are two votes:
-  - Whether <php>DOMHTML5Document</php> should be introduced. This requires 2/3 majority.
-  - Whether <php>DOMHTML5Document::loadHTMLFile</php> should respect the resolver set by <php>libxml_set_external_entity_loader</php>. This requires 50% majority.
+  - Whether <php>DOM\HTML5Document</php> should be introduced. This requires 2/3 majority.
+  - Whether <php>DOM\HTML5Document::loadHTMLFile</php> should respect the resolver set by <php>libxml_set_external_entity_loader</php>. This requires 50% majority.
+  - Whether to create namespace aliases for existing DOM classes into a DOM namespace. This requires 50% majority.
 
 ===== Patches and Tests =====
 
