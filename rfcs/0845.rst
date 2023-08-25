@@ -7,7 +7,7 @@ DOMDocument HTML5 Parsing And Serialization
 :Status: Draft
 :Type: Unknown
 :Created: 2023-08-12
-:Version: 0.3.0
+:Version: 0.3.8
 
 Introduction
 ------------
@@ -48,7 +48,7 @@ integrates with the DOM extension, ensuring compatibility for all
 existing code and third-party extensions. To solve the serialization
 issue, an implementation for the HTML5 serialization algorithm will also
 be added. The new functionality will be available via a
-``DOMHTML5Document`` class that extends ``DOMDocument`` and overrides
+``DOM\HTML5Document`` class that extends ``DOMDocument`` and overrides
 the loadHTML(File) and saveHTML(File) methods.
 
 Proposal
@@ -59,23 +59,25 @@ seamlessly with the DOM extension. This means that using it must be a
 simple drop-in replacement. You will still be able to use all the
 existing APIs to manipulate and traverse DOM documents and nodes.
 
-This proposal introduces the ``DOMHTML5Document`` class that extends the
-``DOMDocument`` class. The reason we introduce a new class instead of
-replacing the methods of the existing class is to ensure full backwards
-compatibility. There are applications that work with legacy HTML4
-documents, and want the HTML4 behaviour. By keeping the DOMDocument
-class, nothing changes for existing code. Code that wants HTML5
-functionality can use the ``DOMHTML5Document`` class.
+This proposal introduces the ``DOM\HTML5Document`` class that extends
+the ``DOMDocument`` class. The reason we introduce a new class instead
+of replacing the methods of the existing class is to ensure full
+backwards compatibility. There are applications that work with legacy
+HTML4 documents, and want the HTML4 behaviour. By keeping the
+DOMDocument class, nothing changes for existing code. Code that wants
+HTML5 functionality can use the ``DOM\HTML5Document`` class.
 
 Here's how its definition looks:
 
 .. code:: php
 
-   class DOMHTML5Document extends DOMDocument {
-       public function loadHTML(string $source, int $options = 0): bool {}
-       public function loadHTMLFile(string $filename, int $options = 0): bool {}
-       public function saveHTML(?DOMNode $node = null): string|false {}
-       public function saveHTMLFile(string $filename): int|false {}
+   namespace DOM {
+       class HTML5Document extends \DOMDocument {
+           public function loadHTML(string $source, int $options = 0): bool {}
+           public function loadHTMLFile(string $filename, int $options = 0): bool {}
+           public function saveHTML(?DOMNode $node = null): string|false {}
+           public function saveHTMLFile(string $filename): int|false {}
+       }
    }
 
 The options argument
@@ -309,17 +311,17 @@ existing class. The advantage would be consistency, but I don't know if
 this is what the community wants. I'm leaving this for a secondary vote
 for the community to decide on.
 
-Interoperability between DOMDocument and DOMHTML5Document
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Interoperability between DOMDocument and DOM\HTML5Document
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Because ``DOMHTML5Document`` is a subclass of ``DOMDocument``, all
-methods accepting a ``DOMDocument`` also accept a ``DOMHTML5Document``.
+Because ``DOM\HTML5Document`` is a subclass of ``DOMDocument``, all
+methods accepting a ``DOMDocument`` also accept a ``DOM\HTML5Document``.
 These functions can transparently work on HTML5 documents. If you want
 to restrict your code to only accept HTML5 documents, you can use the
-more stricter ``DOMHTML5Document`` type hint.
+more stricter ``DOM\HTML5Document`` type hint.
 
 However, what if you're using a library that returns a (non-HTML5)
-``DOMDocument`` but you'd like a ``DOMHTML5Document`` (or vice versa)?
+``DOMDocument`` but you'd like a ``DOM\HTML5Document`` (or vice versa)?
 You can solve this issue by using the ``DOMDocument::importNode`` or
 ``DOMDocument::adoptNode`` methods.
 
@@ -327,7 +329,7 @@ Parsing benchmarks
 ~~~~~~~~~~~~~~~~~~
 
 You might wonder about the performance impact of the tree conversion. In
-particular, how does the performance of ``DOMHTML5Document::loadHTML``
+particular, how does the performance of ``DOM\HTML5Document::loadHTML``
 compare with the performance of ``DOMDocument::loadHTML()``? Note that
 the latter method doesn't follow the HTML5 rules, but it does give an
 indication about the performance.
@@ -347,16 +349,15 @@ Results
 
 The following graph shows the results. The blue bar shows the parse time
 in seconds for ``DOMDocument``, and the orange bar does so for
-``DOMHTML5Document``. Lower is better. The black vertical line indicates
-the minimum & maximum measured times for each bar. First of all, some
-measurements on the far left are very low. That's because those sites
-primarily generate their content using JavaScript. Hence, there are not
-many HTML nodes in the document. Some sites also show a geo-blocked
-page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that ``DOMHTML5Document`` is usually on par or faster
-than ``DOMDocument``'s parser, despite having to do a conversion. For
-very short documents, the HTML5 parser can be a little bit slower
-because of the larger startup overhead.
+``DOM\HTML5Document``. Lower is better. The black vertical line
+indicates the minimum & maximum measured times for each bar. First of
+all, some measurements on the far left are very low. That's because
+those sites primarily generate their content using JavaScript. Hence,
+there are not many HTML nodes in the document. Some sites also show a
+geo-blocked page, so these pages are rather simple and will be parsed
+quickly. Second, we can see that ``DOM\HTML5Document`` is usually on par
+or faster than ``DOMDocument``'s parser, despite having to do a
+conversion. When it is slower, it's not by much.
 
 Based on this limited experiment, I conclude that the performance is
 acceptable.
@@ -368,27 +369,56 @@ Impact on binary size
 ~~~~~~~~~~~~~~~~~~~~~
 
 Incorporating any library will increase the binary size of the DOM
-extension. The Lexbor library is fairly big. The reality is however that
-a lot of the library is not actually used. Diving into each source file
-and ripping out functions that are not used is time-consuming and
-difficult however. Furthermore, this would make syncing upstream changes
-also more difficult.
+extension. The Lexbor library is fairly big. Some of the library is not
+actually used. I've manually ripped out the big parts of the CSS parser
+with a patch. However, diving into each source file and ripping out
+functions that are not used is time-consuming and difficult.
+Furthermore, this would make syncing upstream changes also more
+difficult.
 
 Inspecting the dom.so shared library using the size command yields the
 following results:
 
-================= =========== =========== ===========
-before/after      text        data        total
-================= =========== =========== ===========
-before this patch 174.78 KiB  15.18 KiB   192.24 KiB
-after this patch  5347.72 KiB 2012.19 KiB 7362.44 KiB
-================= =========== =========== ===========
+================= =========== ==========
+before/after      text        data
+================= =========== ==========
+before this patch 174.78 KiB  15.18 KiB
+after this patch  2966.81 KiB 553.44 KiB
+================= =========== ==========
 
 The large data section is due to the large lookup tables for text
 encoding handling: Lexbor supports a lot of text encodings. The HTML5
 parser spec requires quite a few character encodings to be supported by
 a compliant parser. This also has some influence on the text section,
 but another big part of it is simply all the parsing logic.
+
+Naming
+~~~~~~
+
+I'm open to discussion about the name. I chose to use the HTML5 name
+because this is widely recognized as meaning "modern HTML technology".
+See also
+https://html.spec.whatwg.org/multipage/introduction.html#is-this-html5.
+The name is not that great because you can still load XML documents with
+it.
+
+The class is inside a new namespace called DOM. This follows the policy
+of the accepted `Namespaces in bundled PHP
+extensions </rfc/namespaces_in_bundled_extensions>`__ RFC.
+
+This paragraph is up for secondary vote. We'll have DOM classes in the
+global namespace and a single class (i.e. ``HTML5Document``) in the
+(new) DOM namespace. This is awkward. I propose to solve this by
+creating namespace aliases for the existing DOM classes and constants,
+and (single) function. This would improve consistency and in the far far
+future may allow a complete transition to the namespaced variants. This
+means for example that there will be an alias ``DOM\Document`` for
+``DOMDocument``, an alias ``DOM\Entity`` for ``DOMEntity`` etc. There is
+a single function ``dom_import_simplexml``, which can get an alias as
+``DOM\import_simplexml``. Similarly, the constants would lose their
+``DOM_`` prefix in the namespace version, e.g. ``DOM\INDEX_SIZE_ERR``
+will be an alias for ``DOM_INDEX_SIZE_ERR``. For constants that begin
+with ``XML_`` I propose to keep the prefix.
 
 Completely alternative solution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -473,18 +503,23 @@ that we do not use right now.
    *could* make implementing querySelector(All) more easy.
 #. It contains a WHATWG-compliant URL parser, which might be useful for
    extending PHP's URL pasing capabilities.
-#. There are more performance optimization opportunities.
+#. There are more performance optimization and possibly size reduction
+   opportunities. I've already upstreamed work for reducing size.
+#. The new class could be a way to opt-in into spec-compliant behaviour.
+   This is out of scope for this RFC though.
 
 Proposed Voting Choices
 -----------------------
 
 There are two votes:
 
-#. Whether ``DOMHTML5Document`` should be introduced. This requires 2/3
+#. Whether ``DOM\HTML5Document`` should be introduced. This requires 2/3
    majority.
-#. Whether ``DOMHTML5Document::loadHTMLFile`` should respect the
+#. Whether ``DOM\HTML5Document::loadHTMLFile`` should respect the
    resolver set by ``libxml_set_external_entity_loader``. This requires
    50% majority.
+#. Whether to create namespace aliases for existing DOM classes into a
+   DOM namespace. This requires 50% majority.
 
 Patches and Tests
 -----------------
