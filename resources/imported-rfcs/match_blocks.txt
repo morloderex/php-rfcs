@@ -23,7 +23,7 @@ match ($key) {
 $result = match($foo) {
     1 => {
         bar();
-        baz() // The return value of baz() is the result of the match
+        <- baz(); // The return value of baz() is the result of the match
     }
 };
 </code>
@@ -32,20 +32,42 @@ $result = match($foo) {
 
 ==== Return value ====
 
-Match blocks come in two forms: They must return a value if the match return value is used. Conversely, they must not return a value if the match return value is not used. The return value is always the last expression after a list of optional statements, with the trailing semi-colon omitted. This syntax is heavily inspired by Rust.
+Because match blocks are expressions, they may have a return value. The return value is the last expression after a list of optional statements, preceded by a ''<-'' symbol to denote that the value flows out of the block. If the match return value is used, each block is expected to return a value, unless it terminates early.
 
 <code php>
 $result = match($foo) {
-    1 => {
-        // As many statements as you want
+    'bar' => {
         $l = 1;
         $r = 2;
-        // The last element in the list must be an expression (e.g. no if statement), and the last
-        // semicolon must be omitted.
-        $l + $r
-    }
+        <- $l + $r;
+    },
+    'baz' => {
+        throw new Exception();
+    },
+    'qux' => {
+        // Forgot to return something
+        // This will throw a MatchBlockNoValueError if executed
+    },
 };
 </code>
+
+If the match return value is not used, the blocks must not return a value.
+
+<code php>
+match($foo) {
+    'bar' => {
+        echo 'This branch does not return a value';
+    },
+    'bar' => {
+        $l = 1;
+        $r = 2;
+        // Compile time error: Blocks of match expression with unused result must not return a value
+        <- $l + $r;
+    },
+};
+</code>
+
+Note that the return keyword is not reused in place of ''<-'' because it would be ambiguous whether the user meant to return from the match block, or return from the function.
 
 ==== Control statements ====
 
@@ -72,7 +94,7 @@ var_dump(match ($foo) {
             // This is ok
             continue;
         }
-        42
+        <- 42;
     }
 });
 </code>
@@ -83,7 +105,7 @@ The rationale for this decision is twofold:
 
 <code php>
 var_dump(match (1) {
-    1 => { break; 42 }
+    1 => { break; <- 42; }
 });
 // What is the return value of match? A value was never returned, but the var_dump must receive a value nonetheless.
 </code>
@@ -112,15 +134,13 @@ The improvements in match expressions are described in https://wiki.php.net/rfc/
 <code php>
 match ($option) {
     is Option::Some($value) => var_dump($value),
-    Option::None => var_dump('None'),
+    is Option::None         => var_dump('None'),
 };
 </code>
 
 Match blocks would make pattern matching in match expressions immensely more useful, and cannot be substituted with a switch statement.
 
 ===== Why not language-level blocks? =====
-
-FIXME: This section is WIP.
 
 Instead of just implementing blocks for match-expressions, I've considered adding language-level blocks instead. There are three evident use cases.
 
@@ -131,8 +151,15 @@ Instead of just implementing blocks for match-expressions, I've considered addin
 Unfortunately, these three use cases are all slightly different.
 
   * For match, whether the block should return a value depends on whether the match itself returns a value.
-  * Arrow function blocks should never return a value, because function return values are controlled by ''return''.
+  * Arrow function blocks should never return a value, because function return values are controlled by ''return''. No return value should mean ''null'', to stay consistent with other functions.
   * For the remaining cases, a value should always be returned.
+
+Furthermore, blocks for arrow functions have been discussed and rejected in two separate RFCs.
+
+  * https://wiki.php.net/rfc/short-functions
+  * https://wiki.php.net/rfc/auto-capture-closure
+
+It seems that most concerns for both of these RFCs were related to auto-capturing, which language-level blocks would also suffer from.
 
 ===== Backwards incompatible changes =====
 
