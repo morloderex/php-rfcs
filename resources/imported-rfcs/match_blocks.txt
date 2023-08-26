@@ -207,7 +207,7 @@ PHPs VM is in three-address form. As opposed to most machines, PHP opcodes are d
 
 <code php>
 new Foo() + match (1) {
-    1 => { return; null },
+    1 => { return; },
 };
 </code>
 
@@ -219,20 +219,21 @@ new Foo() + match (1) {
 0004 JMP 0005
 0005 MATCH_ERROR int(1)
 0006 RETURN null
-0007 T3 = QM_ASSIGN null
-0008 JMP 0009
-0009 T4 = ADD V0 T3
-0010 FREE T4
-0011 RETURN int(1)
+0007 MATCH_BLOCK_NO_VALUE_ERROR
+0008 T3 = QM_ASSIGN null
+0009 JMP 0010
+0010 T4 = ADD V0 T3
+0011 FREE T4
+0012 RETURN int(1)
 </code>
 
-The opcode 0006 (RETURN) is always executed, skipping the 0009 (ADD) instruction, not consuming V0 and thus leaking the Foo object. This problem may be avoided by emitting a FREE opcode before RETURN. The same issue can occur when breaking out of switch statements, continuing in loops, using goto, etc. This approach is implemented in [[https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking|this PR]]. However, it has proven to be much more complex for questionable benefit.
+The opcode 0006 (RETURN) is always executed, skipping the 0010 (ADD) instruction, not consuming V0 and thus leaking the Foo object. This problem may be avoided by emitting a FREE opcode before RETURN. The same issue can occur when breaking out of switch statements, continuing in loops, using goto, etc. This approach is implemented in [[https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking|this PR]]. However, it has proven to be much more complex for questionable benefit.
 
 Similarly, we run into an issue in this code.
 
 <code php>
 foo()->bar(match (1) {
-    1 => { return; null },
+    1 => { return; },
 });
 </code>
 
@@ -245,14 +246,15 @@ foo()->bar(match (1) {
 0005 JMP 0006
 0006 MATCH_ERROR int(1)
 0007 RETURN null
-0008 T2 = QM_ASSIGN null
-0009 JMP 0010
-0010 SEND_VAL_EX T2 1
-0011 DO_FCALL
-0012 RETURN int(1)
+0008 MATCH_BLOCK_NO_VALUE_ERROR
+0009 T2 = QM_ASSIGN null
+0010 JMP 0011
+0011 SEND_VAL_EX T2 1
+0012 DO_FCALL
+0013 RETURN int(1)
 </code>
 
-The 0007 (RETURN) instruction skips over 0011 (DO_FCALL). However, the 0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and increased its refcount to make sure the value is not released before the method bar() is called on it. Given that 0011 (DO_FCALL) is never executed, this value leaks.
+The 0007 (RETURN) instruction skips over 0012 (DO_FCALL). However, the 0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and increased its refcount to make sure the value is not released before the method bar() is called on it. Given that 0012 (DO_FCALL) is never executed and thus foo() is never released it leaks.
 
 Both of these issues arise because there are unfreed VARs at the time the escaping control statements in the match blocks are executed, skipping over their consuming opcodes. Disallowing the escaping of the match blocks prevents skipping over the consuming opcodes, and thus circumvents the issue.
 
