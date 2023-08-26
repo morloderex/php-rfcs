@@ -8,7 +8,7 @@
 
 ===== Proposal =====
 
-The [[https://wiki.php.net/rfc/match_expression_v2|match expression]] was added to PHP 8.0 with the goal of being a safer and more useful alternative to the switch statement. In its current form, each match arm is limited to a single expression. This RFC proposes to lift this restriction and allow the placement of blocks at the match arm site.
+The [[https://wiki.php.net/rfc/match_expression_v2|match expression]] was added to PHP 8.0 with the goal of being a safer and more useful alternative to the switch statement. In its current form, each match arm is limited to a single expression. Any arm does not nicely fold into a singular expression prevents a match expression from being used. This RFC proposes to lift this restriction and allow the placement of blocks at the match arm site.
 
 <code php>
 // Before
@@ -61,17 +61,21 @@ $result = match($foo) {
 
 If the match return value is not used, the blocks must not return a value.
 
+FIXME: This is subject to change. Since single expressions and blocks may be mixed, it might make sense to be more lax.
+
 <code php>
 match($foo) {
     'bar' => {
         echo 'This branch does not return a value';
     },
-    'bar' => {
+    'baz' => {
         $l = 1;
         $r = 2;
         // Compile time error: Blocks of match expression with unused result must not return a value
         <- $l + $r;
     },
+    // Single expressions are still allowed, even if they are non-void
+    'qux' => qux(),
 };
 </code>
 
@@ -113,7 +117,10 @@ The rationale for this decision is twofold:
 
 <code php>
 var_dump(match (1) {
-    1 => { break; <- 42; },
+    1 => {
+        break;
+        <- 42;
+    },
 });
 // What is the return value of match? A value was never returned, but the var_dump must receive a value nonetheless.
 </code>
@@ -135,9 +142,11 @@ echo $bar; // I can see this
 
 ===== Motivation =====
 
-The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address approximately half of its use cases. switch statements commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. Since match expressions are limited to one expressions per case, a single case that does not nicely fold into a singular expression can prevent a match expression from being used. It has previously been argued that limiting match arms to single expressions is beneficial for enforcing clean code. While keeping functions and consequently match arms short certainly has its merits, I personally find excessively small functions disorienting and hard to name well.
+The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address approximately half of its use cases. switch cases commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. Since match expressions are limited to one expressions per arm, a single arm that does not nicely fold into a singular expression prevents a match expression from being used entirely.
 
-Furthermore, [[https://wiki.php.net/rfc/pattern-matching|pattern matching]] is in the works, with planned enhancements of the match expression. Specifically, each match arm will be able to specify a pattern to match the expression against. The Doctrine example from the introduction could become the following:
+It has previously been argued that limiting match arms to single expressions is beneficial for enforcing clean code. While keeping functions and consequently match arms short certainly has its merits, I personally find excessively small functions disorienting and hard to name well. Moreover, some statements (e.g. control statements) cannot be moved into separate functions.
+
+Furthermore, the [[https://wiki.php.net/rfc/pattern-matching|pattern matching]] plans to add enhancements to the match expression. Specifically, each match arm will be able to specify a pattern to match the expression against, including type checks. The Doctrine example from the introduction could become the following:
 
 <code php>
 $entitySql = match ($entityExpr) {
