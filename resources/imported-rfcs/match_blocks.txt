@@ -11,22 +11,30 @@
 The [[https://wiki.php.net/rfc/match_expression_v2|match expression]] was added to PHP 8.0 with the goal of being a safer and more useful alternative to the switch statement. In its current form, each match arm is limited to a single expression. This RFC proposes to lift this restriction and allow the placement of blocks at the match arm site.
 
 <code php>
-// FIXME: Provide real-world examples
+// Before
+switch (true) {
+    // InputParameter
+    case $entityExpr instanceof AST\InputParameter:
+        $dqlParamKey = $entityExpr->name;
+        $entitySql   = '?';
+        break;
 
-match ($key) {
-    Key::Return => {
-        echo "Saving...";
-        save();
-    },
+    // snip
 };
 
-$result = match($foo) {
-    1 => {
-        bar();
-        <- baz(); // The return value of baz() is the result of the match
+// After
+$entitySql = match (true) {
+    // InputParameter
+    $entityExpr instanceof AST\InputParameter => {
+        $dqlParamKey = $entityExpr->name;
+        <- '?';
     },
+
+    // snip
 };
 </code>
+
+[[https://github.com/doctrine/orm/blob/2f9e98754bb451107dcffbf0a9844b90dcdee992/lib/Doctrine/ORM/Query/SqlWalker.php#L2169-L2183|doctrine/orm SqlWalker.php]]
 
 ===== Semantics =====
 
@@ -127,18 +135,21 @@ echo $bar; // I can see this
 
 ===== Motivation =====
 
-switch statements commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address these use cases. It has previously been argued that limiting match arms to single expressions is beneficial for enforcing clean code. While keeping functions and consequently match arms short certainly has its merits, I personally find excessively small functions disorienting and hard to name well.
+The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address approximately half of its use cases. switch statements commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. Since match expressions are limited to one expressions per case, a single case that does not nicely fold into a singular expression can prevent a match expression from being used. It has previously been argued that limiting match arms to single expressions is beneficial for enforcing clean code. While keeping functions and consequently match arms short certainly has its merits, I personally find excessively small functions disorienting and hard to name well.
 
-The improvements in match expressions are described in https://wiki.php.net/rfc/match_expression_v2. Moreover, [[https://wiki.php.net/rfc/pattern-matching|pattern matching]] is in the works, with planned enhancements of the match expression. Specifically, each match arm will be able to specify a pattern to match the expression against.
+Furthermore, [[https://wiki.php.net/rfc/pattern-matching|pattern matching]] is in the works, with planned enhancements of the match expression. Specifically, each match arm will be able to specify a pattern to match the expression against. The Doctrine example from the introduction could become the following:
 
 <code php>
-match ($option) {
-    is Option::Some($value) => var_dump($value),
-    is Option::None         => var_dump('None'),
+$entitySql = match ($entityExpr) {
+    // InputParameter
+    is AST\InputParameter => {
+        $dqlParamKey = $entityExpr->name;
+        <- '?';
+    },
+
+    // snip
 };
 </code>
-
-Match blocks would make pattern matching in match expressions immensely more useful, and cannot be substituted with a switch statement.
 
 ===== Why not language-level blocks? =====
 
