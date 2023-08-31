@@ -10,7 +10,7 @@
 
 The RFC proposes to add 4 new modes to the round() function.
 
-  * [[https://en.wikipedia.org/wiki/Principle_of_least_astonishment|PHP_ROUND_CEILING]],
+  * [[https://en.wikipedia.org/wiki/Rounding#Rounding_up|PHP_ROUND_CEILING]],
   * [[https://en.wikipedia.org/wiki/Rounding#Rounding_down|PHP_ROUND_FLOOR]],
   * [[https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero|PHP_ROUND_AWAY_FROM_ZERO]],
   * [[https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero|PHP_ROUND_TOWARD_ZERO]].
