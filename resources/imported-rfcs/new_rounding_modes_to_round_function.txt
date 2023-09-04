@@ -15,7 +15,7 @@ The RFC proposes to add 4 new modes to the round() function.
   * [[https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero|PHP_ROUND_AWAY_FROM_ZERO]],
   * [[https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero|PHP_ROUND_TOWARD_ZERO]].
 
-Two first comments on the documentation page of the round() function are related to the missing modes of rounding. The first comment has an outstanding number of 309 votes.
+Two first comments on the [[https://www.php.net/manual/en/function.round.php|documentation page of the round()]] function are related to the missing modes of rounding. The first comment has an outstanding number of 309 votes.
 
 Moreover, the [[https://www.php.net/manual/en/class.numberformatter.php|NumberFormatter]] already implements 4 new proposed modes known as ROUND_CEILING, ROUND_FLOOR, ROUND_DOWN, ROUND_UP.
 
@@ -33,15 +33,20 @@ Adding 4 new constants for the rounding modes of function round():
 None
 
 ===== Proposed PHP Versions =====
+
 8.4
 
 ===== Questions =====
 
 ==== Why not use functions ceil() and floor()? ====
-The functions ceil() and floor() round numbers to the full integer, while the function round() roundes the number by given precision.
+The functions ceil() and floor() round numbers to the full integer, while the function round() roundes the number by given precision. Implementing new rounding modes we get equivalent of those functions using round() with 0 as precision.
+<PHP>
+ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
+floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
+</PHP>
 
-==== Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN ====
-Such constants already exist in the NumberFormatter and represent rounding modes 'away from zero' and 'toward zero'. However the names rounding up and down are not straightforward and thus I restrained from using them. 
+==== Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN? ====
+Such constants already exist in the [[https://www.php.net/manual/en/class.numberformatter.php|NumberFormatter]] and represent rounding modes 'away from zero' and 'toward zero'. However the names rounding up and down are ambiguous. They may be easily confused with the rounding ceiling/floor, while the terms away from/toward zero are distinct.
 
 ===== Proposed Voting Choices =====
 
