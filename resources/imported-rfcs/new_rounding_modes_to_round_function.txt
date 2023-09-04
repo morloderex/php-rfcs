@@ -39,7 +39,7 @@ None
 ===== Questions =====
 
 ==== Why not use functions ceil() and floor()? ====
-The functions ceil() and floor() round numbers to the full integer, while the function round() roundes the number by given precision. Implementing new rounding modes we get equivalent of those functions using round() with 0 as precision.
+The functions ceil() and floor() round numbers to the full integer, while the function round() rounds the number by given precision. Implementing new rounding modes we get equivalent of those functions using round() with 0 as precision.
 <PHP>
 ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
 floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
