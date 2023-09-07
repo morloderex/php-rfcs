@@ -1,0 +1,187 @@
+====== PHP RFC: Increasing the default BCrypt cost ======
+  * Version: 1.0
+  * Date: 2023-09-07
+  * Author: Tim Düsterhus, timwolla@php.net
+  * Status: Draft (or Under Discussion or Accepted or Declined)
+  * First Published at: https://wiki.php.net/rfc/bcrypt_cost_2023
+
+
+===== Introduction =====
+
+PHP's default BCrypt cost for <php>password_hash</php> is unchanged since the addition of the [[rfc:password_hash|password hashing API]] in PHP 5.5 which was 11 years ago.
+
+BCrypt's variable cost factor is intended to provide adaptable security against increases in processing power and thus increased cracking speed. It appears appropriate to reconsider the default value after 11 years have passed.
+
+==== Technical explanation of the cost factor ====
+
+Any increase of the cost by ''1'' will double the time it takes to calculate a single BCrypt hash.
+
+==== Processing time for several different CPUs ====
+
+These times were measured using PHP 8.2 with this script and were selected to represent a reasonable range of CPUs that might still be in use today. All tests were carried out using wall-power.
+
+<PHP>
+<?php
+for ($cost = 8; $cost <= 14; $cost++) {
+	$start = microtime(true);
+	for ($i = 0; $i < 100; $i++) {
+		$dummy = password_hash((string) $i, \PASSWORD_BCRYPT, ['cost' => $cost]);
+	}
+	$end = microtime(true);
+	
+	printf("Cost %d: %f total (%f per hash)\n", $cost, ($end - $start), ($end - $start) / 100);
+}
+
+</PHP>
+
+**Intel(R) Core(TM) i5-2430M CPU @ 2.40GHz (2011)**
+
+Representative for an aging and low-end developer laptop used by non-professional developers / students / lower-wage countries.
+
+<code>
+Cost 8: 2.119621 total (0.021196 per hash)
+Cost 9: 4.067830 total (0.040678 per hash)
+Cost 10: 8.063046 total (0.080630 per hash)
+Cost 11: 16.157652 total (0.161577 per hash)
+Cost 12: 32.794920 total (0.327949 per hash)
+Cost 13: 65.690789 total (0.656908 per hash)
+Cost 14: 131.897865 total (1.318979 per hash)
+</code>
+
+**Apple M1 Pro (2021)**
+
+Representative of a recent commonly used developer laptop.
+
+<code>
+Cost 8: 1.519649 total (0.015196 per hash)
+Cost 9: 3.139973 total (0.031400 per hash)
+Cost 10: 6.101330 total (0.061013 per hash)
+Cost 11: 12.102118 total (0.121021 per hash)
+Cost 12: 24.038673 total (0.240387 per hash)
+Cost 13: 48.072537 total (0.480725 per hash)
+Cost 14: 96.567422 total (0.965674 per hash)
+</code>
+
+**Intel(R) Xeon(R) E-2246G CPU @ 3.60GHz (2019)**
+
+Representative of a modern bare metal production server.
+
+<code>
+Cost 8: 1.011392 total (0.010114 per hash)
+Cost 9: 2.021493 total (0.020215 per hash)
+Cost 10: 3.967762 total (0.039678 per hash)
+Cost 11: 7.885475 total (0.078855 per hash)
+Cost 12: 15.852770 total (0.158528 per hash)
+Cost 13: 31.636997 total (0.316370 per hash)
+Cost 14: 63.183766 total (0.631838 per hash)
+</code>
+
+**Intel(R) Xeon(R) CPU E31245 @ 3.30GHz (2011)**
+
+Representative of an aging bare metal production server.
+
+<code>
+Cost 8: 1.635034 total (0.016350 per hash)
+Cost 9: 3.203396 total (0.032034 per hash)
+Cost 10: 6.402601 total (0.064026 per hash)
+Cost 11: 12.824214 total (0.128242 per hash)
+Cost 12: 25.627993 total (0.256280 per hash)
+Cost 13: 52.337828 total (0.523378 per hash)
+Cost 14: 104.786531 total (1.047865 per hash)
+</code>
+
+**AMD EPYC 7002 (2019)**
+
+Representative of a common host CPU within a modern virtualized and shared-CPU cloud environment. (Note: The author of this RFC was unable to verify the exact CPU model, due to the virtualization layer. The model name is what the cloud provider claims it to be).
+
+<code>
+Cost 8: 1.462180 total (0.014622 per hash)
+Cost 9: 2.955791 total (0.029558 per hash)
+Cost 10: 5.859765 total (0.058598 per hash)
+Cost 11: 11.603300 total (0.116033 per hash)
+Cost 12: 24.426527 total (0.244265 per hash)
+Cost 13: 48.486861 total (0.484869 per hash)
+Cost 14: 99.683899 total (0.996839 per hash)
+</code>
+
+===== Proposal =====
+
+The default BCrypt cost shall be increased from ''10'' to either ''11'' or ''12'' (depending on the secondary vote). 
+
+===== Backward Incompatible Changes =====
+
+Users that rely on the default BCrypt cost will experience increased processing time when generating or validating BCrypt hashes. It naturally follows that the CPU usage of the application servers will increase.
+
+For high-traffic websites it might be necessary to add additional application servers to handle the increased load. Alternatively the application developer will need to explicitly specify the existing BCrypt costs of ''10'', provided they still consider it appropriate for their threat model.
+
+The increase of the costs is the entire point of this RFC and thus the reasoning for this possibly breaking change is given above.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP 8.x (8.4).
+
+===== RFC Impact =====
+
+==== To SAPIs ====
+
+None.
+
+==== To Existing Extensions ====
+
+None.
+
+==== To Opcache ====
+
+None.
+
+==== New Constants ====
+
+None.
+
+==== php.ini Defaults ====
+
+None.
+
+===== Open Issues =====
+
+None.
+
+===== Unaffected PHP Functionality =====
+
+Anything not BCrypt is unaffected (i.e. everything not <php>password_*</php> with <php>PASSWORD_BCRYPT</php> / BCrypt hashes). Users that explicitly specify the BCrypt cost are also unaffected.
+
+===== Future Scope =====
+
+None.
+
+===== Proposed Voting Choices =====
+
+2/3 majority to increase the default costs:
+
+<doodle title="Increase the default BCrypt cost?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * Yes
+   * No
+</doodle>
+
+Simple majority to decide the new costs:
+
+<doodle title="Increase the default BCrypt cost to?" auth="timwolla" voteType="single" closed="false" closeon="2022-01-01T00:00:00Z">
+   * 11
+   * 12
+</doodle>
+
+===== Patches and Tests =====
+
+tbd
+
+===== Implementation =====
+
+tbd
+
+===== References =====
+
+  * https://externals.io/message/120993
+
+===== Rejected Features =====
+
+None.
