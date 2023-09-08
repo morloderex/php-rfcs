@@ -40,7 +40,7 @@ Source: [[https://github.com/doctrine/orm/blob/2f9e98754bb451107dcffbf0a9844b90d
 
 ==== Return value ====
 
-Match blocks may have return values. The match expression will propagate the return value of the executed match arm. The return value is the last expression after an optional list of statements, preceded by a ''<-'' symbol to denote the value flowing out of the block. If the match return value is used, each block is expected to return a value, unless it terminates early.
+Match blocks may have return values. Match will propagate the return value of the executed arm. The return value of the block is the last expression after an optional list of statements, preceded by a ''<-'' symbol to denote the value flowing out of the block. If the match return value is used, each block is expected to return a value, unless it terminates early. If the match return value is not used, the returned value is simply discarded.
 
 <code php>
 $result = match($foo) {
@@ -59,31 +59,11 @@ $result = match($foo) {
 };
 </code>
 
-If the match return value is not used, the blocks must not return a value.
-
-FIXME: This is subject to change. Since single expressions and blocks may be mixed, it might make sense to be more lax.
-
-<code php>
-match($foo) {
-    'bar' => {
-        echo 'This branch does not return a value';
-    },
-    'baz' => {
-        $l = 1;
-        $r = 2;
-        // Compile time error: Blocks of match expression with unused result must not return a value
-        <- $l + $r;
-    },
-    // Single expressions are still allowed, even if they are non-void
-    'qux' => qux(),
-};
-</code>
-
 Note that the return keyword is not reused in place of ''<-'' because it would be ambiguous whether the user meant to return from the match block, or return from the function. Similarly, yield can already refer to pausing a generator in this context.
 
 ==== Control statements ====
 
-return, break, continue and goto statements are allowed in match blocks //only// if the return value of match is not used, or if they don't escape the block (e.g. continue in a loop contained in the block).
+return, break, continue and goto statements out of the block are allowed in match blocks //only// if the return value of match is not used.
 
 <code php>
 match ($foo) {
@@ -105,7 +85,7 @@ var_dump(match ($foo) {
 var_dump(match ($foo) {
     'bar' => {
         for ($i = 0; $i < 10; $i++) {
-            // This is ok
+            // This is ok, as the block is not escaped
             continue;
         }
         <- 42;
@@ -144,11 +124,11 @@ echo $bar; // I can see this
 
 ===== Motivation =====
 
-The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address approximately half of its use cases. switch cases commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. Since match expressions are limited to one expressions per arm, a single arm that does not nicely fold into a singular expression prevents a match expression from being used entirely.
+The match expression has been introduced to address some shortcomings of switch statements, but currently fails to address approximately half of its use cases. Switch cases commonly contain more than one statement. [[https://github.com/nikic/popular-package-analysis|popular-package-analysis]] revealed that 3 507 of 6 012 switch statements contained at least one case with more than one statement (excluding breaks). Moreover, 29 690 of 67 563 cases were multi-statement. Since match is limited to one expressions per arm, a single arm that does not nicely fold into a singular expression prevents match from being used entirely.
 
 It has previously been argued that limiting match arms to single expressions is beneficial for enforcing clean code. While keeping functions and consequently match arms short certainly has its merits, I personally find excessively small functions disorienting and hard to name well. Moreover, some statements (e.g. control statements) cannot be moved into separate functions.
 
-Furthermore, the [[https://wiki.php.net/rfc/pattern-matching|pattern matching]] plans to add enhancements to the match expression. Specifically, each match arm will be able to specify a pattern to match the expression against, including type checks. The Doctrine example from the introduction could become the following:
+Furthermore, the [[https://wiki.php.net/rfc/pattern-matching|pattern matching RFC]] plans to add enhancements to match. Specifically, each match arm will be able to specify a pattern to match the value against, like type checks. The Doctrine example from the introduction could become the following:
 
 <code php>
 $entitySql = match ($entityExpr) {
@@ -164,17 +144,29 @@ $entitySql = match ($entityExpr) {
 
 ===== Why not language-level blocks? =====
 
-Instead of just implementing blocks for match expressions, it has been suggested to implement them as a language-level concept instead. There are three evident use cases for block expressions.
+Instead of just implementing blocks match, it has been suggested to implement blocks as a language-level concept. There are three evident use cases for block expressions.
 
   * Match blocks
   * Arrow function blocks
   * Short-circuiting operators (''??='', ''??'', ''?:'', ''? :'')
 
-Unfortunately, these three use cases are all slightly different.
+The optimal return value semantics for these three use cases are all slightly different.
 
-  * For match, whether the block should return a value depends on whether the match itself returns a value.
-  * Arrow function blocks should never return a value, because function return values are controlled by ''return''. No return value should mean ''null'', to stay consistent with other functions.
+  * For match, whether the block should require returning a value depends on whether the match itself returns a value.
+  * Arrow function blocks should never require a return a value, because function return values are controlled by ''return''. No return value should mean ''null'', to stay consistent with other functions.
   * For the remaining cases, a value should always be returned.
+
+We could settle for a solution that works for all cases, namely returning ''null'' by default. Whether this solution is preferable is likely a matter of taste.
+
+<code php>
+var_dump(match ('foo') {
+    'foo' => {
+        echo "foo branch reached\n";
+    },
+});
+// foo branch reached
+// NULL
+</code>
 
 Furthermore, blocks for arrow functions have been discussed and rejected in two separate RFCs.
 
@@ -202,6 +194,18 @@ $foo ??= {
     // ...
     <- new Foo($tmp);
 };
+</code>
+
+Another issue is that ''{}'' is ambiguous (without arbitrary lookahead) in expression context, as it clashes with statement lists, i.e. the blocks you put after if statements, while loops, etc. An alternative syntax could use parentheses, although this introduces some inconsistency in the grammar.
+
+
+<code php>
+var_dump(match ($value) {
+    'foo' => (
+        echo "foo branch reached\n";
+        'foo'
+    ),
+});
 </code>
 
 ===== Technical implications of control statements =====
