@@ -69,7 +69,7 @@ return, break, continue and goto statements out of the block are allowed //only/
 match ($foo) {
     'bar' => {
         // Returning 'baz' from the *function* (not match)
-        // This is ok
+        // This is ok, because match is a standalone expression
         return 'baz';
     },
 };
@@ -77,7 +77,7 @@ match ($foo) {
 var_dump(match ($foo) {
     'bar' => {
         // Breaking out of match (like breaking out of switch, foreach, etc)
-        // This is **not** ok
+        // This is **not** ok, because match needs to return something to var_dump
         break;
     },
 });
@@ -86,7 +86,7 @@ var_dump(match ($foo) {
     'bar' => {
         for ($i = 0; $i < 10; $i++) {
             // Continuing the for loop inside the block
-            // This is ok, as the block itself is not escaped
+            // This is ok, because the block itself is not escaped
             continue;
         }
         <- 42;
@@ -96,19 +96,7 @@ var_dump(match ($foo) {
 
 The rationale for this decision is twofold:
 
-  * It attempts to avoid confusing and potentially unsound control flow. For example:
-
-<code php>
-var_dump(match (1) {
-    1 => {
-        break;
-        <- 42;
-    },
-});
-// What is the return value of match? 
-// A value was never returned, but the var_dump must receive a value nonetheless.
-</code>
-
+  * It attempts to avoid potentially unsound control flow (second example above).
   * There are technical challenges to correctly implementing control flow that escapes mid-expression. For the interested, this is explained in more detail under "Technical implications of control statements" below. Disallowing escaping of the match block completely dodges this problem.
 
 ==== Scoping ====
@@ -136,8 +124,7 @@ Additionally, the [[https://wiki.php.net/rfc/pattern-matching|pattern matching R
 $entitySql = match ($entityExpr) {
     // InputParameter
     is AST\InputParameter => {
-        $dqlParamKey = $entityExpr->name;
-        <- '?';
+        ...
     },
 
     // snip
@@ -146,11 +133,13 @@ $entitySql = match ($entityExpr) {
 
 ===== Why not language-level blocks? =====
 
-Instead of just implementing blocks match, it has been suggested to implement blocks as a language-level concept. There are three evident use cases for block expressions.
+Instead of just implementing blocks for match, it has been suggested to implement blocks as a language-level concept. There are three evident use cases for block expressions.
 
   * Match blocks
   * Arrow function blocks
   * Right-hand side of short-circuiting operators (''??='', ''??'', ''?:'', ''? :'')
+
+We'll discuss why it might be hard for a general block expression to solve all these use cases well.
 
 ==== Return value semantics ====
 
@@ -160,7 +149,7 @@ The optimal return value semantics for these three use cases are all slightly di
   * Arrow function blocks should never require a return value, as they already provide ''return''. No return value should mean ''null'', to stay consistent with other functions.
   * For the remaining cases, a value should always be returned, unless the block terminates.
 
-We could settle for a solution that works for all cases, namely returning ''null'' by default. Whether this solution is preferable is likely a matter of taste.
+We could settle for a solution that works for all cases, returning ''null'' by default. Whether this solution is acceptable is likely a matter of taste.
 
 <code php>
 var_dump(match ('foo') {
@@ -175,9 +164,17 @@ var_dump(fn () => {
     <- 'foo';
 }());
 // string(3) "foo"
+
+$foo ??= {
+    bar();
+};
+var_dump($foo);
+// NULL
 </code>
 
-It's also note that the general use of blocks is quite limited due to PHPs scoping rules. In other languages, blocks can be used to prevent pollution of the current scope.
+==== Limited use cases ====
+
+It's worth noting that the usefulness of blocks is limited due to PHPs scoping rules. In other languages, blocks can be used to prevent pollution of the current scope.
 
 <code rust>
 let foo = {
@@ -200,16 +197,16 @@ $foo ??= {
 
 ==== Arrow function capturing ====
 
-Another issue is that blocks for arrow functions have previously beenrejected in two separate RFCs, for reasons that are not solved with this approach.
+Another issue is that blocks for arrow functions have previously been rejected in two separate RFCs.
 
   * https://wiki.php.net/rfc/short-functions
   * https://wiki.php.net/rfc/auto-capture-closure
 
-It seems that most concerns for both of these RFCs were related to auto-capturing, which language-level blocks cannot properly address.
+It seems that main concerns for both of these RFCs were related to auto- and explicit capturing, which language-level blocks cannot properly address.
 
 ==== Grammar ambiguity ====
 
-Yet another issue is that ''{}'' is ambiguous (without arbitrary lookahead) in expression context, as it clashes with statement lists, i.e. the blocks you put after if statements, while loops, etc. An alternative syntax could use parentheses, although this introduces some inconsistency in the grammar.
+Yet another issue is that ''{}'' is ambiguous (without arbitrary lookahead) in the general expression context, as it clashes with statement lists (i.e. the blocks you put after if statements, while loops, etc). An alternative syntax could use parentheses, although this introduces some inconsistency in the grammar.
 
 <code php>
 var_dump(match ($value) {
@@ -222,7 +219,7 @@ var_dump(match ($value) {
 // string(3) "foo"
 </code>
 
-This works fine, but looks somewhat odd, given that we use ''{}'' in all other cases when wrapping statements into blocks.
+While this works fine, it looks somewhat odd, given that we use ''{}'' in all other cases when wrapping statements into blocks.
 
 ===== Technical implications of control statements =====
 
