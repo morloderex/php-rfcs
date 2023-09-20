@@ -1,0 +1,102 @@
+====== PHP RFC: A new JIT implementation based on IR Framework ======
+  * Version: 0.9
+  * Date: 2023-09-20
+  * Author: Dmitry Stogov, dmitry@php.net
+  * Status: Draft (or Under Discussion or Accepted or Declined)
+  * First Published at: http://wiki.php.net/rfc/php-ir
+
+===== Introduction =====
+The first version of JIT for PHP was released in PHP-8.0 (https://wiki.php.net/rfc/jit). That time we took a quite simple approach. We are generating native code directly from Zend VM bytecode. This approach allowed to deliver JIT in a quite short time, but it also made significant limitation in possible optimizations. Smart optimizations require more formal and detailed **Intermediate Representation** (IR). The later introduction of AArch64 JIT back-end in PHP-8.1, made the maintenance of JIT a bit more complex, because now we often had to update assembler code in two back-ends.
+ 
+A smarter JIT compiler with some Intermediate Representation was planned for a long time. The real work was started in January 2022.
+This proposal is the result of that 1.75 years work.
+ 
+===== Proposal =====
+I propose a new JIT implementation that is based on a separately developed [[https://github.com/dstogov/ir|IR Framework]]  
+
+Instead of separate back-ends that generated x86 and AArch64 code, now we have a single back-end that constructs IR.
+Then this IR is passed to the Framework that performs machine independent optimisations, register allocation, scheduling and native code generation. The new back-end doesn't have to care about many old low-level details, e.g. register assignment, different calling conventions, etc. On the other hand, sometimes the construction of IR may be more complex because all the dependencies must be consistently reflected, but this helps to find many errors during formal IR verification.
+
+New JIT implementation will affect only a few core PHP developers who are involved in the JIT development or maintenance.
+JIT is a self-containing subsystem and the changes in the implementation details (even big changes) don't affect others.
+You may see that the proposed [[https://github.com/php/php-src/pull/12079|patch]] almost doesn't make changes outside **ext/opcache/jit**, it also very carefully adds new IR related code into **zend_jit.c** and **zend_jit_trace.c** keeping the ability to work with old and new back-ends. At the current state the PR doesn't remove the sources of the old JIT implementation. It's possible to switch to the old implementation by configuring PHP with **--disable-opcache-jit-ir**.
+
+JIT is a quite complex subsystem. It can come without bugs, but I hope everything will be fixed. The early we merge this, the more time we have until the release.
+
+The main goal of separate IR Framework development is the collaboration with other compiler experts (sharing expertise, contribution, etc). The necessary part of the IR Framework is embedded into php source tree anyway, so this won't introduce any new external dependencies.
+
+I won't explain the internals of the IR Framework here. I'll publish a related presentation soon. The preview is already shared with some of the core PHP developers.      
+
+===== Backward Incompatible Changes =====
+There is no any BC breaks.
+
+===== Proposed PHP Version(s) =====
+next (master branch)
+
+===== RFC Impact =====
+
+==== Performance ====
+In the current state the new PHP JIT implements exactly the same set of PHP related features and optimizations as the old one.
+Anyway, because of IR Framework optimizations and smarter Register Allocator, new JIT produces a bit faster (5-10%) and smaller code.
+This is visible on **bench.php** and **micro_bench.php**. Speed of the real-life applications is not affected.
+
+Compilation speed of Tracing JIT is almost the same, function JIT compilation speed shows up to 4 times slowdown (tested on Wordpress).
+Anyway, this is quite good result for an Optimizing JIT compiler. In my tests PHP with new JIT may produce ~15MB of native code per second.   
+
+==== Zend VM ====
+On JIT supported platforms (x86, x86_64, AArch64) HYBRID VM interpreter starts to save and restore all the persistent CPU registers at **execute_ex()** prologue and epilogue. This allows elimination of the similar save/restore code in each JIT-ed function or trace. CLANG and MSVC builds that use CALL VM are not affected. 
+
+==== To Opcache ====
+JIT is implemented as a part of opcache, so the PR changes the build process for opcache.
+Nothing else is affected.
+
+==== php.ini Defaults ====
+The PR doesn't introduce new php.ini detectives or change any default values.
+It adds few new IR related JIT debugging capabilities that may be enabled through **opcache.jit_debug** directive bits.
+
+  * 0x01000000 - print the initial IR graph right after construction 
+  * 0x02000000 - print the final IR graph right before code emmision
+  * 0x04000000 - print Control Flow Graph
+  * 0x08000000 - print information about Live Ranges and Allocated Registers
+  * 0x10000000 - print IR graph after Sparse Conditional Constants Propagation pass
+  * 0x20000000 - print IR graph after Global Code Motion and linearisation pass
+  * 0x40000000 - print IR graph after Register Allocation pass
+  * 0x80000000 - anotate IR graph with information about CFG, Regisers and Code Generation rules
+
+==== To SAPIs ====
+SAPIs are not affected.
+
+==== To Existing Extensions ====
+PHP extensions are not affected.
+ 
+==== New Constants ====
+There are no new constants.
+
+===== Open Issues =====
+Should we keep the old implementation of the JIT for a while?
+
+===== Unaffected PHP Functionality =====
+JIT is developed as a self-contained feature and it doesn't affect anything else directly.
+
+===== Future Scope =====
+Usage of IR opens the door for more powerful optimizations. Part of them are going to be PHP independent (e.g. planned introduction of new loop optimization passes, improvement in LOAD/STORE motion and redundancy, improvement in code generator). The other part is PHP specific (e.g. we now may extend CPU register usage for more instructions). It's also possible to support new JIT tagets (e.g. RISCV) almost independently from PHP.
+
+===== Proposed Voting Choices =====
+Merge the new JIT implementation into PHP master?
+
+===== Patches and Tests =====
+  - https://github.com/php/php-src/pull/12079
+  - All CI tests (including nightly workflow) were passed: https://github.com/dstogov/php-src/actions/runs/6123676012/job/16638279521 
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+https://github.com/dstogov/ir
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
