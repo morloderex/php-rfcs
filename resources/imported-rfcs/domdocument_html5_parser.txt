@@ -1,5 +1,5 @@
 ====== PHP RFC: DOM HTML5 parsing and serialization ======
-  * Version: 0.5.3
+  * Version: 0.6.0
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Under Discussion
@@ -41,7 +41,7 @@ DOMDocument will NOT change, and remains for the foreseeable future.
 Introducing a new class also opens the door to tackle some oddities in how DOM documents are constructed.
 In particular, the properties set by DOMDocument's constructor are overridden by its load methods, which is surprising. That's even mentioned as the second top comment on https://www.php.net/manual/en/domdocument.loadxml.php. Furthermore, the XML version argument of the constructor is even useless for HTML5 documents.
 While we cannot change the behaviour of DOMDocument, we //can// choose a sane behaviour for <php>DOM\HTMLDocument</php> and <php>DOM\XMLDocument</php>.
-So instead of mirroring the broken API, we'll use factory methods.
+So instead of mirroring the broken API, we'll use factory methods. Factory methods are essentially a way to implement multiple named constructors. As it's unclear what a default constructor should be for DOM\Document derivatives, we chose to only have named constructors and disable the public constructor by making it private. This should make the code also more readable and less surprising as the factory method's name tells us exactly what the behaviour is.
 
 To put it in PHP code:
 
@@ -52,24 +52,24 @@ namespace DOM {
 		/* all properties and methods that are common and sensible for both XML & HTML documents */
 	}
 	
-	class XMLDocument extends Document {
+	final class XMLDocument extends Document {
 		/* insert specific XML methods and properties (e.g. xmlVersion, validate(), ...) here */
 
 		private function __construct() {}
 		
-		public static function fromEmptyDocument(string $version = "1.0", string $encoding = "UTF-8");
-		public static function fromFile(string $path, int $options = 0);
-		public static function fromString(string $source, int $options = 0);
+		public static function fromEmpty(string $version = "1.0", string $encoding = "UTF-8"): XMLDocument;
+		public static function createFromFile(string $path, int $options = 0): XMLDocument;
+		public static function createFromString(string $source, int $options = 0): XMLDocument;
 	}
 	
-	class HTMLDocument extends Document {
+	final class HTMLDocument extends Document {
 		/* insert specific Html methods and properties here */
 
 		private function __construct() {}
 		
-		public static function fromEmptyDocument(string $encoding = "UTF-8");
-		public static function fromFile(string $path, int $options = 0);
-		public static function fromString(string $source, int $options = 0);
+		public static function createEmpty(string $encoding = "UTF-8"): HTMLDocument;
+		public static function createFromFile(string $path, int $options = 0): HTMLDocument;
+		public static function createFromString(string $source, int $options = 0): HTMLDocument;
 	}
 }
 
@@ -250,9 +250,11 @@ There are a couple of reasons:
 
 ===== Backward Incompatible Changes =====
 
-This RFC adds three new classes, and aliases, but the existing DOMDocument class as-is.
-<php>DOMNode::ownerDocument</php> gets its type changed from <php>?DOMDocument</php> to <php>?DOM\Document</php>. As PHP's type checks happen at runtime instead of statically, this shouldn't affect assignments.
-Overriding a property in a child class of DOMNode would cause a compile error. However, overriding properties is useless in PHP anyway, so this is only a minor break.
+This RFC adds three new classes, and new aliases. The existing DOMDocument class remains as-is.
+<php>DOMNode::ownerDocument</php> gets its type changed from <php>?DOMDocument</php> to <php>?DOM\Document</php>.
+Similarly, <php>DOMXPath::document</php> gets its type changed from <php>DOMDocument</php> to <php>DOM\Document</php>, and the constructor now receives <php>DOM\Document</php> instead of <php>DOMDocument</php>. The constructor change is not a BC break, because constructors do not participate in LSP checks.
+As PHP's type checks happen at runtime instead of statically, this shouldn't affect assignments.
+Overriding the changed property in a child class of DOMNode/DOMXPath would cause a compile error. However, overriding properties is useless in PHP anyway, so this is only a minor break.
 Therefore, this feature is almost purely opt-in.
 
 ===== Proposed PHP Version(s) =====
@@ -325,6 +327,7 @@ None yet.
 
 ===== Changelog =====
 
+  * 0.6.0: mark classes as final, update method names, clarification about named constructor, list DOMXPath modification..
   * 0.5.3: The options argument was discussed in the text but missing in the signature, this is now fixed.
   * 0.5.2: Clarification about DOMDocument being kept as-is.
   * 0.5.1: Clarification about purpose of XMLDocument.
