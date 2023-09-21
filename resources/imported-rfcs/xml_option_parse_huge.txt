@@ -1,8 +1,8 @@
-====== PHP RFC: PHP_XML_OPTION_PARSE_HUGE ======
+====== PHP RFC: XML_OPTION_PARSE_HUGE ======
   * Version: 0.9
   * Date: 2023-09-21
   * Author: Niels Dossche, nielsdos@php.net
-  * Status: Draft
+  * Status: Under Discussion
   * First Published at: https://wiki.php.net/rfc/xml_option_parse_huge
 
 ===== Introduction =====
@@ -16,14 +16,16 @@ First, it's important to note that the ext/xml extension can work with two diffe
 
 Now, let's get to the actual issue:
 
-Starting with libxml2 version 2.7.6, parsing large input data is no longer allowed by default; it must be explicitly enabled. This change was made to prevent potential denial-of-service attacks. However, this modification unintentionally disrupted a legitimate use-case involving the <php>xml_parse</php> and <php>xml_parse_into_struct</php> functions. Attempting to parse large documents using these methods now results in a parsing error.
+Starting with libxml2 version 2.7.6, parsing large input data (*) is no longer allowed by default; it must be explicitly enabled. This change was made to prevent potential denial-of-service attacks. However, this modification unintentionally disrupted a legitimate use-case involving the <php>xml_parse</php> and <php>xml_parse_into_struct</php> functions. Attempting to parse large documents using these methods now results in a parsing error.
 There is a workaround for <php>xml_parse</php> by parsing in chunks, but this is a bit cumbersome if the data is already in memory anyway as you'll have to split the data into chunks. Ironically, this increases memory usage instead of preventing blowing up memory usage. For the latter method, that workaround does not work as you cannot use it with chunked parsing.
 
 This proposal aims to solve this issue by introducing a new parser option.
 
+(*) The definition of large is defined in parserInternals.h in libxml2, but could potentially be changed by patching and recompiling libxml2.
+
 ===== Proposal =====
 
-It's possible to set parser options via <php>xml_set_parser_option</php>. The idea is to add a new parser option that takes effect when libxml2 is used. Enabling this (boolean) option will allow parsing large documents. The option will be called <php>XML_OPTION_PARSE_HUGE</php>, so that will be a new integer constant added to the global namespace. The default value of the option is <php>false</php> because that's the behaviour right now, and therefore the denial-of-service prevention will still be active by default (which is useful for untrusted data).
+It's possible to set parser options via <php>xml_parser_set_option</php>. The idea is to add a new parser option that takes effect when libxml2 is used. Enabling this (boolean) option will allow parsing large documents. The option will be called <php>XML_OPTION_PARSE_HUGE</php>, so that will be a new integer constant added to the global namespace. The default value of the option is <php>false</php> because that's the behaviour right now, and therefore the denial-of-service prevention will still be active by default (which is useful for untrusted data).
 
 Internally, this option will pass XML_PARSE_HUGE to libxml2, allowing large documents to be parsed without resulting in a parse error.
 If libexpat is used, this option will do nothing as libexpat does not block loading large documents anyway.
