@@ -1,5 +1,5 @@
 ====== PHP RFC: DOM HTML5 parsing and serialization ======
-  * Version: 0.6.1
+  * Version: 0.6.2
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Under Discussion
@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 
-PHP's DOM extension supports loading HTML documents using the methods <php>DOMDocument::loadHTML</php> and <php>DOMDocument::loadHTMLFile</php>.
+PHP's DOM extension supports loading HTML documents using the methods <php>\DOMDocument::loadHTML</php> and <php>\DOMDocument::loadHTMLFile</php>.
 This uses libxml2's HTML parser under the hood to parse these documents into a libxml2 document tree that ext/dom uses.
 Unfortunately, this parser only supports HTML up to version 4.01. This is a problem because HTML5 has become the de facto standard for websites over the past decade.
 Introducing HTML5 parsing to PHP's DOM implementation is crucial for modernizing and enhancing PHP's capabilities in handling modern web content.
@@ -86,7 +86,7 @@ Similarly, the constants would lose their <php>DOM_</php> prefix in the namespac
 
 ==== The options argument ====
 
-Just like the load methods of <php>DOMDocument</php>, their HTML5 counterparts also take an optional options argument. The options for the load methods change the way the parser behaves. The only three libxml options that will have an effect for the new methods are <php>LIBXML_HTML_NOIMPLIED</php>, <php>LIBXML_COMPACT</php>, and <php>LIBXML_NOERROR</php>. Here's an overview of the other options that are unimplemented and the reason why:
+Just like the load methods of <php>\DOMDocument</php>, their HTML5 counterparts also take an optional options argument. The options for the load methods change the way the parser behaves. The only three libxml options that will have an effect for the new methods are <php>LIBXML_HTML_NOIMPLIED</php>, <php>LIBXML_COMPACT</php>, and <php>LIBXML_NOERROR</php>. Here's an overview of the other options that are unimplemented and the reason why:
 
 ^ Option                        ^ Reasoning                                          ^
 | <php>LIBXML_BIGLINES</php> \\ <php>LIBXML_PARSEHUGE</php>    | Not needed, this always works for the new methods. |
@@ -176,15 +176,15 @@ I'm leaving this for a secondary vote for the community to decide on.
 
 ==== Interoperability between \DOMDocument and DOM\HTMLDocument ====
 
-<php>DOM\HTMLDocument</php> and <php>DOMDocument</php> are both subclasses of <php>DOM\Document</php>. Therefore, if you want to use both interchangeably you can use the parent class as a type declaration.
+<php>DOM\HTMLDocument</php> and <php>\DOMDocument</php> are both subclasses of <php>DOM\Document</php>. Therefore, if you want to use both interchangeably you can use the parent class as a type declaration.
 Since most of the API, except construction, is similar, this shouldn't give interoperability problems.
 
-However, what if you're using a library that returns a (non-HTML5) <php>DOMDocument</php> but you'd like a <php>DOM\HTMLDocument</php> (or vice versa)?
+However, what if you're using a library that returns a (non-HTML5) <php>\DOMDocument</php> but you'd like a <php>DOM\HTMLDocument</php> (or vice versa)?
 You can solve this issue by using the <php>DOM\Document::importNode</php> or <php>DOM\Document::adoptNode</php> methods.
 
 ==== Parsing benchmarks ====
 
-You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOM\HTMLDocument::loadHTML</php> compare with the performance of <php>DOMDocument::loadHTML</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
+You might wonder about the performance impact of the tree conversion. In particular, how does the performance of <php>DOM\HTMLDocument::loadHTML</php> compare with the performance of <php>\DOMDocument::loadHTML</php>? Note that the latter method doesn't follow the HTML5 rules, but it does give an indication about the performance.
 
 Relevant scripts can be found at https://gist.github.com/nielsdos/5b59de15b4f1572b2147980eb0687df3.
 
@@ -195,10 +195,10 @@ I created a PHP script that invokes each parser 300 times. I ran the experiment 
 
 === Results ===
 
-The following graph shows the results. The blue bar shows the parse time in seconds for <php>DOMDocument</php>, and the orange bar does so for <php>DOM\HTMLDocument</php>. Lower is better.
+The following graph shows the results. The blue bar shows the parse time in seconds for <php>\DOMDocument</php>, and the orange bar does so for <php>DOM\HTMLDocument</php>. Lower is better.
 The black vertical line indicates the minimum & maximum measured times for each bar.
 First of all, some measurements on the far left are very low. That's because those sites primarily generate their content using JavaScript. Hence, there are not many HTML nodes in the document. Some sites also show a geo-blocked page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that <php>DOM\HTMLDocument</php> is usually on par or faster than <php>DOMDocument</php>'s parser, despite having to do a conversion. When it is slower, it's not by much.
+Second, we can see that <php>DOM\HTMLDocument</php> is usually on par or faster than <php>\DOMDocument</php>'s parser, despite having to do a conversion. When it is slower, it's not by much.
 
 Based on this limited experiment, I conclude that the performance is acceptable.
 
@@ -252,7 +252,7 @@ There are a couple of reasons:
 
 This RFC adds three new classes, and new aliases. The existing \DOMDocument class remains as-is.
 <php>DOMNode::ownerDocument</php> gets its type changed from <php>?DOMDocument</php> to <php>?DOM\Document</php>.
-Similarly, <php>DOMXPath::document</php> gets its type changed from <php>DOMDocument</php> to <php>DOM\Document</php>, and the constructor now receives <php>DOM\Document</php> instead of <php>DOMDocument</php>. The constructor change is not a BC break, because constructors do not participate in LSP checks.
+Similarly, <php>DOMXPath::document</php> gets its type changed from <php>\DOMDocument</php> to <php>DOM\Document</php>, and the constructor now receives <php>DOM\Document</php> instead of <php>\DOMDocument</php>. The constructor change is not a BC break, because constructors do not participate in LSP checks.
 As PHP's type checks happen at runtime instead of statically, this shouldn't affect assignments.
 Overriding the changed property in a child class of \DOMNode or \DOMXPath would cause a compile error. However, overriding properties is useless in PHP anyway, so this is only a minor break.
 Therefore, this feature is almost purely opt-in.
@@ -327,6 +327,7 @@ None yet.
 
 ===== Changelog =====
 
+  * 0.6.2: Fixed some missing leading backslashes...
   * 0.6.1: Use FQN names, fixed a reference to an old name, and fixed typos
   * 0.6.0: mark classes as final, update method names, clarification about named constructor, list \DOMXPath modification..
   * 0.5.3: The options argument was discussed in the text but missing in the signature, this is now fixed.
