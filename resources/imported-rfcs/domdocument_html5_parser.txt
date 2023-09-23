@@ -1,5 +1,5 @@
 ====== PHP RFC: DOM HTML5 parsing and serialization ======
-  * Version: 0.6.0
+  * Version: 0.6.1
   * Date: 2023-08-12
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Under Discussion
@@ -24,23 +24,23 @@ To solve the parsing issue, we will leverage an alternative HTML5 parser to crea
 
 The most important requirement is that the new class must integrate seamlessly with the DOM extension. This means that using it must be a simple drop-in replacement. You will still be able to use all the existing APIs to manipulate and traverse DOM documents and nodes.
 
-This proposal introduces the <php>DOM\HTMLDocument</php> class. The reason we introduce a new class instead of replacing the methods of the existing class is to ensure full backwards compatibility. There are applications that work with legacy HTML4 documents, and want the HTML4 behaviour. By keeping the DOMDocument class, nothing changes for existing code. Code that wants HTML5 functionality can use the <php>DOM\HTMLDocument</php> class.
+This proposal introduces the <php>DOM\HTMLDocument</php> class. The reason we introduce a new class instead of replacing the methods of the existing class is to ensure full backwards compatibility. There are applications that work with legacy HTML4 documents, and want the HTML4 behaviour. By keeping the <php>\DOMDocument</php> class, nothing changes for existing code. Code that wants HTML5 functionality can use the <php>DOM\HTMLDocument</php> class.
 
-How does the class hierarchy look and how does it interact with DOMDocument?
+How does the class hierarchy look and how does it interact with \DOMDocument?
 We'll add a common abstract base class DOM\Document (name taken from the DOM spec & Javascript world).
 DOM\Document contains the properties and abstract methods common to both HTML and XML documents.
 Examples of what it includes/excludes:
   * includes: firstElementChild, lastElementChild, ...
   * excludes: xmlStandalone, xmlVersion, validate(), ...
 Then we'll have two subclasses: DOM\HTMLDocument (a previous version of this RFC named this DOM\HTML5Document) and DOM\XMLDocument.
-DOMDocument will also use DOM\Document as a base class to make it interchangeable with the new classes.
-We're only adding XMLDocument for completeness and API parity. It's a drop-in replacement for DOMDocument, and behaves the exact same.
+\DOMDocument will also use DOM\Document as a base class to make it interchangeable with the new classes.
+We're only adding XMLDocument for completeness and API parity. It's a drop-in replacement for \DOMDocument, and behaves the exact same.
 The difference is that the API is on par with HTMLDocument, and the construction is designed to be more misuse-resistant.
-DOMDocument will NOT change, and remains for the foreseeable future.
+\DOMDocument will NOT change, and remains for the foreseeable future.
 
 Introducing a new class also opens the door to tackle some oddities in how DOM documents are constructed.
-In particular, the properties set by DOMDocument's constructor are overridden by its load methods, which is surprising. That's even mentioned as the second top comment on https://www.php.net/manual/en/domdocument.loadxml.php. Furthermore, the XML version argument of the constructor is even useless for HTML5 documents.
-While we cannot change the behaviour of DOMDocument, we //can// choose a sane behaviour for <php>DOM\HTMLDocument</php> and <php>DOM\XMLDocument</php>.
+In particular, the properties set by \DOMDocument's constructor are overridden by its load methods, which is surprising. That's even mentioned as the second top comment on https://www.php.net/manual/en/domdocument.loadxml.php. Furthermore, the XML version argument of the constructor is even useless for HTML5 documents.
+While we cannot change the behaviour of \DOMDocument, we //can// choose a sane behaviour for <php>DOM\HTMLDocument</php> and <php>DOM\XMLDocument</php>.
 So instead of mirroring the broken API, we'll use factory methods. Factory methods are essentially a way to implement multiple named constructors. As it's unclear what a default constructor should be for DOM\Document derivatives, we chose to only have named constructors and disable the public constructor by making it private. This should make the code also more readable and less surprising as the factory method's name tells us exactly what the behaviour is.
 
 To put it in PHP code:
@@ -80,7 +80,7 @@ class DOMDocument extends DOM\Document {
 
 We'll have the existing DOM classes in the global namespace and our three new classes in the (new) DOM namespace.
 This is awkward. I propose to solve this by creating namespace aliases for the existing DOM classes and constants, and (single) function. This would improve consistency and in the far far future //may// allow a complete transition to the namespaced variants.
-This means for example that there will be an alias <php>DOM\Element</php> for <php>DOMElement</php>, an alias <php>DOM\Entity</php> for <php>DOMEntity</php> etc.
+This means for example that there will be an alias <php>DOM\Element</php> for <php>DOMElement</php>, an alias <php>DOM\Entity</php> for <php>DOMEntity</php> etc. The exception will be <php>DOMException</php> which is aliased to <php>DOM\DOMException</php> because that's the official name and otherwise importing it and using it would be confusing with the global namespace <php>Exception</php> class (see also https://github.com/php/php-src/pull/9071#issuecomment-1193162754).
 There is a single function <php>dom_import_simplexml</php>, which can get an alias as <php>DOM\import_simplexml</php>.
 Similarly, the constants would lose their <php>DOM_</php> prefix in the namespace version, e.g. <php>DOM\INDEX_SIZE_ERR</php> will be an alias for <php>DOM_INDEX_SIZE_ERR</php>. For constants that begin with <php>XML_</php> I propose to keep the prefix.
 
@@ -146,9 +146,9 @@ This is perfectly valid for a parser. Our implementation won't report any errors
 
 ==== Error handling ====
 
-When parsing a document, potential parse errors may occur. With the load methods of DOMDocument, a parser error results in an E_WARNING by default. //However//, you can use <php>libxml_use_internal_errors(true)</php> to store the errors inside an array. In this case, no warning will be generated and the parse errors may be inspected using <php>libxml_get_errors()</php> and <php>libxml_get_last_error()</php>.
+When parsing a document, potential parse errors may occur. With the load methods of \DOMDocument, a parser error results in an E_WARNING by default. //However//, you can use <php>libxml_use_internal_errors(true)</php> to store the errors inside an array. In this case, no warning will be generated and the parse errors may be inspected using <php>libxml_get_errors()</php> and <php>libxml_get_last_error()</php>.
 
-The naming of these methods is a bit unfortunate because it leaks implementation details. Users shouldn't have to care that it's actually libxml2 under the hood producing these errors. The reality is that these error methods have become synonymous with "handling errors in DOMDocument / SimpleXML / ...".
+The naming of these methods is a bit unfortunate because it leaks implementation details. Users shouldn't have to care that it's actually libxml2 under the hood producing these errors. The reality is that these error methods have become synonymous with "handling errors in \DOMDocument / SimpleXML / ...".
 To offer a seamless HTML5 drop-in, my current implementation follows the same error handling as described above.
 That means, by default we will emit an E_WARNING. If <php>libxml_use_internal_errors(true)</php> is used then the errors will be stored, and can be retrieved in the same way as described above. This may seem unconventional since the errors originate from Lexbor rather than libxml2. However, we have good reasons to do so.
 
@@ -170,13 +170,13 @@ This function has been perceived as broken by the community due to it blocking l
 I don't know how the community perceives the interaction between loadHTMLFile and <php>libxml_set_external_entity_loader</php>.
 
 Unlike XML, HTML5 does not have a concept of external entities.
-The question I have is whether <php>libxml_set_external_entity_loader</php> should affect the new class's loadHTMLFile in the same way as it does for the existing class.
+The question I have is whether <php>libxml_set_external_entity_loader</php> should affect the new class's parser in the same way as it does for the existing class.
 The advantage would be consistency, but I don't know if this is what the community wants.
 I'm leaving this for a secondary vote for the community to decide on.
 
-==== Interoperability between DOMDocument and DOM\HTMLDocument ====
+==== Interoperability between \DOMDocument and DOM\HTMLDocument ====
 
-<php>DOM\HTMLDocument</php> and <php>DOMDocument</php> are both subclasses of <php>DOM\Document</php>. Therefore, if you want to use both interchangeably you can use the parent class as a type hint.
+<php>DOM\HTMLDocument</php> and <php>DOMDocument</php> are both subclasses of <php>DOM\Document</php>. Therefore, if you want to use both interchangeably you can use the parent class as a type declaration.
 Since most of the API, except construction, is similar, this shouldn't give interoperability problems.
 
 However, what if you're using a library that returns a (non-HTML5) <php>DOMDocument</php> but you'd like a <php>DOM\HTMLDocument</php> (or vice versa)?
@@ -250,11 +250,11 @@ There are a couple of reasons:
 
 ===== Backward Incompatible Changes =====
 
-This RFC adds three new classes, and new aliases. The existing DOMDocument class remains as-is.
+This RFC adds three new classes, and new aliases. The existing \DOMDocument class remains as-is.
 <php>DOMNode::ownerDocument</php> gets its type changed from <php>?DOMDocument</php> to <php>?DOM\Document</php>.
 Similarly, <php>DOMXPath::document</php> gets its type changed from <php>DOMDocument</php> to <php>DOM\Document</php>, and the constructor now receives <php>DOM\Document</php> instead of <php>DOMDocument</php>. The constructor change is not a BC break, because constructors do not participate in LSP checks.
 As PHP's type checks happen at runtime instead of statically, this shouldn't affect assignments.
-Overriding the changed property in a child class of DOMNode/DOMXPath would cause a compile error. However, overriding properties is useless in PHP anyway, so this is only a minor break.
+Overriding the changed property in a child class of \DOMNode or \DOMXPath would cause a compile error. However, overriding properties is useless in PHP anyway, so this is only a minor break.
 Therefore, this feature is almost purely opt-in.
 
 ===== Proposed PHP Version(s) =====
@@ -327,9 +327,10 @@ None yet.
 
 ===== Changelog =====
 
-  * 0.6.0: mark classes as final, update method names, clarification about named constructor, list DOMXPath modification..
+  * 0.6.1: Use FQN names, fixed a reference to an old name, and fixed typos
+  * 0.6.0: mark classes as final, update method names, clarification about named constructor, list \DOMXPath modification..
   * 0.5.3: The options argument was discussed in the text but missing in the signature, this is now fixed.
-  * 0.5.2: Clarification about DOMDocument being kept as-is.
+  * 0.5.2: Clarification about \DOMDocument being kept as-is.
   * 0.5.1: Clarification about purpose of XMLDocument.
   * 0.5.0: Add a common base class DOM\Document, make DOM\HTMLDocument into DOM\HTMLDocument extending DOM\Document, add DOM\XMLDocument, add factory methods. See revision history and internals mail for full changelog.
   * 0.4.0: Initial version placed under discussion
