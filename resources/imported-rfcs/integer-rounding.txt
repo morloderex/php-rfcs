@@ -1,0 +1,154 @@
+====== PHP RFC: Your Title Here ======
+  * Version: 0.1
+  * Date: 2023-09-26
+  * Author: Marc Bennewitz, php@mabe.berlin
+  * Status: Draft
+  * First Published at: https://wiki.php.net/RFC/integer-rounding
+
+
+===== Introduction =====
+
+PHP contains several build-in rounding functions [[https://www.php.net/round|round]], [[https://www.php.net/ceil|ceil]], [[https://www.php.net/floor|floor]] and [[https://www.php.net/number_format|number_format]].
+
+Except ''number_format'' all of these functions take a ''float|int'', do a cast to ''float'', process on floating point number only and finally return a '' float''.
+
+As a result of ''round'', ''ceil'' and ''floor'' you get a floating point number rounded to your needs.
+
+In most cases this is sufficient but in cases of handling with integer values above 2^53 you start to end up with unexpected results due to floating point arithmetic and precision loss.
+
+''number_format'' on the other hand produces human readable numbers as ''string'' and since PHP 8.3 it also performs rounding integers without casting it to floating point numbers to fix the above issues mentioned.
+
+
+===== Proposal =====
+
+This RFC proposes to perform rounding on given integer values and also return the resulting integer if possible.
+In case of integer under-/overflow the value will be casted to a float and rounded based on the floating point number as it's done currently.
+
+For ''ceil'', ''floor'' and ''round'' with ''precision >= 0'' this means a given integer argument gets returned as is.
+
+The ''int''-type is compatible to ''float'', returning an integer instead of a floating point number will still be a number accepted for type-hints of ''int'', ''float'', ''int|float'' or ''mixed'' with strict_types enabled.
+
+Even if the returned type is compatible to the current returned type this is considered a breaking change on high frequently used functions and as such there will be a deprecation phase as described in "Backward Incompatible Changes" below.
+
+As a result PHP will behave more precise on rounding integer values.
+
+
+===== Examples =====
+<code php>
+function takeFloat(float $v) { return $v; }
+function returnFloat($v): float { return $v; }
+
+var_dump(round(1));
+var_dump(round(1.0));
+var_dump(round(987654321098765432, precision: -3));
+var_dump(round(987654321098765432, precision: -4));
+var_dump(takeFloat(round(987654321098765432, precision: -3)));
+var_dump(returnFloat(round(987654321098765432, precision: -3)));
+</code>
+
+8.3 behavior (current):
+<nowiki>
+float(1)
+float(1)
+float(9.87654321098766E+17)
+float(9.8765432109877E+17)
+float(9.87654321098766E+17)
+float(9.87654321098766E+17)
+</nowiki>
+
+8.4 behavior (deprecation message):
+<nowiki>
+Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+float(1)
+float(1)
+Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+float(9.87654321098766E+17)
+float(9.8765432109877E+17)
+Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+float(9.87654321098766E+17)
+Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+float(9.87654321098766E+17)
+</nowiki>
+
+9.0 behavior (Changed behavior):
+<nowiki>
+int(1)
+float(1)
+int(987654321098765000)
+float(9.8765432109877E+17)
+float(9.87654321098766E+17)
+float(9.87654321098766E+17)
+</nowiki>
+
+===== Backward Incompatible Changes =====
+
+A BC break happens on type reporting functions like ''is_float'', ''get_debug_type'', ''gettype'' and strict comparison ''==='' will now report an integer. Because of that there will be a deprecation phase so users are able to detect these cases and can act accordingly.
+
+As such PHP 8.4 will report a deprecation message in case ''round'', ''ceil'' and ''floor'' would return an integer. For as long as the deprecation phase the resulting integer gets casted to ''float'' before return.
+
+The old implicit behavior can be forced by explicitly casting the value ''round((float)$num)''. This does not trigger a deprecation message and will not change behavior after the deprecation phase.
+
+In PHP 9.0 the new behavior on rounding integers will be in place without further messages.
+
+
+===== Proposed PHP Version(s) =====
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
+
+===== RFC Impact =====
+==== To SAPIs ====
+none
+
+==== To Existing Extensions ====
+none
+
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
+
+==== New Constants ====
+none
+
+==== php.ini Defaults ====
+none
+
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+* Rounding floating point numbers will not be effected in any way
+
+===== Future Scope =====
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+* Branch: https://github.com/marc-mabe/php-src/tree/integer_rounding
+* PR: TBD
+
+===== Implementation =====
+Current implementation is available at https://github.com/marc-mabe/php-src/tree/integer_rounding
+
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+* https://externals.io/message/120373
+
+===== Rejected Features =====
+
+=== Add new functions ===
+
+PHP is a loosely typed langue and as such it's extremely uncommon to have to call different rounding functions for rounding ''int'' vs. ''float''.
+Also the normal ''round'' already does the trick and mostly you won't know better until you get bitten by floating point.
+
+=== Add function argument ===
+
+Same as "Add new function" PHP is a loosely typed langue and as such it's extremely uncommon to have to define different arguments for ''int'' vs. ''float''.
+
+
