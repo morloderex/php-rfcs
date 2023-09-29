@@ -1,19 +1,19 @@
-DOMDocument HTML5 Parsing And Serialization
-===========================================
+DOM HTML5 Parsing And Serialization
+===================================
 
 :PHP-RFC: 0845
-:Title: DOMDocument HTML5 Parsing And Serialization
+:Title: DOM HTML5 Parsing And Serialization
 :Author: Niels Dossche <nielsdos@php.net>
 :Status: Draft
 :Type: Unknown
 :Created: 2023-08-12
-:Version: 0.3.0
+:Version: 0.6.6
 
 Introduction
 ------------
 
 PHP's DOM extension supports loading HTML documents using the methods
-``DOMDocument::loadHTML`` and ``DOMDocument::loadHTMLFile``. This uses
+``\DOMDocument::loadHTML`` and ``\DOMDocument::loadHTMLFile``. This uses
 libxml2's HTML parser under the hood to parse these documents into a
 libxml2 document tree that ext/dom uses. Unfortunately, this parser only
 supports HTML up to version 4.01. This is a problem because HTML5 has
@@ -41,15 +41,13 @@ support: https://gitlab.gnome.org/GNOME/libxml2/-/issues/211. However,
 it seems like this won't happen anytime soon. Furthermore, there are
 also problems with saving (also known as serializing) HTML5 documents
 due to subtle rule differences between HTML4 and HTML5. This RFC
-proposes a fully backwards compatible solution to deal with these
+proposes a practically backwards compatible solution to deal with these
 problems. To solve the parsing issue, we will leverage an alternative
 HTML5 parser to create the libxml2 document tree. This parser seamlessly
 integrates with the DOM extension, ensuring compatibility for all
 existing code and third-party extensions. To solve the serialization
 issue, an implementation for the HTML5 serialization algorithm will also
-be added. The new functionality will be available via a
-``DOMHTML5Document`` class that extends ``DOMDocument`` and overrides
-the loadHTML(File) and saveHTML(File) methods.
+be added. The new functionality will be available via a new class.
 
 Proposal
 --------
@@ -59,45 +57,124 @@ seamlessly with the DOM extension. This means that using it must be a
 simple drop-in replacement. You will still be able to use all the
 existing APIs to manipulate and traverse DOM documents and nodes.
 
-This proposal introduces the ``DOMHTML5Document`` class that extends the
-``DOMDocument`` class. The reason we introduce a new class instead of
-replacing the methods of the existing class is to ensure full backwards
-compatibility. There are applications that work with legacy HTML4
-documents, and want the HTML4 behaviour. By keeping the DOMDocument
-class, nothing changes for existing code. Code that wants HTML5
-functionality can use the ``DOMHTML5Document`` class.
+This proposal introduces the ``DOM\HTMLDocument`` class. The reason we
+introduce a new class instead of replacing the methods of the existing
+class is to ensure full backwards compatibility. There are applications
+that work with legacy HTML4 documents, and want the HTML4 behaviour. By
+keeping the ``\DOMDocument`` class, nothing changes for existing code.
+Code that wants HTML5 functionality can use the ``DOM\HTMLDocument``
+class.
 
-Here's how its definition looks:
+How does the class hierarchy look and how does it interact with
+\\DOMDocument? We'll add a common abstract base class DOM\Document (name
+taken from the DOM spec & Javascript world). DOM\Document contains the
+properties and abstract methods common to both HTML and XML documents.
+Examples of what it includes/excludes:
+
+-  includes: firstElementChild, lastElementChild, ...
+-  excludes: xmlStandalone, xmlVersion, validate(), ...
+
+Then we'll have two subclasses: DOM\HTMLDocument (a previous version of
+this RFC named this DOM\HTML5Document) and DOM\XMLDocument.
+\\DOMDocument will also use DOM\Document as a base class to make it
+interchangeable with the new classes. We're only adding XMLDocument for
+completeness and API parity. It's a drop-in replacement for
+\\DOMDocument, and behaves the exact same. The difference is that the
+API is on par with HTMLDocument, and the construction is designed to be
+more misuse-resistant. \\DOMDocument will NOT change, and remains for
+the foreseeable future.
+
+Introducing a new class also opens the door to tackle some oddities in
+how DOM documents are constructed. In particular, the properties set by
+\\DOMDocument's constructor are overridden by its load methods, which is
+surprising. That's even mentioned as the second top comment on
+https://www.php.net/manual/en/domdocument.loadxml.php. Furthermore, the
+XML version argument of the constructor is even useless for HTML5
+documents. While we cannot change the behaviour of \\DOMDocument, we
+*can* choose a sane behaviour for ``DOM\HTMLDocument`` and
+``DOM\XMLDocument``. So instead of mirroring the broken API, we'll use
+factory methods. Factory methods are essentially a way to implement
+multiple named constructors. As it's unclear what a default constructor
+should be for DOM\Document derivatives, we chose to only have named
+constructors and disable the public constructor by making it private.
+This should make the code also more readable and less surprising as the
+factory method's name tells us exactly what the behaviour is.
+
+To put it in PHP code:
 
 .. code:: php
 
-   class DOMHTML5Document extends DOMDocument {
-       public function loadHTML(string $source, int $options = 0): bool {}
-       public function loadHTMLFile(string $filename, int $options = 0): bool {}
-       public function saveHTML(?DOMNode $node = null): string|false {}
-       public function saveHTMLFile(string $filename): int|false {}
+   namespace DOM {
+       // The base abstract document class
+       abstract class Document extends DOM\Node implements DOM\ParentNode {
+           /* all properties and methods that are common and sensible for both XML & HTML documents */
+       }
+       
+       final class XMLDocument extends Document {
+           /* insert specific XML methods and properties (e.g. xmlVersion, validate(), ...) here */
+
+           private function __construct() {}
+           
+           public static function createEmpty(string $version = "1.0", string $encoding = "UTF-8"): XMLDocument;
+           public static function createFromFile(string $path, int $options = 0, ?string $override_encoding = null): XMLDocument;
+           public static function createFromString(string $source, int $options = 0, ?string $override_encoding = null): XMLDocument;
+       }
+       
+       final class HTMLDocument extends Document {
+           /* insert specific Html methods and properties here */
+
+           private function __construct() {}
+           
+           public static function createEmpty(string $encoding = "UTF-8"): HTMLDocument;
+           public static function createFromFile(string $path, int $options = 0, ?string $override_encoding = null): HTMLDocument;
+           public static function createFromString(string $source, int $options = 0, ?string $override_encoding = null): HTMLDocument;
+       }
    }
+
+   class DOMDocument extends DOM\Document {
+       /* Keep methods, properties, and constructor the same as they are now */
+   }
+
+The override_encoding parameter is optional. It is used to override the
+implicit encoding detection routines as determined by the HTML parser
+spec. This can be useful when the document is downloaded manually (e.g.
+using Guzzle). Passing ``null`` means that the encoding will not be
+overridden.
+
+We'll have the existing DOM classes in the global namespace and our
+three new classes in the (new) DOM namespace. This is awkward. I propose
+to solve this by creating namespace aliases for the existing DOM classes
+and constants, and (single) function. This would improve consistency and
+in the far far future *may* allow a complete transition to the
+namespaced variants. This means for example that there will be an alias
+``DOM\Element`` for ``DOMElement``, an alias ``DOM\Entity`` for
+``DOMEntity`` etc. The exception will be ``DOMException`` which is
+aliased to ``DOM\DOMException`` because that's the official name and
+otherwise importing it and using it would be confusing with the global
+namespace ``Exception`` class (see also
+https://github.com/php/php-src/pull/9071#issuecomment-1193162754). There
+is a single function ``dom_import_simplexml``, which can get an alias as
+``DOM\import_simplexml``. Similarly, the constants would lose their
+``DOM_`` prefix in the namespace version, e.g. ``DOM\INDEX_SIZE_ERR``
+will be an alias for ``DOM_INDEX_SIZE_ERR``. For constants that begin
+with ``XML_`` I propose to alias them, but keep the prefix (e.g.
+``XML_ELEMENT_NODE`` gets an alias ``DOM\XML_ELEMENT_NODE``).
 
 The options argument
 ~~~~~~~~~~~~~~~~~~~~
 
-Just like the load methods of ``DOMDocument``, their HTML5 counterparts
+Just like the load methods of ``\DOMDocument``, their HTML5 counterparts
 also take an optional options argument. The options for the load methods
-change the way the parser behaves. The only two options that will have
-an effect for the new methods are ``LIBXML_HTML_NOIMPLIED`` and
-``LIBXML_NOERROR``. Here's an overview why the other options are not
-implemented and the reason why:
+change the way the parser behaves. The only three libxml options that
+will have an effect for the new methods are ``LIBXML_HTML_NOIMPLIED``,
+``LIBXML_COMPACT``, and ``LIBXML_NOERROR``. Here's an overview of the
+other options that are unimplemented and the reason why:
 
 +--------------------------+------------------------------------------+
 | Option                   | Reasoning                                |
 +==========================+==========================================+
 | ``LIBXML_BIGLINES``      | Not needed, this always works for the    |
 | ``LIBXML_PARSEHUGE``     | new methods.                             |
-+--------------------------+------------------------------------------+
-| ``LIBXML_COMPACT``       | This is a transparent optimization for   |
-|                          | the program, not implemented right now   |
-|                          | because it requires quite a few hacks.   |
-|                          | It can be implemented in the future      |
 +--------------------------+------------------------------------------+
 | ``LIBXML_DTDATTR``       | There is only one valid DTD for HTML5,   |
 | ``LIBXML_DTDLOAD``       | these options don't make sense.          |
@@ -112,8 +189,8 @@ implemented and the reason why:
 |                          | accepts #PCDATA, and based on the        |
 |                          | position of the element. As HTML5 is not |
 |                          | based on XML, there is no concept of     |
-|                          | #PCDATA. Hence, it is unclear how to     |
-|                          | implement this.                          |
+|                          | #PCDATA. Hence, it is unclear what the   |
+|                          | right behaviour should be.               |
 +--------------------------+------------------------------------------+
 | ``LIBXML_NOCDATA``       | This is only valid in XML, the concept   |
 | ``LIBXML_NOEMPTYTAG``    | doesn't exist in HTML5.                  |
@@ -130,8 +207,18 @@ implemented and the reason why:
 |                          | this is not a conformance checker.       |
 +--------------------------+------------------------------------------+
 | ``LIBXML_PEDANTIC``      | Error reporting follows the spec, no     |
-|                          | custom modification is done.             |
+|                          | custom error levels are available.       |
 +--------------------------+------------------------------------------+
+
+Furthermore, we also implement a custom option ``DOM\NO_DEFAULT_NS``
+that avoids putting a default namespace on the HTML/SVG/MATHML elements.
+This is done to ease migration and to make everything compatible with
+non-namespace aware DOM tools. Something very similar exists in
+`masterminds/html5-php <https://github.com/Masterminds/html5-php/>`__
+and this option is also used in `Symfony's CSS Selector
+package <https://github.com/symfony/css-selector>`__.
+
+Passing invalid options will result in an argument ValueError exception.
 
 Additional background info
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -142,10 +229,10 @@ XML-related PHP extensions within php-src. This is great for
 interoperability (e.g. with simplexml and xsl). Third-party extensions
 also use libxml2 APIs. For example, the
 `xmldiff <https://pecl.php.net/package/xmldiff>`__ PECL extension peeks
-into the internals of DOMDocument to grab the libxml2 data structures
-and compare them. It is not possible to switch away from the libxml2
-library as the underlying basis for the DOM extension because that will
-cause a major BC break.
+into the internals of DOMNode to grab the libxml2 data structures and
+compare them. It is not possible to switch away from the libxml2 library
+as the underlying basis for the DOM extension because that will cause a
+major BC break.
 
 Approach
 ~~~~~~~~
@@ -177,9 +264,9 @@ Choosing an HTML5 parser
 We have to choose a suitable HTML5 parser. It should be spec-compliant,
 heavily tested, and fast. I propose to use
 `Lexbor <https://github.com/lexbor/lexbor>`__. According to its README,
-it satisfies our requirements. Furthermore, it already has bindings for
-Elixir, Crystal, Python, D, and Ruby. This shows that it has been used
-in practice in other serious projects.
+it satisfies our requirements. Furthermore, people already made bindings
+for Elixir, Crystal, Python, D, and Ruby. This shows that it has been
+used in practice in other serious projects.
 
 It is fully written in C99. That's ideal, because PHP is also using the
 C99 standard. One small complication is that this library is not
@@ -188,7 +275,7 @@ propose to bundle it with PHP. This also gives us the freedom to
 incorporate a patch to expose the line and column numbers of HTML nodes
 such that the error messages are richer and the ``DOMNode::getLineNo()``
 function will work properly. Bundling a library with PHP is not
-unprecedented, PHP already bundles e.g. pcre2lib, gd, libmagic, ...
+unprecedented, PHP already bundles e.g. pcre2lib, libgd, libmagic, ...
 
 Lexbor also supports overriding the allocation routines. Therefore, we
 can make it work with PHP's memory limit. Something that is currently
@@ -247,7 +334,7 @@ Error handling
 ~~~~~~~~~~~~~~
 
 When parsing a document, potential parse errors may occur. With the load
-methods of DOMDocument, a parser error results in an E_WARNING by
+methods of \\DOMDocument, a parser error results in an E_WARNING by
 default. *However*, you can use ``libxml_use_internal_errors(true)`` to
 store the errors inside an array. In this case, no warning will be
 generated and the parse errors may be inspected using
@@ -257,7 +344,7 @@ The naming of these methods is a bit unfortunate because it leaks
 implementation details. Users shouldn't have to care that it's actually
 libxml2 under the hood producing these errors. The reality is that these
 error methods have become synonymous with "handling errors in
-DOMDocument / SimpleXML / ...". To offer a seamless HTML5 drop-in, my
+\\DOMDocument / SimpleXML / ...". To offer a seamless HTML5 drop-in, my
 current implementation follows the same error handling as described
 above. That means, by default we will emit an E_WARNING. If
 ``libxml_use_internal_errors(true)`` is used then the errors will be
@@ -276,6 +363,12 @@ idea because:
    replacement.
 #. If libxml2 ever introduces its own HTML5 parser, we can drop Lexbor
    and nothing changes for the end user w.r.t. error handling.
+
+Note that exceptions cannot be used for the parse errors. This is
+because the parse errors aren't actually hard errors. I.e. the parser
+spec defines how to recover from these errors, and that's what your
+browser does too. In a way, they're conceptually closer to warnings than
+errors.
 
 External entity loader
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -304,33 +397,36 @@ loadHTMLFile and ``libxml_set_external_entity_loader``.
 
 Unlike XML, HTML5 does not have a concept of external entities. The
 question I have is whether ``libxml_set_external_entity_loader`` should
-affect the new class's loadHTMLFile in the same way as it does for the
+affect the new class's parser in the same way as it does for the
 existing class. The advantage would be consistency, but I don't know if
 this is what the community wants. I'm leaving this for a secondary vote
 for the community to decide on.
 
-Interoperability between DOMDocument and DOMHTML5Document
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Interoperability between \\DOMDocument and DOM\HTMLDocument
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Because ``DOMHTML5Document`` is a subclass of ``DOMDocument``, all
-methods accepting a ``DOMDocument`` also accept a ``DOMHTML5Document``.
-These functions can transparently work on HTML5 documents. If you want
-to restrict your code to only accept HTML5 documents, you can use the
-more stricter ``DOMHTML5Document`` type hint.
+``DOM\HTMLDocument`` and ``\DOMDocument`` are both subclasses of
+``DOM\Document``. Therefore, if you want to use both interchangeably you
+can use the parent class as a type declaration. Since most of the API,
+except construction, is similar, this shouldn't give interoperability
+problems.
 
 However, what if you're using a library that returns a (non-HTML5)
-``DOMDocument`` but you'd like a ``DOMHTML5Document`` (or vice versa)?
-You can solve this issue by using the ``DOMDocument::importNode`` or
-``DOMDocument::adoptNode`` methods.
+``\DOMDocument`` but you'd like a ``DOM\HTMLDocument`` (or vice versa)?
+You can solve this issue by using the ``DOM\Document::importNode`` or
+``DOM\Document::adoptNode`` methods.
 
 Parsing benchmarks
 ~~~~~~~~~~~~~~~~~~
 
 You might wonder about the performance impact of the tree conversion. In
-particular, how does the performance of ``DOMHTML5Document::loadHTML``
-compare with the performance of ``DOMDocument::loadHTML()``? Note that
+particular, how does the performance of ``DOM\HTMLDocument::loadHTML``
+compare with the performance of ``\DOMDocument::loadHTML``? Note that
 the latter method doesn't follow the HTML5 rules, but it does give an
 indication about the performance.
+
+Relevant scripts can be found at
+https://gist.github.com/nielsdos/5b59de15b4f1572b2147980eb0687df3.
 
 Experimental setup
 ^^^^^^^^^^^^^^^^^^
@@ -346,17 +442,16 @@ Results
 ^^^^^^^
 
 The following graph shows the results. The blue bar shows the parse time
-in seconds for ``DOMDocument``, and the orange bar does so for
-``DOMHTML5Document``. Lower is better. The black vertical line indicates
+in seconds for ``\DOMDocument``, and the orange bar does so for
+``DOM\HTMLDocument``. Lower is better. The black vertical line indicates
 the minimum & maximum measured times for each bar. First of all, some
 measurements on the far left are very low. That's because those sites
 primarily generate their content using JavaScript. Hence, there are not
 many HTML nodes in the document. Some sites also show a geo-blocked
 page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that ``DOMHTML5Document`` is usually on par or faster
-than ``DOMDocument``'s parser, despite having to do a conversion. For
-very short documents, the HTML5 parser can be a little bit slower
-because of the larger startup overhead.
+Second, we can see that ``DOM\HTMLDocument`` is usually on par or faster
+than ``\DOMDocument``'s parser, despite having to do a conversion. When
+it is slower, it's not by much.
 
 Based on this limited experiment, I conclude that the performance is
 acceptable.
@@ -368,27 +463,46 @@ Impact on binary size
 ~~~~~~~~~~~~~~~~~~~~~
 
 Incorporating any library will increase the binary size of the DOM
-extension. The Lexbor library is fairly big. The reality is however that
-a lot of the library is not actually used. Diving into each source file
-and ripping out functions that are not used is time-consuming and
-difficult however. Furthermore, this would make syncing upstream changes
-also more difficult.
+extension. The Lexbor library is fairly big. Some of the library is not
+actually used. I've manually ripped out the big parts of the CSS parser
+with a patch. However, diving into each source file and ripping out
+functions that are not used is time-consuming and difficult.
+Furthermore, this would make syncing upstream changes also more
+difficult.
 
 Inspecting the dom.so shared library using the size command yields the
 following results:
 
-================= =========== =========== ===========
-before/after      text        data        total
-================= =========== =========== ===========
-before this patch 174.78 KiB  15.18 KiB   192.24 KiB
-after this patch  5347.72 KiB 2012.19 KiB 7362.44 KiB
-================= =========== =========== ===========
+================= =========== ==========
+before/after      text        data
+================= =========== ==========
+before this patch 174.78 KiB  15.18 KiB
+after this patch  2966.81 KiB 553.44 KiB
+================= =========== ==========
 
 The large data section is due to the large lookup tables for text
 encoding handling: Lexbor supports a lot of text encodings. The HTML5
 parser spec requires quite a few character encodings to be supported by
 a compliant parser. This also has some influence on the text section,
 but another big part of it is simply all the parsing logic.
+
+Naming
+~~~~~~
+
+The names are in accordance to the DOM specification.
+
+The class is inside a new namespace called DOM. This follows the policy
+of the accepted `Namespaces in bundled PHP
+extensions </rfc/namespaces_in_bundled_extensions>`__ RFC. The
+capitalization of the namespace and class names follows the guidelines
+written in the `Class Naming </rfc/class-naming>`__ RFC.
+
+There's currently a discussion on the mailing list about changing the
+above-linked policy: https://externals.io/message/120959. The casing
+rules are flexible with respect to the outcome of that potential future
+RFC. As this RFC is introduced in the 8.4 development cycle, there's
+still freedom to change the naming after this RFC is hypothetically
+accepted.
 
 Completely alternative solution
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -407,14 +521,36 @@ reasons:
    and third-party).
 #. Fragmentation of userland.
 #. Additional maintenance work and complexity.
-#. I don't have time to do build this.
+#. I don't have time to build this.
+
+Rolling our own HTML5 parser
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Instead of using an external library/dependency, why don't we make our
+own parser? There are a couple of reasons:
+
+#. It's complex
+#. It requires a lot of testing. Using a library that's been used by
+   many others (like listed before), reduces the chance of bugs.
+#. It takes more maintenance effort to build our own, fix our bugs, and
+   keep up with potential spec changes than relying on a library.
+#. Time constraints
 
 Backward Incompatible Changes
 -----------------------------
 
-This RFC adds two new methods, but the existing methods for loading
-HTML4 documents remain as-is. Therefore, this feature is purely opt-in,
-and there is no BC break.
+This RFC adds three new classes, and new aliases. The existing
+\\DOMDocument class remains as-is. ``DOMNode::ownerDocument`` gets its
+type changed from ``?DOMDocument`` to ``?DOM\Document``. Similarly,
+``DOMXPath::document`` gets its type changed from ``\DOMDocument`` to
+``DOM\Document``, and the constructor now receives ``DOM\Document``
+instead of ``\DOMDocument``. The constructor change is not a BC break,
+because constructors do not participate in LSP checks. As PHP's type
+checks happen at runtime instead of statically, this shouldn't affect
+assignments. Overriding the changed property in a child class of
+\\DOMNode or \\DOMXPath would cause a compile error. However, overriding
+properties is useless in PHP anyway, so this is only a minor break.
+Therefore, this feature is almost purely opt-in.
 
 Proposed PHP Version(s)
 -----------------------
@@ -470,27 +606,29 @@ that we do not use right now.
 
 #. It contains a CSS selector parser, that transforms the expression
    into a list of actions we must follow to find the elements. This
-   *could* make implementing querySelector(All) more easy.
+   *could* make implementing querySelector(All) easier.
 #. It contains a WHATWG-compliant URL parser, which might be useful for
    extending PHP's URL pasing capabilities.
-#. There are more performance optimization opportunities.
+#. There are more performance optimization and possibly size reduction
+   opportunities. I've already upstreamed work for reducing size.
+#. The new class could be a way to opt-in into spec-compliant behaviour.
+   This is out of scope for this RFC though.
 
 Proposed Voting Choices
 -----------------------
 
-There are two votes:
+There is 1 primary vote, and there is 1 secondary vote:
 
-#. Whether ``DOMHTML5Document`` should be introduced. This requires 2/3
+#. Whether the proposed classes and namespace aliases should be
+   introduced. This requires 2/3 majority.
+#. Whether ``DOM\HTMLDocument::fromFile`` should respect the resolver
+   set by ``libxml_set_external_entity_loader``. This requires 50%
    majority.
-#. Whether ``DOMHTML5Document::loadHTMLFile`` should respect the
-   resolver set by ``libxml_set_external_entity_loader``. This requires
-   50% majority.
 
 Patches and Tests
 -----------------
 
-#. Pull request: https://github.com/nielsdos/php-src/pull/32 (TODO: move
-   this to php-src)
+#. Pull request: https://github.com/php/php-src/pull/12111
 #. Try it out yourself:
    https://gist.github.com/nielsdos/139099c54ddc4a43bc66f4c0b7ef02fc
 
@@ -508,19 +646,39 @@ After the project is implemented, this section should contain
 #. a link to the PHP manual entry for the feature
 #. a link to the language specification section (if any)
 
-References
-----------
-
-None yet.
-
 Rejected Features
 -----------------
 
 None yet.
 
+Changelog
+---------
+
+-  0.6.6: Clarify why exceptions aren't used for parse errors.
+-  0.6.5: Clarify constant aliasing.
+-  0.6.4: Add optional arguments $override_encoding to the factory
+   methods.
+-  0.6.3: Fixed typo: fromEmpty -> createEmpty. There was a single place
+   with this typo.
+-  0.6.2: Fixed some missing leading backslashes...
+-  0.6.1: Use FQN names, fixed a reference to an old name, and fixed
+   typos
+-  0.6.0: mark classes as final, update method names, clarification
+   about named constructor, list \\DOMXPath modification..
+-  0.5.3: The options argument was discussed in the text but missing in
+   the signature, this is now fixed.
+-  0.5.2: Clarification about \\DOMDocument being kept as-is.
+-  0.5.1: Clarification about purpose of XMLDocument.
+-  0.5.0: Add a common base class DOM\Document, make DOM\HTMLDocument
+   into DOM\HTMLDocument extending DOM\Document, add DOM\XMLDocument,
+   add factory methods. See revision history and internals mail for full
+   changelog.
+-  0.4.0: Initial version placed under discussion
+
 Additional Metadata
 -------------------
 
 :Original Authors: Niels Dossche, nielsdos@php.net
+:Original Status: Under Discussion
 :Slug: domdocument_html5_parser
 :Wiki URL: https://wiki.php.net/rfc/domdocument_html5_parser
