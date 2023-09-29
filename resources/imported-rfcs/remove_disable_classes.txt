@@ -1,0 +1,69 @@
+====== PHP RFC: Remove disable_classes INI setting ======
+  * Version: 0.1
+  * Date: 2023-09-29
+  * Author: George Peter Banyard <girgias@php.net>
+  * Status: Draft
+  * Target Version: PHP 8.4
+  * Implementation: https://github.com/php/php-src/pull/12043
+  * First Published at: http://wiki.php.net/rfc/remove_disable_classes
+
+===== Introduction =====
+
+The ''disable_classes'' INI setting is fundamentally useless and cause various issues in the engine, as using it will result in unexpected states for the engine to deal with.
+
+Only internal classes can be disabled, which brings the following observation.
+On a minimal build of PHP, with only the mandatory extensions enabled, there are 148 classes/interfaces/traits defined. [2]
+
+Other than a specific subset of classes defined in the SPL extension, disabling any of these classes will cause issues within the engine.
+Moreover, the subset of SPL classes that could be disabled are not a security concern.
+
+Therefore, any other class that can be disabled must come from an extension that can be disabled altogether.
+And "disabling" a class from an extension without disabling said extension will, other than rendering it useless, cause various issues that the extension is not prepared to handle as they expect the classes they defined to exist.
+
+If a hosting provided is concerned about an extension, then it should not enable it in the first place. Not break it ad hoc.
+
+Considering the above, the usefulness of this feature has always been dubious.
+
+This is in stark contrast to the ''disable_functions'' INI setting, which can be used to selectively remove functionality of an extension without breaking it overall.
+
+What makes this setting particularly broken is that it does not unregister the class, it only overwrites the create CE handler to emit a warning and purge the properties and function hash tables.
+This leads to various use after free, segfaults, and broken expectations for the engine and extensions which define said classes.
+On top of that, it is possible to actually instantiate such a class (and even classes which actually disallow this like ''ext/imap'') in userland, and pass it to function that are typed against said class without raising a TypeError.
+However, when trying to do anything with said object, stuff is going to explode in countless ways.
+
+===== Proposal =====
+
+Remove the ''disable_classes'' INI setting.
+
+===== Proposed PHP Version(s) =====
+
+Next minor version, i.e. PHP 8.4.0.
+
+===== RFC Impact =====
+==== To SAPIs ====
+
+The Fuzzer SAPI uses this setting to remove the <php>InfiniteIterator</php> class.
+
+The fix for this is to manually change the create handler of the <php>InfiniteIterator</php> CE to throw.
+
+===== Unaffected PHP Functionality =====
+
+The ''disable_functions'' INI setting is not affected.
+
+===== Proposed Voting Choices =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX. 
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  - [1] Initial Mailing List discussion: https://news-web.php.net/php.internals/120896
+  - [2] Gist containing all mandatory classes: https://gist.github.com/Girgias/63d55ba1e50b580412b004046daed02b
