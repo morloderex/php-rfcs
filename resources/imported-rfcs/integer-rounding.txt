@@ -14,19 +14,33 @@ Except ''number_format'' all of these functions take a ''float|int'', do a cast 
 
 As a result of ''round'', ''ceil'' and ''floor'' you get a floating point number rounded to your needs.
 
-In most cases this is sufficient but in cases of handling with integer values above 2^53 you start to end up with unexpected results due to floating point arithmetic and precision loss.
+In most cases this is sufficient but in cases of handling integer values above 2^53 you start to end up with unexpected results due to floating point arithmetic and precision loss.
 
 ''number_format'' on the other hand produces human readable numbers as ''string'' and since PHP 8.3 it also performs rounding integers without casting it to floating point numbers to fix the above issues mentioned.
 
 
 ===== Proposal =====
 
-This RFC proposes to perform rounding on given integer values and also return the resulting integer if possible.
-In case of integer under-/overflow the value will be casted to a float and rounded based on the floating point number as it's done currently.
+This RFC proposes to perform rounding on given int and return the resulting int if possible.
+In case of integer under-/overflow the value will be casted to a float (double) and rounded based on the floating point number as it's done currently.
 
-For ''ceil'', ''floor'' and ''round'' with ''precision >= 0'' this means a given integer argument gets returned as is.
+For ''ceil'', ''floor'' and ''round'' with ''precision >= 0'' this means a given int gets returned as is.
 
-The ''int''-type is compatible to ''float'', returning an integer instead of a floating point number will still be a number accepted for type-hints of ''int'', ''float'', ''int|float'' or ''mixed'' with strict_types enabled.
+The behavior will be as follows:
+<code>
+ceil(float): float
+floor(float): float
+round(float): float
+
+ceil(int): int
+floor(int): int
+round(int, precision: >= 0): int
+round(int, precision: < 0): int|float // implicit cast to float only in case of integer under-/overflow
+</code>
+
+This will result in less implicit casts and more precise rounding of integers above 2^53.
+
+The ''int''-type is compatible to ''float'', returning an int instead of a float will still be a number accepted for type-hints of ''int'', ''float'', ''int|float'' or ''mixed'' with strict_types enabled.
 
 Even if the returned type is compatible to the current returned type this is considered a breaking change on high frequently used functions and as such there will be a deprecation phase as described in "Backward Incompatible Changes" below.
 
@@ -56,17 +70,17 @@ float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 </code>
 
-8.4 behavior (deprecation message):
+8.4 behavior (deprecation phase):
 <code>
-Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(1)
 float(1)
-Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
-Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
-Rounding an integer will return an integer instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
+Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
 </code>
 
@@ -82,9 +96,9 @@ float(9.87654321098766E+17)
 
 ===== Backward Incompatible Changes =====
 
-A BC break happens on type reporting functions like ''is_float'', ''get_debug_type'', ''gettype'' and strict comparison ''==='' will now report an integer. Because of that there will be a deprecation phase so users are able to detect these cases and can act accordingly.
+A BC break happens on type reporting functions like ''is_float'', ''get_debug_type'', ''gettype'' and strict comparison ''==='' will now report an int. Because of that there will be a deprecation phase so users are able to detect these cases and can act accordingly.
 
-As such PHP 8.4 will report a deprecation message in case ''round'', ''ceil'' and ''floor'' would return an integer. For as long as the deprecation phase the resulting integer gets casted to ''float'' before return.
+As such PHP 8.4 will report a deprecation message in case ''round'', ''ceil'' and ''floor'' would return an int. For as long as the deprecation phase the resulting int gets casted back to ''float'' before return.
 
 The old implicit behavior can be forced by explicitly casting the value ''round((float)$num)''. This does not trigger a deprecation message and will not change behavior after the deprecation phase.
 
