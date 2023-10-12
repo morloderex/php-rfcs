@@ -14,19 +14,19 @@ RFC1867 defines the multipart/form-data content type. This content type is used 
 
 With the emergence of REST it has become increasingly popular to use other HTTP verbs such as PUT and PATCH where the usage of multipart/form-data is entirely valid but not processed by PHP. This requires manual parsing of the request body of this non-trivial format. Handling large amounts of data in userland may also be suboptimal in terms of performance. The corresponding issue has been upvoted over 350 times. https://bugs.php.net/bug.php?id=55815
 
-This RFC suggests adding a new function ''parse_post_data()'' to expose the existing functionality to userland so that it may be used for other HTTP verbs.
+This RFC suggests adding a new function ''request_parse_body()'' to expose the existing functionality to userland so that it may be used for other HTTP verbs.
 
 <code php>
 /**
  * @param resource<stream>|null $input_stream
  */
-function parse_post_data($input_stream = null, ?string $content_type = null): array {}
+function request_parse_body($input_stream = null, ?string $content_type = null): array {}
 
 // This is a PUT request
 var_dump($_POST);  // []
 var_dump($_FILES); // []
 
-[$_POST, $_FILES] = parse_post_data();
+[$_POST, $_FILES] = request_parse_body();
 
 var_dump($_POST);  // [...]
 var_dump($_FILES); // [...]
@@ -36,14 +36,14 @@ The function returns an array pair with index 0 in the shape of $_POST and index
 
 The function also accepts an optional stream as input. This is useful for applications like RoadRunner that use the CLI SAPI for webserver workers that process multiple requests per execution. If the input stream is not provided the function will obtain its input directly from ''sapi_module.read_post()''. If the input stream is set the content type must also be set, for the following reasons:
 
-  * The content type is needed because ''parse_post_data()'' also supports application/x-www-form-urlencoded for consistency.
+  * The content type is needed because ''request_parse_body()'' also supports application/x-www-form-urlencoded for consistency.
   * If the content type is multipart/form-data, the parser requires a boundary which is embedded in the Content-Type header.
 
 The function accepts a stream rather than a string because the input may be arbitrarily large (i.e. too large to hold in memory at once).
 
 ==== Sanitization ====
 
-Like the automatically invoked RFC1867 parsing, ''parse_post_data()'' will warn/abort under various conditions.
+Like the automatically invoked RFC1867 parsing, ''request_parse_body()'' will warn/abort under various conditions.
 
   * If the content size exceeds ''post_max_size''
   * If Content-Type is missing the boundary attribute
@@ -54,7 +54,7 @@ Like the automatically invoked RFC1867 parsing, ''parse_post_data()'' will warn/
 
 ==== Supported content types ====
 
-Apart from multipart/form-data which is the primary motivation for this RFC, ''parse_post_data()'' also supports the application/x-www-form-urlencoded format. For application/x-www-form-urlencoded the $_FILES-equivalent array is empty. If the content type is not supported, an <php>InvalidArgumentException</php> is thrown.
+Apart from multipart/form-data which is the primary motivation for this RFC, ''request_parse_body()'' also supports the application/x-www-form-urlencoded format. For application/x-www-form-urlencoded the $_FILES-equivalent array is empty. If the content type is not supported, an <php>InvalidArgumentException</php> is thrown.
 
 ===== Rationales =====
 
@@ -70,13 +70,13 @@ The second reason is that a separate function provides more flexibility. An endp
 
 ==== Removing files ====
 
-PHP automatically removes uploaded files at the end of the request to avoid DoS attacks that attempt to fill disk storage. For users of ''parse_post_data()'' with an input stream, it is expected that the process may handle multiple requests and thus multiple calls to this function. Waiting until process termination may accumulate many temporary files. It may be desired to add a function that cleans up temporary files that may be called on demand.
+PHP automatically removes uploaded files at the end of the request to avoid DoS attacks that attempt to fill disk storage. For users of ''request_parse_body()'' with an input stream, it is expected that the process may handle multiple requests and thus multiple calls to this function. Waiting until process termination may accumulate many temporary files. It may be desired to add a function that cleans up temporary files that may be called on demand.
 
 The same could be achieved in userland by inspecting the returned $_FILES-equivalent array, and thus a separate function might not be necessary. This would be slightly inconsistent with the current cleanup mechanism which tracks uploaded files independent of the $_FILES superglobal.
 
 ===== Backwards incompatible changes =====
 
-Other than reserving ''parse_post_data()'' in the global namespace there are no backwards incompatible changes.
+Other than reserving ''request_parse_body()'' in the global namespace there are no backwards incompatible changes.
 
 ===== RFC1867 refresher =====
 
@@ -140,7 +140,7 @@ Voting starts 2023-xx-xx and ends 2023-xx-xx.
 
 As this is a language change, a 2/3 majority is required.
 
-<doodle title="Introduce parse_post_data() in PHP 8.x?" auth="ilutov" voteType="single" closed="true">
+<doodle title="Introduce request_parse_body() in PHP 8.x?" auth="ilutov" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
