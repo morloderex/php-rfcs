@@ -58,13 +58,19 @@ All of these conditions emit warnings for the automatically invoked RFC1867 pars
 class RequestParseBodyException extends Exception {}
 </code>
 
-It's worth noting that the ''request_parse_body()'' function is not idempotent (when reading directly from the SAPI), even if the function throws. This is because the function receives input from the client that cannot be received again. It is thus not safe to call ''request_parse_body()'' twice for the same request without providing an input stream.
-
-Furthermore, calling ''request_parse_body()'' with an unsupported Content-Type throws an <php>InvalidArgumentException</php>.
+It's worth noting that the ''request_parse_body()'' function is not idempotent (when reading directly from the SAPI), even if the function throws. It is thus not safe to call ''request_parse_body()'' twice for the same request without providing an input stream. This is explained in more detail in the <php>php://input</php> section below.
 
 ==== Supported content types ====
 
 Apart from multipart/form-data which is the primary motivation for this RFC, ''request_parse_body()'' also supports the application/x-www-form-urlencoded format. For application/x-www-form-urlencoded the $_FILES-equivalent array is empty. If the content type is not supported, an <php>InvalidArgumentException</php> is thrown.
+
+==== php://input ====
+
+Usually, the requests content is accessible through the <php>php://input</php> stream. This stream buffers the content of the request so that it may be read multiple times. For POST requests, the entire content is read and buffered before control is handed over to the PHP script. For non-POST verbs the content remains unread until the PHP script does so. As the <php>php://input</php> stream is read it is buffered on the fly.
+
+The singular exception to this buffering mechanism is multipart/form-data for which the <php>php://input</php> stream is empty. The reasoning is most likely that multipart requests should not need to read the input stream since the parsed result is available in $_POST and $_FILES. Buffering the input for these requests essentially means that all files are written to disk twice, doubling the load on the disk in terms of time and space.
+
+For the same reason, ''request_parse_body()'' does not buffer to <php>php://input</php>. If you //really// need this behavior, you may read <php>php://input</php> before invoking ''request_parse_body()'' and then passing the stream to it.
 
 ===== Rationales =====
 
@@ -75,14 +81,6 @@ One could argue that since POST automatically triggers the parsing of the applic
 The first one is backwards compatibility. At least for multipart/form-data, the request body is consumed without buffering. Existing code that manually parses multipart/form-data will break as the input stream will be empty.
 
 The second reason is that a separate function provides more flexibility. An endpoint that does not accept multipart/form-data can terminate early, instead of parsing the request, potentially storing large files, erroring, and then deleting the buffered files again. Moreover, a separate function allows the parsing mechanism to be reused for RoadRunner and similar services as explained above.
-
-==== Why is php://input not rewindable for RFC1867? ====
-
-Usually, the requests content is accessible through the <php>php://input</php> stream. This stream buffers the content of the request so that it may be read multiple times. For POST requests, the entire content is read and buffered before control is handed over to the PHP script. For non-POST verbs the content remains unread until the PHP script does so. As the <php>php://input</php> stream is read it is buffered on the fly.
-
-The singular exception to this buffering mechanism is multipart/form-data for which the <php>php://input</php> stream is empty. The reasoning is most likely that multipart requests should not need to read the input stream since the parsed result is available in $_POST and $_FILES. Buffering the input for these requests essentially means that all files are written to disk twice, doubling the load on the disk in terms of time and space.
-
-For the same reason, ''request_parse_body()'' does not buffer to <php>php://input</php>. If you //really// need this behavior, you may read <php>php://input</php> before invoking ''request_parse_body()'' and then passing the stream to it.
 
 ===== Open questions =====
 
