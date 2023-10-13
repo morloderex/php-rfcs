@@ -84,14 +84,6 @@ The first one is backwards compatibility. At least for multipart, the request bo
 
 The second reason is that a separate function provides more flexibility. An endpoint that does not accept multipart can terminate early, instead of parsing the request, potentially storing large files, erroring, and then deleting the buffered files again. Moreover, a separate function allows the parsing mechanism to be reused for RoadRunner and similar services as explained above.
 
-===== Open questions =====
-
-==== Removing files ====
-
-PHP automatically removes uploaded files at the end of the request to avoid DoS attacks that attempt to fill disk storage. For users of ''request_parse_body()'' with an input stream, it is expected that the process may handle multiple requests and thus multiple calls to this function. Waiting until process termination may accumulate many temporary files. It may be desired to add a function that cleans up temporary files that may be called on demand.
-
-The same could be achieved in userland by inspecting the returned $_FILES-equivalent array, and thus a separate function might not be necessary. This would be slightly inconsistent with the current cleanup mechanism which tracks uploaded files independent of the $_FILES superglobal.
-
 ===== Backwards incompatible changes =====
 
 Other than reserving ''request_parse_body()'' in the global namespace there are no backwards incompatible changes.
@@ -151,6 +143,43 @@ echo file_get_contents($_FILES['file_name']['tmp_name']);
 </code>
 
 RFC1867 requests are automatically parsed when the request has the POST HTTP verb. Each non-file input is populated to the $_POST superglobal. For files, the content is stored in a temporary file and an entry is created in $_FILES to provide its metadata, along with a path to the temporary file. At the end of the request, any uploaded files that were not moved by the application get cleaned up. This avoids attacks that attempt to fill the servers disk space.
+
+===== Future scope =====
+
+==== Removing files ====
+
+PHP automatically removes uploaded files at the end of the request to avoid DoS attacks that attempt to fill disk storage. For users of ''request_parse_body()'' with an input stream, it is expected that the process may handle multiple requests and thus multiple calls to this function. Waiting until process termination may accumulate many temporary files. It may be desired to add a function that cleans up temporary files that may be called on demand.
+
+The same could be achieved in userland by inspecting the returned $_FILES-equivalent array, and thus a separate function might not be necessary. This would be slightly inconsistent with the current cleanup mechanism which tracks uploaded files independent of the $_FILES superglobal.
+
+==== Configuration ====
+
+A dedicated function presents the opportunity to customize parsing limits based on endpoints rather than setting them globally for all endpoints. For example, your website may have a public and a login-protected multipart form. Increasing ''post_max_size'', ''upload_max_filesize'' or similar settings globally may increase the risk for DoS attacks. As such, it may be preferable to increase these limits only for specific endpoints.
+
+With ''request_parse_body()'' it is possible to achieve this.
+
+<code php>
+#[Route('/api/videos', methods: ['PUT'])]
+public function index(): Response {
+    ini_set('post_max_size', '128M');
+    [$post, $files] = request_parse_body();
+
+    // ...
+}
+</code>
+
+However, it may be nice to have a dedicated parameter to overwrite these values without affecting the global ini-settings, particularly for long-running processes that may call ''request_parse_body'' multiple times.
+
+<code php>
+#[Route('/api/videos', methods: ['PUT'])]
+public function index(): Response {
+    [$post, $files] = request_parse_body(config: [
+        'post_max_size' => '128M',
+    ]);
+
+    // ...
+}
+</code>
 
 ===== Vote =====
 
