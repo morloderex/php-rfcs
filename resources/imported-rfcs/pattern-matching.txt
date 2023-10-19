@@ -96,7 +96,22 @@ Class constants may also be used as a pattern:
 $foo is ('spade'|'heart'|self::Wild);
 </PHP>
 
-Global constants are NOT permitted in a pattern, as they cannot be easily disambiguated from a class name.  If desired, they could be disambiguated using a special character prefix to indicate "the next thing is a constant."  That is not included in the RFC at this time, however.
+Global constants may not be used directly, as they cannot be differentiated from class names.  However, they may be used in expression patterns (see next section).
+
+=== Limited expression pattern ===
+
+The use of variables directly in a pattern is not supported, as it would conflict with variable binding below.  However, they may be included by deliniating them within <php>@()</php>.  This approach also works for global constants.  As with literals, they are useful mainly in compound patterns and <php>match()</php>.
+
+<code php>
+// Simple degenerate case patterns.
+$foo is @($bar); // Equivalent to $foo === $bar
+$foo is @(PHP_VERSION); // Equivalent to $foo === PHP_VERSION
+
+// More practical compound expressions
+$foo is @(Errors::NotFound)|@(Errors::Invalid); // Equivalent to $foo === Errors::NotFound || $foo === Errors::Invalid
+</code>
+
+It would be possible to expand this pattern to support arbitrary expressions within the delimiters, including function calls.  However, that has been omitted at this time in the interest of simplicity.  If a good use case for it can be shown in the future, that can be added in a backward compatible way, however.
 
 === Object property pattern ===
 
@@ -128,7 +143,7 @@ $p is (Point {x: 2}|null)
 $p instanceof Point && $p->x === 2 || $p === null;
 </code>
 
-Properties may be listed in any order.  A trailing comma is permitted.
+Properties may be listed in any order, but must be named.  A trailing comma is permitted.
 
 ==== match() enhancement ====
 
@@ -154,9 +169,11 @@ $result = match (true) {
 };
 </code>
 
+(See "Open Questions" below regarding the syntax for <php>match()</php> with patterns.)
+
 ==== Variable binding ====
 
-One of the prime uses of pattern matching is to extract a value from a larger structure, such as an object (or Enumeration/ADT, in the future).  This RFC supports such variable binding.  A variable that should be bound is denoted by a % and a variable.  If the input variable matches the rest of the pattern, then the corresponding value will be extracted and assigned to a variable of that name in the current scope.  It will remain in scope as long as normal variable rules say it should.
+One of the prime uses of pattern matching is to extract a value from a larger structure, such as an object (or Enumeration/ADT, in the future).  This RFC supports such variable binding by specifying the variable to populate.  If the input variable matches the rest of the pattern, then the corresponding value will be extracted and assigned to a variable of that name in the current scope.  It will remain in scope as long as normal variable rules say it should.
 
 In the currently supported patterns, it is only relevant for object pattern matching.
 
@@ -171,7 +188,7 @@ class Point {
 
 $p = new Point(3, 4, 5);
 
-if ($p is Point {x: 3, y: %$y} ) {
+if ($p is Point {x: 3, y: $y} ) {
     print "x is 3 and y is $y.";
 }
 // Equivalent to:
@@ -180,7 +197,7 @@ if ($p instanceof Point && $p->x === 3) {
     print "x is 3 and y is $y.";
 }
 
-if ($p is Point {z: %$z, x: 3, y: %$y} ) {
+if ($p is Point {z: $z, x: 3, y: $y} ) {
   print "x is 3 and y is $y and z is $z.";
 }
 // Equivalent to:
@@ -196,7 +213,7 @@ Variable binding is not compatible with an ORed compound pattern, as depending o
 If the variable name to extract to is the same as the name of the property, then the property name may be omitted.  That is, the last example can be abbreviated as:
 
 <code php>
-if ($p is Point {%$z, x: 3, %$y} ) {
+if ($p is Point {$z, x: 3, $y} ) {
   print "x is 3 and y is $y and z is $z.";
 }
 </code>
@@ -207,10 +224,10 @@ Variable binding is especially useful in ''match()'' statements, where there is 
 $result = match ($p) is {
   // These will match only some Point objects, depending on their property values.
   Point{x: 3, y: 9, %$z} => "x is 3, y is 9, z is $z",
-  Point{%$z, %$x, y: 4} => "x is $x, y is 4, z is $z",
-  Point{x: 5, %$y} => "x is 5, y is $y, and z doesn't matter",
+  Point{$z, $x, y: 4} => "x is $x, y is 4, z is $z",
+  Point{x: 5, $y} => "x is 5, y is $y, and z doesn't matter",
   // This will match any Point object.
-  Point{%$x, %$y, %$z} => "x is $x, y is $y, z is $z",
+  Point{$x, $y, $z} => "x is $x, y is $y, z is $z",
 };
 </code>
 
@@ -231,7 +248,7 @@ enum Move {
 match ($move) is {
     Move::TurnLeft => $this->orientation--,
     Move::TurnRight => $this->orientation++,
-    Move::Forward(%$amount) => $this->distance += $amount,
+    Move::Forward($amount) => $this->distance += $amount,
 };
 
 
@@ -241,7 +258,7 @@ enum Option {
 }
 
 match ($maybe) is {
-    Option::Some {%$val} => compute_something($val),
+    Option::Some {$val} => compute_something($val),
     Option::None => 'default value',
 }
 </PHP>
