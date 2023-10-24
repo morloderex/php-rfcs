@@ -35,8 +35,6 @@ While patterns may resemble other language constructs, whatever follows ''is'' i
 
 Patterns are a super-set of type definitions.  A pattern consists of one or more pattern segments, combined by <php>|</php> and <php>&</php> conjunctions.  If both are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.
 
-Additionally, if a pattern contains multiple segments, the entire pattern must also be enclosed in parentheses to help avoid parser ambiguity.  In practice, most patterns are expected to be single-segment.
-
 ==== Supported patterns ====
 
 === Type pattern ===
@@ -49,8 +47,9 @@ $foo is Request;   // Equivalent to $foo instanceof Request
 $foo is ?array;    // Equivalent to is_array($foo) || is_null($foo)
 
 // These are compound patterns, consisting of two sub-patterns each.
-$foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
-$foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
+$foo is int|float; // Equivalent to is_int($foo) || is_float($foo)
+$foo is User|int;  // Equivalent to $foo instanceof User || is_int($foo)
+$foo is string|Stringable; // Equivalent to is_string($foo) || $string instanceof Stringable
 
 // This is also a compound pattern. It is equivalent to:
 // $foo instanceof User || ($foo instanceof Account && $foo instanceof Authenticated)
@@ -71,7 +70,7 @@ $foo is 5;         // Equivalent to $foo === 5
 $foo is 'yay PHP'; // Equivalent to $foo === 'yay PHP'
 
 // More practical compound example
-$foo is ("beep"|"boop"); // Equivalent to $foo === "beep" || $foo === "boop"
+$foo is "beep"|"boop"; // Equivalent to $foo === "beep" || $foo === "boop"
 </code>
 
 === Built-in constants pattern ===
@@ -84,8 +83,8 @@ $foo is true;      // Equivalent to $foo === true
 $foo is null;      // Equivalent to $foo === null
 
 // More practical compound examples
-$foo is (array|null); // Equivalent to is_array($foo) || $foo === null
-$foo is ("Aardvark"|"Bear"|null) // Equivalent to $foo === "Aardvark" || $foo === "Bear" || $foo === null
+$foo is array|null; // Equivalent to is_array($foo) || $foo === null
+$foo is "Aardvark"|"Bear"|null // Equivalent to $foo === "Aardvark" || $foo === "Bear" || $foo === null
 </code>
 
 === Class constant pattern ===
@@ -93,14 +92,14 @@ $foo is ("Aardvark"|"Bear"|null) // Equivalent to $foo === "Aardvark" || $foo ==
 Class constants may also be used as a pattern:
 
 <PHP>
-$foo is ('spade'|'heart'|self::Wild);
+$foo is 'spade'|'heart'|self::Wild;
 </PHP>
 
 Global constants may not be used directly, as they cannot be differentiated from class names.  However, they may be used in expression patterns (see next section).
 
 === Limited expression pattern ===
 
-The use of variables directly in a pattern is not supported, as it would conflict with variable binding below.  However, they may be included by deliniating them within <php>@()</php>.  This approach also works for global constants.  As with literals, they are useful mainly in compound patterns and <php>match()</php>.
+The use of variables directly in a pattern is not supported, as it would conflict with variable binding below.  However, they may be included by delineating them within <php>@()</php>.  This approach also works for global constants.  As with literals, they are useful mainly in compound patterns and <php>match()</php>.
 
 <code php>
 // Simple degenerate case patterns.
@@ -138,7 +137,7 @@ $p is Point {y: 37, x: 2,};
 $p instanceof Point && $p->y === 37 && $p->x === 2;
 
 // A multi-segment pattern that includes an object pattern.
-$p is (Point {x: 2}|null)
+$p is Point {x: 2}|null
 // Equivalent to:
 $p instanceof Point && $p->x === 2 || $p === null;
 </code>
@@ -175,7 +174,7 @@ $result = match (true) {
 
 One of the prime uses of pattern matching is to extract a value from a larger structure, such as an object (or Enumeration/ADT, in the future).  This RFC supports such variable binding by specifying the variable to populate.  If the input variable matches the rest of the pattern, then the corresponding value will be extracted and assigned to a variable of that name in the current scope.  It will remain in scope as long as normal variable rules say it should.
 
-In the currently supported patterns, it is only relevant for object pattern matching.
+In the currently supported patterns, it is only relevant for object and array pattern matching.  (See the next section for array examples.)
 
 <code php>
 class Point {
@@ -248,7 +247,7 @@ enum Move {
 match ($move) is {
     Move::TurnLeft => $this->orientation--,
     Move::TurnRight => $this->orientation++,
-    Move::Forward($amount) => $this->distance += $amount,
+    Move::Forward{$amount} => $this->distance += $amount,
 };
 
 
@@ -376,7 +375,10 @@ if ($assoc is ['a' => 'A', 'b' => $b]) {
   print "Yes: $b";
 }
 // True.  Equivalent to:
-if (is_array($assoc) && count($assoc) === 2 && array_key_exists($assoc, 'a') && $assoc['a'] === 'A') {
+if (is_array($assoc) 
+    && count($assoc) === 2 
+    && array_key_exists($assoc, 'a') && $assoc['a'] === 'A'
+    ) {
     $b = $assoc['b'];
     print "Yes: $b";
 }
