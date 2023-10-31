@@ -1,74 +1,172 @@
 ====== PHP RFC: standard built-in is_empty() function ======
-  * Version: 0.1
-  * Date: 2023-10-30
+  * Version: 0.2
+  * Date: 2023-10-31
   * Author: Alessandro Rosa, alessandro.a.rosa@gmail.com
   * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/empty_function
 
 ===== Introduction =====
-So far the goal of the standard function `empty' is, according to the official documentation, to "//determine whether a variable is empty//". There are kinds of flaws that should be settled, in my viewpoint:
+The official documentation of the function empty() is at https://www.php.net/manual/en/function.empty.php. All the quotations below have been reported from the online version up to the date of this RFC, namely October 31th 2023.
+
+Heer the purpose of the function empty() is to `//Determine whether a variable is considered to be empty//'. Before exploring the behavior of this built-in function, we would argue upon the following sentence: `//A variable is considered empty if it does not exist or if its value equals false//'. While we agree on the first part, we could not do about the second half, as it throws an exception about the meaning of `//emptiness//'.
+
+Defining `emptiness' might be very subtle and actually not all the most blasoned online dictionaries succeed in giving a quite insightful definition. First,
+> Merriam-Webster: //`containing nothing', `not occupied or inhabited'//
+
+I do not like the usage of the above term `nothing', as this is a generic term which does not mean anything with regard to the relation between containers and contents, which is the core of `emptiness' definition.
+
+In this sense, a little better version follows:
+> Oxford dictionary: `//The condition of being without contents//'
+
+But it can be improved further in terms of specialized contents for containers, being actually the habitat of variables in programming languages. Finally, a more refined definition is the next, because it sets up a quality relation in terms of `appropriate' contents.
+> Dictionary.com: `//the fact or state of containing nothing or of being without the usual or appropriate contents//'.
+
+Before conlcusion, I will first resume basic notions about variable declaration; each example is followed by some equivalent statement in C-like languages, as they are pretty clearer about the strict connection between the kind of containers and contents.
+
+<code>
+//a container for storing an integer number was instantiated,
+//named `integer' and set to the constant value 1
+$integer = 1;
+
+//In C-like languages, it will ruled through this instantiation
+//int <var_name> = 1;
+</code>
+
+Emptiness here occurs __only__ when
+<code>$integer;</code>
+is coded.
+
+<code>
+//a container for storing an integer number was instantiated,
+//named `float' and set to the constant value 1.1
+$float = 1.1;
+
+//In C-like languages, it will ruled through this instantiation
+//double <var_name> = 1.1;
+</code>
+
+Analogously, emptiness here occurs __only__ when
+<code>$float;</code>
+is coded.
+
+<code>
+//a container for storing a sequence of characters was instantiated
+//named `string' and then set to something
+$string = "<any or no character>";
+
+//In C-like languages, it corresponds to the pointer-like syntax
+//char* <var_name> = "<any or no characters>";
+</code>
+
+Emptiness here occurs in two cases: when
+<code>$string;</code>
+or
+<code>$string="";</code>
+are coded.
+
+The definition of `emptiness' changes according to the kind of container. Therefore the second option in the official definition of emptiness in the empty function documentation, namely `//a variable is considered empty if its value equals false//', cannot hold logically holds, with regard to the essence of the variable container. The constant boolean value `false' alludes to the instantiation of a one-byte container, which is filled through the `false' value, hence the one-byte container not be judged as `empty'. Moreover, the same objection holds for the zero (0) input value, according to the official return value of empty() function in php.net, being documented as follows:
+`//Returns true if var does not exist or has a value that is empty or equal to zero, aka falsey, see conversion to boolean. Otherwise returns false//'.
+
+In my viewpoint, the optimal behavior of any emptiness-test function shall rely upon the match between the container and the kind of contents. Resuming, there are the flaws that should be eventually settled:
 
 1) the **semantics**: the function name is ambiguous about the action, that is, it is not clear whether the goal of empty() function should consist of testing the `emptiness' of input variable or return an empty version of the input variable.
 
-2) the **behavior**. The only two issues come from inputing no variable or managing the false/true constant values. I resumed the behavior here below:
+2) the **behavior**. The only three issues arise from inputing no variable or managing the false and 0 constant values.
+
+The ordinary behavior with all the built-in datatypes has been listed below:
 
 <code>
-echo "built-in function `empty'<br/>";
-echo "null value: ".( empty( null ) ? "Yes" : "No" )."<br/>";
-echo "undeclared var : ".( empty( $i ) ? "Yes" : "No" )."<br/>";
-//echo "empty input : ".( empty() ? "Yes" : "No" )."<br/>"; //empty input var will let code crash
-echo "empty string : ".( empty( "" ) ? "Yes" : "No" )."<br/>";
-echo "empty array : ".( empty( [] ) ? "Yes" : "No" )."<br/>";
-$i = 1;
-echo "boolean false : ".( empty( false ) ? "Yes" : "No" )."<br/>"; // expected value : 1
-echo "boolean true : ".( empty( true ) ? "Yes" : "No" )."<br/>"; // expected value : 1
-echo "declared var : ".( empty( $i ) ? "Yes" : "No" )."<br/>"; // expected value : 1
-echo "non-empty string : ".( empty( "something" ) ? "Yes" : "No" )."<br/>"; // expected value : 1
-echo "non empty array : ".( empty( [10] ) ? "Yes" : "No" )."<br/>"; // expected value : 1
+echo "built-in function `empty' behavior:\n";
+echo "Stage 1: empty, undeclared or null containers (`empty' function)\n";
+echo "null value >> empty( null ): ".( empty( null ) ? "Empty" : "Not empty" )."\n";
+echo "undeclared var >> empty( \$i ): ".( empty( $i ) ? "Empty" : "Not empty" )."\n";
+//echo "empty input >> empty() : ".( empty() ? "Empty" : "Not empty" )."\n"; //empty input var will let it crash
+echo "empty string >> empty( \"\" ) : ".( empty( "" ) ? "Empty" : "Not empty" )."\n";
+echo "empty array >> empty( [] ) : ".( empty( [] ) ? "Empty" : "Not empty" )."\n";
+	
+$res = fopen( 'file.txt', "w+" );
+echo "resource \$res = fopen( 'file.txt', \"w+\" );\n";
+echo "resource >> empty( \$res ) : ".( empty( $res ) ? "Empty" : "Not empty" )."\n";
+if ( $res !== false ) fclose( $res );
+
+echo "Stage 2: non-empty containers (`empty' function)\n";
+echo "boolean true >> empty( true ) : ".( empty( true ) ? "Empty" : "Not empty" )."\n";
+echo "boolean false >> empty( false ) : ".( empty( false ) ? "Empty" : "Not empty" )."\n"; // expected return value 0, but 1 is returned
+echo "constant 0 value >> empty( 0 ) : ".( empty( 0 ) ? "Empty" : "Not empty" )."\n"; // expected return value 0, but 1 is returned
+
+$a;
+echo "instantiated variable \$a but not filled >> empty( \$a ) : ".( empty( $a ) ? "Empty" : "Not empty" )."\n";
+
+$i = 1; // I have declared a variable for the test below
+echo "instanatiated var and filled >> empty( \$i ) : ".( empty( $i ) ? "Empty" : "Not empty" )."\n";
+
+echo "non-empty string >> empty( \"something\" ) : ".( empty( "something" ) ? "Empty" : "Not empty" )."\n";
+echo "non empty array >> empty( [10] ) : ".( empty( [10] ) ? "Empty" : "Not empty" )."\n";
 </code>
 
-We remark, to the benefit of any reader, that the empty string is "", that is, nothing between (double)quotes. The empty space, such as " ", cannot be ascribed to emptiness definition.
+We remark, to the benefit of readers, that the empty string is namely "", that is, no characters between (double)quotes. The empty space, namely " ", cannot match the definition of emptiness. Contents of string containers are properly characters only (i.e., any kind of symbol); hence, according to the dictionaries definitions listed at the top, the emptiness of a string occurs when the given variable container for string storage includes no character in general, either if the statements
+
+<code>$string;</code>
+
+or 
+
+<code>$string="";</code>
+
+are coded.
 
 ===== Proposal =====
-I understand that this proposal could represent a huge break, anyway I believe that my two points above shall not be disregarded in order to strengthen parts of PHP that look flawed or fuzzy so far. 1) Semantics, as you know, is essential for languages. 2) The function behavior must cover all cases as possible, without exceptions.
+I understand that this proposal could represent a huge break, anyway I believe that my points above shall not be disregarded in order to strengthen parts of PHP that look flawed or fuzzy so far. Honestly, I still read tons of people out there mocking up PHP for its non-typified nature. Also consider that 1) __semantics__, as you know, is essential for languages. 2) the function __behavior__ match the purposes declared in its name as well as it must cover all cases as possible, without exceptions.
 
 First, the `empty' name shall be adequated to the `//is_//' family of php built-in functions (//is_null//, //is_bool//, //is_string//, //is_array//, ...). Hence I propose `//is_empty//'. The return value will be true for emptiness and false otherwise. If the input variable is not empty would throw an error.
 
-Second, I implemented the following version which fixes the above two flaws:
+Second, I implemented the following version which fixes all the above flaws:
 
 <code>
 function is_empty( $input = null )
 {
-	$ser = @serialize( $input );
-	if ( preg_match( "/^N;$/i", $ser ) === 1 ) return 1;
-	if ( preg_match( "/^b\:[01]\;?$/i", $ser ) === 1 ) return 1;
-	return preg_match( "/0\:(\{\}|\[\]|\"\")\;?$/i", $ser ) === 1 ? 1 : 0;
+     $ser = @serialize( $input );
+     if ( preg_match( "/^N;$/i", $ser ) === 1 ) return 1;
+     if ( preg_match( "/^b\:[01]\;?$/i", $ser ) === 1 ) return 0;
+     return preg_match( "/0\:(\{\}|\[\]|\"\")\;?$/i", $ser ) === 1 ? 1 : 0;
 }
 </code>
 
-I resorted to the `serialize' built-in function just to show how it should work. This is just an escamotage coded in PHP for obtaining a formal basis and checking input variable consistence in the examples below. However, I presume that the internal C-version would approach the emptiness test in better ways that PHP is not able to perform. Hence note that I suppressed warnings in order to let this function run throughout the following tests, that also cover undefined variables:
+Let me first say that I resorted to the `serialize' built-in function just for showing here how the function is_empty() should work. The serialization just represents an escamotage in PHP for obtaining a formal basis for eventually checking the input variable emptiness in the examples below. However, I presume that the internal C-version would approach emptiness test in most proper ways involving memory tests. Please, note that I suppressed warnings in order to let this function run throughout the next tests, that also cover undefined variables:
 
 <code>
-echo "null value: ".is_empty( null )."<br/>"; // expected return value : 0
-echo "undeclared var : ".is_empty( $i )."<br/>"; // expected return value : 0
-echo "empty input : ".is_empt()."<br/>"; // expected return value : 0
-echo "empty string : ".is_empty( "" )."<br/>"; // expected return value : 0
-echo "empty array : ".is_empty( [] )."<br/>"; // expected return value : 0
-echo "<br/><br/>";
+echo ">new `is_empty()' function behavior\n";
+echo "Stage 1: empty, undeclared or null containers (`is_empty' function)\n";
+echo "null value >> is_empty( null ): ".( is_empty( null ) ? "Empty" : "Not empty" )."\n";
+echo "undeclared var >> is_empty( \$un ) : ".( is_empty( $un ) ? "Empty" : "Not empty" )."\n";
+echo "empty input >> is_empty() : ".( is_empty() ? "Empty" : "Not empty" )."\n";
+echo "empty string >> is_empty( \"\" ) : ".( is_empty( "" ) ? "Empty" : "Not empty" )."\n";
+echo "empty array >> is_empty( [] ) : ".( is_empty( [] ) ? "Empty" : "Not empty" )."\n";
+
+echo "Stage 2: non-empty containers (`is_empty' function)\n";
+echo "boolean true >> is_empty( true ) : ".( is_empty( true ) ? "Empty" : "Not empty" )."\n";
+echo "boolean false >> is_empty( false ) : ".( is_empty( false ) ? "Empty" : "Not empty" )."\n";
+echo "zero (0) constant value >> is_empty( 0 ) : ".( is_empty( 0 ) ? "Empty" : "Not empty" )."\n";
+
+$a;
+echo "instantiated variable \$a but not filled >> is_empty( \$a ) : ".( is_empty( $a ) ? "Empty" : "Not empty" )."<br/>";
 
 $i = 1;
-echo "boolean false : ".is_empty( false )."<br/>"; // expected return value : 1
-echo "boolean true : ".is_empty( true )."<br/>"; // expected return value : 1
-echo "declared var : ".is_empty( $i )."<br/>"; // expected return value : 1
-echo "non-empty string : ".is_empty( "something" )."<br/>"; // expected return value : 1
-echo "non empty array : ".is_empty( [10] )."<br/>"; // expected return value : 1
+echo "instantiated var and filled >> is_empty( \$i ) : ".( is_empty( $i ) ? "Empty" : "Not empty" )."\n";
+
+echo "non-empty string >> is_empty( \"something\" ) : ".( is_empty( "something" ) ? "Empty" : "Not empty" )."\n";
+echo "non empty array >> is_empty( [ 10 ] ): ".( is_empty( [10] ) ? "Empty" : "Not empty" )."\n";
+
+$res = fopen( 'file.txt', "w+" );
+echo "resource \$res = fopen( 'file.txt', \"w+\" );\n";
+echo "resource >> is_empty( \$res ) : ".( empty( $res ) ? "Empty" : "Not empty" )."\n";
+if ( $res !== false ) fclose( $res );
 </code>
 
-Code works correctly, it covers all cases and, last but not least, can be also finely read.
+The above code works correctly covers all cases of basic datatypes and, last but not least, can be also finely read.
 
 ===== Proposed PHP Version(s) =====
-next PHP 8.(x+2) [suggested]
-The status of empty() function shall be set to `deprecated'. Because of the importance of this break, I recommend the new is_empty() function to co-live together with the older one empty() until the latter will be definitely superseeded after 2 or 3 versions (suggest deadline) from the official embedding in the standard library. Assuming empty() to be deprecated since the version 8.x, it will be removed after version 8.(x+3) or 8.(x+4), that would take 3 or 4 years, as I presume.
+According to the official policies documented at https://wiki.php.net/rfc/releaseprocess, backwards compatibility can only be broken
+in a major version, hence the new function is_empty() would appear not before than version 9.0
 
 ===== RFC Impact =====
 
