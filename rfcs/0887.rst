@@ -1,733 +1,329 @@
-Path To Saner Increment/Decrement Operators
-===========================================
+RFC1867 For Non-POST HTTP Verbs
+===============================
 
 :PHP-RFC: 0887
-:Title: Path To Saner Increment/Decrement Operators
-:Author: George Peter Banyard <girgias@php.net>
-:Status: Implemented
+:Title: RFC1867 For Non-POST HTTP Verbs
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
+:Status: Draft
 :Type: Standards Track
-:Created: 2022-11-21
-:PHP-Version: 8.3
-:Version: 0.3
-
-Introduction
-------------
-
-PHP's increment and decrement operators can have some surprising
-behaviours when used with types other than int and float. Various
-previous attempts  [1]_  [2]_  [3]_ have been made to improve the
-behaviour of these operators, but none have been implemented. The goal
-of this RFC is to normalize the behaviour of ``$v++`` and ``$v--`` to be
-the same as ``$v += 1`` and ``$v -= 1``, respectively.
-
-Therefore, we will first look at the behaviour of arithmetic operators
-with various types, then detail the current behaviour of the increment
-and decrement operators, and finally propose various changes to fix the
-discrepancies.
-
-Behaviour of arithmetic operators
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Arithmetic operators perform a numeric type juggling, which is described
-in the userland manual as:
-
-    In this context if either operand is a float (or not interpretable
-    as an int), both operands are interpreted as floats, and the result
-    will be a float. Otherwise, the operands will be interpreted as
-    ints, and the result will also be an int. As of PHP 8.0.0, if one of
-    the operands cannot be interpreted a ``TypeError`` is thrown.
-
-The following types (other than int and float) are considered
-interpretable as int/float:
-
--  ``null``, as ``0``
--  ``bool``, where ``false`` is interpreted as ``0``, and ``true`` as
-   ``1``
--  ``string``, if it is numeric the string is converted to int/float and
-   the standard behaviour is used
-
-.. code:: php
-
-   var_dump(null + 1); // int(1)
-   var_dump(null - 1); // int(-1)
-
-   var_dump(false + 1); // int(1)
-   var_dump(false - 1); // int(-1)
-
-   var_dump(true + 1); // int(2)
-   var_dump(true - 1); // int(0)
-
-   var_dump("10" + 1); // int(11)
-   var_dump("10" - 1); // int(9)
-   var_dump("5.7" + 1); // float(6.7)
-   var_dump("5.7" - 1); // float(4.7)
-
-Resources, non-numeric strings, arrays (except when adding two arrays
-together), and objects that are instances of userland classes throw a
-``TypeError``.
-
-Object values that are instances of an internal class that overload the
-arithmetic operator (by implementing the ``do_operation`` handler) will
-use the result of calling the handler. If an internal class implements a
-custom ``cast_object`` handler which supports a numeric ``_IS_NUMBER``
-cast, the object is cast and the standard int/float behaviour is used.
-Otherwise, a ``TypeError`` is thrown.
-
-One example of an internal class that implements a ``do_operation``
-handler is the GMP class.
-
-.. code:: php
-
-   $o = gmp_init(36);
-   var_dump($o + 1);
-   /*
-   object(GMP)#2 (1) {
-     ["num"]=>
-     string(2) "37"
-   }
-   */
-
-The only examples of an internal class that does not implement a
-``do_operation`` handler but implements an ``_IS_NUMBER`` cast in
-php-src are in Tidy extension (and are of dubious nature):
-
-.. code:: php
-
-   $o = tidy_parse_string("<p>Hello world</p>");
-   var_dump($o + 1); // int(1)
-
-Note: the empty string has **never** been considered numeric. (see:
-https://3v4l.org/uvLbV)
-
-Note: If an internal class implements a custom ``cast_object`` handler
-that supports an integer cast (via ``IS_LONG``) and/or a float cast (via
-``IS_DOUBLE``), but *not* an ``_IS_NUMBER`` cast, no casting occurs and
-a ``TypeError`` is thrown.
-
-.. code:: php
-
-   $o = curl_init();
-   var_dump((int) $o); // e.g. int(1)
-   var_dump($o + 1); // Fatal error: Uncaught TypeError: Unsupported operand types: CurlHandle + int
-
-Current behaviour of the increment and decrement operators
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The current behaviour of these operators is rather complex and depends
-on which operator is used with which type. First, we will describe the
-common behaviour between both operators:
-
--  the value is of type ``int`` or ``float``, the operation is performed
--  the value is of type ``array`` or ``resource`` then a ``TypeError``
-   is raised
--  the value is of type ``bool``, no action is performed on the value
--  the value is of type ``string`` and is numeric, then a standard
-   numeric type cast is performed, and the ``int``/``float`` behaviour
-   is utilized.
-
-.. code:: php
-
-   $int = 10;
-   var_dump(++$int); // int(11)
-   $int = 10;
-   var_dump(--$int); // int(9)
-
-   $float = 5.7;
-   var_dump(++$float); // float(6.7)
-   $float = 5.7;
-   var_dump(--$float); // float(4.7)
-
-   $false = false;
-   var_dump(++$false); // bool(false)
-   var_dump(--$false); // bool(false)
-   $true = true;
-   var_dump(++$true); // bool(true)
-   var_dump(--$true); // bool(true)
-
-   $stringInt = "10";
-   var_dump(++$stringInt); // int(11)
-   var_dump(--$stringInt); // int(9)
-   $stringFloat = "5.7";
-   var_dump(++$stringFloat); // float(6.7)
-   var_dump(--$stringFloat); // float(4.7)
-
-Object values that are instances of an internal class that overload the
-arithmetic operator (by implementing the ``do_operation`` handler) will
-use the result of calling the handler. Otherwise, a ``TypeError`` is
-thrown.
-
-.. code:: php
-
-   $o = gmp_init(36);
-   var_dump(++$o);
-   /*
-   object(GMP)#2 (1) {
-     ["num"]=>
-     string(2) "37"
-   }
-   */
-
-   $o = tidy_parse_string("<p>Hello world</p>");
-   var_dump(++$o); // Fatal error: Uncaught TypeError: Cannot increment tidy
-
-For non-numeric ``string`` values and values of type ``null`` the
-behaviour is different between the increment and decrement operators.
-
-Current behaviour of the decrement operator with values of type null and non-numeric string
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-If the value is of type ``null``, no action is performed.
-
-If the value is a non-numeric ``string``, no action is performed, except
-if the value is the empty string, in which case the result of the
-operation is the integer ``-1``.
-
-.. code:: php
-
-   $n = null;
-   --$n;
-   var_dump($n); // NULL
-
-   $s = "foo";
-   --$s;
-   var_dump($s); // string(3) "foo"
-
-   $e = "";
-   --$e;
-   var_dump($e); // int(-1)
-
-Current behaviour of the increment operator with values of type null and non-numeric string
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-If the value is of type ``null``, the result of the operation is the
-integer ``1``.
-
-If the value is a non-numeric ``string`` a PERL alphanumeric string
-increment is performed.
-
-.. code:: php
-
-   $n = null;
-   ++$n;
-   var_dump($n); // int(1)
-
-   $s = "foo";
-   ++$s;
-   var_dump($s); // string(3) "fop"
-
-   $e = "";
-   ++$e;
-   var_dump($e); // string(1) "1"
-
-Note: this means that the behaviour around the empty string differs
-between both operators. Because for ``++`` a PERL increment is used, the
-result is the string ``"1"``. This behaviour is identical in **all**
-versions of PHP.
-
-.. code:: php
-
-   <?php
-
-   $s1 = $s2 = "";
-   var_dump(++$s1, ++$s1, --$s2, --$s2);
-   /* this results in
-   string(1) "1"
-   int(2)
-   int(-1)
-   int(-2)
-   */
-
-Details about the PERL String increment feature
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-If the string to increment is the empty string, return the string
-``"1"``.
-
-Otherwise, the last byte of the string is inspected:
-
--  If it is in-between "a" and "y", "A" and "Y", or "0" and "8", the
-   ASCII code point value is increased by one.
--  If if is "z", "Z", or "9" replace it by "a", "A", and "0"
-   respectively, then inspect the previous byte while holding a carry
-   value of 1.
--  Otherwise, do nothing.
-
-If, and only if, a carry value is held after having inspected the first
-byte of the string. The string is prepended the character "a", "A", or
-"1" depending on the value of the first byte ("z", "Z", and "9"
-respectively).
-
-Here are a couple examples demonstrating these rules:
-
-.. code:: php
-
-   <?php
-
-   // Empty string
-   $s = "";
-   var_dump(++$s); // string(1) "1"
-
-   // String increments are unaware of being "negative"
-   $s = "-cc";
-   var_dump(++$s); // string(3) "-cd"
-   $s = "cc";
-   var_dump(++$s); // string(2) "cd"
-
-   // Carrying values of different cases/types
-   $s = "Az";
-   var_dump(++$s); // string(2) "Ba"
-   $s = "aZ";
-   var_dump(++$s); // string(2) "bA"
-   $s = "A9";
-   var_dump(++$s); // string(2) "B0"
-   $s = "a9";
-   var_dump(++$s); // string(2) "b0"
-
-   // Carrying values until the beginning of the string
-   $s = "Zz";
-   var_dump(++$s); // string(3) "AAa"
-   $s = "zZ";
-   var_dump(++$s); // string(3) "aaA"
-   $s = "9z";
-   var_dump(++$s); // string(3) "10a"
-   $s = "9Z";
-   var_dump(++$s); // string(3) "10A"
-
-   // Trailing whitespace
-   $s = "Z ";
-   var_dump(++$s); // string(2) "Z "
-
-   // Leading whitespace
-   $s = " Z";
-   var_dump(++$s); // string(2) " A"
-
-   // Whitespace in-between
-   $s = "C Z";
-   var_dump(++$s); // string(3) "C A"
-
-   // Non-ASCII characters
-   $s = "é";
-   var_dump(++$s); // string(2) "é"
-   $s = "あいうえお";
-   var_dump(++$s); // string(15) "あいうえお"
-   $s = "α";
-   var_dump(++$s); // string(2) "α"
-   $s = "ω";
-   var_dump(++$s); // string(2) "ω"
-   $s = "Α";
-   var_dump(++$s); // string(2) "Β"
-   $s = "Ω";
-   var_dump(++$s); // string(2) "Ω"
-
-   // With period
-   $s = "foo1.txt";
-   var_dump(++$s); // string(8) "foo1.txu"
-   $s = "1f.5";
-   var_dump(++$s); // string(4) "1f.6"
-
-   // With multiple period
-   $s = "foo.1.txt";
-   var_dump(++$s); // string(9) "foo.1.txu"
-   $s = "1.f.5";
-   var_dump(++$s); // string(5) "1.f.6"
-
-The behaviour is slightly different than that of
-`Raku <https://docs.raku.org/type/Str>`__ (a PERL successor). It
-performs the string increment prior to the first ``FULL STOP .``
-character, handles Unicode characters, performs the carry in a slightly
-differently way, and also does not do anything with empty strings.
-
-.. code:: raku
-
-   sub var_dump(Str $v) {
-     say 'string(' ~  $v.encode('UTF-8').bytes ~ ') "' ~ $v ~ "\"\n";
-   }
-
-   # Empty string
-   my $s = "";
-   var_dump(++$s);
-
-   # String increments are unaware of being "negative"
-   $s = "-cc";
-   var_dump(++$s); # string(3) "-cd"
-   $s = "cc";
-   var_dump(++$s); # string(2) "cd"
-
-   # Carrying values of different cases/types
-   $s = "Az";
-   var_dump(++$s); # string(2) "Ba"
-   $s = "aZ";
-   var_dump(++$s); # string(2) "bA"
-   $s = "A9";
-   var_dump(++$s); # string(2) "B0"
-   $s = "a9";
-   var_dump(++$s); # string(2) "b0"
-
-   # Carrying values until the beginning of the string
-   $s = "Zz";
-   var_dump(++$s); # string(3) "AAa"
-   $s = "zZ";
-   var_dump(++$s); # string(3) "aaA"
-   $s = "9z";
-   var_dump(++$s); # string(3) "10a"
-   $s = "9Z";
-   var_dump(++$s); # string(3) "10A"
-
-   # Trailing whitespace
-   $s = "Z ";
-   var_dump(++$s); # string(2) "Z "
-
-   # Leading whitespace
-   $s = " Z";
-   var_dump(++$s); # string(2) " A"
-
-   # Whitespace in-between
-   $s = "C Z";
-   var_dump(++$s); # string(4) "C AA"
-
-   # Non-ASCII characters
-   $s = "é";
-   var_dump(++$s); # string(2) "é"
-   $s = "あいうえお";
-   var_dump(++$s); # string(15) "あいうえお"
-   $s = "α";
-   var_dump(++$s); # string(2) "β"
-   $s = "ω";
-   var_dump(++$s); # string(4) "αα"
-   $s = "Α";
-   var_dump(++$s); # string(2) "Β"
-   $s = "Ω";
-   var_dump(++$s); # string(4) "ΑΑ"
-
-   # With period
-   $s = "foo1.txt";
-   var_dump(++$s); # string(8) "foo2.txt"
-   $s = "1f.5";
-   var_dump(++$s); # string(4) "1g.5"
-
-   # With multiple period
-   $s = "foo.1.txt";
-   var_dump(++$s); # string(9) "fop.2.txt"
-   $s = "1.f.5";
-   var_dump(++$s); # string(5) "2.f.5"
-
-However, the biggest problem is with strings that can be interpreted as
-a number in scientific notation, because they will never be interpreted
-as an alphanumeric string to be incremented using the PERL increment
-feature, but converted to float first:
-
-.. code:: php
-
-   $s = "5d9";
-   var_dump(++$s); // string(3) "5e0"
-   var_dump(++$s); // float(6)
-
-While Raku also supports arithmetic operations with strings that
-represent number in scientific notation, it does not perform any type
-juggling at all for the increment and decrement operators (therefore
-having the same behaviour as currently for boolean and its corresponding
-``null`` type ``Nil``).
-
-Therefore the above snippet in Raku gives a consistent result:
-
-.. code:: raku
-
-   sub var_dump(Str $v) {
-     say 'string(' ~  $v.encode('UTF-8').bytes ~ ') "' ~ $v ~ "\"\n";
-   }
-
-   my $s = "5d9";
-   var_dump(++$s); // string(3) "5e0"
-   var_dump(++$s); // string(3) "5e1"
-
-Summary of behavioural differences
-----------------------------------
-
-=========== ============= ============= ============= =============
-\           ``+1``        ``++``        ``-1``        ``--``
-``null``    ``1``         ``1``         ``-1``        ``null``
-``false``   ``1``         ``false``     ``-1``        ``false``
-``true``    ``2``         ``true``      ``0``         ``true``
-``""``      ``TypeError`` ``"1"``       ``TypeError`` ``-1``
-``"foo"``   ``TypeError`` ``"fop"``     ``TypeError`` ``"foo"``
-Tidy Object ``1``         ``TypeError`` ``-1``        ``TypeError``
-=========== ============= ============= ============= =============
+:Created: 2023-10-06
+:PHP-Version: 8
+:Version: 1.0
 
 Proposal
 --------
 
-The proposal is to create a path so that in the next major version of
-PHP the increment and decrement operators behave identically to
-adding/subtracting 1 respectively, while acknowledging that users rely
-on the PERL string increment feature.
+*If you need a refresher on RFC1867, there's a section below.*
 
-To achieve this, we propose the following changes to be made in the next
-minor version of PHP:
+RFC1867 defines the multipart/form-data content type. This content type
+is used primarily for submitting HTTP forms that contain files. PHP
+supports the parsing of this content type natively, but only for POST
+requests. Specifically, if a request has the method POST and the content
+type multipart/form-data the request body is immediately consumed before
+starting the PHP script and populated into the $_POST and $_FILES
+superglobals. This functionality triggers automatically and is not
+exposed to userland directly.
 
--  Add the ``str_increment()`` and ``str_decrement()`` functions which
-   implement a symmetrical but more rigorous and strict behaviour than
-   the current PERL string increment feature has which is described in
-   the sub-section below.
--  Add support to increment/decrement objects that implement support for
-   a ``_IS_NUMBER`` cast but do not implement a ``do_operation`` handle
+With the emergence of REST it has become increasingly popular to use
+other HTTP verbs such as PUT and PATCH where the usage of
+multipart/form-data is entirely valid but not processed by PHP. This
+requires manual parsing of the request body of this non-trivial format.
+Handling large amounts of data in userland may also be suboptimal in
+terms of performance. The corresponding issue has been upvoted over 350
+times. https://bugs.php.net/bug.php?id=55815
 
-.. code:: php
-
-   $o = tidy_parse_string("<p>Hello world</p>");
-   var_dump(++$o); // int(1)
-
--  to emit ``E_WARNING``\ s when the operators currently do not have any
-   behaviour when they would if replaced with a proper
-   addition/subtraction (i.e. when the value is of type ``bool`` and
-   ``null`` for the decrement operator).
+This RFC suggests adding a new function ``request_parse_body()`` to
+expose the existing functionality to userland so that it may be used for
+other HTTP verbs.
 
 .. code:: php
 
-   $n = null;
-   --$n; // Warning: Decrement on type null has no effect, this will change in the next major version of PHP
-   var_dump($n); // NULL
+   /**
+    * @param resource<stream>|null $input_stream
+    */
+   function request_parse_body($input_stream = null, ?string $content_type = null, ?array $options): array {}
 
-   $false = false;
-   --$false; // Warning: Decrement on type bool has no effect, this will change in the next major version of PHP
-   var_dump($false); // bool(false)
-   ++$false; // Warning: Increment on type bool has no effect, this will change in the next major version of PHP
-   var_dump($false); // bool(false)
+   // This is a PUT request
+   var_dump($_POST);  // []
+   var_dump($_FILES); // []
 
-   $true = true;
-   --$true; // Warning: Decrement on type bool has no effect, this will change in the next major version of PHP
-   var_dump($true); // bool(true)
-   ++$true; // Warning: Increment on type bool has no effect, this will change in the next major version of PHP
-   var_dump($true); // bool(true)
+   [$_POST, $_FILES] = request_parse_body();
 
--  Deprecate using the decrement operator with non-numeric strings.
+   var_dump($_POST);  // [...]
+   var_dump($_FILES); // [...]
 
-.. code:: php
+The function returns an array pair with index 0 in the shape of $_POST
+and index 1 in the shape of $_FILES. If desired, the return values can
+overwrite the $_POST and $_FILES superglobals. This makes it simple to
+share existing POST endpoints.
 
-   $empty = "";
-   --$empty // Deprecated: Decrement on empty string is deprecated as non-numeric
-   var_dump($empty); // int(-1)
+The function also accepts an optional stream as input. This is useful
+for applications like RoadRunner that use the CLI SAPI for webserver
+workers that process multiple requests per execution. If the input
+stream is not provided the function will obtain its input directly from
+``sapi_module.read_post()``. If the input stream is set the content type
+must also be set, for the following reasons:
 
-   $s = "foo";
-   --$s; // Deprecated: Decrement on non-numeric string has no effect and is deprecated
-   var_dump($s); // string(3) "foo"
+-  The content type is needed to infer the desired parser, as
+   ``request_parse_body()`` also supports
+   application/x-www-form-urlencoded for consistency.
+-  If the content type is multipart/form-data, the parser requires a
+   boundary which is embedded in the Content-Type header.
 
--  Deprecate using the increment operator with strings that are not
-   strictly alphanumeric.
+The function accepts a stream rather than a string because the input may
+be arbitrarily large (i.e. too large to hold in memory at once).
 
-.. code:: php
+The function accepts an array of options to override global INI
+settings. See the "$options parameter" section for more details.
 
-   $empty = "";
-   ++$empty // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($empty); // string(1) "1"
-
-   $s = "foo";
-   ++$s; // No Deprecation
-   var_dump($s); // string(3) "fop"
-
-   $s = "-cc";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); // string(3) "-cd"
-
-   $s = "Z ";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); // string(2) "Z "
-
-   $s = " Z";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); // string(2) " A"
-
-   # Non-ASCII characters
-   $s = "é";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); # string(2) "é"
-   $s = "あいうえお";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); # string(15) "あいうえお"
-   $s = "α";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); # string(2) "α"
-   $s = "1f.5";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); # string(4) "1f.6"
-
-   $s = "1.f.5";
-   ++$s; // Deprecated: Increment on non-alphanumeric string is deprecated
-   var_dump($s); # string(5) "1.f.6"
-
-In a follow-up minor version of PHP the following changes will take
-place:
-
--  Deprecate using the increment operator with non-numeric strings.
-
-.. code:: php
-
-   $s = "foo";
-   ++$s; // Deprecated: Increment on non-numeric string is deprecated
-   var_dump($s); // string(3) "fop"
-
-In the next major version of PHP the following changes will take place:
-
--  Values of type ``bool`` and ``null`` are first cast to integers
--  Non-numeric string values throw a ``TypeError``
-
-Semantics of str_increment() and str_decrement()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The signature of the functions are:
-
-.. code:: php
-
-   function str_increment(string $string): string {}
-   function str_decrement(string $string): string {}
-
-If ``$string`` is the empty string or not totally comprised of ASCII
-alphanumeric characters (``[a-zA-Z0-9]``) then a ValueError is thrown.
-
-If decrementing ``$string`` would result in an underflow (e.g. ``"AA"``
-or ``"0"``) an out of range ValueError will be thrown. This follows
-Raku's behaviour.
-
-As those functions would not be performing any type juggling strings
-that can be interpreted as numbers in scientific notation will not be
-implicitly converted to float.
-
-.. code:: php
-
-   $s = "5d9";
-   $s = str_increment($s);
-   var_dump($s); // string(3) "5e0"
-   $s = str_increment($s);
-   var_dump($s); // string(3) "5e1"
-
-Cost/Benefit
+Sanitization
 ~~~~~~~~~~~~
 
-PHP currently has 6 main and 4 operation-specific type juggling
-contexts. The main 6 are documented in the userland manual on the `type
-juggling
-page <https://www.php.net/manual/en/language.types.type-juggling.php>`__
-and are as follows:
+Like the automatically invoked multipart parsing,
+``request_parse_body()`` will fail under various conditions.
 
--  Numeric
--  String
--  Logical
--  Integral and string
--  Comparative
--  Function
+-  If the content size exceeds ``post_max_size``.
+-  If Content-Type is missing the boundary attribute.
+-  If the number of multipart parts exceeds
+   ``max_multipart_body_parts``.
+-  If the number of "POST" (non-file) inputs exceeds ``max_input_vars``.
+-  If the number of files exceeds ``max_file_uploads``.
+-  If an input is missing both the ``name`` and ``filename`` attribute.
 
-The 4 operation-specific contexts are:
-
--  Increment/Decrement operators
--  String offsets
--  Array offsets
--  ``exit`` language construct
-
-With the semantics proposed in this RFC the increment/decrement
-operators would be folded into the numeric type juggling context which
-reduces the semantic complexity of the language and possibly the
-engine/optimizer implementation in the next major version.
-
-The drawback of this approach is the deprecation, and thus removal, of
-the PERL increment feature. However, the issues around strings that can
-be interpreted in scientific notation, the fact it only properly
-supports strings which are only comprised of the ASCII alphanumeric
-characters (``[a-zA-Z0-9]``), and adding support for string decrements
-was previously `rejected unanimously </rfc/alpanumeric_decrement>`__,
-makes us believe the current semantics of the string increment feature
-are unsound.
-
-Therefore, we consider the value of reducing the semantic complexity of
-PHP higher than keeping support for this feature in its current form.
-The introduction of the ``str_increment()`` function provides a
-migration path for users relying on this feature that can easily be
-polyfilled in prior versions of PHP:
+All of these conditions emit warnings for the automatically invoked
+multipart parsing. However, with a dedicated function we can benefit
+from exceptions to make parsing errors unmissable. A new Exception class
+``RequestParseBodyException`` is created.
 
 .. code:: php
 
-   function str_increment_polyfill(string $s): string {
-       if (is_numeric($s)) {
-           $offset = stripos($s, 'e');
-           if ($offset !== false) {
-               /* Using increment operator would cast the string to float
-                * Therefore we manually increment it to convert it to an "f"/"F" that doesn't get affected */
-               $c = $s[$offset];
-               $c++;
-               $s[$offset] = $c;
-               $s++;
-               $s[$offset] = match ($s[$offset]) {
-                   'f' => 'e',
-                   'F' => 'E',
-                   'g' => 'f',
-                   'G' => 'F',
-               };
-               return $s;
-           }
-       }
-       return ++$s;
+   class RequestParseBodyException extends Exception {}
+
+It's worth noting that the ``request_parse_body()`` function is not
+idempotent (when reading directly from the SAPI), even if the function
+throws. It is thus not safe to call ``request_parse_body()`` twice for
+the same request without providing an input stream. This is explained in
+more detail in the ``php://input`` section below.
+
+Supported content types
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Apart from multipart/form-data which is the primary motivation for this
+RFC, ``request_parse_body()`` also supports the
+application/x-www-form-urlencoded format. For
+application/x-www-form-urlencoded the $_FILES-equivalent array is empty.
+If the content type is not supported, an ``InvalidArgumentException`` is
+thrown.
+
+php://input
+~~~~~~~~~~~
+
+Usually, the requests content is accessible through the ``php://input``
+stream. This stream buffers the content of the request so that it may be
+read multiple times. For POST requests, the entire content is read and
+buffered before control is handed over to the PHP script. For non-POST
+verbs the content remains unread until the PHP script does so. As the
+input stream is read it is buffered on the fly.
+
+The singular exception to this buffering mechanism is
+multipart/form-data for which the input stream is empty. The reasoning
+is most likely that multipart requests should not need to read the input
+stream since the parsed result is available in $_POST and $_FILES.
+Buffering the input for these requests essentially means that all files
+are written to disk twice, doubling the load on the disk in terms of
+time and space.
+
+For the same reason, ``request_parse_body()`` does not buffer to
+``php://input``. If you *really* need this behavior, you may read the
+input stream before invoking ``request_parse_body()`` and then passing
+the stream to it.
+
+This means that ``request_parse_body()`` may not be called twice for the
+same request without providing an input stream, as it destructively
+consumes ``sapi_module.read_post()``.
+
+$options parameter
+~~~~~~~~~~~~~~~~~~
+
+A dedicated function presents the opportunity to customize parsing
+limits based on endpoints rather than setting them globally for all
+endpoints. For example, your website may have a public and a
+login-protected multipart form. Increasing ``post_max_size``,
+``upload_max_filesize`` or similar settings globally may increase the
+risk for DoS attacks. As such, it may be preferable to increase these
+limits only for specific endpoints.
+
+``request_parse_body()`` accepts a ``$options`` parameter to set
+override the following INI values:
+
+-  max_file_uploads
+-  max_input_vars
+-  max_multipart_body_parts
+-  post_max_size
+-  upload_max_filesize
+
+.. code:: php
+
+   #[Route('/api/videos', methods: ['PUT'])]
+   public function index(): Response {
+       [$post, $files] = request_parse_body(options: [
+           'post_max_size' => '128M',
+       ]);
+
+       // ...
    }
 
-Impact of deprecating the PERL string increment feature on userland
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This is particularly useful for long-running processes that may call
+``request_parse_body`` multiple times and as such would otherwise need
+to restore the old INI values.
 
-To determine the impact of this RFC on userland, the static analysis
-tool `Exakat <https://www.exakat.io/en/>`__ was used. We analyzed 2909
-open source projects, including the top 1000 composer packages, plus
-various private enterprise code bases.  [4]_
+.. code:: php
 
-The only non-false-positive use cases using the PERL string increment
-feature are:
+   #[Route('/api/videos', methods: ['PUT'])]
+   public function index(): Response {
+       $previousValue = ini_get('post_max_size');
+       ini_set('post_max_size', '128M');
+       try {
+           [$post, $files] = request_parse_body();
+       } finally {
+           ini_set('post_max_size', $previousValue);
+       }
 
--  Generating a list of valid unicode (or ASCII) characters. The most
-   popular project using this is HTMLPurifier, which no longer does so
-   as of `this PR <https://github.com/ezyang/htmlpurifier/pull/367>`__.
--  Generating sequential IDs. The main library doing this is amphp/amp,
-   however a lot of other projects depend on this library.
--  Incrementing a spreadsheet column.
+       // ...
+   }
 
-In any of these cases, no deprecation notices would be emitted in the
-first stage of this RFC. As the first stage of this RFC also provides
-the ``str_increment()`` function, which can be polyfilled, we believe
-there will be enough time to migrate all these usages to the new
-function prior to removal of this feature.
+Providing invalid keys or values will throw a ``ValueError``.
 
-Backward Incompatible Changes
------------------------------
+Why not parse the content automatically?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Using the increment/decrement operators on the empty string.
+One could argue that since POST automatically triggers the parsing of
+the application/x-www-form-urlencoded and multipart/form-data requests
+the same should be done for PUT, PATCH and other verbs. There are two
+primary reasons not to do that.
 
-The string increment feature.
+The first one is backwards compatibility. At least for multipart, the
+request body is consumed without buffering. Existing code that manually
+parses multipart will break as the input stream will be empty.
 
-The changes that introduce an ``E_WARNING`` diagnostic do not
-technically break backwards compatibility, however they might be
-elevated to an exception via a user set error handler which may reveal
-some unintended usages.
+The second reason is that a separate function provides more flexibility.
+An endpoint that does not accept multipart can terminate early, instead
+of parsing the request, potentially storing large files, erroring, and
+then deleting the buffered files again. Moreover, a separate function
+allows the parsing mechanism to be reused for RoadRunner and similar
+services as explained above.
 
-Future Scope
+If you'd like to make use of these benefits for ``POST``, you may
+disable the ``enable_post_data_reading`` ini-setting and then call
+``request_parse_body()`` from your application.
+
+Backwards incompatible changes
+------------------------------
+
+Other than reserving ``request_parse_body()`` in the global namespace
+there are no backwards incompatible changes.
+
+RFC1867 refresher
+-----------------
+
+RFC1867 defines the multipart/form-data content type. This content type
+is used primarily for submitting HTTP forms that contain files. It is
+similar to application/x-www-form-urlencoded in that it contains a list
+of key-value pairs for each form input. Each input may contain
+attributes, as well as the content of the input. Each of the inputs are
+separated by a boundary which is an arbitrary string sequence not used
+in any of the input content sections. The boundary is specified in the
+Content-Type header, so that the client knows how to split the sections.
+For files, the original filename and content type are passed as
+attributes. Here's a simple example of what this might look like.
+
+::
+
+   POST / HTTP/1.1
+   Host: localhost:9000
+   Content-Type: multipart/form-data; boundary=---------------------------84000087610663814162942123332
+
+   -----------------------------84000087610663814162942123332
+   Content-Disposition: form-data; name="post_field"
+
+   post content
+   -----------------------------84000087610663814162942123332
+   Content-Disposition: form-data; name="file_field"; filename="original_filename.txt"
+   Content-Type: text/plain
+
+   file content
+   -----------------------------84000087610663814162942123332--
+
+The resulting $_POST and $_FILES superglobals may look like this:
+
+::
+
+   var_dump($_POST);
+   array(1) {
+     ["post_field"]=>
+     string(9) "post data"
+   }
+   var_dump($_FILES);
+   array(1) {
+     ["file_field"]=>
+     array(6) {
+       ["name"]=>
+       string(21) "original_filename.txt"
+       ["full_path"]=>
+       string(21) "original_filename.txt"
+       ["type"]=>
+       string(10) "text/plain"
+       ["tmp_name"]=>
+       string(%d) "/tmp/sometmpfilename"
+       ["error"]=>
+       int(0)
+       ["size"]=>
+       int(12)
+     }
+   }
+
+::
+
+   echo file_get_contents($_FILES['file_name']['tmp_name']);
+   // file content
+
+RFC1867 requests are automatically parsed when the request has the POST
+HTTP verb. Each non-file input is populated to the $_POST superglobal.
+For files, the content is stored in a temporary file and an entry is
+created in $_FILES to provide its metadata, along with a path to the
+temporary file. At the end of the request, any uploaded files that were
+not moved by the application get cleaned up. This avoids attacks that
+attempt to fill the servers disk space.
+
+Future scope
 ------------
 
-One possible future scope is to add support to both arithmetic
-operations and the increment/decrement operators to support objects that
-only implement an int or float cast instead of a numeric cast.
+Removing files
+~~~~~~~~~~~~~~
 
-One other possible extension is to add a ``$step`` argument to
-``str_increment()`` and ``str_decrement()``
+PHP automatically removes uploaded files at the end of the request to
+avoid DoS attacks that attempt to fill disk storage. For users of
+``request_parse_body()`` with an input stream, it is expected that the
+process may handle multiple requests and thus multiple calls to this
+function. Waiting until process termination may accumulate many
+temporary files. It may be desired to add a function that cleans up
+temporary files that may be called on demand.
 
-Proposed PHP Version
---------------------
+The same could be achieved in userland by inspecting the returned
+$_FILES-equivalent array, and thus a separate function might not be
+necessary. This would be slightly inconsistent with the current cleanup
+mechanism which tracks uploaded files independent of the $_FILES
+superglobal.
 
-Next minor version, i.e. PHP 8.3.0, follow-up minor version, e.g. PHP
-8.4.0, and next major version, i.e. PHP 9.0.0.
+Vote
+----
 
-Proposed Voting Choices
------------------------
+Voting starts 2023-xx-xx and ends 2023-xx-xx.
 
-As per the voting RFC a yes/no vote with a 2/3 majority is needed for
-this proposal to be accepted.
+As this is a language change, a 2/3 majority is required.
 
-Voting started on 2023-06-28 and will end on 2023-07-12.
-
-Question: Accept Path to Saner Increment/Decrement operators RFC?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Introduce request_parse_body() in PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -735,41 +331,12 @@ Voting Choices
 -  Yes
 -  No
 
-Implementation
---------------
-
-GitHub pull request: https://github.com/php/php-src/pull/10358
-
-After the project is implemented, this section should contain
-
--  Version: PHP 8.3
--  Implementation
-   :https://github.com/php/php-src/commit/d8696f92166eea5e94cc82b64bce72f36fc81d46
--  a link to the PHP manual entry for the feature
-
-References
-----------
-
-.. [1]
-   `PHP RFC: Normalize increment and decrement
-   operators </rfc/normalize_inc_dec>`__
-
-.. [2]
-   `PHP RFC: Alphanumeric Decrement </rfc/alpanumeric_decrement>`__
-
-.. [3]
-   `PHP RFC: Increment/Decrement
-   Fixes </rfc/increment_decrement_fixes>`__
-
-.. [4]
-   Raw results of the analysis are available as a
-   `gist <https://gist.github.com/exakat/9d6d1cc04639a43e62bed85d133d87ef>`__.
-
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/commit/d8696f92166eea5e94cc82b64bce72f36fc81d46
-:Original Authors: George Peter Banyard, girgias@php.net
-:Original PHP Version: PHP 8.3, PHP 8.(3+x), and PHP 9.0
-:Slug: saner-inc-dec-operators
-:Wiki URL: https://wiki.php.net/rfc/saner-inc-dec-operators
+:Implementation: https://github.com/php/php-src/pull/11472
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Original Status: Under discussion
+:Slug: rfc1867-non-post
+:Wiki URL: https://wiki.php.net/rfc/rfc1867-non-post
