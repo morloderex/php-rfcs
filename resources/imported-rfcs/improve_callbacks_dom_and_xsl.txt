@@ -15,7 +15,61 @@ To better understand the proposal, I'll first give some background to demo the u
 
 ===== Background =====
 
+**Important:** in all examples in this RFC, I will use the following sample document to work with. I will not repeat this code snippet.
+<PHP>
+// Set up a sample document with links to cats and dogs
+$doc = new DOMDocument;
+$doc->loadXML(<<<XML
+<animals>
+    <a box_preference="small" href="cat/jill">Jill</a>
+    <a box_preference="medium" href="cat/kes">Kes</a>
+    <a box_preference="medium" href="cat/minou">Minou</a>
+    <a box_preference="large" href="cat/tessa">Tessa</a>
+    <a href="dog/jack">Jack</a>
+</animals>
+XML);
+</PHP>
 
+Let's take a look at how to use a callback with <php>DOMXPath</php>:
+
+<PHP>
+function my_callback(string $href): bool {
+    return preg_match("/cat/", $href);
+}
+
+$xpath = new DOMXPath($doc);
+// This is necessary to resolve the php:function expression down below to a PHP-specific feature.
+$xpath->registerNamespace("php", "http://php.net/xpath");
+// This registers the function "my_callback" with the XPath evaluator, such that my_callback can be called.
+$xpath->registerPhpFunctions("my_callback");
+// This selects all <a> tags where my_callback(their href attribute content) returns true.
+$results = $xpath->evaluate("//a[php:function('my_callback', string(@href))]");
+foreach ($results as $result) {
+    echo "Found ", $result->textContent, "\n";
+}
+
+/* This script outputs:
+Found Jill
+Found Kes
+Found Minou
+Found Tessa
+*/
+</PHP>
+
+Note that this is only the simplest example. You can do much more complex actions with it, even with side-effects.
+Furthermore, I only showcased a single callback. It's even possible to chain multiple callbacks.
+
+Registering multiple callbacks at once is possible too, in that case you have to pass an array to <php>registerPhpFunctions</php>:
+<PHP>
+// Now my_first_callback and my_second_callback can be used within XPath
+$xpath->registerPhpFunctions(["my_first_callback", "my_second_callback"]);
+
+// registerPhpFunctions() is additive, so calling it again will make even more functions callable:
+// now strtoupper() will also be callable.
+$xpath->registerPhpFunctions("strtoupper");
+</PHP>
+
+I'm not going to repeat this again for <php>XSLTProcessor</php>, but it works the exact same way: <php>XSLTProcessor</php> also has a <php>registerPhpFunctions</php> method.
 
 ===== Proposal =====
 
