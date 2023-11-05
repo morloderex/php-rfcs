@@ -40,7 +40,7 @@ function my_callback(string $href): bool {
 }
 
 $xpath = new DOMXPath($doc);
-// This is necessary to resolve the php:function expression down below to a PHP-specific feature.
+// This is necessary to resolve the php name in the php:function expression down below.
 $xpath->registerNamespace("php", "http://php.net/xpath");
 // This registers the function "my_callback" with the XPath evaluator, such that my_callback can be called.
 $xpath->registerPhpFunctions("my_callback");
@@ -102,9 +102,11 @@ $xpath->registerPhpFunctions([
 // and var_dump using "php:function('var_dump', ...)".
 </PHP>
 
-If the value is callable will now be checked during registration instead of during execution.
+Whether the value is callable will now be checked during registration instead of during execution.
 
 ==== registerPhpFunctions error conditions ====
+
+There will be new error conditions added to <php>registerPhpFunctions</php> as part of this RFC.
 
 In case the argument is a string:
   - If the string is not a callable: argument type error
@@ -126,7 +128,7 @@ In PHP 8.0, these were changed to throw exceptions instead of warnings (https://
 <php>XSLTProcessor</php> has the same error conditions, but still uses warnings to this day.
 As part of this proposal, the implementations will be unified and will therefore use exceptions instead of warnings.
 
-Finally, both for <php>DOMXPath</php> and <php>XSLTProcessor</php>, if you never called <php>registerPhpFunctions</php> it will throw a warning instead of throwing an exception. This is inconsistent because if you //did// call the function but did not register a function that you're trying to call you get an exception instead. I believe these error conditions should be consistent.
+Finally, both for <php>DOMXPath</php> and <php>XSLTProcessor</php>, if you never called <php>registerPhpFunctions</php> it will throw a warning instead of throwing an exception. This is inconsistent because if you //did// call the function but did not register a function that you're trying to call you get an exception instead. I propose to make this an exception too such that it is consistent with the other error conditions.
 
 ==== Method signature ====
 
@@ -135,7 +137,7 @@ You might be wondering why I don't change the string type in that union to calla
   - callable|array is ambiguous: what does <php>["foo", "bar"]</php> mean? Does this mean: register both "foo" and "bar" as functions? Or does this mean: register foo::bar ?
   - XPath expressions are written as strings, so we have to give a string name to the callable.
 
-==== Examples of the API improvement ====
+==== Usage examples of the API improvement ====
 
 Here are some simple, but somewhat realistic examples of how this API improvement can be used.
 
@@ -172,6 +174,8 @@ class Collector {
 (new Collector("/cat/", ["medium", "large"]))->process($doc);
 </PHP>
 
+As you can see, this allows the use of instance methods when you have to carry around state. It also allows the use of closures.
+
 And here's an example of using <php>XSLTProcessor</php> with the improved API:
 <PHP>
 class BoxCounter {
@@ -207,15 +211,18 @@ class BoxCounter {
 (new BoxCounter(["medium" => 1, "large" => 3]))->process($doc);
 </PHP>
 
+This is again an example of instance methods in use, but for XSL transformations this time, with a stateful function.
+
 ==== Alternatives ====
 
-I considered an alternative solution too: https://bugs.php.net/bug.php?id=49567
+I considered an alternative solution too: https://bugs.php.net/bug.php?id=49567.
+
 In that feature request, the idea is to add a new <php>registerObjectMethods</php> method instead of extending <php>registerPhpFunctions</php>.
 Or more generally, the alternative is that we add <php>registerCallable(string $name, callable $callable)</php>. The downside is that this can break BC if there are user child classes of <php>DOMXPath</php> and <php>XSLTProcessor</php> that already contain a method named <php>registerCallable</php>.
 
 ===== Backward Incompatible Changes =====
 
-Strictly speaking, as the callable validity is checked earlier (i.e. when calling <php>registerPhpFunctions</php>), this has a subtle break. If the function is not declared yet at the time of calling <php>registerPhpFunctions</php>, then this will throw an error. Previously this was accepted as long as the function was declared by the time the callback was executed. I think however that this situation is sufficiently rare and easily avoidable.
+Strictly speaking, as the callable validity is checked earlier (i.e. when calling <php>registerPhpFunctions</php>), this has a subtle break. If the function is not declared yet at the time of calling <php>registerPhpFunctions</php>, then this will throw an error. Previously this was accepted as long as the function was declared by the time the callback was executed. I think however that this situation is sufficiently rare and easily avoidable. It might also be confusing for users to have two functions that have almost the same purpose, especially w.r.t. interactions between these two.
 
 ===== Proposed PHP Version(s) =====
 
