@@ -30,7 +30,8 @@ $doc->loadXML(<<<XML
 XML);
 </PHP>
 
-Let's take a look at how to use a callback with <php>DOMXPath</php>:
+Let's take a look at how to use a callback with <php>DOMXPath</php>.
+We have to use <php>DOMXPath::registerPhpFunctions(string|array|null $restrict=null)</php> to register callbacks.
 
 <PHP>
 function my_callback(string $href): bool {
@@ -69,9 +70,25 @@ $xpath->registerPhpFunctions(["my_first_callback", "my_second_callback"]);
 $xpath->registerPhpFunctions("strtoupper");
 </PHP>
 
-I'm not going to repeat this again for <php>XSLTProcessor</php>, but it works the exact same way: <php>XSLTProcessor</php> also has a <php>registerPhpFunctions</php> method.
+Finally, if the <php>$restrict</php> argument is null, then all global functions and static class methods will be callable.
+
+I'm not going to repeat this again for <php>XSLTProcessor</php>, but it works the same way: <php>XSLTProcessor</php> also has a <php>registerPhpFunctions</php> method that works exactly the same.
 
 ===== Proposal =====
+
+Right now, it is impossible to call instance functions or closures.
+Based on feature request https://bugs.php.net/bug.php?id=38595, I propose the following change.
+
+If you pass an array, entries of the form <php>$key => $value</php> will be interpreted as "associated the callable $value with name $key".
+The behaviour of passing only a string value without a key will remain the same as before.
+Example:
+
+<PHP>
+$xpath->registerPhpFunctions(["function_name" => $callable]);
+// Now you can use "php:function_name(...)" to call $callable.
+</PHP>
+
+<php>$callable</php> can be any kind of callable, examples: <php>"MyClass::staticFunc"</php>, <php>[$this, "instanceFunc"]</php>, <php>$object->foo(...)</php>, <php>fn ($argument1, $argument2, etc...) => whatever</php>.
 
 ==== Exceptions vs warnings ====
 
@@ -84,12 +101,18 @@ In PHP 8.0, these were changed to throw exceptions instead of warnings (https://
 <php>XSLTProcessor</php> has the same error conditions, but still uses warnings to this day.
 As part of this proposal, the duplicated code will be unified in a common place, and will therefore use exceptions instead of warnings.
 
+Finally, both for <php>DOMXPath</php> and <php>XSLTProcessor</php>, if you never called <php>registerPhpFunctions</php> it will throw a warning instead of throwing an exception. This is inconsistent because if you //did// call the function but did not register a function that you're trying to call you get an exception instead. I believe these error conditions should be consistent.
+
 ==== Method signature ====
 
 The method signature of <php>registerPhpFunctions</php> will remain the same, i.e. <php>registerPhpFunctions(string|array|null $restrict=null)</php>.
 You might be wondering why I don't change the string argument to callable. There are two reasons:
   - callable|array is ambiguous: what does <php>["foo", "bar"]</php> mean? Does this mean: register both "foo" and "bar" as functions? Or does this mean: register foo::bar ?
   - XPath expressions are written as strings, so we have to give a string name to the callable.
+
+==== Alternatives ====
+
+TODO
 
 ===== Backward Incompatible Changes =====
 
