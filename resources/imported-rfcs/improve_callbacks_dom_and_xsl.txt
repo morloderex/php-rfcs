@@ -135,6 +135,78 @@ You might be wondering why I don't change the string type in that union to calla
   - callable|array is ambiguous: what does <php>["foo", "bar"]</php> mean? Does this mean: register both "foo" and "bar" as functions? Or does this mean: register foo::bar ?
   - XPath expressions are written as strings, so we have to give a string name to the callable.
 
+==== Examples of the API improvement ====
+
+Here are some simple, but somewhat realistic examples of how this API improvement can be used.
+
+Here's an example of <php>DOMXPath</php> with the new API:
+<PHP>
+class Collector {
+    function __construct(private string $regex, private array $available_boxes) {}
+
+    function process(DOMDocument $doc) {
+        $xpath = new DOMXPath($doc);
+        $xpath->registerNamespace("php", "http://php.net/xpath");
+
+        // This registers the callbacks
+        $xpath->registerPhpFunctions([
+            "filter" => $this->filter(...),
+            "check_box_preference" => fn (string $box) => in_array($box, $this->available_boxes),
+        ]);
+
+        $results = $xpath->evaluate(<<<X
+        //a
+        [php:function('filter', string(@href))]
+        [php:function('check_box_preference', string(./@box_preference))]
+        X);
+        foreach ($results as $result) {
+            echo "Found ", $result->textContent, "\n";
+        }
+    }
+
+    function filter(string $href): bool {
+        return preg_match($this->regex, $href);
+    }
+}
+
+(new Collector("/cat/", ["medium", "large"]))->process($doc);
+</PHP>
+
+And here's an example of using <php>XSLTProcessor</php> with the improved API:
+<PHP>
+class BoxCounter {
+    function __construct(private array $available_boxes) {}
+
+    function process(DOMDocument $doc) {
+        $xsl = new DOMDocument;
+        $xsl->loadXML(<<<XML
+        <?xml version="1.0" encoding="iso-8859-1"?>
+        <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+            xmlns:php="http://php.net/xsl">
+            <xsl:template match="//a">
+                <xsl:if test="php:function('filter', string(@box_preference))">
+                    <xsl:value-of select="."/>
+                </xsl:if>
+            </xsl:template>
+        </xsl:stylesheet>
+        XML);
+
+        $proc = new XSLTProcessor;
+        $proc->registerPHPFunctions(["filter" => $this->assignBox(...)]);
+        $proc->importStyleSheet($xsl);
+        echo $proc->transformToXML($doc);
+    }
+
+    function assignBox($size) {
+        if (!@$this->available_boxes[$size]) return false;
+        $this->available_boxes[$size]--;
+        return true;
+    }
+}
+
+(new BoxCounter(["medium" => 1, "large" => 3]))->process($doc);
+</PHP>
+
 ==== Alternatives ====
 
 I considered an alternative solution too: https://bugs.php.net/bug.php?id=49567
