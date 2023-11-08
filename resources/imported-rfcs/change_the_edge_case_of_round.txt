@@ -1,5 +1,5 @@
 ====== PHP RFC: Change the edge case of round() ======
-  * Version: 0.2.0
+  * Version: 0.3.0
   * Date: 2023-10-23
   * Author: Saki Takamachi, saki@sakiot.com
   * Status: Under Discussion
@@ -11,9 +11,28 @@ https://wiki.php.net/rfc/rounding
 
 However, there is an opinion that it is wrong to expect decimal-like behavior because FP is just FP. Since 0.28499999999999995 to 0.28500000000000000 are all the same IEEE754 internal representation, and most of their values ​​are less than 0.285, it is unreasonable to treat them as edge cases.
 
-==== FP is not a decimal number ====
+==== About the current implementation ====
 
-When we treat FP "like" a decimal number, it is not an exact value, but an approximation with some error range. The following six numbers are all 3fd23d70a3d70a3d in IEEE754 representation.
+Here are excerpts from the RFC that determined the current implementation policy that are particularly relevant in this context.
+
+<blockquote>
+If the requested number of places to round the number is smaller than the precision of the number, then the number will be first rounded to its own precision and then rounded to the requested number of places.
+
+Example: Round 1.255 to 2 places precision, expected value is 1.26. First step: Calculate 10^places = 10^2 = 100. Second step: Calculate 14 - floor(log10(value)) = 14 - 0 = 14 which indicates the number of places after the decimal point which are guaranteed to be exact by IEEE 754. Now, 2 < 14, so the condition applies. So, calculate 10^14 and multiply the number by that: 1.255 * 1e14 = 125499999999999.984375... Now, round that number to integer, i.e. 125500000000000. Now, divide that number by 10^(14 - 2) = 10^12 (the difference) and get 125.5 (exact). NOW round that number to decimal which yields 126 and divide it by 10^2 = 100 which gives 1.26 which is the expected result for that rounding operation.
+
+Of course, one may argue that pre-rounding is not necessary and that this is simply the problem with FP arithmetics. This is true on the one hand, but the introduction of the places parameter made it clear that round() is to operate as if the numbers were stored as decimals. We can't revert that and this seems to me to be the best solutions for FP numbers one can get.
+</blockquote>
+
+In other words, due to the presence of the second parameter, the user expects round() to behave as if it were dealing with a decimal number.
+
+By the way, the double rounding method has side effects and can lead to incorrect results. It will need to be fixed regardless of the outcome of this RFC. I have already created a PR to correct the issue in accordance with PHP current policy. If this RFC is rejected, this PR will be adopted.
+https://github.com/php/php-src/pull/12268
+
+We can discuss this RFC without getting caught up in the technical issues of whether it is feasible.
+
+==== Arguments against current implementation ====
+
+FP is not a decimal number. When we treat FP "like" a decimal number, it is not an exact value, but an approximation with some error range. The following six numbers are all 3fd23d70a3d70a3d in IEEE754 representation.
 
 <code>
 0.28499999999999995
