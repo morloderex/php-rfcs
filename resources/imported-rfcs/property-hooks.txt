@@ -842,16 +842,6 @@ Properties in traits may declare hooks, just like any other property.  However, 
 
 We anticipate that being a very rare edge case, and thus no additional resolution machinery is necessary.
 
-==== Interaction with asymmetric visibility ====
-
-Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibility on the ''get'' or ''set'' hook.
-
-That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
-
-However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate more complex syntax to determine if references should or should not be disabled on a property.  Both are poor options.
-
-For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the best option in practice.
-
 ==== Interaction with readonly ====
 
 ''readonly'' properties work by checking if the backing store value is uninitialized.  A virtual property has no backing store value to check.  While technically an inherited <php>readonly</php> property would allow accessing its parent's stored value, in practice it would be non-obvious when readonly works on properties with hooks. Moreover, providing a <php>get</php> hook on an overridden property would further complicate the notion of a "initialized" value.
@@ -948,7 +938,7 @@ In PHP 8.2, using <php>json_encode()</php> on an object that does not implement 
 
 <php>var_export()</php> is an interesting case.  Its intent is to create an export of the object's internal state, and it bypasses visibiilty control, but in a way that it may be re-hydrated entirely from user-space code in the <php>__set_state()</php> method.  <php>__set_state()</php> necessarily must send any assignments through the <php>set</php> hook, if defined.To minimize asymmetry, therefore, we have chosen to invoke <php>get</php> hooks on properties for <php>var_export()</php>.
 
-===== Reflection =====
+==== Reflection ====
 
 <php>ReflectionProperty</php> has several new methods to work with hooks.
 
@@ -1008,6 +998,34 @@ $c->prop = 'secret';
 // #0 example.php(4): C->$prop::set(Object(SensitiveParameterValue))
 // #1 {main}
 </PHP>
+
+===== Frequently Asked Questions =====
+
+==== Why isn't asymmetric visibility included, like in C#? ====
+
+Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibility on the ''get'' or ''set'' hook.
+
+That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
+
+However, using the C#-style syntax for visibility would either inherently forbid asymmetric visibility on arrays (undesirable), or necessitate more complex syntax to determine if references should or should not be disabled on a property.  Both are poor options.
+
+For that reason, any concept of asymmetric visibility has been omitted from this RFC.  Should asymmetric visibility be determined a desirable feature in the future, a left-side syntax as used by Swift and as demonstrated in the original [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would be a complementary addition, and the best option in practice.
+
+==== Why do set hooks not return the value to set? ====
+
+An alternate implementation would be to have a set hook return a value, and that value be what is assigned.  While the seemingly obvious answer, it is not as robust as the approach described here.
+
+Primarily, that is because it disallows any action //after// the assignment happens.  Only "before" actions are allowed, because once the value is returned no further code in the hook executes (like any other function).
+
+Some actions, however, will want to run after the assignment is confirmed.  Change-logging, for instance, shouldn't record until the change is confirmed and "committed."  That's because the assignment itself still might fail, for instance if the passed <php>$value</php> has a wider type than the property itself, and the code in the hook fails to propertly normalize it.
+
+For that reason, we need a way to assign and confirm the property write while still allowing code to run after it.  Swift approaches that with a separate "beforeSet" and "didSet" hook; howevever, as this design opts for a single <php>set</php> hook rather than three, the return value is not a viable option.
+
+==== Why the $field magic value? ====
+
+This is primarily for convenience, as <php>$field</php> is shorter to type, and more consistent.  It also makes common code easier to copy-paste (which, for better or worse, is likely to happen for code fragments this small).  Additionally, using a generic variable name will almost certainly be necessary for reusable hooks, should those ever be adopted.  (See Future Scope, below.)
+
+Of note, Kotlin uses the exact same design with exact same variable name, and we are not aware of it causing any confusion in the Kotlin world.
 
 ===== Usage examples =====
 
