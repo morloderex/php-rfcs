@@ -1,5 +1,5 @@
 ====== PHP RFC: Harmonise "untyped" and "typed" properties ======
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2023-11-16
   * Author: Rowan Tommins <imsop@php.net>
   * Status: Draft
@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 
-This RFC proposes to remove the distinction between "typed" and "untyped" properties, by treating any property with no type information as though it was declared ''mixed''. This is primarily aimed to reduce confusion around different states, error messages, and behaviours; to do so, it makes the language stricter in some circumstances.
+This RFC proposes to remove the distinction between "typed" and "untyped" properties, by treating any property with no type information as though it was declared ''mixed''. This is primarily aimed to reduce confusion around different states, error messages, and behaviours; to do so, it makes the language stricter in some circumstances, and changes the error message in others.
 
 PHP currently has three primary ways of adding properties to an object:
 
@@ -51,64 +51,110 @@ Dynamic properties [[rfc:deprecate_dynamic_properties|will be prohibited on most
 
 ===== Proposal =====
 
+==== Calling ''unset'' on any declared property will result in "uninitialized" ====
+
+The behaviour of ''unset'' will be standardised for all declared properties, regardless of whether a type was included in the declaration. 
+
+For an untyped property, this means:
+
+  * The property will show up in ''var_dump'' and similar output, with a special type of "uninitialized"
+  * The error given when attempting to access the variable will refer to it as "uninitialized" rather than "undefined"
+
+For typed properties, the current error message reads:
+
+> Typed property %s::%s must not be accessed before initialization
+
+This will be changed, for both typed and untyped properties, to:
+
+> Property %s::%s must not be accessed before initialization
+
+==== Declared properties will no longer default to null ====
+
+The remaining difference is the //initial// value of the property. We could in principle resolve this in two ways:
+
+  - Initialize any property to ''null'' if that is a valid value, and it has no other initializer
+  - Never initialize a property to ''null'' unless that initial value is explicitly specified
+
+Option 1 has the advantage of not causing errors in any currently valid code; but it goes against the general trend of making the language stricter and more explicit.
+
+Option 2 is a non-trivial breaking change, for which a deprecation period will be needed. The proposal is therefore to **add the following deprecation notice in PHP 8.next**:
+
+> Accessing property %s::%s before initialization is deprecated
+
+The calling code will continue to see the value of the property as ''null''. Assigning a value, either in the declaration (''private $foo = null;'') or in procedural code (''$this->foo = null;'') will suppress this notice for all further accesses.
+
+(**TODO**: How can this be implemented efficiently?)
+
+In PHP 9.0, untyped properties will start in the uninitialized state unless an initial value is provided, and attempting to access them will give the error shown in the previous section.
 
 ===== Backward Incompatible Changes =====
 
-Un-typed properties will no longer have an implicit initial value of ''null''.
+Un-typed properties will no longer have an implicit initial value of ''null''. To retain the existing behaviour, an explicit initializer must be added:
+
+<code php>
+// Before
+class Example {
+    public $foo;
+}
+
+// After
+class Example {
+    public $foo = null;
+}
+</code>
 
 ===== Proposed PHP Version(s) =====
-'''TODO''' List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
+
+In PHP 8.next:
+
+  * Add deprecation notice for untyped properties accessed without initialization
+
+In PHP 9.0:
+
+  * All declared properties will start "uninitialized", rather than implicitly initialized to ''null''
+  * All declared properties will become "uninitialized" when passed to ''unset''
+  * The message for accessing uninitialized properties will be changed to remove reference to "typed properties"
 
 ===== RFC Impact =====
-==== To SAPIs ====
-'''TODO''' Describe the impact to CLI, Development web server, embedded PHP etc.
-
-==== To Existing Extensions ====
-'''TODO''' Will existing extensions be affected?
 
 ==== To Opcache ====
-'''TODO''' It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
 
-Please explain how you have verified your RFC's compatibility with opcache.
+The only behaviour which is not already present in the language is the deprecation of implicit ''null'' initializers.
+
+The other 
 
 ===== Open Issues =====
-'''TODO''' Make sure there are no open issues when the vote starts!
+
+  * [[rfc:readonly_properties_v2|Readonly properties were restricted]] to typed properties, citing the default ''null'' initializer as rationale; should this restriction be explicitly relaxed as part of this RFC?
+  * Are there other differences between typed and untyped properties to address?
+  * Can uninitialized untyped properties be implemented efficiently during the deprecation period?
 
 ===== Unaffected PHP Functionality =====
-'''TODO''' List existing areas/features of PHP that will not be changed by the RFC.
 
-This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+  * The behaviour of //dynamic// properties, that is those not defined at all in the class definition, is not changed by this RFC.
+  * The interaction of ''unset'' and magic ''__get'' is the same for untyped and typed properties, so will not be affected by harmonising them. Specifically, following ''unset($foo->bar);'' a subsequent read of ''$foo->bar'' will call ''$foo->__get('bar')'' if available: https://3v4l.org/D16Tv
 
 ===== Future Scope =====
-'''TODO''' This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+None identified at present.
 
 ===== Proposed Voting Choices =====
-'''TODO''' Include these so readers know where you are heading and can discuss the proposed voting options.
+
+**TODO**: Either a straight vote for the whole proposal, or separate proposals for initial state and ''unset'' behaviour, depending on initial feedback.
 
 ===== Patches and Tests =====
-Links to any external patches and tests go here.
 
-If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
-
-Make it clear if the patch is intended to be the final patch, or is just a prototype.
-
-For changes affecting the core language, you should also provide a patch for the language specification.
-
-===== Implementation =====
-After the project is implemented, this section should contain 
-  - the version(s) it was merged into
-  - a link to the git commit(s)
-  - a link to the PHP manual entry for the feature
-  - a link to the language specification section (if any)
+**TODO**
 
 ===== References =====
 
 Related RFCs already accepted:
 
-* [[rfc:typed_properties_v2|Original definition of typed properties]]
-* [[rfc:mixed_type_v2|Addition of ''mixed'' type]]
-* [[rfc:undefined_property_error_promotion|Promotion to error for "undefined" properties]]
-* [[rfc:deprecate_dynamic_properties|Deprecating "dynamic" properties]]
+  * [[rfc:typed_properties_v2|Original definition of typed properties]]
+  * [[rfc:mixed_type_v2|Addition of ''mixed'' type]]
+  * [[rfc:undefined_property_error_promotion|Promotion to error for "undefined" properties]]
+  * [[rfc:deprecate_dynamic_properties|Deprecating "dynamic" properties]]
 
 ===== Rejected Features =====
-Keep this updated with features that were discussed on the mail lists.
+
+None yet.
