@@ -17,6 +17,38 @@ PHP currently has three primary ways of adding properties to an object:
 
 The different behaviours of these properties are largely a result of the history of the language, rather than a consistent design. In particular, with [[rfc:mixed_type_v2|the addition of the ''mixed'' type]], it would seem logical for ''private $foo;'' to be short-hand for ''private mixed $foo;'', since no type-guards are needed; but this is not currently the case, due to the different handling of initial states and ''unset''.
 
+===== Current Behaviour =====
+
+The three types of property vary in their //initial// state, and in their state //after calling ''unset''//, as can be seen in these three demos, which run the same code with the three types of property: [[https://3v4l.org/ln7Or|dynamic property]], [[https://3v4l.org/U2DFZ|untyped property]], [[https://3v4l.org/3igb4|typed property]].
+
+The states can be summarised in this table:
+
+^ Property Declaration          ^ Initial state ^ After assignment ^ After ''unset'' ^ After re-assignment ^
+| ''#[AllowDynamicProperties]'' | Undefined     | Defined, public  | Undefined       | Defined, public     |
+| ''private $foo;''             | ''null''      | Defined, private | ?               | Defined, private    |
+| ''private mixed $foo;''       | Uninitialized | Defined, private | Uninitialized   | Defined, private    |
+\\
+Where:
+
+  * "Defined" is straight-forward: the property exists, and can be read subject to visibility constraints.
+  * "Undefined" means the property does not exist on the object. It does not show up in views such as ''var_dump''. Attempting to read it currently produces a Warning, but [[rfc:undefined_property_error_promotion|will produce an Error in PHP 9.0]].
+  * "Uninitialized" is a special state introduced as part of [[rfc:typed_properties_v2|the introduction of typed properties]] to handle cases where neither ''null'' nor an inline initializer can be used. The property is still treated as present on the instance, but with a special value/state; in the example, the ''var_dump'' output shows this as ''["foo":"A":private] => uninitialized(mixed)''
+
+The state marked "?", for untyped properties after ''unset'', is a complex one:
+
+  * In output such as ''var_dump'', it is not listed, as with "undefined"
+  * *Reading* it gives a Warning (and future Error) of "Undefined property"
+  * Reading or writing still obeys the original visibility constraint - reading an ''unset'' private property from outside the class gives "Cannot access private property", //not// "Undefined property"
+  * //Writing// to it does //not// give the deprecation notice for "Creation of dynamic property"; instead, the original declaration (including any visibility specifier) is silently re-used
+
+Dynamic properties [[rfc:deprecate_dynamic_properties|will be prohibited on most classes in 9.0]], giving the following if we don't make other changes:
+
+^                          ^ ''var_dump'' output      ^ Error on read                                ^ Error on write ^
+^ True undefined           | Not shown                | "Undefined property"                         | "Creation of dynamic property" \\ (unless on ''stdClass'' or with ''#[AllowDynamicProperties]'') |
+^ Declared then ''unset''  | Not shown                | "Undefined property"                         | None |
+^ Typed and uninitialized  | ''uninitialized(mixed)'' | "must not be accessed before initialization" | None |
+
+
 ===== Proposal =====
 
 
