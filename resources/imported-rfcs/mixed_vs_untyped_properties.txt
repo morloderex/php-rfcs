@@ -1,5 +1,5 @@
 ====== PHP RFC: Harmonise "untyped" and "typed" properties ======
-  * Version: 0.3
+  * Version: 0.4
   * Date: 2023-11-16
   * Author: Rowan Tommins <imsop@php.net>
   * Status: Draft
@@ -18,6 +18,8 @@ PHP currently has three primary ways of adding properties to an object:
 The different behaviours of these properties are largely a result of the history of the language, rather than a consistent design. In particular, with [[rfc:mixed_type_v2|the addition of the ''mixed'' type]], it would seem logical for <php>private $foo;</php> to be short-hand for <php>private mixed $foo;</php>, since no type-guards are needed; but this is not currently the case, due to the different handling of initial states and ''unset''.
 
 ===== Current Behaviour =====
+
+==== Initial State and Unset ====
 
 The three types of property vary in their //initial// state, and in their state //after calling ''unset''//, as can be seen in these three demos, which run the same code with the three types of property: [[https://3v4l.org/ln7Or|dynamic property]], [[https://3v4l.org/U2DFZ|untyped property]], [[https://3v4l.org/3igb4|typed property]].
 
@@ -48,6 +50,52 @@ Dynamic properties [[rfc:deprecate_dynamic_properties|will be prohibited on most
 ^ Declared then ''unset''  | Not shown                | "Undefined property"                         | None |
 ^ Typed and uninitialized  | ''uninitialized(mixed)'' | "must not be accessed before initialization" | None |
 
+==== Variance under inheritance ====
+
+In a "gradual typing" system such as PHP's, any type that is unspecified is usually analysed as though it has the widest possible type for that position. The language itself makes such an analysis for enforcing correct variance rules in inheritance:
+
+  * A method parameter with no type specified is equivalent to ''mixed''. As input is contravariant, sub-classes cannot change to any narrower type, but can freely add or omit the ''mixed'' keyword.
+  * A method which specifies no //return type// may return any type, or the pseudo-types ''void'' and ''never''; conceptually, it returns ''mixed|void|never'' (although that union cannot be specified explicitly). As return types are covariant, sub-classes can change to any narrower type, including ''mixed''; but omitting the type if the parent specified it would be widening the type to ''mixed|void|never'', so is not allowed.
+
+Properties are //invariant// (as they can be both written to and read from), so sub-classes must declare them with an //exactly equivalent// type. As with parameters, the widest possible type is ''mixed'', but this is //not// currently considered equivalent.
+
+<code php>
+class A {
+    /** @var mixed $untyped */
+    public $untyped;
+    
+    public mixed $mixed;
+    
+    /** @param mixed $a */
+    public function acceptsUntyped($a) {}
+    
+    public function acceptsMixed(mixed $a) {}
+    
+    public function returnsMixed(): mixed {}
+    
+    /** @return mixed|void|never */
+    public function returnsUntyped() {}
+}
+
+class B extends A {
+    # Not Allowed: considers "mixed" to be distinct from "untyped"
+    public mixed $untyped;
+    # Also Not Allowed
+    public $mixed;
+    
+    # Allowed: unspecified parameter type is implicitly "mixed", so no variance occurs
+    public function acceptsUntyped(mixed $a) {}
+    # Also Allowed
+    public function acceptsMixed($a) {}
+    
+    # Not Allowed: widens return type from "mixed" to implicit "mixed|void|never"
+    public function returnsMixed() {}
+    
+    # Allowed: narrows return type from implicit "mixed|void|never" to explicit "mixed"
+    # explicit return types of "void" and "never" can also be used here
+    public function returnsUntyped(): mixed {}
+}
+</code>
 
 ===== Proposal =====
 
@@ -68,48 +116,60 @@ This will be changed, for both typed and untyped properties, to:
 
 > Property %s::%s must not be accessed before initialization
 
+==== Properties will default to an implicit type of ''mixed'' ====
+
+If no type is specified for a property, its type will be analysed as ''mixed'', as is the case with parameters.
+
 ==== Declared properties will no longer default to null ====
 
-The remaining difference is the //initial// value of the property. We could in principle resolve this in two ways:
+The remaining difference is the //initial// value of the property. To be fully consistent, we should do one of two things:
 
   - Initialize any property to ''null'' if that is a valid value, and it has no other initializer
   - Never initialize a property to ''null'' unless that initial value is explicitly specified
 
 Option 1 has the advantage of not causing errors in any currently valid code; but it goes against the general trend of making the language stricter and more explicit.
 
-Option 2 is a non-trivial breaking change, for which a deprecation period will be needed. The proposal is therefore to **add the following deprecation notice in PHP 8.next**:
+Option 2 is a non-trivial breaking change; although the edits to be made can be trivially automated (changing code of the form <php>public $foo;</php> to <php>public $foo = null;</php>), they will be very widespread. Users may rightly question the value of requiring such an edit.
 
-> Accessing property %s::%s before initialization is deprecated
+Instead, a compromise is proposed: **if a property has neither a type nor an initializer, treat it as though it had a type of ''mixed'' and an initializer of ''null''**. 
 
-The calling code will continue to see the value of the property as ''null''. Assigning a value, either in the declaration (<php>private $foo = null;</php>) or in procedural code (<php>$this->foo = null;</php>) will suppress this notice for all further accesses.
-
-In PHP 9.0, untyped properties will start in the uninitialized state unless an initial value is provided, and attempting to access them will give the error shown in the previous section.
-
-===== Backward Incompatible Changes =====
-
-Untyped properties will no longer have an implicit initial value of ''null''. To retain the existing behaviour, an explicit initializer must be added:
+In other words, given the following class:
 
 <code php>
-// Before
-class Example {
+class A {
     public $foo;
-}
-
-// After
-class Example {
-    public $foo = null;
+    private $bar;
+    protected $other = 42;
 }
 </code>
 
+Act as though this was specified:
+
+<code php>
+class A {
+    public mixed $foo = null;
+    private mixed $bar = null;
+    protected mixed $other = 42;
+}
+</code>
+
+This has the downside that adding the keyword ''mixed'' to a declaration may still change the behaviour of a program, since it will change the initial state to "uninitialized"; but it retains the behaviour of all //existing// code without any action from users.
+
+===== Backward Incompatible Changes =====
+
+None in current proposal.
+
 ===== Proposed PHP Version(s) =====
+
+**TODO** Is this all now a 9.0 target?
 
 In PHP 8.next:
 
-  * Add deprecation notice for untyped properties accessed without initialization
+  * <del>Add deprecation notice for untyped properties accessed without initialization</del>
 
 In PHP 9.0:
 
-  * All declared properties will start "uninitialized", rather than implicitly initialized to ''null'', unless an explicit initial value is given
+  * <del>All declared properties will start "uninitialized", rather than implicitly initialized to ''null'', unless an explicit initial value is given</del>
   * All declared properties will become "uninitialized" when passed to ''unset''
   * The message for accessing uninitialized properties will be changed to remove reference to "typed properties"
 
@@ -118,6 +178,10 @@ In PHP 9.0:
 ==== To Opcache ====
 
 No new functionality is added in the final proposed state. Indeed, some edge cases that currently need to be handled may be removed.
+
+==== To Reflection ====
+
+**TODO** There are presumably special representations for "untyped" vs "mixed" properties...
 
 ===== Open Issues =====
 
