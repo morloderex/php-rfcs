@@ -1,5 +1,5 @@
 ====== PHP RFC: Harmonise "untyped" and "typed" properties ======
-  * Version: 0.4
+  * Version: 0.5
   * Date: 2023-11-16
   * Author: Rowan Tommins <imsop@php.net>
   * Status: Draft
@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 
-This RFC proposes to remove the distinction between "typed" and "untyped" properties, by treating any property with no type information as though it was declared ''mixed''. This is primarily aimed to reduce confusion around different states, error messages, and behaviours; to do so, it makes the language stricter in some circumstances, and changes the error message in others.
+This RFC proposes to remove or at least minimise the distinction between "typed" and "untyped" properties, by treating any property with no type information as though it was declared ''mixed''. This is primarily aimed to reduce confusion around different states, error messages, and behaviours.
 
 PHP currently has three primary ways of adding properties to an object:
 
@@ -15,7 +15,7 @@ PHP currently has three primary ways of adding properties to an object:
   - Declared, with optional visibility. The property is part of the class definition, and allocated on every instance, even if it is never assigned. The behaviour of ''unset'' is complex, hiding but not fully deleting the property.
   - Declared with a type. In addition to being allocated on every instance, the property is covered by extra guards on assignment to guarantee its type. If it is never assigned a value, or passed to ''unset'', it is assigned a special "uninitialized" state.
 
-The different behaviours of these properties are largely a result of the history of the language, rather than a consistent design. In particular, with [[rfc:mixed_type_v2|the addition of the ''mixed'' type]], it would seem logical for <php>private $foo;</php> to be short-hand for <php>private mixed $foo;</php>, since no type-guards are needed; but this is not currently the case, due to the different handling of initial states and ''unset''.
+The different behaviours of these properties are largely a result of the history of the language, rather than a consistent design. In particular, with [[rfc:mixed_type_v2|the addition of the ''mixed'' type]], it would seem logical for <php>private $foo;</php> to be short-hand for <php>private mixed $foo;</php>, since no type-guards are needed; but this is not currently the case.
 
 ===== Current Behaviour =====
 
@@ -25,7 +25,7 @@ The three types of property vary in their //initial// state, and in their state 
 
 The states can be summarised in this table:
 
-^ Property Declaration          ^ Initial state ^ After assignment ^ After ''unset'' ^ After re-assignment ^
+^ Property Declaration                 ^ Initial state ^ After assignment ^ After ''unset'' ^ After re-assignment ^
 | <php>#[AllowDynamicProperties]</php> | Undefined     | Defined, public  | Undefined       | Defined, public     |
 | <php>private $foo;</php>             | ''null''      | Defined, private | ?               | Defined, private    |
 | <php>private mixed $foo;</php>       | Uninitialized | Defined, private | Uninitialized   | Defined, private    |
@@ -116,22 +116,26 @@ This will be changed, for both typed and untyped properties, to:
 
 > Property %s::%s must not be accessed before initialization
 
-==== Properties will default to an implicit type of ''mixed'' ====
+==== Properties with no declared type will be analysed as ''mixed'' ====
 
 If no type is specified for a property, its type will be analysed as ''mixed'', as is the case with parameters.
 
-==== Declared properties will no longer default to null ====
+Consequently, the following code will be valid:
 
-The remaining difference is the //initial// value of the property. To be fully consistent, we should do one of two things:
+<code php>
+class Parent {
+    public $foo;
+    public mixed $bar;
+}
+class Child extends Parent {
+    public mixed $foo;
+    public $bar;
+}
+</code>
 
-  - Initialize any property to ''null'' if that is a valid value, and it has no other initializer
-  - Never initialize a property to ''null'' unless that initial value is explicitly specified
+==== Properties with no declared type will continue to default to ''null'' ====
 
-Option 1 has the advantage of not causing errors in any currently valid code; but it goes against the general trend of making the language stricter and more explicit.
-
-Option 2 is a non-trivial breaking change; although the edits to be made can be trivially automated (changing code of the form <php>public $foo;</php> to <php>public $foo = null;</php>), they will be very widespread. Users may rightly question the value of requiring such an edit.
-
-Instead, a compromise is proposed: **if a property has neither a type nor an initializer, treat it as though it had a type of ''mixed'' and an initializer of ''null''**. 
+Whereas we are already committed to introducing an error for accessing an ''unset'' property, accessing a property without explicitly initialising it is probably very common. As such, the proposal is to keep the difference in initial value: **if a property has neither a type nor an initializer, treat it as though it had a type of ''mixed'' and an initializer of ''null''**. 
 
 In other words, given the following class:
 
@@ -153,25 +157,15 @@ class A {
 }
 </code>
 
-This has the downside that adding the keyword ''mixed'' to a declaration may still change the behaviour of a program, since it will change the initial state to "uninitialized"; but it retains the behaviour of all //existing// code without any action from users.
+Note that this means adding the keyword ''mixed'' to a declaration may still change the behaviour of a program, since it will change the initial state to "uninitialized"; but it retains the behaviour of all //existing// code without any action from users.
 
 ===== Backward Incompatible Changes =====
 
-None in current proposal.
+It is possible to write code relying directly on the current behaviour of ''unset''. However, note that [[rfc:undefined_property_error_promotion]] already commits us to changing direct access to such a property from a Warning to an Error.
 
 ===== Proposed PHP Version(s) =====
 
-**TODO** Is this all now a 9.0 target?
-
-In PHP 8.next:
-
-  * <del>Add deprecation notice for untyped properties accessed without initialization</del>
-
-In PHP 9.0:
-
-  * <del>All declared properties will start "uninitialized", rather than implicitly initialized to ''null'', unless an explicit initial value is given</del>
-  * All declared properties will become "uninitialized" when passed to ''unset''
-  * The message for accessing uninitialized properties will be changed to remove reference to "typed properties"
+Since the new ''unset'' behaviour produces a fatal error for previously valid code, the change will be in the next major version, i.e. **PHP 9.0**
 
 ===== RFC Impact =====
 
@@ -181,19 +175,37 @@ No new functionality is added in the final proposed state. Indeed, some edge cas
 
 ==== To Reflection ====
 
-**TODO** There are presumably special representations for "untyped" vs "mixed" properties...
+**TODO** Reflection currently shows the implicit ''= null'' on properties, but distinguishes between "no type" and ''mixed'' in parameters, even though they are analysed as equivalent in variance checks. Should we change this? Was this discussed when ''mixed'' was introduced?
 
 ===== Open Issues =====
 
-  * [[rfc:readonly_properties_v2|Readonly properties were restricted]] to typed properties, citing the default ''null'' initializer as rationale; should this restriction be explicitly relaxed as part of this RFC?
   * Are there other differences between typed and untyped properties to address?
-  * Can uninitialized untyped properties be implemented efficiently during the deprecation period?
-  * Is the removal of implicit ''null'' initializers controversial, and are there alternative approaches?
+  * Is there a better compromise than keeping the implicit ''= null'' forever?
 
 ===== Unaffected PHP Functionality =====
 
   * The behaviour of //dynamic// properties, that is those not defined at all in the class definition, is not changed by this RFC.
   * The interaction of ''unset'' and magic ''%%__get%%'' is the same for untyped and typed properties, so will not be affected by harmonising them. Specifically, following <php>unset($foo->bar);</php> a subsequent read of <php>$foo->bar</php> will call <php>$foo->__get('bar')</php> if available: https://3v4l.org/D16Tv
+  * Unlike `var_dump($object)`, both `(array)$object` and `serialize($object)` already skip uninitialized properties, so the change in `unset()` behaviour will not affect code using these.
+
+===== Rejected Features =====
+
+==== Changing initial value of properties ====
+
+When considering the //initial// value of the property, to be fully consistent, we should do one of two things:
+
+  - Initialize any property to ''null'' if that is a valid value, and it has no other initializer
+  - Never initialize a property to ''null'' unless that initial value is explicitly specified
+
+Option 1 has the advantage of not causing errors in any currently valid code; but it goes against the general trend of making the language stricter and more explicit.
+
+Option 2 is a non-trivial breaking change; although the edits to be made can be trivially automated (changing code of the form <php>public $foo;</php> to <php>public $foo = null;</php>), they will be very widespread. Users may rightly question the value of requiring such an edit.
+
+==== Allowing ''readonly'' on untyped properties ====
+
+As currently defined, [[rfc:readonly_properties_v2|''readonly'' properties]] cannot be written to once they have been initialized, so it does not make sense to allow one with an inline initializer. This also means they are currently required to have a specified type, since without one they are implicitly initialized to ''null''.
+
+Unfortunately, this restriction must remain if we are keeping the implicit ''null'' initializer.
 
 ===== Future Scope =====
 
@@ -221,6 +233,7 @@ Previous mailing list threads touching on this issue:
   * [[https://externals.io/message/117487#117487|Discussion thread for "Undefined Property Error Promotion" RFC]]
   * [[https://externals.io/message/117644|Vote thread for that RFC]]
 
-===== Rejected Features =====
+===== Significant revisions =====
 
-None yet.
+  * [[https://wiki.php.net/rfc/mixed_vs_untyped_properties?rev=1700166842|Version 0.3]], 2023-11-16: originally posted for discussion
+  * Version 0.5, 2023-11-20: changed to keep null initializer as special case; added discussion of equivalence for type variance checks
