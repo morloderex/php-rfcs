@@ -11,21 +11,38 @@ As far as I know, Nikita was the first one who realized these shortcomings and s
 
 ===== Discussion =====
 
-As eliminating resources altogether should be a strategic goal for PHP, this time, the question is not whether the remaining resources should be converted to objects or not, but the timeline when we can do so, in order to have acceptable level of backward compatibility breaks.
+As eliminating resources altogether should be a strategic goal for PHP, this time, the main question is not whether the remaining resources should be converted to objects or not, but the timeline when we can do so, in order to have acceptable level of backward compatibility breaks.
 
-Usually, the biggest complaint against these kind of changes is due to return value changes of ''is_resource()'' invocations (read [[https://externals.io/message/116127|a long thread about this topic here]]). An example of such situation along with a suggested fix:
+Usually, the biggest complaint against these kind of changes is due to return value changes of ''is_resource()'' invocations. An example of such situation is the following:
 
 <code php>
 $pipes = [];
 $process = proc_open("sleep 1", [], $pipes);
-if (is_resource($process)) {                  // the condition yields false after conversion happens
-    ...
+if (is_resource($process)) {
+    // do some stuff
 }
-
-if ($process !== false) {                     // this is the backward compliant way to check for success
-    ...
-}
+proc_close($proc);
 </code>
+
+The above code won't work anymore after the conversion, since the ''is_resource($process)'' condition will yield a different result than before (''false'' compared to ''true'').
+
+The easiest solution for fixing the problem is to change the condition to the following:
+
+<code php>
+$pipes = [];
+$process = proc_open("sleep 1", [], $pipes);
+
+if ($process !== false) {
+    // do some stuff
+}
+proc_close($proc);
+</code>
+
+By using ''$process !== false'' instead of ''is_resource($process)'' the ''if'' will yield the correct result, and the code is going to be compatible with any PHP version. One could also use ''is_resource($process) || $process instanceof ProcessHandle'', but this is a more verbose way to achieve the same result.
+
+On the other hand, some people suggest that the ''is_resource'' function should also return ''true'' for classes which originally used to be resources (read [[https://externals.io/message/116127|a long thread about this topic here]]). Doing so would apparently minimize the BC break by making the above mentioned code change unnecessary.
+
+However, the current RFC disagrees with this approach because it has some downsides which would do more harm than benefit.
 
 Most often, these issues are easy to spot and fix, but admittedly need some careful manual work. Therefore, the goal of this RFC is to set the rules according to which the project can continue. So far, the vast majority of the individual conversions were "unofficial", meaning they didn't have to go through the formal RFC process, there was no deprecation period (it is not really feasible anyway), and were performed even in minor versions. I do believe this kind of flexibility has been beneficial for the overall project, however, we occasionally get complaints due to the above mentioned BC breaks. That's what this RFC should prevent for future conversions.
 
@@ -35,49 +52,70 @@ The resources yet to be migrated can be categorized the following way based on t
 
 The ''Process'' resource is returned by ''proc_open()''. According to my earlier [[rfc:process_object_name|straw poll]], its new class name is going to be ''ProcessHandle'' once the migration takes place.
 
-Impact analysis: [[https://gist.github.com/kocsismate/70314bf3e0ab457ef325de35ed70a98d|31 out of the 2000]] most popular PHP packages rely on checking the result of ''proc_open()'' with ''is_resource()''.
+**Impact analysis**: [[https://gist.github.com/kocsismate/70314bf3e0ab457ef325de35ed70a98d|31 out of the 2000]] most popular PHP packages rely on checking the result of ''proc_open()'' with ''is_resource()''.
 
-Implementation: https://github.com/php/php-src/pull/12098/
+**Implementation**: https://github.com/php/php-src/pull/12098/
 
 ==== Primary stream-related resources ====
 
 There are a number of stream-related resources which are to be converted: first of all, the most important ones are ''stream'' and ''persistent stream'' themselves. Historically, these have always been the most widely used resources in the whole PHP ecosystem, since the file handling API is organized around them.
 
+**Impact analysis**: Do to the required amount of work, impact analysis is omitted, but it's guaranteed that the conversion would would cause a large BC break due to the ubiquitous nature of stream resources.
+
+The list of functions which whose return type was affected by the conversion of the primary stream resources:
+  * ''bzopen()''
+  * ''PDO::pgsqlLOBOpen()''
+  * ''pg_socket()''
+  * ''socket_export_stream()''
+  * ''SQLite::openBlob()''
+  * ''opendir()''
+  * ''popen()''
+  * ''fopen()''
+  * ''tmpfile()''
+  * ''fsockopen()''
+  * ''pfsockopen()''
+  * ''stream_socket_client()''
+  * ''stream_socket_server()''
+  * ''stream_socket_accept()''
+  * ''ZipArchive::getStreamIndex()''
+  * ''ZipArchive::getStreamName()''
+  * ''ZipArchive::getStream()''
+
 ==== Auxilliary stream-related resources ====
 
 Furthermore, streams have some auxiliary resources:
 
-  * stream context: it stores parameters/options for the different stream wrappers
-  * stream filter: it helps perform operations on streams
-  * userfilter.bucket, userfilter.bucket brigade: [[https://stackoverflow.com/questions/27103269/what-is-a-bucket-brigade|a very detailed explanation, written by Bob]]
+  * **stream context**: it stores parameters/options for the different stream wrappers
+  * **stream filter**: it helps perform operations on streams
+  * **userfilter.bucket, userfilter.bucket brigade**: [[https://stackoverflow.com/questions/27103269/what-is-a-bucket-brigade|a very detailed explanation, written by Bob]]
 
 Auxilliary resources are "isolated" from the primary ones, and used less often than them, that's why it may be possible to migrate the two resource categories separately from each other.
 
-Impact analysis:
-  * Since ''stream_context_create()'' throws in case of failure, the issue with the is_resource() check doesn't apply to stream context resources.
-  * [[https://gist.github.com/kocsismate/2972a071425ca57031ac3db1bf623865|3 out of the 2000]] most popular PHP packages rely on checking the result of ''stream_filter_append()'' and ''stream_filter_prepend()'' with ''is_resource()''.
-  * None of the 2000 most popular PHP packages rely on checking the result of ''stream_bucket_new()'' with ''is_resource()''. ''userfilter.bucket brigade'' is created by PHP itself when the ''php_user_filter::filter()'' method is invoked, therefore neither it is affected by the BC break.
+**Impact analysis**:
+  * **stream context:** since ''stream_context_create()'' throws in case of failure, the issue with the is_resource() check doesn't apply to stream context resources
+  * **stream filter**: [[https://gist.github.com/kocsismate/2972a071425ca57031ac3db1bf623865|3 out of the 2000]] most popular PHP packages rely on checking the result of ''stream_filter_append()'' and ''stream_filter_prepend()'' with ''is_resource()''
+  * **userfilter.bucket, userfilter.bucket brigade**: None of the 2000 most popular PHP packages rely on checking the result of ''stream_bucket_new()'' with ''is_resource()''. Since ''userfilter.bucket brigade'' is created by PHP itself when the ''php_user_filter::filter()'' method is invoked, therefore neither it is affected by the BC break.
 
 ==== Other resources ====
 
 The rest of the built-in extensions which currently expose resources are the following:
 
-  * COM
+  * **COM**
     * com_dotnet_istream_wrapper
     * com_dotnet_dispatch_wrapper
-  * DBA
+  * **DBA**
     * dba: connection resource returned by ''dba_open()''
     * dba persistent: persistent connection resource  returned by ''dba_popen()''
-  * ODBC (implementation: https://github.com/php/php-src/pull/12040/)
+  * **ODBC** (implementation: https://github.com/php/php-src/pull/12040/)
     * odbc link: connection resource returned by ''odbc_connect()''
     * odbc link persistent: persistent connection returned by ''odbc_pconnect()''
     * odbc result: result resources returned by various ''odbc_*'' functions
-  * SOAP
+  * **SOAP**
     * SOAP SDL: ''SoapClient::$sdl''
     * SOAP table: ''SoapClient::$typemap''
     * SOAP URL: ''SoapClient::$httpurl''
 
-Impact analysis: None of the 2000 most popular PHP packages rely on the above mentioned resources.
+**Impact analysis**: None of the 2000 most popular PHP packages rely on the above mentioned resources.
 
 ===== Vote =====
 
