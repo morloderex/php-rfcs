@@ -6,58 +6,52 @@
   * First Published at: http://wiki.php.net/rfc/not_serializable
 
 ===== Introduction =====
-The elevator pitch for the RFC. The first paragraph of this section will be slightly larger to give it emphasis; please write a good introduction.
+Some classes aren't supposed to be serialized. Examples include closures, various connections like ''PDO'', etc. Currently, while PHP internal classes have a nice way of preventing being serialized/deserialized, userspace doesn't. I'm proposing to make them equal.
+
+Compare the internals slapping ''ce_flags |= ZEND_ACC_NOT_SERIALIZABLE'' to userspace doing something like this:
+
+<code php>
+class MyClass
+{
+    public function __sleep() // Wait, what it's signature is supposed to be? Does it matter?
+    {
+        throw new Exception('This class must not be serialized');
+    }
+    
+    public function __wakeup()
+    {
+        throw new Exception('This class must not be unserialized');
+    }
+}
+</code>
+
+Not only is this method bulky, it also lacks a way for various code analysers to detect attempts to serialize such classes. If course, linters may introduce their own attributes/annotations to catch such mistakes; however various linters 
 
 ===== Proposal =====
-All the features and examples of the proposal.
+Introduce new attribute that would expose this functionality to userspace.
 
-To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain hows the proposal brings substantial value to be considered
-for inclusion in one of the world's most popular programming languages.
+<code php>
+#[NotSerializable]
+class MyClass
+{
+}
 
-Remember that the RFC contents should be easily reusable in the PHP Documentation.
+serialize(new MyClass()); // Exception: Serialization of 'MyClass' is not allowed
+</code>
 
-If applicable, you may wish to use the language specification as a reference.
+This change requires no changes to the engine whatsoever, all functionality is already present - it merely gets exposed.
 
 ===== Backward Incompatible Changes =====
-What breaks, and what is the justification for it?
+The only breaking change is the addition of a new non-namespaced class.
 
 ===== Proposed PHP Version(s) =====
-List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
-
-===== RFC Impact =====
-==== To SAPIs ====
-Describe the impact to CLI, Development web server, embedded PHP etc.
-
-==== To Existing Extensions ====
-Will existing extensions be affected?
-
-==== To Opcache ====
-It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
-
-Please explain how you have verified your RFC's compatibility with opcache.
-
-==== New Constants ====
-Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
-
-==== php.ini Defaults ====
-If there are any php.ini settings then list:
-  * hardcoded default values
-  * php.ini-development values
-  * php.ini-production values
+8.4.
 
 ===== Open Issues =====
 Make sure there are no open issues when the vote starts!
 
-===== Unaffected PHP Functionality =====
-List existing areas/features of PHP that will not be changed by the RFC.
-
-This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
-
-===== Future Scope =====
-This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
-
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
+Implement this RFC? (Yes/no, 2/3 approval required.)
 
 ===== Patches and Tests =====
 Links to any external patches and tests go here.
@@ -75,8 +69,6 @@ After the project is implemented, this section should contain
   - a link to the PHP manual entry for the feature
   - a link to the language specification section (if any)
 
-===== References =====
-Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
