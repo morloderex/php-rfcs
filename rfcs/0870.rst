@@ -1,224 +1,101 @@
-Allow Null And False As Stand-alone Types
-=========================================
+Add 4 New Rounding Modes To Round() Function
+============================================
 
 :PHP-RFC: 0870
-:Title: Allow Null And False As Stand-alone Types
-:Author: George Peter Banyard <girgias@php.net>
-:Status: Implemented
+:Title: Add 4 New Rounding Modes To Round() Function
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Accepted
 :Type: Standards Track
-:Created: 2022-02-20
-:PHP-Version: 8.2
-:Version: 0.3
+:Created: 2023-08-31
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-``null`` corresponds to PHP's unit type, i.e. the type which holds a
-single value. ``false`` is a literal type of type ``bool``.
+The RFC proposes to add 4 new modes to the round() function.
 
-It is currently not possible to use ``null`` as a type declaration on
-its own, as per its nature of it being the unit type, it cannot hold any
-information.
+-  `PHP_ROUND_CEILING <https://en.wikipedia.org/wiki/Rounding#Rounding_up>`__,
+-  `PHP_ROUND_FLOOR <https://en.wikipedia.org/wiki/Rounding#Rounding_down>`__,
+-  `PHP_ROUND_AWAY_FROM_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero>`__,
+-  `PHP_ROUND_TOWARD_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero>`__.
 
-Moreover, ``false`` has traditionally been used instead of ``null`` to
-convey error state. This is the main reason why ``false`` was introduced
-as a literal type with the union type RFC [1]_.
+Two first comments on the `documentation page of the
+round() <https://www.php.net/manual/en/function.round.php>`__ function
+are related to the missing modes of rounding. The first comment has an
+outstanding number of 309 votes.
 
-Motivation
-~~~~~~~~~~
-
-There are a couple of motivations outlined below:
-
-Type system completeness
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-PHP has added support for the top type ``mixed`` in PHP 8.0, the bottom
-type ``never`` in PHP 8.1, and support for composite types in PHP 8.0
-with union types, and 8.1 with intersection types.
-
-The inability to type the unit type in PHP is a deficiency which should
-be resolved.
-
-Edge case with regards to the literal type false
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The ``false`` literal type can only be used in union types, however this
-is not exactly correct as ``null|false`` is disallowed.
-
-The only way to currently type this edge case is by using ``bool|null``
-which gives the wrong impression that the value may also be ``true``,
-making this type information less useful for humans and static
-analysers.
-
-There are instances of this type declaration being needed within some of
-PHP's built-in functions, one example being ``gmp_random_seed()``.
-
-This edge case might be expanded if literal types are added and cannot
-be used as stand-alone type, as a return type of ``1`` would also be
-disallowed.
-
-Providing precise type information while satisfying LSP
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-A parent class might define a method as following:
-``public function foo(): ?T``, since PHP 7.4 covariance of return (and
-contravariance of parameter) types are supported , therefore it is
-possible for a child class to provide more precise type information if
-it always returns a value of type ``T``: ``public function foo(): T``.
-
-However, the opposite isn't true, if the child method returns always
-``null`` it must still use the original function signature and can only
-provide this information through documentation.
-
-A method, from a built-in PHP class, which could benefit from declaring
-its return value as ``null`` is ``SplFileObject::getChildren()``.
-
-The same applies to ``false`` where a userland extension for
-``UConverter::transcode()`` might decided to always return ``false`` and
-cannot currently type this properly.
-
-Distinction between null and void
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A function always returns a value in PHP, even if its return type is
-declared as ``void`` where ``NULL`` is the value returned. The union
-type RFC did not include support for ``null`` for the following reason:
-
-    The null type is only allowed as part of a union, and can not be
-    used as a stand-alone type. Allowing it as a stand-alone type would
-    make both ``function foo(): void`` and ``function foo(): null``
-    legal function signatures, with similar but not identical semantics.
-    This would negatively impact teachability for an unclear benefit.
-
-As explained previously, there are clear reasons as to why one may need
-to use ``null`` as a return type, as ``void`` is not a subtype of any
-other type and lives on its own in the type hierarchy.
-
-Moreover, a function which has a ``void`` return type must only use
-``return;`` whereas one with ``null`` must use ``return null;``.
+Moreover, the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+already implements 4 new proposed modes known as ROUND_CEILING,
+ROUND_FLOOR, ROUND_DOWN, ROUND_UP.
 
 Proposal
 --------
 
-Add support for using ``null`` and ``false`` as stand-alone type
-declarations, wherever type declarations are currently allowed.
+Adding 4 new constants for the rounding modes of function round():
 
-.. code:: php
+-  PHP_ROUND_CEILING - rounds num to the nearest integer bigger than
+   num,
+-  PHP_ROUND_FLOOR - rounds num to the nearest integer lower than num,
+-  PHP_ROUND_AWAY_FROM_ZERO - rounds num away from zero,
+-  PHP_ROUND_TOWARD_ZERO - rounds num towards zero.
 
-   class Nil {
-       public null $nil = null;
-       
-       public function foo(null $v): null { /* ... */ *}
-   } 
+Creating two aliases of constants from Intl extension to have consistent
+naming for rounding modes:
 
-.. code:: php
-
-   class Falsy {
-       public false $nil = false;
-       
-       public function foo(false $v): false { /* ... */ *}
-   } 
-
-Redundancy of ?null
-~~~~~~~~~~~~~~~~~~~
-
-Trying to mark ``null`` as nullable will result in a compile time error,
-in line with PHP's current type resolving redundancy rules.
-
-Reflection
-~~~~~~~~~~
-
-Reflection support is as expected with the notable exception that
-``null|false`` will produce a ReflectionUnionType instead of a
-ReflectionNamedType contrary to other ``null|T`` types.
-
-A concrete case of how this looks like:
-
-.. code:: php
-
-   <?php
-   function dumpType(ReflectionUnionType $rt) {
-       echo "Type $rt:\n";
-       echo "Allows null: " . ($rt->allowsNull() ? "true" : "false") . "\n";
-       foreach ($rt->getTypes() as $type) {
-           echo "  Name: " . $type->getName() . "\n";
-           echo "  String: " . (string) $type . "\n";
-           echo "  Allows Null: " . ($type->allowsNull() ? "true" : "false") . "\n";
-       }
-   }
-
-   function test1(): null|false { }
-   function test2(): ?false { }
-
-
-   dumpType((new ReflectionFunction('test1'))->getReturnType());
-   dumpType((new ReflectionFunction('test2'))->getReturnType());
-
-Will produce the following output:
-
-::
-
-   Type false|null:
-   Allows null: true
-     Name: false
-     String: false
-     Allows Null: false
-     Name: null
-     String: null
-     Allows Null: true
-   Type false|null:
-   Allows null: true
-     Name: false
-     String: false
-     Allows Null: false
-     Name: null
-     String: null
-     Allows Null: true
-
-Example
-~~~~~~~
-
-We take an example from unit testing but it can be applied to other more
-general cases, where a class which implements an interface always
-returns ``null``.
-
-.. code:: php
-
-   class User {}
-
-   interface UserFinder
-   {
-       function findUserByEmail(): User|null;
-   }
-
-   class AlwaysNullUserFinder implements UserFinder
-   {
-       function findUserByEmail(): null
-       {
-           return null;
-       }
-   }
-
-Currently it is not possible to write this code in PHP as it gives the
-error:     Fatal error: Null can not be used as a standalone type
-
-This means that an incorrect ``User|null`` return definition needs to
-used for the ``findUserByEmail()`` method. That leads to further
-confusion as a static analyzer analysing that class will give a 'method
-can never return type User' error.
-
-The same problem exists for interfaces that have a return type that is a
-union of false with another type.
+-  ROUND_TOWARD_ZERO (equivalent of PHP_ROUND_TOWARD_ZERO) alias of
+   `ROUND_DOWN <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-down>`__
+-  ROUND_AWAY_FROM_ZERO (equivalent of PHP_ROUND_AWAY_FROM_ZERO) alias
+   of
+   `ROUND_UP <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-up>`__
 
 Backward Incompatible Changes
 -----------------------------
 
-This RFC does not contain any backwards incompatible changes.
+None
 
-Proposed PHP Version
---------------------
+Proposed PHP Versions
+---------------------
 
-Next minor version, i.e. PHP 8.2.
+8.4
+
+Questions
+---------
+
+Why not use functions ceil() and floor()?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The functions ceil() and floor() round numbers to the full integer,
+while the function round() rounds the number by given precision.
+Implementing new rounding modes we get equivalent of those functions
+using round() with 0 as precision.
+
+.. code:: php
+
+   ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
+   floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
+
+Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Such constants already exist in the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+and represent rounding modes 'away from zero' and 'toward zero'. However
+the names rounding up and down are ambiguous. They may be easily
+confused with the rounding ceiling/floor, while the terms away
+from/toward zero are distinct.
+
+Those constants would be deprecated and replaced with their
+corresponding aliases: ROUND_TOWARD_ZERO and ROUND_AWAY_FROM_ZERO.
+
+Why not the enum implementation for the rounding modes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As this is extension of the existing modes we should add complementary
+modes to the existing constants instead implementing new Enum. This way
+enum is an addition to the new constants and is not included into this
+RFC.
 
 Proposed Voting Choices
 -----------------------
@@ -226,10 +103,26 @@ Proposed Voting Choices
 As per the voting RFC a yes/no vote with a 2/3 majority is needed for
 this proposal to be accepted.
 
-Voting started on 2022-03-12 and will end on 2022-03-26.
+Voting started on 2023-11-15 and will end on 2023-11-30 00:00 GMT.
 
-Question: Accept Allow null and false as stand-alone types RFC?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Implement 4 new rounding modes to \`round()\` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+If the first voting is not accepted the result of the second voting will
+be ignored.
+
+Question: Create aliases for Intl extension constants ROUND_UP and ROUND_DOWN: ROUND_AWAY_FROM_ZERO and ROUND_TOWARD_ZERO
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -240,27 +133,24 @@ Voting Choices
 Implementation
 --------------
 
-GitHub pull request: https://github.com/php/php-src/pull/7546
-
-After the project is implemented, this section should contain
-
--  Version 8.2.0
--  Commit:
-   https://github.com/php/php-src/commit/6039c07a3afd64a42c9b9f1ed994ca971db67a1e
--  a link to the PHP manual entry for the feature
+GitHub pull request: https://github.com/php/php-src/pull/12056
 
 References
 ----------
 
-.. [1]
-   `PHP RFC: Union Types 2.0 </rfc/union_types_v2>`__
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:First Published At: http://wiki.php.net/rfc/null-standalone-type
-:Implementation: https://github.com/php/php-src/commit/6039c07a3afd64a42c9b9f1ed994ca971db67a1e
-:Original Authors: George Peter Banyard, girgias@php.net
-:Original PHP Version: PHP 8.2
-:Slug: null-false-standalone-types
-:Wiki URL: https://wiki.php.net/rfc/null-false-standalone-types
+:Implementation: https://github.com/php/php-src/pull/12056
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Original Status: Voting
+:Slug: new_rounding_modes_to_round_function
+:Wiki URL: https://wiki.php.net/rfc/new_rounding_modes_to_round_function
