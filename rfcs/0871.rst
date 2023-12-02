@@ -6,7 +6,7 @@ NULL Coercion Consistency
 :Author: Craig Francis [] <craig#at#craigfrancis.co.uk>
 :Status: Withdrawn
 :Type: Unknown
-:Created: 2023-08-19
+:Created: 2023-08-22
 :Version: 0.2
 
 Introduction
@@ -17,37 +17,37 @@ internal
 functions <https://wiki.php.net/rfc/deprecate_null_to_scalar_internal_arg>`__.
 While the consistency is welcome (user-defined vs internal functions),
 for those **not** using strict Static Analysis or *strict_types=1*, the
-breaking of NULL coercion creates an upgrade problem.
+breaking of NULL coercion creates a difficult BC problem.
 
-This RFC does **not** change anything for *strict_types=1* (or strict
-static analysis), as strict type checks can be useful. For example,
-developers can view NULL as a missing/invalid value (not as a value in
-itself), and passing NULL to a function like *htmlspecialchars()* could
+This RFC does **not** change anything for *strict_types=1* (or static
+analysis), as strict type checks can be useful. For example, some
+developers view NULL as a missing/invalid value (not as a value in
+itself), and passing NULL to a function like *htmlspecialchars()* might
 indicate a problem.
-
-Roughly **15%** of scripts use *strict_types=1* (calculation below).
-
-Roughly **33%** of developers use static analysis (realistically it's
-less than this, details below).
 
 There was a `short discussion <https://externals.io/message/112327>`__
 about the original RFC, but with the exception of Craig Duncan, there
-was no consideration for the problems this creates with existing code
-(or the inconsistency of NULL coercion compared to string/int/float/bool
-coercion; or other contexts like string concatenation, == comparisons,
-arithmetics, sprintf, etc).
+was no discussion about the BC problems, or the inconsistency of NULL
+coercion compared to string/int/float/bool coercion, or other contexts
+like string concatenation, == comparisons, arithmetics, sprintf, print,
+echo, array keys, etc.
 
 The intention is to also keep `Unify PHP's typing
 modes <https://github.com/Girgias/unify-typing-modes-rfc>`__ by George
 Peter Banyard in mind, with coercions like *substr($string, "offset")*
 and *htmlspecialchars(array())* as being clearly problematic; whereas
-the following is common, and has been fine:
+the following is common:
 
 .. code:: php
 
-   $search = filter_input(INPUT_GET, 'q'); // Or similar (examples below)
+   $search = ($_GET['q'] ?? NULL); // Or similar (examples below)
 
-   echo 'Results for ' . htmlspecialchars($search);
+   echo 'Results for ' . htmlspecialchars($search); // Fatal Error?!?
+
+Roughly **15%** of scripts use *strict_types=1* (calculation below).
+
+Roughly **33%** of developers use static analysis (realistically it's
+less than this, details below).
 
 Problem
 -------
@@ -77,18 +77,33 @@ Coercion from NULL is well defined:
    "When converting to bool, the following values are considered false
    [...] the special type NULL"
 
+String/Int/Float/Bool can be coerced; Arrays, Resources, and Objects
+(without toString) cannot be coerced (for fairly obvious reasons).
+
+Or, NULL "can be coerced to the type requested by the hint without data
+loss and without creation of likely unintended data"
+(`ref <https://wiki.php.net/rfc/coercive_sth>`__).
+
+PHP 7.0 introduced the ability for user-defined functions to specify
+parameter types via the `Scalar Type Declarations
+RFC <https://wiki.php.net/rfc/scalar_type_hints_v5#behaviour_of_weak_type_checks>`__,
+where the implementation triggered Type Errors for those using
+*strict_types=1*, and otherwise used coercion for string/int/float/bool,
+but not NULL, PHP 8.1 updated internal function parameters to work in
+the same way.
+
 Current State
 ~~~~~~~~~~~~~
 
 .. code:: php
 
-   // echo(string ...$expressions): void
-   // print(string $expression): int
    print('A');
    print(1);
    print(1.2);
    print(false);
-   print(NULL); // Fine, coerced to empty string.
+   print(NULL); // Fine, still coerced to empty string.
+
+   echo NULL; // Fine, still coerced to empty string.
 
    var_dump(3 + '5' + NULL); // Fine, int(8)
    var_dump(NULL / 6); // Fine, int(0)
@@ -96,19 +111,19 @@ Current State
    $o = [];
 
    $o[] = ('' == '');
-   $o[] = ('' == NULL); // Fine, coerced to empty string.
+   $o[] = ('' == NULL); // Fine, still coerced to empty string.
 
    $o[] = 'ConCat ' . 'A';
    $o[] = 'ConCat ' . 123;
    $o[] = 'ConCat ' . 1.2;
    $o[] = 'ConCat ' . false;
-   $o[] = 'ConCat ' . NULL; // Fine, coerced to empty string.
+   $o[] = 'ConCat ' . NULL; // Fine, still coerced to empty string.
 
    $o[] = sprintf('%s', 'A');
    $o[] = sprintf('%s', 1);
    $o[] = sprintf('%s', 1.2);
    $o[] = sprintf('%s', false);
-   $o[] = sprintf('%s', NULL); // Fine, coerced to empty string.
+   $o[] = sprintf('%s', NULL); // Fine, still coerced to empty string.
 
    $o[] = htmlspecialchars('A');
    $o[] = htmlspecialchars(1);
@@ -116,11 +131,7 @@ Current State
    $o[] = htmlspecialchars(false);
    $o[] = htmlspecialchars(NULL); // Deprecated in 8.1, Fatal Error in 9.0?
 
-With user-defined functions, while there hasn't been a backwards
-compatibility issue, it still highlights the coercion inconsistency, in
-an environment that does not expect type checking, despite NULL being a
-value that "can be coerced to the type requested by the hint without
-data loss and without creation of likely unintended data":
+With user-defined functions, this inconsistency is also noted:
 
 .. code:: php
 
@@ -135,44 +146,23 @@ data loss and without creation of likely unintended data":
      // string(1) "2" / int(2) / float(2) / bool(true)
 
    user_function(3.3, 3.3, 3.3, 3.3);
-     // string(3) "3.3" / int(3) / float(3.3) / bool(true)
+     // string(3) "3.3" / int(3), lost precision / float(3.3) / bool(true)
 
    user_function(false, false, false, false);
      // string(0) "" / int(0) / float(0) / bool(false)
 
    user_function(NULL, NULL, NULL, NULL);
-     // Uncaught TypeError x4?
-
-Arrays, Resources, and Objects (without toString) cannot be coerced (for
-fairly obvious reasons).
-
-String/Int/Float/Bool can be coerced.
-
-NULL can usually be coerced (e.g. string concatenation, == comparisons,
-arithmetics, sprintf, print, echo, array keys), but...
-
-#. PHP 7.0 introduced the ability for user-defined functions to specify
-   parameter types via the `Scalar Type Declarations
-   RFC <https://wiki.php.net/rfc/scalar_type_hints_v5#behaviour_of_weak_type_checks>`__,
-   where the implementation triggered Type Errors for those using
-   *strict_types=1*, and otherwise used coercion for
-   string/int/float/bool, but not NULL.
-#. PHP 8.1 updated internal function parameters to work in the same way.
+     // Fatal error, Uncaught TypeError x4!
 
 Scalar Types
 ~~~~~~~~~~~~
 
-`George Peter Banyard <https://news-web.php.net/php.internals/117523>`__
-notes that "Userland scalar types [...] did not include coercion from
-NULL for *very* good reasons". The only reason mentioned in `Scalar Type
-Declarations <https://wiki.php.net/rfc/scalar_type_hints_v5>`__ is "to
-be consistent with our existing type declarations" (no further details
-given).
-
-The RFC also says "it should be possible for existing userland libraries
-to add scalar type declarations without breaking compatibility", but
-this is not the case, because of NULL. This has made adoption of type
-declarations harder, as it does not work like the following:
+The `Scalar Type
+Declarations <https://wiki.php.net/rfc/scalar_type_hints_v5>`__ RFC says
+"it should be possible for existing userland libraries to add scalar
+type declarations without breaking compatibility", but this is not the
+case, because of NULL. This has made adoption of type declarations
+harder, as it does not work like the following:
 
 .. code:: php
 
@@ -190,10 +180,19 @@ declarations harder, as it does not work like the following:
 
    my_function(NULL, NULL, NULL, NULL);
 
-Some developers view NULL as a missing/invalid value, and passing NULL
-to a function like *htmlspecialchars()* could indicate a problem (can a
-be useful check for static analysis, or in the context of
-*strict_types=1*).
+`George Peter Banyard <https://news-web.php.net/php.internals/117523>`__
+notes that "Userland scalar types [...] did not include coercion from
+NULL for *very* good reasons".
+
+The `Scalar Type
+Declarations <https://wiki.php.net/rfc/scalar_type_hints_v5>`__ RFC says
+"The only exception to this is the handling of NULL: in order to be
+consistent with our existing type declarations for classes, callables
+and arrays, NULL is not accepted by default, unless it is a parameter
+and is explicitly given a default value of NULL", which goes against the
+documentation (as noted above) where the coercion from NULL is well
+defined (i.e. NULL is more like a string/int/float/bool, rather than an
+object/callable/array).
 
 Examples
 ~~~~~~~~
@@ -213,12 +212,11 @@ Common sources of NULL:
    $search = $this->request->getQuery('q'); // CakePHP
    $search = $request->getGet('q'); // CodeIgniter
 
-   $value = mysqli_fetch_row($result);
-   $value = json_decode($json); // Invalid JSON, or nesting limit.
    $value = array_pop($empty_array);
+   $value = mysqli_fetch_row($result);
 
-Examples functions, often working with user input, where NULL has been
-fine:
+Examples functions, often working with user input, where NULL has always
+been accepted/coerced:
 
 .. code:: php
 
@@ -264,11 +262,10 @@ which preserves NULL, but it's often passed to *echo* (which accepts it,
 despite the `echo documentation <https://www.php.net/echo>`__ saying it
 accepts non-nullable strings).
 
-I'd argue a very strict level of type checking (that prevents all forms
-of coercion) is best done by Static Analysis, which can check if a
-variable can be nullable, and it can decide if this is a problem, in the
-same way that a string (e.g. '15') being provided to integer parameter
-could be seen as a problem.
+I'd argue strict type checking (that prevents all forms of coercion)
+should be done via Static Analysis or via *strict_types=1* opt-in, like
+how a string (e.g. '15') being provided to integer parameter could
+identify a problem in some development environments.
 
 There are approximately `335 parameters affected by this
 deprecation <https://github.com/craigfrancis/php-allow-null-rfc/blob/main/functions-change.md>`__.
@@ -288,6 +285,10 @@ Finding
 
 The only realistic way for developers to find when NULL is passed to
 these internal functions is to use the deprecation notices (not ideal).
+
+And this does not stop new issues being introduced, as developers may
+not consider when variables might be NULL (e.g. a browser extension or
+network issues affecting GET/POST variables).
 
 It is possible to use very strict Static Analysis, to follow every
 variable from source to sink (to check if a variable could be NULL), but
@@ -424,7 +425,7 @@ This will litter the code with the use of *(string)* type casting, e.g.
    -<?= htmlspecialchars($var) ?>
    +<?= htmlspecialchars((string) $var) ?>
 
-For a typical project (which won't be using strict_types), expect
+For a typical project (which won't be using *strict_types=1*), expect
 thousands of changes to be made; and note how this does not improve code
 quality.
 
@@ -453,15 +454,15 @@ php-src <https://externals.io/message/116519#116559>`__ (risky).
 Updating
 ~~~~~~~~
 
-While making each change is fairly easy - they are difficult to find,
-there are many of them (time consuming), and the updates used are often
-pointless, e.g.
+While making each change is fairly easy - they are still difficult to
+find, there are many of them, and the updates used are often pointless,
+e.g.
 
 -  *urlencode(strval($name));*
 -  *urlencode((string) $name);*
 -  *urlencode($name ?? "");*
 
-One example diff didn't exactly make the code easier to read:
+And often do not make the code easier to read:
 
 .. code:: diff
 
@@ -469,14 +470,14 @@ One example diff didn't exactly make the code easier to read:
     + $result = substr($string ?? '', 0, $length);
 
 As noted above - Rector can add *(string)* type casting automatically,
-but I have no idea how this improves code quality.
+but this does not improve code quality.
 
 Proposal
 --------
 
 Revert the NULL deprecation for parameters (when **not** using
-*strict_types=1*), so it continues to work (as NULL coercion does in
-other contexts), to avoid the upgrade problems (i.e. Fatal Errors in PHP
+*strict_types=1*), so NULL coercion continues to work (as it does in
+other contexts) to avoid the upgrade problems (i.e. Fatal Errors in PHP
 9.0).
 
 And, in the spirit of the original RFC to keep user-defined and internal
@@ -486,14 +487,16 @@ coerced for non-nullable parameters (when **not** using
 
 This means the type "*?int*" will allow NULL or an integer to be
 provided to the function; whereas the non-nullable type "*int*" would
-coerce NULL to 0, in the same way the string "0" would be.
+coerce NULL to 0; in exactly the same way the string "0" or the boolean
+false would be.
 
 Backward Incompatible Changes
 -----------------------------
 
 While the intention of this RFC is to avoid a BC break; for user defined
 functions to be updated to also coerce NULL (instead of throwing a Type
-Error), it's possible some code may rely on that behaviour, for example:
+Error), while unlikely, it is possible some non *strict_types* code may
+rely the TypeError being thrown, for example:
 
 .. code:: php
 
