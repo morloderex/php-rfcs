@@ -1,5 +1,5 @@
 ====== PHP RFC: Improve callbacks in ext/dom and ext/xsl ======
-  * Version: 0.1.1
+  * Version: 0.2
   * Date: 2023-11-05
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Under Discussion
@@ -77,7 +77,10 @@ I won't repeat this for <php>XSLTProcessor</php>, but it works the same way: <ph
 ===== Proposal =====
 
 Right now, it is impossible to call instance functions or closures.
-Based on feature request https://bugs.php.net/bug.php?id=38595, I propose the following change.
+Based on feature request https://bugs.php.net/bug.php?id=38595, I propose the following API changes.
+These changes apply to //both// <php>DOMXPath</php> and <php>XSLTProcessor</php>.
+
+==== Extending the array abilities of registerPhpFunctions ====
 
 If you pass an array, entries of the form <php>$key => $value</php> will be interpreted as "associate the callable $value with name $key". The key must be a string.
 Example:
@@ -103,9 +106,35 @@ $xpath->registerPhpFunctions([
 
 Whether the value is callable will now be checked during registration instead of during execution.
 
-==== registerPhpFunctions error conditions ====
+==== Additional registerPhpFunctionsNS API ====
+
+We can go even further and //additionally// add an extra API: registerPhpFunctionsNS.
+<PHP>
+// Associate the prefix "example" with namespace URI "http://example.com"
+$xpath->registerNamespace("example", "http://example.com");
+// Register some functions with the "http://example.com" namespace.
+$xpath->registerPhpFunctionsNS("http://example.com", [
+  "first_function" => $callable,
+  "second_function" => $another_callable
+]);
+// Now $callable can be called using "example:first_function(...)"
+// and $another_callable using "example:second_function(...)".
+</PHP>
+
+As you can see in the example, this offers a namespace-aware API and a nicer syntax.
+The fact that the function names are now fully-qualified avoids naming clashes when multiple independent libraries or API users register callbacks.
+
+The signature of this function is:
+<PHP>
+function registerPhpFunctionsNS(string $namespaceURI, array|string $restrict): void;
+</PHP>
+
+As you can see, unlike the <php>registerPhpFunctions</php> method, we don't allow <php>null</php>. Passing <php>null</php> to <php>registerPhpFunctions</php> makes it possible to call all global functions, which I find dubious for a namespace-aware API. Furthermore, in that case it //cannot// determine at registration time whether the global function is callable (because we don't know yet what function will be called). I find this a footgun that I'd rather avoid for a new API.
+
+==== Error conditions ====
 
 There will be new error conditions added to <php>registerPhpFunctions</php> as part of this RFC.
+These errors will also apply to <php>registerPhpFunctionsNS</php>.
 
 In case the argument is a string:
   - If the string is not a callable: argument type error
@@ -113,7 +142,12 @@ In case the argument is a string:
 In case the argument is an array:
   - If the value of an array entry is not a callable: argument type error
   - If there is no string key, and the value cannot be converted to a string: whatever error <php>zval_try_get_string</php> gives. Example: if you do <php>registerPhpFunctions([ function() {...} ])</php>: this will throw a "Object of class Closure could not be converted to string" error.
-  - If there is a string key that's empty: argument value error
+  - If there is a string key that's empty: argument <php>ValueError</php>
+  - If there are NUL bytes in the string: argument <php>ValueError</php>
+
+Furthermore, for <php>registerPhpFunctionsNS</php> there are some additional error conditions:
+  - The predefined php namespace for XPath is "http://php.net/xpath", and for XSL it is "http://php.net/xsl". It will //not// be possible to register functions under those namespaces respectively for XPath and XSL. It will throw an argument <php>ValueError</php>.
+  - Some characters for callbacks are invalid (e.g. you cannot use a colon in the function name because a colon is used to separate prefixes from names). It will throw an argument <php>ValueError</php>.
 
 ==== Exceptions vs warnings during execution ====
 
@@ -216,6 +250,7 @@ This is again an example of instance methods in use, but for XSL transformations
 ==== Special cases ====
 
 This section clarifies the behaviour of some special cases. These behave the same as in current PHP stable versions.
+These also apply to <php>registerPhpFunctionsNS</php>.
 
 === Duplicate registrations ===
 
@@ -279,7 +314,9 @@ None right now.
 
 ===== Proposed Voting Choices =====
 
-One primary vote requiring 2/3rd majority: "Accept the proposed changes to ext/dom and ext/xsl callbacks?"
+Two primary votes requiring 2/3rd majority:
+  - Accept the proposed changes to registerPhpFunctions ext/dom and ext/xsl callbacks?
+  - Add registerPhpFunctionsNS to ext/dom and ext/xsl?
 
 ===== Patches and Tests =====
 
@@ -303,5 +340,6 @@ Keep this updated with features that were discussed on the mail lists.
 
 ===== Changelog =====
 
+  * 0.2: Added registerPhpFunctionsNS
   * 0.1.1: Clarify special cases (which are identical to how they are in current PHP versions)
   * 0.1: Initial version under discussion
