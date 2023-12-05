@@ -18,10 +18,9 @@ This RFC suggests adding a new function ''request_parse_body()'' to expose the e
 
 <code php>
 /**
- * @param resource<stream>|null $input_stream
  * @param array<string, int>|null $options
  */
-function request_parse_body($input_stream = null, ?string $content_type = null, ?array $options = null): array {}
+function request_parse_body(?array $options = null): array {}
 
 // This is a PUT request
 var_dump($_POST);  // []
@@ -33,14 +32,7 @@ var_dump($_POST);  // [...]
 var_dump($_FILES); // [...]
 </code>
 
-The function returns an array pair with index 0 in the shape of $_POST and index 1 in the shape of $_FILES. If desired, the return values can overwrite the $_POST and $_FILES superglobals. This makes it simple to reuse existing POST endpoints.
-
-The function also accepts an optional stream as input. This is useful for applications like RoadRunner that use the CLI SAPI for webserver workers that process multiple requests per execution. If the input stream is not provided, the function will obtain its input directly from ''sapi_module.read_post()''. If the input stream is set, the content type must also be set, for the following reasons:
-
-  * The content type is needed to infer the desired parser, as ''request_parse_body()'' also supports application/x-www-form-urlencoded for consistency with the automatically invoked parsing.
-  * If the content type is multipart/form-data, the parser requires a boundary, which is embedded in the Content-Type header.
-
-The function accepts a stream rather than a string because the input may be arbitrarily large (i.e. too large to hold in memory at once).
+The function returns an array pair with index 0 in the shape of $_POST and index 1 in the shape of $_FILES. If desired, the return values can overwrite the $_POST and $_FILES superglobals. This makes it simple to reuse existing POST endpoints. The function will obtain its input directly from ''sapi_module.read_post()''.
 
 The function accepts an array of options to override global INI settings. See the "$options parameter" section for more details.
 
@@ -61,7 +53,7 @@ All of these conditions emit warnings for the automatically invoked multipart pa
 class RequestParseBodyException extends Exception {}
 </code>
 
-It's worth noting that the ''request_parse_body()'' function is not idempotent (when reading directly from the SAPI), even if the function throws. It is thus not safe to call ''request_parse_body()'' twice for the same request without providing an input stream. This is explained in more detail in the <php>php://input</php> section below.
+It's worth noting that the ''request_parse_body()'' function is not idempotent (when reading directly from the SAPI), even if the function throws. It is thus not safe to call ''request_parse_body()'' twice. This is explained in more detail in the <php>php://input</php> section below.
 
 ==== Supported content types ====
 
@@ -73,9 +65,7 @@ Usually, the requests content is accessible through the <php>php://input</php> s
 
 The singular exception to this buffering mechanism is multipart/form-data for which the input stream is empty. The reasoning is most likely that multipart requests should not need to read the input stream again, since the parsed result is available in $_POST and $_FILES. Buffering the input for these requests essentially means that all files are written to disk twice, doubling the load on the disk in terms of time and space.
 
-For the same reason, ''request_parse_body()'' does not buffer to <php>php://input</php>. This also means that ''request_parse_body()'' may not be called twice for the same request without providing an input stream, as it destructively consumes ''sapi_module.read_post()''.
-
-If you //really// need this behavior, you may pass <php>php://input</php> to ''request_parse_body()'' which will buffer it on the fly.
+For the same reason, ''request_parse_body()'' does not buffer to <php>php://input</php>. This also means that ''request_parse_body()'' may not be called twice, as it destructively consumes ''sapi_module.read_post()''.
 
 ==== $options parameter ====
 
@@ -100,23 +90,6 @@ public function index(): Response {
 }
 </code>
 
-This is particularly useful for long-running processes that may call ''request_parse_body'' multiple times and as such would otherwise need to restore the old INI values.
-
-<code php>
-#[Route('/api/videos', methods: ['PUT'])]
-public function index(): Response {
-    $previousValue = ini_get('post_max_size');
-    ini_set('post_max_size', '128M');
-    try {
-        [$post, $files] = request_parse_body();
-    } finally {
-        ini_set('post_max_size', $previousValue);
-    }
-
-    // ...
-}
-</code>
-
 Providing invalid keys or values will throw a ''ValueError''.
 
 ==== Why not parse the content automatically? ====
@@ -125,7 +98,7 @@ One could argue that since POST automatically triggers the parsing of the applic
 
 The first one is backwards compatibility. At least for multipart, the request body is consumed without buffering. Existing code that manually parses multipart will break as the input stream will be empty.
 
-The second reason is that a separate function provides more flexibility. An endpoint that does not accept multipart can terminate early, instead of parsing the request, potentially storing large files, erroring, and then deleting the buffered files again. Moreover, a separate function allows the parsing mechanism to be reused for RoadRunner and similar services, as explained above.
+The second reason is that a separate function provides more flexibility. An endpoint that does not accept multipart can terminate early, instead of parsing the request, potentially storing large files, erroring, and then deleting the buffered files again.
 
 If you'd like to make use of these benefits for ''POST'', you may disable the ''enable_post_data_reading'' ini-setting and then call ''request_parse_body()'' from your application.
 
@@ -189,13 +162,13 @@ echo file_get_contents($_FILES['file_name']['tmp_name']);
 
 RFC1867 requests are automatically parsed when the request has the POST HTTP verb. Each non-file input is populated to the $_POST superglobal. For files, the content is stored in a temporary file and an entry is created in $_FILES to provide its metadata, along with a path to the temporary file. At the end of the request, any uploaded files that were not moved by the application get cleaned up. This prevents attacks that attempt to fill the servers disk space.
 
-===== Future scope =====
+===== Rejected ideas =====
 
-==== Removing files ====
+==== $input_stream parameter ====
 
-PHP automatically removes uploaded files at the end of the request to avoid DoS attacks that attempt to fill disk storage. For users of ''request_parse_body()'' with an input stream, it is expected that the process may handle multiple requests and thus multiple calls to this function. Waiting until process termination may accumulate many temporary files. It may be desired to add a function that cleans up temporary files that may be called on demand.
+This RFC previously contained an ''$input_stream'' parameter, with the assumption that RoadRunner and special SAPIs might make use it. However, on closer inspection at how RoadRunner handles files, this does not seem to be the case. For RoadRunner, the Go server already parsers the multipart request, saves any files to disk, and transfers the file handle directly to the PHP worker. Thus, the PHP worker has no reason to parse the request again. New SAPIs like FrankenPHP can make use of multipart parsing by tweaking the ''sapi_module.read_post()'' function.
 
-The same could be achieved in userland by inspecting the returned $_FILES-equivalent array, and thus a separate function might not be necessary. This would be slightly inconsistent with the current cleanup mechanism which tracks uploaded files independent of the $_FILES superglobal.
+Since the multipart/form-data content type is used exclusively for server requests, and a PHP process can only receive one request per execution, it does not seem like custom request body inputs are useful. I'm open to extending this functionality in the future if we do find a use-case for it after all.
 
 ===== Vote =====
 
