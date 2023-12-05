@@ -13,6 +13,25 @@ This RFC proposes to add support for final anonymous classes.
 
 This should also allow some additional opcache optimizations, such as any JIT logic gated behind a check on ZEND_ACC_FINAL, i.e. https://github.com/php/php-src/blob/master/ext/opcache/jit/zend_jit_trace.c#L4507.
 
+Example syntax:
+
+<code php>
+$x = new final class {};
+</code>
+
+Extending a final anonymous class throws an error:
+
+<code php>
+$x = new final class {};
+class_alias($x::class, 'alias');
+class aliasExtends extends alias {}
+</code>
+
+''
+Fatal error: Class aliasExtends cannot extend final class class@anonymous in %s on line %d
+''
+
+
 ===== Backward Incompatible Changes =====
 
 None.
@@ -67,7 +86,18 @@ I think this is a dangerous game. Breaking BC shouldn't be proposed unless absol
  Nicolas
 </blockquote>
 
-What follows is the text of the original RFC:
+To be entirely honest, I'm a bit on the fence: on one hand, looking at code like ''new class {}'', you would assume that since the class apparently has no name, it should not be impossible to extend it, but on the other hand, there are valid usecases for extending even anonymous classes (comments in the PR (https://github.com/php/php-src/pull/11126) referenced proxying, I can think of phpunit mocking to a much, much lesser extent given that you should realistically (hopefully) never have to mock an anonymous class that does not already implement an interface), and completely precluding the possibility of extending a class that
+
+  - Has a name (even if it's not immediately obvious)
+  - Can be referenced to using its name (''class_exists'', ''new ReflectionClass'', ''new $clazz'', and yes, even ''class_alias'')
+
+seems a tad bit too restrictive...
+
+On the other hand, I also really don't like non-final classes, in all of my projects, I use CS rules that force all classes to either be abstract or final, because unfortunately, I've had to work with a lot of code that very frequently violates encapsulation by using inheritance.
+
+Still, there are some useful patterns, mainly regarding testing and mocking, for example I use https://github.com/dg/bypass-finals as a dev dependency to make all final classes non-final at runtime to allow mocking in phpunit, but it works by installing a custom default stream contexts that intercepts requires, tokenizes files and removes final keywords from classes; this approach would break for anonymous classes if they were rendered final by default without an option to make them non-final. 
+
+This is why I remain ambivalent about the options, as seen both in my emails and in the original text of the RFC:
 
 Personally, I would have instead preferred the much cleaner approach of making all anonymous classes final by default, (preferrably) without offering the option to make them non-final.
 
