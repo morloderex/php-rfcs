@@ -1,5 +1,5 @@
 ====== PHP RFC: Improve callbacks in ext/dom and ext/xsl ======
-  * Version: 0.2
+  * Version: 0.3
   * Date: 2023-11-05
   * Author: Niels Dossche, nielsdos@php.net
   * Status: Under Discussion
@@ -76,7 +76,7 @@ I won't repeat this for <php>XSLTProcessor</php>, but it works the same way: <ph
 
 ===== Proposal =====
 
-Right now, it is impossible to call instance functions or closures.
+Right now, it is impossible to call instance methods or closures.
 Based on feature request https://bugs.php.net/bug.php?id=38595, I propose the following API changes.
 These changes apply to //both// <php>DOMXPath</php> and <php>XSLTProcessor</php>.
 
@@ -106,17 +106,15 @@ $xpath->registerPhpFunctions([
 
 Whether the value is callable will now be checked during registration instead of during execution.
 
-==== Additional registerPhpFunctionsNS API ====
+==== Additional registerPhpFunctionNS API ====
 
-We can go even further and //additionally// add an extra API: registerPhpFunctionsNS.
+We can go even further and //additionally// add an extra API: registerPhpFunctionNS.
 <PHP>
 // Associate the prefix "example" with namespace URI "http://example.com"
 $xpath->registerNamespace("example", "http://example.com");
 // Register some functions with the "http://example.com" namespace.
-$xpath->registerPhpFunctionsNS("http://example.com", [
-  "first_function" => $callable,
-  "second_function" => $another_callable
-]);
+$xpath->registerPhpFunctionNS("http://example.com", "first_function", $callable);
+$xpath->registerPhpFunctionNS("http://example.com", "second_function", $another_callable);
 // Now $callable can be called using "example:first_function(...)"
 // and $another_callable using "example:second_function(...)".
 </PHP>
@@ -126,15 +124,16 @@ The fact that the function names are now fully-qualified avoids naming clashes w
 
 The signature of this function is:
 <PHP>
-function registerPhpFunctionsNS(string $namespaceURI, array|string $restrict): void;
+function registerPhpFunctionNS(string $namespaceURI, string $name, callable $callable): void;
 </PHP>
 
-As you can see, unlike the <php>registerPhpFunctions</php> method, we don't allow <php>null</php>. Passing <php>null</php> to <php>registerPhpFunctions</php> makes it possible to call all global functions, which I find dubious for a namespace-aware API. Furthermore, in that case it //cannot// determine at registration time whether the global function is callable (because we don't know yet what function will be called). I find this a footgun that I'd rather avoid for a new API.
+Notice how the function name is in singular (function vs the plural functions).
+Unlike the <php>registerPhpFunctions</php> method, we don't allow <php>null</php> or arrays. Passing <php>null</php> to <php>registerPhpFunctions</php> makes it possible to call all global functions, which I find dubious for a namespace-aware API. Furthermore, in that case it //cannot// determine at registration time whether the global function is callable (because we don't know yet what function will be called). I find this a footgun that I'd rather avoid for a new API.
+Similarly, the array support for <php>registerPhpFunctions</php> is mostly a legacy relic from the past and gives conflicts with array-like callables. That is the reason only string-like callables can be passed and you have to wrap a callable in an array if you want to use a callable. To avoid this mess, the new <php>registerPhpFunctionNs</php> API does not use an array and consequently supports all kinds of callables directly without caveats.
 
 ==== Error conditions ====
 
 There will be new error conditions added to <php>registerPhpFunctions</php> as part of this RFC.
-These errors will also apply to <php>registerPhpFunctionsNS</php>.
 
 In case the argument is a string:
   - If the string is not a callable: argument type error
@@ -145,7 +144,7 @@ In case the argument is an array:
   - If there is a string key that's empty: argument <php>ValueError</php>
   - If there are NUL bytes in the string: argument <php>ValueError</php>
 
-Furthermore, for <php>registerPhpFunctionsNS</php> there are some additional error conditions:
+For <php>registerPhpFunctionNS</php> there are other error conditions. This list is shorter because the function is much simpler (i.e. no array handling):
   - The predefined php namespace for XPath is "http://php.net/xpath", and for XSL it is "http://php.net/xsl". It will //not// be possible to register functions under those namespaces respectively for XPath and XSL. It will throw an argument <php>ValueError</php>.
   - Some characters for callbacks are invalid (e.g. you cannot use a colon in the function name because a colon is used to separate prefixes from names). It will throw an argument <php>ValueError</php>.
 
@@ -250,7 +249,7 @@ This is again an example of instance methods in use, but for XSL transformations
 ==== Special cases ====
 
 This section clarifies the behaviour of some special cases. These behave the same as in current PHP stable versions.
-These also apply to <php>registerPhpFunctionsNS</php>.
+These also apply to <php>registerPhpFunctionNS</php>.
 
 === Duplicate registrations ===
 
@@ -289,7 +288,7 @@ Or more generally, the alternative is that we add <php>registerCallable(string $
 
 Strictly speaking, as the callable validity is checked earlier (i.e. when calling <php>registerPhpFunctions</php>), this has a subtle break. If the function is not declared yet at the time of calling <php>registerPhpFunctions</php>, then this will throw an error. Previously this was accepted as long as the function was declared by the time the callback was executed. I think however that this situation is sufficiently rare and easily avoidable.
 
-If the part of the proposal to //also// add <php>registerPhpFunctionsNS</php> is accepted, then this could also be a BC break //if// user subclasses already define a <php>registerPhpFunctionsNS</php> function with a different signature. GitHub search revealed no such cases however, and I also think that this method name would be rare.
+If the part of the proposal to //also// add <php>registerPhpFunctionNS</php> is accepted, then this could also be a BC break //if// user subclasses already define a <php>registerPhpFunctionNS</php> function with a different signature. GitHub search revealed no such cases however, and I also think that this method name is rare.
 
 ===== Proposed PHP Version(s) =====
 
@@ -318,7 +317,7 @@ None right now.
 
 Two primary votes requiring 2/3rd majority:
   - Accept the proposed changes to registerPhpFunctions ext/dom and ext/xsl callbacks?
-  - Add registerPhpFunctionsNS to ext/dom and ext/xsl?
+  - Add registerPhpFunctionNS to ext/dom and ext/xsl?
 
 ===== Patches and Tests =====
 
@@ -342,6 +341,7 @@ Keep this updated with features that were discussed on the mail lists.
 
 ===== Changelog =====
 
+  * 0.3: Changed registerPhpFunctionsNS -> registerPhpFunctionNS
   * 0.2: Added registerPhpFunctionsNS
   * 0.1.1: Clarify special cases (which are identical to how they are in current PHP versions)
   * 0.1: Initial version under discussion
