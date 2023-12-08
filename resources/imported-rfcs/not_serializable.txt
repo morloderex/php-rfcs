@@ -6,14 +6,14 @@
   * First Published at: http://wiki.php.net/rfc/not_serializable
 
 ===== Introduction =====
-Some classes aren't supposed to be serialized. Examples include closures, various connections like ''PDO'', etc. Currently, while PHP internal classes have a nice way of preventing being serialized/deserialized, userspace doesn't. I'm proposing to make them equal.
+Some classes aren't supposed to be serialized. Currently, while PHP internal classes have a nice way of preventing being serialized/unserialized, userspace doesn't. I'm proposing to make them equal.
 
-Compare the internals slapping ''ce_flags |= ZEND_ACC_NOT_SERIALIZABLE'' to userspace doing something like this:
+Compare the internals simply slapping ''ce_flags |= ZEND_ACC_NOT_SERIALIZABLE'' to userspace having to do something like this:
 
 <code php>
 class MyClass
 {
-    public function __sleep() // Wait, what it's signature is supposed to be? Does it matter?
+    public function __sleep() // Wait, what its signature is supposed to be? Does it matter?
     {
         throw new Exception('This class must not be serialized');
     }
@@ -25,7 +25,18 @@ class MyClass
 }
 </code>
 
-Not only is this method bulky, it also lacks a way for various code analysers to detect attempts to serialize such classes. If course, linters may introduce their own attributes/annotations to catch such mistakes; however various linters 
+Not only is this method bulky, it's also less readable. It also lacks a way for various code analysers to detect attempts to serialize such classes. If course, linters may introduce their own attributes/annotations to catch such mistakes; however various linters 
+
+===== Analysis =====
+As of the time I'm writing this, there are 94 uses of ''@not-serializable'' in php-src. Examples include:
+  * Closures
+  * Various connections like ''PDO'', etc.
+  * Reflection
+
+What could userspace use this for?
+  * Wrappers for all the above. Imagine a PDO wrapper that creates connections lazily. If the connection hasn't been initialized yet, its serialization will succeed, which results in unpredictable behavior.
+  * Secret information that shouldn't be accidentally exfiltrated by being serialized.
+  * Security-sensitive classes that are unsafe to unserialize with arbitrary data.
 
 ===== Proposal =====
 Introduce new attribute that would expose this functionality to userspace.
@@ -39,7 +50,7 @@ class MyClass
 serialize(new MyClass()); // Exception: Serialization of 'MyClass' is not allowed
 </code>
 
-This change requires no changes to the engine whatsoever, all functionality is already present - it merely gets exposed.
+This change requires no changes to the engine whatsoever, all functionality is already present - it merely gets exposed to userspace.
 
 ===== Backward Incompatible Changes =====
 The only breaking change is the addition of a new non-namespaced class.
