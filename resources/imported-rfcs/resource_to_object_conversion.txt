@@ -13,15 +13,17 @@ As far as I know, Nikita was the first one who realized these shortcomings and s
 
 As eliminating resources altogether should be a strategic goal for PHP, this time, the main question is not whether the remaining resources should be converted to objects or not, but the timeline when we can do so, in order to have acceptable level of backward compatibility breaks.
 
-Usually, the biggest complaint against these kind of changes is due to return value changes of ''is_resource()'' invocations. An example of such situation is the following:
+Therefore the goal of this RFC is to set the rules and BC expectations based on which the project can continue. So far, the vast majority of the individual conversions were "unofficial", meaning they didn't have to go through the formal RFC process, there was no deprecation period (it is not really feasible anyway), and were performed even in minor versions. I do believe this kind of flexibility has been beneficial for the overall project, however, we occasionally get complaints due to the introduced BC break. That's what this RFC should prevent for future conversions. But what are these breaks?
+
+First and foremost, the return value changes of ''is_resource()'' invocations cause the biggest issues. An example of such situation is the following:
 
 <code php>
 $pipes = [];
 $process = proc_open("sleep 1", [], $pipes);
 if (is_resource($process)) {
     // do some stuff
+    proc_close($proc);
 }
-proc_close($proc);
 </code>
 
 The above code won't work anymore after the conversion, since the ''is_resource($process)'' condition will yield a different result than before (''false'' compared to ''true'').
@@ -34,17 +36,21 @@ $process = proc_open("sleep 1", [], $pipes);
 
 if ($process !== false) {
     // do some stuff
+    proc_close($proc);
 }
-proc_close($proc);
 </code>
 
-By using ''$process !== false'' instead of ''is_resource($process)'' the ''if'' will yield the correct result, and the code is going to be compatible with any PHP version. One could also use ''is_resource($process) || $process instanceof ProcessHandle'', but this is a more verbose way to achieve the same result.
+By using ''$process !== false'' instead of ''is_resource($process)'', the ''if'' will yield the correct result, and the code is going to be compatible with any PHP version. One could also use ''is_resource($process) || $process instanceof ProcessHandle'', but this is a more verbose way to achieve the same result.
 
 On the other hand, some people suggest that the ''is_resource'' function should also return ''true'' for classes which originally used to be resources (read [[https://externals.io/message/116127|a long thread about this topic here]]). Doing so would apparently minimize the BC break by making the above mentioned code change unnecessary.
 
-However, the current RFC disagrees with this approach because it has some downsides which would do more harm than benefit.
+However, the current RFC rejects the usage of the above workaround *for any resources besides streams* mostly because of the low perceived BC impact of their migration (see the impact analysis below for more information). Additionally, the issues introduced by the `is_resource()` return value changes are mostly easy to spot and fix (but admittedly need some careful manual work).
 
-Most often, these issues are easy to spot and fix, but admittedly need some careful manual work. Therefore, the goal of this RFC is to set the rules according to which the project can continue. So far, the vast majority of the individual conversions were "unofficial", meaning they didn't have to go through the formal RFC process, there was no deprecation period (it is not really feasible anyway), and were performed even in minor versions. I do believe this kind of flexibility has been beneficial for the overall project, however, we occasionally get complaints due to the above mentioned BC breaks. That's what this RFC should prevent for future conversions.
+In case of streams though - due to their ubiquitous nature - a different course of action is applied in order to minimize the BC breaks: `is_resouce` will return `true` if any object is passed to it which previously used to be ''stream'' or ''persistent stream'' resources.
+
+Some examples:
+
+===== Resource categories =====
 
 The resources yet to be migrated can be categorized the following way based on their backward compatibility impact:
 
@@ -124,18 +130,18 @@ The rest of the built-in extensions which currently expose resources are the fol
 
 ===== Vote =====
 
-The RFC consists of 4 votes, one for each resource category. Since the majority of the resource migrations in question don't yet have an implementation, most voting choices are intentionally left vague so that they only define whether a resource group can only be migrated in a major version or the conversion can happen in minor versions as well.
+The RFC consists of 4 votes, one for each resource category. Since the majority of the resource migrations in question don't yet have an implementation, most voting choices are intentionally left vague so that they only define whether a resource group can only be migrated in a major version or the conversion can happen in minor versions as well. Each vote requires 2/3 majority in order to be accepted.
 
 ==== Process resource ====
 
-<doodle title="When should the migration of the Process resource happen?" auth="kocsismate" voteType="single" closed="true" closeon="2023-12-06T18:00:00Z">
+<doodle title="When should the migration of the Process resource happen?" auth="kocsismate" voteType="single" closed="true" closeon="2024-01-18T08:00:00Z">
    * in the next major version (e.g. PHP 9.0)
    * in the next minor or major version (e.g. PHP 8.4)
 </doodle>
 
 ==== Primary stream resources (stream, persistent stream) ====
 
-<doodle title="When should the migration of the primary stream resources happen?" auth="kocsismate" voteType="single" closed="true" closeon="2023-12-06T18:00:00Z">
+<doodle title="When should the migration of the primary stream resources happen?" auth="kocsismate" voteType="single" closed="true" closeon="2024-01-18T08:00:00Z">
    * only in a major version (e.g. PHP 9.0)
    * in any minor or major version (e.g. PHP 8.4)
    * primary stream resources should not be migrated to objects
@@ -143,14 +149,14 @@ The RFC consists of 4 votes, one for each resource category. Since the majority 
 
 ==== Auxiliary stream resources (contexts, filters, brigades, buckets) ====
 
-<doodle title="When should the migration of the auxiliary stream resources happen?" auth="kocsismate" voteType="single" closed="true" closeon="2023-12-06T18:00:00Z">
+<doodle title="When should the migration of the auxiliary stream resources happen?" auth="kocsismate" voteType="single" closed="true" closeon="2024-01-18T08:00:00Z">
    * only in a major version (e.g. PHP 9.0)
    * in any minor or major version (e.g. PHP 8.4)
 </doodle>
 
 ==== Other resources ====
 
-<doodle title="When should the migration of the resources of other extensions happen?" auth="kocsismate" voteType="single" closed="true" closeon="2023-12-06T18:00:00Z">
+<doodle title="When should the migration of the resources of other extensions happen?" auth="kocsismate" voteType="single" closed="true" closeon="2024-01-18T08:00:00Z">
    * only in a major version (e.g. PHP 9.0)
    * in any minor or major version (e.g. PHP 8.4)
 </doodle>
