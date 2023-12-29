@@ -1,165 +1,43 @@
 ====== PHP RFC: new MyClass()->method() without parentheses ======
 
   * Date: 2023-12-29
-  * Author: Valentin Udaltsov (udaltsov.valentin@gmail.com)
-  * Status: Under Discussion
-  * Discussion: https://externals.io/message/123031
+  * Author: Valentin Udaltsov <vudaltsov@php.net>
+  * Status: Draft
   * First Published at: http://wiki.php.net/rfc/new_without_parentheses
-  * Implementation and tests: https://github.com/php/php-src/pull/13029
+  * Implementation: https://github.com/php/php-src/pull/13029
 
 ===== Introduction =====
 
-The "class member access on instantiation" feature
-[[https://php-legacy-docs.zend.com/manual/php5/en/migration54.new-features#:~:text=Class%20member%20access%20on%20instantiation%20has%20been%20added%2C%20e.g.%20(new%20Foo)%2D%3Ebar().|was introduced in PHP 5.4.0]].
-Since then constants, properties and methods can be accessed on a newly created instance without an intermediate
-variable, but **only** if the ''new'' expression is wrapped in parentheses:
-
-<code php>
-class Request implements Psr\Http\Message\RequestInterface
-{
-    // ...
-}
-
-// OK
-$request = (new Request())->withMethod('GET')->withUri('/hello-world');
-
-// PHP Parse error: syntax error, unexpected token "->"
-$request = new Request()->withMethod('GET')->withUri('/hello-world');
-</code>
-
-The goal of this RFC is to enable the second syntax to:
-  * make coding with PHP more convenient and satisfy many users' requests for this feature (see [[https://externals.io/message/66197|externals#66197]], [[https://bugs.php.net/bug.php?id=70549|bugs.php#70549]], [[https://externals.io/message/101811|externals#101811]], [[https://externals.io/message/113953|externals#113953]])
-  * decrease the visual debt in all sorts of builders and configurators ([[https://github.com/search?q=path%3A*.php+language%3APHP+%2F%5C%28%5Cs*new%5Cs%2B%5B%5E%5C%28%5D%2B%5Cs*%5C%28%5B%5E%5C%29%5D*%5C%29%5Cs*%5C%29%5Cs*-%3E%2F&type=code&ref=advsearch|more than half a million lines of open source PHP code could be simplified]])
-  * ease switching between other C-like languages that don't require parentheses ([[https://onecompiler.com/java/3zxuee3bm|Java]], [[https://onecompiler.com/csharp/3zxudhw4s|C#]], [[https://onecompiler.com/typescript/3zxudfpyy|TypeScript]]).
-
-===== Proposal =====
-
-This RFC allows to omit parentheses around the ''new'' expression when constructor arguments' parentheses **are** present. Given class
+In PHP 5.4.0 "class member access on instantiation" feature [[https://php-legacy-docs.zend.com/manual/php5/en/migration54.new-features#:~:text=Class%20member%20access%20on%20instantiation%20has%20been%20added%2C%20e.g.%20(new%20Foo)%2D%3Ebar().|was introduced]].
+Since then methods, properties and constants can be accessed on a newly created instance without an intermediate variable,
+but only if the new expression is wrapped into parenetheses:
 
 <code php>
 class MyClass
 {
-    const CONSTANT = 'constant';
-    public static $staticProperty = 'staticProperty';
-    public static function staticMethod(): string { return 'staticMethod'; }
-    public $property = 'property';
-    public function method(): string { return 'method'; }
-    public function __invoke(): string { return '__invoke'; }
+    public function method(): void
+    {
+        echo 'Hello, World!';
+    }
 }
+
+(new MyClass())->method(); // Hello, World!
+
+new MyClass()->method(); // PHP Parse error:  syntax error, unexpected token "->"
 </code>
 
-one will be able to write
+At the same time some C-like languages allow to use new instance immediately without wrapping:
+[[https://onecompiler.com/java/3zxuee3bm|Java]],
+[[https://onecompiler.com/csharp/3zxudhw4s|C#]],
+[[https://onecompiler.com/typescript/3zxudfpyy|TypeScript]]. The goal of this RFC is to make parentheses around new expression optional in PHP as well.
 
-<code php>
-var_dump(
-    new MyClass()::CONSTANT,        // string(8)  "constant"
-    new MyClass()::$staticProperty, // string(14) "staticProperty"
-    new MyClass()::staticMethod(),  // string(12) "staticMethod"
-    new MyClass()->property,        // string(8)  "property"
-    new MyClass()->method(),        // string(6)  "method"
-    new MyClass()(),                // string(8)  "__invoke"
-);
+===== Proposal =====
 
-$myClass = MyClass::class;
-var_dump(
-    new $myClass()::CONSTANT,        // string(8)  "constant"
-    new $myClass()::$staticProperty, // string(14) "staticProperty"
-    new $myClass()::staticMethod(),  // string(12) "staticMethod"
-    new $myClass()->property,        // string(8)  "property"
-    new $myClass()->method(),        // string(6)  "method"
-    new $myClass()(),                // string(8)  "__invoke"
-);
-
-var_dump(
-    new (trim(' MyClass '))()::CONSTANT,        // string(8)  "constant"
-    new (trim(' MyClass '))()::$staticProperty, // string(14) "staticProperty"
-    new (trim(' MyClass '))()::staticMethod(),  // string(12) "staticMethod"
-    new (trim(' MyClass '))()->property,        // string(8)  "property"
-    new (trim(' MyClass '))()->method(),        // string(6)  "method"
-    new (trim(' MyClass '))()(),                // string(8)  "__invoke"
-);
-</code>
-
-This RFC still does not allow to omit parentheses around the ''new'' expression **without** constructor arguments' parentheses, because in some cases
-this leads to an ambiguity:
-
-<code php>
-// Instantiate and then access the instance or instantiate the result of the expression?
-new MyClass::CONSTANT;
-new MyClass::$staticProperty;
-new $myClass::CONSTANT;
-new $myClass::$staticProperty;
-new $myClass->property;
-new $myClass->method();
-</code>
-
-This RFC allows to omit parentheses around the ''new'' anonymous class expression regardless of whether constructor arguments'
-parentheses are present or not:
-
-<code php>
-var_dump(
-    // string(8) "constant"
-    new class { const CONSTANT = 'constant'; }::CONSTANT,
-    // string(14) "staticProperty"
-    new class { public static $staticProperty = 'staticProperty'; }::$staticProperty,
-    // string(12) "staticMethod"
-    new class { public static function staticMethod() { return 'staticMethod'; } }::staticMethod(),
-    // string(8) "property"
-    new class { public $property = 'property'; }->property,
-    // string(6) "method"
-    new class { public function method() { return 'method'; } }->method(),
-    // string(8) "__invoke"
-    new class { public function __invoke() { return '__invoke'; } }(),
-);
-</code>
-
-===== Why the proposed syntax is unambiguous =====
-
-At first glance ''new MyClass()->method()'' expression might seem ambiguous. But according to the same logic ''new MyClass()'' is also ambiguous:
-is it ''new (MyClass())'' or ''new MyClass''? However, ''new MyClass()'' is unambiguously interpreted as an instantiation
-of class ''MyClass'' with zero constructor arguments, not an instantiation of ''MyClass()'' function call result. This
-is because PHP interprets the first expression after ''new'' as a class name.
-
-Consider also ''MyClass::new()->method()''. It is not interpreted as ''MyClass::(new()->method())'' or ''MyClass::(new())->method()''.
-It is interpreted as ''(MyClass::new())->method()''. It's natural to assume that ''MyClass::new()'' is the first expression to evaluate.
-The same is true for ''new MyClass()->method()'': expression ''new MyClass()'' is also the first to evaluate.
-
-Here's how it looks at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
-The formula for the ''new'' expression with explicit constructor arguments' parentheses is ''T_NEW class_name|new_variable|(expr) ctor_arguments'',
-where ''new_variable'' is a variable expression without calls.
-
-<code php>
-new MyClass();
-^   ^      ^
-|   |      |
-|—T_NEW    |—ctor_arguments
-    |
-    |—class_name
-
-
-new $class();
-^   ^     ^
-|   |     |
-|—T_NEW   |—ctor_arguments
-    |
-    |—new_variable (cannot have calls!)
-
-new (trim(' MyClass '))();
-^   ^                  ^
-|   |                  |
-|—T_NEW                |—ctor_arguments
-    |
-    |—(expr)
-</code>
-
-Once the parser encounters ''T_NEW'', it considers whatever comes next a class name, not a part of another expression.
-This guarantees that the ''new'' expression with arguments' parentheses can be unambiguously used as a separate expression
-without any additional parentheses. It also becomes clear why ''new_variable'' cannot have calls and why arguments' parentheses
-are crucial for the proposed syntax: parentheses denote the end of the class name and the end of the new expression.
+TODO
 
 ===== Backward Incompatible Changes =====
 
-None. Any code that is valid before the change will be valid after and interpreted in the same way.
+None.
 
 ===== Proposed PHP Version(s) =====
 
