@@ -8,10 +8,10 @@
 
 ===== Introduction =====
 
-The "Class member access on instantiation" feature
+The "class member access on instantiation" feature
 [[https://php-legacy-docs.zend.com/manual/php5/en/migration54.new-features#:~:text=Class%20member%20access%20on%20instantiation%20has%20been%20added%2C%20e.g.%20(new%20Foo)%2D%3Ebar().|was introduced in PHP 5.4.0]].
-Since then methods, properties and constants can be accessed on a newly created instance without an intermediate variable,
-but **only** if the new expression is wrapped in parentheses:
+Since then constants, properties and methods can be accessed on a newly created instance without an intermediate
+variable, but **only** if the ''new'' expression is wrapped in parentheses:
 
 <code php>
 class MyClass
@@ -40,9 +40,9 @@ At first glance ''new MyClass()->method()'' expression might seem ambiguous. But
 does not exist: ''new MyClass()'' is interpreted as an instantiation of class ''MyClass'' with zero
 constructor arguments, not as instantiation of ''MyClass()'' function call result.
 
-Here's how it is solved at the grammar level. The formula for the ''new'' expression is
-''T_NEW class_name|new_variable|(expr) ctor_arguments'', where ''new_variable'' is a variable expression without calls.
-Thus PHP offers 3 ways to provide a class:
+Here's how it is solved at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
+The formula for the ''new'' expression is ''T_NEW class_name|new_variable|(expr) ctor_arguments'', where ''new_variable''
+is a variable expression without calls. Thus PHP offers 3 ways to provide a class:
 
 <code php>
 // class_name
@@ -57,16 +57,95 @@ new (trim(' MyClass '))();
 
 This guarantees that the ''new'' expression is unambiguous: once the parser encounters ''T_NEW'', it considers
 whatever comes next a class name. Hence it's safe and unambiguous to further use the ''new'' expression on its
-own without parentheses. It's like refactoring ''(MyClass::new())->method()'' to ''MyClass::new()->method()''. Nobody will
-ever read it as ''MyClass::(new())->method()'' or ''MyClass::(new()->method())''.
+own without parentheses. It's like refactoring ''(MyClass::new())->method()'' to ''MyClass::new()->method()'',
+nobody will ever read it as ''MyClass::(new())->method()'' or ''MyClass::(new()->method())''.
 
 ===== Proposal =====
 
-TODO
+This RFC allows to omit parentheses around ''new'' expressions **with** constructor arguments' parentheses:
+
+<code php>
+class MyClass
+{
+    const CONSTANT = 'constant';
+    public static $staticProperty = 'staticProperty';
+    public static function staticMethod(): string { return 'staticMethod'; }
+    public $property = 'property';
+    public function method(): string { return 'method'; }
+    public function __invoke(): string { return '__invoke'; }
+}
+</code>
+
+<code php>
+var_dump(
+    new MyClass()::CONSTANT,        // string(8)  "constant"
+    new MyClass()::$staticProperty, // string(14) "staticProperty"
+    new MyClass()::staticMethod(),  // string(12) "staticMethod"
+    new MyClass()->property,        // string(8)  "property"
+    new MyClass()->method(),        // string(6)  "method"
+    new MyClass()(),                // string(8)  "__invoke"
+);
+
+$myClass = MyClass::class;
+var_dump(
+    new $myClass()::CONSTANT,        // string(8)  "constant"
+    new $myClass()::$staticProperty, // string(14) "staticProperty"
+    new $myClass()::staticMethod(),  // string(12) "staticMethod"
+    new $myClass()->property,        // string(8)  "property"
+    new $myClass()->method(),        // string(6)  "method"
+    new $myClass()(),                // string(8)  "__invoke"
+);
+
+var_dump(
+    new (trim(' MyClass '))()::CONSTANT,        // string(8)  "constant"
+    new (trim(' MyClass '))()::$staticProperty, // string(14) "staticProperty"
+    new (trim(' MyClass '))()::staticMethod(),  // string(12) "staticMethod"
+    new (trim(' MyClass '))()->property,        // string(8)  "property"
+    new (trim(' MyClass '))()->method(),        // string(6)  "method"
+    new (trim(' MyClass '))()(),                // string(8)  "__invoke"
+);
+</code>
+
+This RFC preserves grammar for ''new'' expressions **without** constructor arguments' parentheses, because in some cases
+omitting parentheses around the ''new'' expression will result in a valid expression with different meaning:
+
+<code php>
+(new MyClass)::$staticProperty; // Access static property on MyClass instance
+new MyClass::$staticProperty;   // Instantiate class MyClass::$staticProperty
+
+(new $myClass)::$staticProperty; // Access static property on an instance of class $myClass
+new $myClass::$staticProperty;   // Instantiate class $myClass::$staticProperty
+
+(new $myClass)->property; // Access non-static property on an instance of class $myClass
+new $myClass->property;   // Instantiate class $myClass->property
+
+(new $myClass)->method(); // Call method on an instance of class $myClass
+new $myClass->method();   // Instantiate class $myClass->method
+</code>
+
+This RFC allows to omit parentheses around any ''new'' anonymous class expressions regardless of constructor arguments'
+parentheses:
+
+<code php>
+var_dump(
+    // string(8) "constant"
+    new class { const CONSTANT = 'constant'; }::CONSTANT,
+    // string(14) "staticProperty"
+    new class { public static $staticProperty = 'staticProperty'; }::$staticProperty,
+    // string(12) "staticMethod"
+    new class { public static function staticMethod() { return 'staticMethod'; } }::staticMethod(),
+    // string(8) "property"
+    new class { public $property = 'property'; }->property,
+    // string(6) "method"
+    new class { public function method() { return 'method'; } }->method(),
+    // string(8) "__invoke"
+    new class { public function __invoke() { return '__invoke'; } }(),
+);
+</code>
 
 ===== Backward Incompatible Changes =====
 
-None.
+None. Any code that is valid before the change will be valid after and interpreted in the same way.
 
 ===== Proposed PHP Version(s) =====
 
