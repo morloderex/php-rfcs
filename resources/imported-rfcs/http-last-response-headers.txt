@@ -1,0 +1,91 @@
+====== PHP RFC: Add http_(get|clear)_last_request_headers() function ======
+
+  * Version: 0.1
+  * Date: 2024-01-03
+  * Author: Gina Peter Banyard <girgias@php.net>
+  * Status: Under Discussion
+  * Target Version: PHP 8.4
+  * Implementation: [[https://github.com/php/php-src/pull/12500|https://github.com/php/php-src/pull/12500]]
+  * First Published at: [[rfc:http-last-response-headers|http://wiki.php.net/rfc/http-last-response-headers]]
+
+===== Introduction =====
+
+The [[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
+variable is magically created in the local scope whenever an HTTP request is performed through PHP's stream layer,
+i.e. when using the [[https://www.php.net/manual/en/wrappers.http.php|HTTP wrapper]].
+One such usage is using <php>file_get_content()</php> to retrieve the content of a URL.
+
+
+The [[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
+variable will contain all the HTTP headers that were encountered during the request performed via the HTTP wrapper.
+
+Because creating a variable in the local scope is a terrible way of returning additional information,
+we have removed all other features using this operating principle,
+such as [[https://www.php.net/manual/en/reserved.variables.phperrormsg.php|$php_errormsg]].
+This variable was initially slated [[rfc:deprecations_php_8_1#predefined_variable_http_response_header|to be deprecated in PHP 8.1]],
+but due to the lack of convenient alternatives it was removed from the proposal.
+
+Indeed, this variable is created and populated even if the HTTP request fails.
+Something that is only possible to achieve when dropping down to the stream layer when providing an additional
+stream context which ignores errors.
+Which requires manually parsing and detecting if the HTTP request failed or not instead of just checking if the return value is <php>false</php>.
+
+Thus, we propose adding functions similar to <php>error_get_last()</php>/<php>error_clear_last()</php> which replaced
+[[https://www.php.net/manual/en/reserved.variables.phperrormsg.php|$php_errormsg]].
+
+===== Proposal =====
+
+Add the following two functions:
+  * <php>function http_get_last_response_header(): ?array</php>
+  * <php>function http_clear_last_response_header(): void</php>
+
+<php>http_get_last_response_header()</php> would behave like
+[[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
+if a request via the HTTP wrapper is made and return the headers as an array even when the request fails.
+If no request via the HTTP wrapper is made, or the previous headers have been cleared by using
+<php>http_clear_last_response_header()</php>, then <php>null</php> is returned.
+
+===== Backward Incompatible Changes =====
+
+As this RFC does not yet propose deprecating
+[[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
+there are no backward incompatible changes.
+
+However, considering the possible engine and optimizer simplifications by removing
+the last usage of the engine creating a variable, we have conducted a usage analysis of this feature.
+We have found 65 usages in 30 projects across over 900 projects
+(composer packages, standalone open source projects, and private codebases) that were analyzed with [[https://www.exakat.io|Exakat]]. [1]
+Most of those usages stem from packages like Guzzle or OAuth client libraries.
+
+It is impossible to polyfill this feature, however it is possible to write cross version compatible code
+in the following way:
+<PHP>
+$content = file_get_contents('http://example.com/');
+if (function_exists('http_get_last_response_headers')) {
+    $http_response_header = http_get_last_response_headers();
+}
+// Use $http_response_header as before
+</PHP>
+
+Considering the low usage of this feature, the possibility to write cross version compatible code,
+and the possible engine and optimizer simplifications,
+it seems reasonable to be able to remove this feature even without a deprecation notice if the need arises.
+
+===== Version =====
+
+Next minor version, PHP 8.4.
+
+===== Vote =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2024-XX-XX and will end on 2024-XX-XX.
+ 
+<doodle title="Accept Add http_(get|clear)_last_request_headers() function RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== References =====
+
+[1] https://gist.github.com/exakat/454e503458e231dc0695837ad2561540
