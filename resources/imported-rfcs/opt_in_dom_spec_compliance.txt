@@ -34,30 +34,30 @@ In particular, changing types is backwards incompatible, especially considering 
 
 Therefore, I propose the following BC solution.
 [[rfc:domdocument_html5_parser|The HTML 5 RFC]] added class aliases such as <php>DOMNode</php> -> <php>DOM\Node</php> etc.
-I propose to make them real classes instead of aliases. This was we can leave the old classes untouched while fixing the types in the new classes, even though most of the structure remains the same. Note that a lot of code is still shared internally between these classes.
-This also means to make <php>DOMDocument</php> no longer inherit from <php>DOM\Document</php>, an inheritance which was introduced in the HTML 5 RFC but would now become impossible.
+I propose to make them real classes instead of aliases. This way we can leave the old classes untouched while fixing the types in the new classes, even though most of the structure remains the same. Note that a lot of code is still shared internally between these classes.
+This also means to make <php>DOMDocument</php> no longer inherit from <php>DOM\Document</php>. This inheritance was introduced in the HTML 5 RFC, but would no longer be possible due to type divergences.
 
-The disadvantage of doing it like this is that it becomes more difficult for userland code to support the "old DOM" and "new DOM" classes simulatenously, they'd have to use type unions now. Then again, that's probably fine because their behaviour can either subtly or wildly differ.
+The disadvantage of doing this is that it becomes more difficult for userland code to support the "old DOM" and "new DOM" classes simulatenously. They'd have to use type unions now. Then again, that's probably fine because their semantic behaviour can differ quite a bit.
 
 ==== Let's not damage XML support ====
 
-The DOM spec right now has no explicit support for things like DOM entities and notation nodes.
+The DOM spec has no explicit support for things like DOM entities and DOM notation nodes.
 I'd prefer to keep the support in because otherwise it makes working with XML more difficult, especially in combination with other extensions.
-The spec authors have removed some support for these things to simplify the specification but there's no reason why we should drop support.
+The spec authors have removed some support for these things to simplify the specification but there's no reason why we should drop support for these things that don't have an alternative.
 
 ===== Testing =====
 
 To proactively prevent as many implementation issues as possible, I tried to test every edge case I found in the DOM spec.
 
-WHATWG (the working group maintaining the DOM spec) has also a repository full of tests. It's called WPT (Web Platform Test).
-I also ported a subset of these tests from Javascript to PHP and those ported tests all succeed. This increases the certainty that the implementation is correct. Note that I only ported a subset because it is very time consuming and mentally draining, even with automation.
+WHATWG (the working group maintaining the DOM spec) also has a repository full of tests. It's called WPT (Web Platform Test).
+I ported a subset of these tests from Javascript to PHP and those ported tests all pass. This increases the confidence that the implementation is correct. Note that I only ported a subset because it is very time consuming and mentally draining, even with automation.
 
-To ensure that the existing DOM classes still work, I rely on the PHP test suite, but I have also tested real-world DOM-utilising libraries.
+To ensure that the old DOM classes still work, I rely on the PHP test suite, and I have also tested real-world DOM-utilising libraries.
 I have tested veewee's XML library, Mensbeam library, some SimpleSAML libraries
 
 ===== Bug list =====
 
-I will be using the new aliased names for the DOM classes in this document.
+I will be using the currently aliased names for the DOM classes in this document.
 
 ==== DOM\Node class (and its subclasses) ====
 
@@ -229,7 +229,8 @@ This currently isn't the case and will become possible by this proposal.
 
 ==== General issues ====
 
-  * The HTML namespace is practically non-existent and not respected.
+  * The rules surrounding the HTML namespace are not respected.
+  * Runtime performance issues with namespaces.
   * Namespace serialization is incorrect when xmlns attributes exist, or when the namespace of an element is the empty namespace (in some cases).
   * There is a DOMNameSpaceNode class where namespace declarations are sometimes treated as attributes and sometimes are not. This causes all sorts of inconsistencies. In modern-day DOM spec the internal namespace information is not exposed, but when you see an xmlns declaration they are attributes and can be manipulated properly like attributes. This also causes issues when there is internal namespace information _and_ an xmlns attribute. The DOMNameSpaceNode class is also lacking in features because they try to be like attributes but are not due to implementation problems. In modern-day DOM spec, the internal namespace declarations are not attributes. Explicit xmlns attributes exist that are just attributes and have no influence on the namespace declaration, they are only there to help serialization.
   * Namespace reconciliation can shift nodes between namespaces, which is incorrect.
@@ -248,12 +249,11 @@ The class hierarchy w.r.t. textual nodes is supposed to be:
 However in the current implementation, the ProcessingInstruction class extends Node instead of CharacterData.
 Also CharacterData is a class instead of an interface in the current implementation, but that's because interfaces cannot contain properties in PHP.
 
-==== Typing ====
+==== General typing issues ====
 
   * As listed above, there are a lot of places where the implementation uses "string" but should actually use "?string".
   * DOMNameSpaceNode will never be possibly returned in the spec compliant implementation, so that return type becomes useless.
   * There are a lot of return types of the form "T|false" because the current implementation can return false on error instead of throwing an exception if "strictErrorChecking" is false. This is a legacy DOM feature that is no longer supported in the modern-day DOM spec. For new classes, the return type would become "T" instead of "T|false".
-  * null vs false return type.
 
 ==== Bug reports ====
 
