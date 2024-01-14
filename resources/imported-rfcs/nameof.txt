@@ -6,22 +6,41 @@
 
 ===== Introduction =====
 
-Currently, it is possible to inspect virtually any aspect of running code, except there is no easy way to inspect the locally executing scope. For example, a developer can get the class of an object with ''get_class()'' or the name with ''MyClass::class'' or ''$myClass::class''. A developer can get the name of a parameter or property via reflection, however, when a developer needs to write a simple error message, that may be overkill, thus the variable name is usually hard-coded into the error message. This usually works fine until a developer refactors the code and forgets to change the name of the variable in the error message.
+During PHP execution, it is possible to reflect on most of the code currently running. For example, it is easy to get the name of a class and using reflection utilities: names of properties, methods, and so on. However, getting the name of a callable passed via ''(...)'' is complicated, even though the engine knows it. Getting the name of a constant not bound to a class or a simple variable, is virtually impossible. This RFC proposes a ''nameof'' operator that makes it relatively easy to get the name of virtually any identifier passed to it.
 
-''nameof()'' allows developers to quickly and easily access the name of a variable in the current scope, in a way that keeps error messages consistent.
-
-This RFC proposes a global ''nameof()'' function that allows a developer to get the name of virtually any user-named variable, property, const, or member, quickly and easily:
+This can be used in attributes:
 
 <code PHP>
-echo nameof($variable); // variable
-echo nameof($object->property); // property
-echo nameof(Enum::Case); // Case
-echo nameof(Object::Const); // Const
-echo nameof(myFunction(...)); // myFunction
-echo nameof(MY_CONSTANT); // MY_CONSTANT
+#[SerializeWith(nameof(Person->serialize))]
+class Person {
+  public function serialize() { /* do stuff */ }
+}
 </code>
 
-As named parameters become more prevalent, providing the end user with the name of the parameter is more important, in a way that it is easy to locate when refactoring, especially as part of a deprecation strategy:
+In error messages:
+
+<code PHP>
+function divide(float $numerator, float $denominator): float {
+  if($denominator === 0) throw new InvalidArgumentException(nameof($denominator) . ' is zero');
+}
+</code>
+
+In match statements:
+
+<code PHP>
+match($propertyName) {
+  nameof(MyClass->property) => $value,
+  nameof(MyClass->otherProperty) => $otherValue,
+}
+</code>
+
+Or anywhere a literal string can be used:
+
+<code PHP>
+$arr[nameof(myfunc(...))] = true;
+</code>
+
+As named parameters become more prevalent, providing the end user with the name of the parameter is more important than ever, in a way that it is easy to locate when refactoring, especially as part of a deprecation strategy:
 
 <code PHP>
 function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
@@ -32,16 +51,17 @@ function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
 }
 </code>
 
-Further, using ''nameof()'' would allow simpler usage of attributes, by using the silence operator (see error checking):
+Here are some further examples showing how the identifier is transformed:
 
 <code PHP>
-// evaluates to #[EventHandler(callback: 'handler')]
-#[EventHandler(callback: @nameof(Operator::handler))]
-class Operator {
-  public function handler() {
-    // implementation
-  }
-}
+echo nameof($variable); // variable
+echo nameof(MyClass->property); // property
+echo nameof(MyClass::staticProperty); // staticProperty
+echo nameof(Enum::Case); // Case
+echo nameof(Object::Const); // Const
+echo nameof(myFunction(...)); // myFunction
+echo nameof(\MyNamespace\myFunction(...)); // \MyNamespace\myFunction
+echo nameof(MY_CONSTANT); // MY_CONSTANT
 </code>
 
 It's important to note that some things have an ambiguous name that is a compile error:
@@ -51,58 +71,50 @@ echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead
 echo nameof($a === $b); // ??
 echo nameof($a($b)); // same as array access
 echo nameof($$a); // ask for $a or use the value of $a
+echo nameof($a->prop); // what is $a?
 </code>
 
-All of these will generate a compile error: "Cannot get the name of an ambiguous expression."
+These will generate a compile error: "Cannot get the name of an ambiguous expression."
+
+Note that only the right-most part of the identifier is translated to a string. This is because this is almost always what you want. For example, in the case of ''nameof(MyClass->property)'', you are most likely not interested in the name of ''MyClass'' (otherwise, you'd ask for the ''MyClass::class''), but you are interested in the name of ''property'' because that is what you asked for. The key difference between writing ''"property"'' and ''nameof(MyClass->property)'' comes down to humans reading and modifying the code. It is much safer to refactor code when you know the pedigree of a string that should also be refactored. 
+
+To continue the ''"property"'' example, it isn't clear what object "property" comes from without digging into the code, perhaps requiring debugging running code. When it is clear that it comes from ''MyClass'', you can know from whence it came. You can also grep the codebase for "MyClass->property" and locate all usages.
 
 ===== Proposal =====
 
-The ''nameof()'' function is not necessarily a function in the traditional sense and can be used anywhere a string literal can be used (such as to define static constants, array keys, and attributes). This means that there is an 'identity' for every valid ''nameof()'':
+A ''nameof'' operator will be introduced into PHP. During compilation, it will validate that all parts of the identifier exist, and if they do not, a warning will be emitted. The right-most identifier will be turned into a string literal.
 
-<code PHP>
-${nameof($variable)} === $variable;
-$object->{nameof($object->property)} === $object->property;
-constant(Enum::class . '::' . nameof(Enum::Case)) === Enum::Case;
-constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
-(nameof(myFunction(...))() === myFunction();
-constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
-</code>
+There is a special case for objects:
+
+1. A ''::'' will denote a static property/method.
+2. A ''->'' will denote an instanced property/method
+3. The left-hand side must be the type name; it can be an abstract type or an interface.
+4. The left-hand side cannot be a variable.
+
+If the first two rules are broken (e.g., a ''::'' where a ''->'' should be used), a warning will be emitted: "name of a static property/method is asked for, using instanced syntax." If the 3rd rule is broken (e.g., a type cannot be found), then the standard error will be emitted for a missing type, and if the 4th rule is broken, a compilation error will be emitted: "cannot get the name of a variables property/method." The exceptions for rule 4 are ''$this'', ''static::'', and ''self::'', which may be used on the left-hand side in appropriate contexts.
 
 There are a limited number of expressions that can resolve to a name using ''nameof()'':
 
   * variables (but not variable-variables): ''nameof($var)'' resolves to 'var'
-  * properties: ''nameof($this->prop)'', ''nameof($a?->prop)'' resolves to 'prop'
+  * properties: ''nameof($this->prop)'', ''nameof(MyClass->prop)'' resolves to 'prop'
   * first-class callables: ''nameof(strlen(...))'' resolves to 'strlen'
   * static properties and constants: ''nameof(A::Prop)'' resolves to 'Prop'
   * constants: ''nameof(MY_CONST)'' resolves to 'MY_CONST'
 
-When getting the name of constants and functions, the name will NOT be the full name, but the lexical name. This means that if the name is ''use'''d, it will be that name. However, if the full name is used in the ''nameof()'', the full name is returned. It's probably easiest to show this with an example:
+The name will always be fully qualified, with a beginning slash, if it is a first-class callable or constant and it refers to a globally accessible identifier. For example:
 
 <code PHP>
-namespace Name {
-    const MY_CONST = true;
-    function namedFunction() {}
+namespace Example;
+
+class A {
+  public function doStuff(): void {}
 }
 
-namespace Other {
-    echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-    echo nameof(\Name\namedFunction(...)); // \Name\namedFunction
-}
+function doStuff(): void {}
 
-namespace Using {
-    use const Name\MY_CONST as ;
-    use const Name\MY_CONST as ALIASED_CONST;
-    use function Name\namedFunction;
-
-    echo nameof(MY_CONST); // MY_CONST
-    echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-    echo nameof(ALIASED_CONST); // ALIASED_CONST
-    echo nameof(namedFunction(...)); // namedFunction
-    echo nameof(\Name\namedFunction(...)); // \Name\namedFunction(...)
-}
+echo nameof(doStuff(...)); // \Example\doStuff
+echo nameof(A->doStuff(...)); // doStuff
 </code>
-
-In other language implementations (such as C#), a full name usually isn't returned even if you pass one in. However, a 'full name' is rarely required and can often be constructed from parts, if required. However, as a convenience, in this implementation, if a 'full name' is requested entered, a full name is returned. This allows for the 'least surprises' since what you put in is what you get out.
 
 Additionally, consider traits and aliasing:
 
@@ -122,45 +134,11 @@ class C {
   }
 }
 
-$a = new C();
-echo nameof($a->exampleB(...)); // outputs: "exampleB"
+echo nameof(C->exampleB(...)); // outputs: "exampleB"
+echo nameof(B->example(...)); // outputs: "example"
 </code>
 
-In the example above, if we were to return the 'full name' of ''$a->exampleB(...)'' it would actually be 'B::example' but that isn't helpful in the context of class ''C''. By returning the lexical name, the developer gets the response they expect.
-
-===== Error Handling =====
-
-There are several ways to handle errors, each one has its own merits but ultimately will be left up as a secondary vote. It may not provide the **best** solution, but the author doesn't have a personal preference:
-
-1. No error handling
-
-In this case, there is no error handling. This would allow using ''nameof'' on things that don't exist. For example, no error would be output if a developer references a static property on an instanced property:
-
-<code PHP>
-class MyClass {
-  public string $var;
-}
-nameof(MyClass::var); // no error, returns 'var'
-nameof($aVariable); // no error, returns 'aVariable'
-</code>
-
-The downside is that PHP won't natively inform a developer that they've used something that doesn't exist. The main benefit of this approach is that it would allow the community to come up with its own rules via static analysis tools.
-
-2. Warnings
-
-In this case, PHP would output a warning: "nameof(<name>): does not exist." where <name> is the name the developer passed.
-
-Using a class name (or any other method that would normally trigger autoloading) that does not exist, will trigger autoloading and attempt to locate the class. If it is not found, a warning will be issued. If a variable does not exist in the current scope, a warning will be issued. If the referenced property/method/const cannot be located, a warning will be issued. If a function or constant cannot be located in the current scope, a warning will be issued.
-
-Warnings can be disabled via the 'silence operator' (''@'') to behave just like the first case. This is the best of both worlds, allowing developers to 'break the rules' to specify properties/functions without a reference to the object (''@nameof(Object::method(...))'' vs. ''nameof($object->method)'') but would require assistance via static analysis tooling to catch mistakes.
-
-3. Exceptions
-
-An exception model was considered, however, the author believes that it would break the concept of "using ''nameof'' wherever a string could be used". For example, if a name cannot be located, an exception would be thrown. This would be true in the case of simply defining an attribute with a non-existent name:
-
-#[EventHandler(handler: nameof(I_DO_NOT_EXIST))]
-
-which is probably undesirable and nearly impossible to handle in a graceful way.
+This adheres to the basic refactoring safety mentioned earlier, since refactoring ''B->example()'' will show up in ''C'', which will then be found by looking for ''C->exampleB'', if it needs to be refactored at all. If ''nameof(C->exampleB)'' returned 'example,' other code may accidentally call ''C->example()'', which would not be ideal, not to mention counter-intuitive.
 
 ===== Backward Incompatible Changes =====
 There are no backward incompatible changes at this time except that `nameof` will become a reserved word.
@@ -171,8 +149,8 @@ This could be expanded in the future to allow classes and types. For example, ''
 
 ===== Proposed PHP Version(s) =====
 
-  * 8.3: release
-  * 8.2.x: ''nameof'' becomes a reserved word, emitting a notice
+  * 8.4: release
+  * 8.3.x: ''\nameof'' becomes a reserved word, emitting a deprecation warning.
 
 ===== RFC Impact =====
 ==== To SAPIs ====
@@ -182,20 +160,16 @@ Should be none
 Will existing extensions be affected? No
 
 ==== To Opcache ====
-Depends on error type vote.
 
-First case: compiled to a string literal.
-
-Second and third case: a new AST node (similar to isset) will need to be handled.
+a new AST node (similar to isset) will need to be handled.
 
 ==== New Constants ====
 None
 
 ===== Open Issues =====
-- Should first-class callables be allowed? It's relatively easy to get the name of a first-class callable and only included for completeness.
 
 ===== Unaffected PHP Functionality =====
-PHP will largely be unaffected by this change, except that a new global function is introduced.
+PHP will largely be unaffected by this change.
 
 ===== Future Scope =====
 None.
@@ -203,11 +177,9 @@ None.
 ===== Proposed Voting Choices =====
 This is a simple yes-or-no vote to include this feature. 2/3 majority required to pass.
 
-There is a subvote for the type of error checking to include. Majority wins.
-
 ===== Patches and Tests =====
 
-experimental implementation: https://github.com/php/php-src/pull/11172/files
+experimental implementation: https://github.com/php/php-src/pull/11172/files (to be updated)
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
@@ -217,7 +189,37 @@ After the project is implemented, this section should contain
   - a link to the language specification section (if any)
 
 ===== References =====
-Links to external references, discussions or RFCs
+- internals discussion: https://externals.io/message/120256
 
 ===== Rejected Features =====
-Keep this updated with features that were discussed on the mail lists.
+
+Classes need not be supported by ''nameof()'' because there is already an easy way to get the class via ''::class''. This would also be ambiguous when a class name matches a constant name.
+
+There were some suggestions to use ''::name'' instead of ''nameof''; however, this introduces some ambiguity. Take, for example:
+
+<code PHP>
+class A {
+	public const name = 'bob';
+}
+
+function example(): A {
+	return new A();
+}
+
+echo example()::name;
+echo A::name;
+</code>
+
+The author believes ''name'' is a rather popular name for variables and would inevitably confuse things. In the example above, "bob" is output, but it looks like we could be getting the name of ''example'' if we don't look hard enough. Further, it prevents us from getting the names of constants:
+
+<code PHP>
+const A = 'billy';
+
+class A {
+	public const name = 'bob';
+}
+
+echo A::name;
+</code>
+
+Are we getting the string "A" or "bob" in this example? As it is currently, we would output "bob," and the author feels rather strongly that this is correct. Thus, something like ''::name'' is rejected.
