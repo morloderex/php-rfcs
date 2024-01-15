@@ -3,7 +3,7 @@ Deprecations For PHP 8.4
 
 :PHP-RFC: 0837
 :Title: Deprecations For PHP 8.4
-:Author: Niels Dossche <nielsdos@php.net>
+:Author: Niels Dossche <nielsdos@php.net>, Gina Peter Banyard <girgias@php.net>, Máté Kocsis <kocsismate@php.net>
 :Status: Draft
 :Type: Unknown
 :Created: 2023-07-25
@@ -19,10 +19,21 @@ The following list provides a short overview of the functionality
 targeted for deprecation, while more detailed explanation is provided in
 the Proposal section:
 
--  ``DOMAttr::schemaTypeInfo`` and ``DOMElement::schemaTypeInfo``
+-  ``DOMAttr::$schemaTypeInfo`` and ``DOMElement::$schemaTypeInfo``
+-  Soft-deprecated ``DOMDocument`` and ``DOMEntity`` properties
 -  ``DOMImplementation::getFeature($feature, $version)``
 -  Constant ``DOM_PHP_ERR``
 -  ``mysqli_ping()`` and ``mysqli::ping()``
+-  ``unserialize()``'s 'S' tag
+-  ``session.sid_length`` and ``session.sid_bits_per_character``
+-  ``SplFixedArray::__wakeup()``
+-  ``xml_set_object()`` and ``xml_set_*_handler()`` with string method
+   names
+-  Passing ``null`` and ``false`` to ``dba_key_split()``
+-  Non-numeric seed strings in xxh3
+-  Constants SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE,
+   SUNFUNCS_RET_TIMESTAMP
+-  Deprecate proprietary CSV escaping mechanism
 
 Proposal
 --------
@@ -31,8 +42,10 @@ Each feature proposed for deprecation is voted separately and requires a
 2/3 majority. All votes refer to deprecation in PHP 8.4 and removal in
 PHP 9.
 
-DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+DOMAttr::$schemaTypeInfo and DOMElement::$schemaTypeInfo
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Niels Dossche nielsdos@php.net
 
 schemaTypeInfo used to be a feature of DOM Core Level 3
 https://www.w3.org/TR/2003/WD-DOM-Level-3-Core-20030226/DOM3-Core.html#core-Attr-schemaTypeInfo,
@@ -44,8 +57,32 @@ never been implemented and is removed by the reference specification.
 
 TODO: check impact
 
-Question: Deprecate DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Deprecate DOMAttr::$schemaTypeInfo and DOMElement::$schemaTypeInfo
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Soft-deprecated DOMDocument and DOMEntity properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The following properties have already been soft-deprecated for a long
+time:
+
+-  ``DOMDocument::$actualEncoding``: it is just an alias to
+   ``DOMDocument::$encoding``
+-  ``DOMDocument::$config``: it has always returned null
+-  ``DOMEntity::$actualEncoding``: it has always returned null
+-  ``DOMEntity::$encoding``: it has always returned null
+-  ``DOMEntity::$version``: it has always returned null
+
+Question: Deprecate and remove the aforementioned DOMDocument and DOMEntity properties?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -55,6 +92,8 @@ Voting Choices
 
 DOMImplementation::getFeature($feature, $version)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Niels Dossche nielsdos@php.net
 
 ``DOMImplementation::getFeature($feature, $version)`` used to be a
 feature of DOM Core Level 3
@@ -68,7 +107,7 @@ implemented and is removed by the reference specification.
 Question: Deprecate DOMImplementation::getFeature($feature, $version)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _voting-choices-1:
+.. _voting-choices-2:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -88,6 +127,163 @@ mysqli_ping() and mysqli::ping()
 TODO: See reasoning:
 https://github.com/php/php-src/pull/11912#issuecomment-1671762583
 
+unserialize()'s 'S' tag
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Tim Düsterhus timwolla@php.net
+
+Strings serialized with PHP's native serialization mechanism are
+represented with the (lowercase) ``s`` tag, followed by the length of
+the string and the raw binary representation of the string contents.
+During the development of the never-released PHP 6, the serialization
+format of binary strings `was
+changed <https://github.com/php/php-src/commit/1f2d5e3b00d19bd6d0db40d7fc2badaa2d65082e>`__
+to use an escaped representation for non-ASCII characters, likely to
+make the serialization output compatible with PHP 6's Unicode strings
+where not all byte sequences are valid. This escaped format was then
+represented with the uppercase ``S`` tag `in a follow-up
+commit <https://github.com/php/php-src/commit/7ccba6624df074051f24efabd5d88d9c0d2a8ec0>`__
+and support for that uppercase ``S`` tag `added to PHP
+5 <https://github.com/php/php-src/commit/8f5310afad0eeef6f2e45a03f6ff7d4a2a7653ce>`__
+in an attempt to provide interoperability with serialized binary strings
+between PHP 5 and PHP 6. This support for the uppercase ``S`` tag
+remains in PHP until today.
+
+PHP's native serializer is a security-sensitive part of the standard
+library, the simpler the logic the smaller the chance for security
+issues and the easier it is to verify the code for correctness. There
+are no tests verifying the functionality of the uppercase ``S`` tag and
+no released version emitted the uppercase ``S`` tag, thus deprecating
+and ultimately removing the support for the ``S`` tag is exceedingly
+unlikely to affect anyone.
+
+Implementation: https://github.com/php/php-src/pull/12309
+
+Question: Deprecate unserialize()’s ‘S’ tag?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-3:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+session.sid_length and session.sid_bits_per_character
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO:
+https://github.com/php/php-src/issues/12418#issuecomment-1763034403
+
+Deprecate SplFixedArray::__wakeup()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO: https://github.com/php/php-src/pull/9704
+
+xml_set_object() and xml_set_*_handler() with string method names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+The XML extension allows registering callbacks that are invoked when
+encountering certain XML triggers, such as the start of a new element or
+a processing instruction, via the relevant ``xml_set_*_handler()``
+function.
+
+However, these functions also allow setting a method name, as a string,
+that should be called on the object provided via ``xml_set_object()``.
+This behaviour is very strange and seems to date prior to the
+introduction of proper callables for object methods via the
+``[$objInstance, 'methodName']`` syntax.
+
+The proposal is to deprecate the ``xml_set_object()`` function and
+passing non-callable strings to the ``xml_set_*_handler()`` functions.
+This would also mean to unset a handler the value of ``null`` must be
+used instead of an empty string witch is also currently allowed.
+
+Question: Deprecate xml_set_object() and xml_set_*_handler() with string method names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-4:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Deprecate passing null and false to dba_key_split()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+The signature of ``dba_key_split()`` is currently
+``function dba_key_split(string|false|null $key): array|false {}``.
+
+However, passing ``null`` or ``false`` to this function will make it
+immediately return ``false``, this is the case since at least PHP 5.3,
+probably earlier.
+
+Moreover, since PHP 8.0, this is the only way for this function to
+return ``false``.
+
+The proposal is to deprecate passing ``null`` and ``false`` to the
+``$key`` parameter, which will allow to clean up the return type of this
+function in the next major version to just ``array``.
+
+Question: Deprecate passing null and false to dba_key_split()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-5:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Non-numeric seed strings in xxh3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO: https://github.com/php/php-src/issues/10305
+
+Constants SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Jorg Sowa jorg.sowa@gmail.com
+
+The functions ``date_sunrise()``/``date_sunset()`` are `already
+deprecated since PHP
+8.1 <https://wiki.php.net/rfc/deprecations_php_8_1>`__ and will be
+removed in the next major version.
+
+The proposal is to deprecate constants SUNFUNCS_RET_STRING,
+SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP which are used exclusively
+with those functions.
+
+Question: Deprecate constants SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-6:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation: https://github.com/php/php-src/pull/12978
+
+Deprecate proprietary CSV escaping mechanism
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+TODO: Follow-up on https://wiki.php.net/rfc/kill-csv-escaping
+
+See: https://github.com/php/doc-en/issues/3086
+
 Backward Incompatible Changes
 -----------------------------
 
@@ -98,6 +294,6 @@ Additional Metadata
 -------------------
 
 :Implementation: TBD
-:Original Authors: Niels Dossche nielsdos@php.net
+:Original Authors: Niels Dossche nielsdos@php.net, Gina Peter Banyard girgias@php.net, Máté Kocsis kocsismate@php.net
 :Slug: deprecations_php_8_4
 :Wiki URL: https://wiki.php.net/rfc/deprecations_php_8_4

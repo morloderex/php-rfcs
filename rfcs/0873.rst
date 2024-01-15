@@ -1,19 +1,639 @@
-No Title
-========
+Opt-in DOM Spec-compliance
+==========================
 
 :PHP-RFC: 0873
-:Title: No Title
-:Author: Unknown
-:Status: Unknown
+:Title: Opt-in DOM Spec-compliance
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Draft
 :Type: Unknown
-:Created: 2023-08-19
-:Version: 1.0
+:Created: 2024-01-14
+:Version: 0.1
 
-This RFC has moved to
-`access_scope_from_magic_accessors </rfc/access_scope_from_magic_accessors>`__
+Introduction
+------------
+
+The DOM extension in PHP is used to parse, query, and manipulate
+XML/HTML documents. The DOM extension is based on the DOM specification.
+Originally this was the `DOM Core Level 3
+specification <https://www.w3.org/TR/DOM-Level-3-Core/>`__, but
+nowadays, that specification has evolved into the current `"Living
+Specification" <https://dom.spec.whatwg.org/>`__ maintained by WHATWG.
+Unfortunately, there are many bugs in PHP's DOM extension. Most of those
+bugs are related to namespace and attribute handling. This leads to
+people trying to work around those bugs by relying on more bugs, or on
+undocumented side-effects of incorrect behaviour, leading to even more
+issues in the end. Furthermore, some of these bugs `may have security
+implications <https://github.com/php/php-src/issues/8388>`__. Note that
+the bugs are not HTML-exclusive, but also apply to XML documents.
+
+Some of these bugs are caused because the method or property was
+implemented incorrectly back in the day, or because the original DOM 3
+specification used to be unclear. A smaller part of this is because the
+specification has made breaking changes when HTML 5 first came along and
+the specification creators had to unify what browsers implemented into a
+single specification that everyone agreed on.
+
+It's not possible to "just fix" these bugs because people actually
+*rely* on these bugs. They are also often unaware that what they're
+doing is actually incorrect or causes the internal document state to be
+inconsistent. We therefore have to fix this in a backwards-compatible
+way: i.e. a hard requirement is that all code written for the current
+DOM extension keeps working without requiring changes. In summary, the
+core challenge lies in the fact that two decades of buggy behavior have
+become deeply ingrained in the system.
+
+Proposal
+--------
+
+It is clear that any behavioural fix must come in an opt-in manner.
+Fortunately, `the HTML 5 RFC </rfc/domdocument_html5_parser>`__ that
+landed in PHP 8.4-dev gives us a unique opportunity to do so!
+
+To recap, that RFC has introduced 3 new classes in a new DOM namespace:
+DOM\Document, DOM\XMLDocument, and DOM\HTMLDocument. When utilising
+these new classes, HTML 5 parsing and serialization will be used. The
+old DOM classes are unaffected. As this RFC landed in the development
+cycle of PHP 8.4, there are no users yet. I propose that when the new
+classes are used, then the DOM extension will opt-into spec-compliance
+behaviour. When you are using the (old) DOMDocument class, the old
+implementations will be used. This means that backwards compatibility is
+kept.
+
+When operating in spec-compliance mode, these bugs cease to exist while
+they remain as-is for the old DOM classes. A few sections further, I
+have included a bug list with all the bugs that I found that are in
+scope of this RFC. I consider two categories of bugs: type issues and
+behavioural issues.
+
+#. A type issue is a bug where the type of a property, return value, or
+   method argument is incorrect. An example is a string property that
+   should've been nullable. Right now, such properties return the empty
+   string whereas they should've actually returned NULL according to
+   spec.
+#. A behaviour issue is a bug where the semantics of the operation are
+   incorrectly implemented. The majority of the bugs targeted by this
+   RFC are of this kind.
+
+Solving type issues
+~~~~~~~~~~~~~~~~~~~
+
+Solving behavioural issues is possible in an opt-in way, but type issues
+are more difficult to solve. In particular, changing types is backwards
+incompatible, especially considering that the DOM classes can be
+extended by userland classes.
+
+Therefore, I propose the following BC solution. `The HTML 5
+RFC </rfc/domdocument_html5_parser>`__ added class aliases such as
+``DOMNode`` -> ``DOM\Node`` etc. I propose to make them real classes
+instead of aliases. This way we can leave the old classes untouched
+while fixing the types in the new classes, even though most of the
+structure remains the same. Note that a lot of code is still shared
+internally between these classes. This also means to make
+``DOMDocument`` no longer inherit from ``DOM\Document``. This
+inheritance was introduced in the HTML 5 RFC, but would no longer be
+possible due to type divergences.
+
+The disadvantage of doing this is that it becomes more difficult for
+userland code to support the "old DOM" and "new DOM" classes
+simulatenously. They'd have to use type unions now. Then again, that's
+probably fine because their semantic behaviour can differ quite a bit.
+
+Let's not damage XML support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The DOM spec has no explicit support for things like DOM entities and
+DOM notation nodes. I'd prefer to keep the support in because otherwise
+it makes working with XML more difficult, especially in combination with
+other extensions. The spec authors have removed some support for these
+things to simplify the specification but there's no reason why we should
+drop support for these things that don't have an alternative.
+
+Migration
+~~~~~~~~~
+
+Migration will unfortunately not be trivial for everyone because many
+users rely on behaviour that was not intended by spec, or rely on bugs.
+Furthermore, there are userland libraries that currently work with the
+old classes and won't be able to support the old and new classes at the
+same time easily because of type and behaviour differences. So I expect
+the migration of the ecosystem to take a long time. There's a high
+chance that the migration of all old code won't happen until PHP
+versions older than 8.4 are EOL.
+
+Therefore, a conscious decision is to *not* deprecate the old DOM
+classes anytime soon. New code can use the new DOM classes, while old
+code can keep using the old classes and migrate at their own pace.
+
+I do propose however to add a note to the DOM documentation that the
+usage of the new classes is encouraged.
+
+Testing
+-------
+
+To proactively prevent as many implementation issues as possible, I
+tried to test every edge case I found in the DOM spec.
+
+WHATWG (the working group maintaining the DOM spec) also has a
+repository full of tests. It's called WPT (Web Platform Test). I ported
+a subset of these tests from Javascript to PHP and those ported tests
+all pass. This increases the confidence that the implementation is
+correct. Note that I only ported a subset because it is very time
+consuming and mentally draining, even with automation.
+
+To ensure that the old DOM classes still work, I rely on the PHP test
+suite, and I have also tested real-world DOM-utilising libraries. I have
+tested veewee's XML library, Mensbeam library, some SimpleSAML libraries
+
+Bug list
+--------
+
+I will be using the currently aliased names for the DOM classes in this
+document.
+
+DOM\Node class (and its subclasses)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Properties
+^^^^^^^^^^
+
+-  ``$nodeValue`` (https://dom.spec.whatwg.org/#dom-node-nodevalue)
+
+::
+
+       * Decodes and substitutes entities, undoing any kind of entity encoding. Can result in security issues.
+       * Is only supposed to return a string for attributes and CharacterData subtypes, it should return NULL for other node types. However, it can return a string too for elements for example.
+   * <php>$nodeName</php> (https://dom.spec.whatwg.org/#dom-node-nodename)
+       * For elements: should be the uppercased qualified name for HTML.
+   * <php>$textContent</php> (https://dom.spec.whatwg.org/#dom-node-textcontent)
+       * Returns the empty string instead of NULL for nodes that don't have text content.
+       * Should only return text content for DocumentFragment/Element/Attr/CharacterData subtypes.
+   * <php>$prefix</php> (https://dom.spec.whatwg.org/#concept-element-namespace-prefix)
+       * Should be NULL instead of the empty string when unspecified.
+       * Is writable but shouldn't be, causes all sorts of weird issues where shared namespace data is changed.
+
+Methods
+^^^^^^^
+
+-  ``isDefaultNamespace(string $namespace)``
+   (https://dom.spec.whatwg.org/#dom-node-isdefaultnamespace)
+
+::
+
+       * Strictly speaking this should have argument type <php>?string</php> instead of <php>string</php>. The NULL value is treated the same as the empty string.
+       * Ignores implicit existence of xml and xmlns namespace.
+       * Ignores xmlns attributes, i.e. only works with internal namespace declarations.
+   * <php>lookupNamespaceURI(?string $prefix)</php> (https://dom.spec.whatwg.org/#dom-node-lookupnamespaceuri)
+       * Ignores implicit existence of xml and xmlns namespace.
+       * Ignores xmlns attributes, i.e. only works with internal namespace declarations.
+   * <php>lookupPrefix(string $namespace)</php> (https://dom.spec.whatwg.org/#dom-node-lookupprefix)
+       * Strictly speaking this should have argument type <php>?string</php> instead of <php>string</php>. The NULL value is treated the same as the empty string.
+       * Ignores xmlns attributes, i.e. only works with internal namespace declarations.
+   * <php>replaceChild(DOMNode $node, DOMNode $child)</php> (https://dom.spec.whatwg.org/#dom-node-replacechild)
+       * Does not fully check the node types of the parent or the child. Some edge cases are not checked.
+   * <php>appendChild(DOMNode $node)</php> (https://dom.spec.whatwg.org/#dom-node-appendchild)
+       * Violates pre-insertion validity. E.g. should not work with attributes.
+       * Breaks when appending dtd nodes.
+   * <php>insertBefore(DOMNode $node, ?DOMNode $child = null)</php> (https://dom.spec.whatwg.org/#dom-node-insertbefore)
+       * Violates pre-insertion validity.
+   * <php>normalize()</php> (https://dom.spec.whatwg.org/#dom-node-normalize)
+       * Makes nodes inaccessible if text is merged and the node still has a userland reference.
+     This can be fixed unconditionally in the master branch.
+       * The behaviour for merge order is different. This is because when all the implementations were unified into a single spec, they decided to change the behaviour of the merge order: https://www.w3.org/Bugs/Public/show_bug.cgi?id=19837.
+   * <php>cloneNode()</php> (https://dom.spec.whatwg.org/#concept-node-clone)
+       * Merges adjacent text nodes.
+
+DOM\Attr class
+~~~~~~~~~~~~~~
+
+.. _properties-1:
+
+Properties
+^^^^^^^^^^
+
+-  ``$name`` (https://dom.spec.whatwg.org/#dom-attr-name)
+
+::
+
+       * Should be the qualified name instead of the local name.
+
+DOM\Text class
+~~~~~~~~~~~~~~
+
+.. _methods-1:
+
+Methods
+^^^^^^^
+
+-  ``splitText(int $offset)``
+   (https://dom.spec.whatwg.org/#dom-text-splittext)
+
+::
+
+       * Should throw a DOMException when $offset is greater than the text's $length.
+
+DOM\ChildNode and DOM\ParentNode interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For all the methods in this interface, the pre-insertion validity
+checking is incomplete. Source:
+https://dom.spec.whatwg.org/#concept-node-ensure-pre-insertion-validity
+
+-  Step 4 is missing: Should throw a hierarchy request DOMException when
+   the node to insert isn't a DocumentFragment, DocumentType, Element,
+   or CharacterData.
+-  Step 5 (first part) is missing: Text nodes may not be inserted if the
+   parent is a document, should result in a hierarchy request
+   DOMException.
+-  Step 5 (second part) is missing: Doctype nodes may only be inserted
+   if the parent is a document, otherwise should result in a hierarchy
+   request DOMException.
+-  Missing all the validation of step 6.
+-  Merges adjacent text nodes while it shouldn't.
+-  Handles the special case of passing a single node incorrectly with
+   regards to error handling.
+
+DOM\Document class
+~~~~~~~~~~~~~~~~~~
+
+.. _properties-2:
+
+Properties
+^^^^^^^^^^
+
+-  $documentURI is supposed to be a URI, but for local files it doesn't
+   prefix the path with the file scheme.
+-  $strictErrorChecking property should only exist on the legacy
+   DOMDocument class, exceptions instead of warnings are the default in
+   the modern-day DOM spec.
+
+.. _methods-2:
+
+Methods
+^^^^^^^
+
+-  ``createAttribute(string $localName)``
+   (https://dom.spec.whatwg.org/#dom-document-createattribute)
+
+::
+
+       * Should check whether the document is an HTML document. In that case it should lowercase the $localName.
+   * <php>createAttributeNS(?string $namespace, string $qualifiedName)</php> (https://dom.spec.whatwg.org/#dom-document-createattributens)
+       * Fails with a warning if there is no root element in the document. This is due to an implementation detail.
+       * Fails when there are other internal namespace declarations with a different prefix.
+   * <php>createCDATASection(string $data)</php> (https://dom.spec.whatwg.org/#dom-document-createcdatasection)
+       * Should throw a NotSupported DOMException if the document is an HTML document.
+       * Should throw an InvalidCharacterError DOMException if $data contains "]]>".
+   * <php>createProcessingInstruction(string $target, string $data = "")</php> (https://dom.spec.whatwg.org/#dom-document-createprocessinginstruction)
+       * Should throw an InvalidCharacterError DOMException if $data contains "?>".
+   * <php>createElement(string $localName, string $value = "")</php> (https://dom.spec.whatwg.org/#dom-document-createelement)
+       * Should set $localName to lowercase ASCII if this is an HTML document.
+       * Should automatically set the HTML namespace if this is an HTML document.
+       * Decodes and substitutes entities, undoing any kind of entity encoding. Can result in security issues.
+   * <php>createElementNS(?string $namespace, string $qualifiedName, string $value = "")</php> (https://dom.spec.whatwg.org/#internal-createelementns-steps)
+       * The validate and extract step is completely broken, allowing bogus stuff like <php>createElementNS("http://www.w3.org/2000/xmlns/", "svg")</php>.
+       * Decodes and substitutes entities, undoing any kind of entity encoding. Can result in security issues.
+   * <php>getElementsByTagName(string $qualifiedName)</php> (https://dom.spec.whatwg.org/#concept-getelementsbytagname)
+       * Does not take into account casing rules for the HTML namespace vs other namespaces.
+   * <php>getElementsByTagNameNS(?string $namespace, string $localName)</php> (https://dom.spec.whatwg.org/#concept-getelementsbytagnamens)
+       * Due to current implementation issues w.r.t. HTML namespaces, the empty namespace matching can sometimes match elements and sometimes not.
+   * <php>importNode(DOMNode $node, bool $deep = false)</php> (https://dom.spec.whatwg.org/#dom-document-importnode)
+       * Document types cannot be imported.
+       * Always warns for unsupported node types, regardless of $strictErrorChecking, instead of warning or throwing a DOMException. In spec compliant mode this should always throw in such cases.
+
+DOM\Element class
+~~~~~~~~~~~~~~~~~
+
+.. _properties-3:
+
+Properties
+^^^^^^^^^^
+
+-  ``$tagName`` (https://dom.spec.whatwg.org/#dom-element-tagname)
+
+::
+
+       * Should be the uppercased qualified name for HTML.
+
+.. _methods-3:
+
+Methods
+^^^^^^^
+
+-  ``getAttributeNode(string $qualifiedName)``
+   (https://dom.spec.whatwg.org/#dom-element-getattributenode)
+
+::
+
+       * Should lowercase the qualified name when working with HTML namespace in an HTML document.
+       * Should return NULL instead of false when the attribute doesn't exist.
+       * Doesn't correctly match the qualified name of an attribute.
+       * Can return a DOMNameSpaceNode instead of an actual attribute (see general issues).
+   * <php>getAttributeNodeNS(?string $namespace, string $localName)</php> (https://dom.spec.whatwg.org/#dom-element-getattributenodens)
+       * As a side note: this method _does_ return NULL instead of false, unlike getAttributeNode!
+       * Can return a DOMNameSpaceNode instead of an actual attribute (see general issues).
+       * Treats the empty string and NULL $namespace different, while they are actually the same thing.
+   * <php>getAttribute(string $qualifiedName)</php> (https://dom.spec.whatwg.org/#dom-element-getattribute)
+       * Should lowercase the qualified name when working with HTML namespace in an HTML document.
+       * Should return NULL instead of the empty string when the attribute doesn't exist because it would be impossible to differentiate between a non-existent attribute and an empty attribute otherwise.
+       * Internally works with DOMNameSpaceNode (see general issues).
+   * <php>getAttributeNS(?string $namespace, string $localName)</php> (https://dom.spec.whatwg.org/#dom-element-getattributens)
+       * Should return NULL instead of the empty string instead when the attribute doesn't exist.
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Treats the empty string and NULL $namespace different, while they are actually the same thing.
+   * <php>hasAttribute(string $qualifiedName)</php> (https://dom.spec.whatwg.org/#dom-element-hasattribute)
+       * Should lowercase the qualified name when working with HTML namespace in an HTML document.
+       * Doesn't correctly match the qualified name of an attribute.
+       * Internally works with DOMNameSpaceNode (see general issues).
+   * <php>hasAttributeNS(?string $namespace, string $qualifiedName)</php> (https://dom.spec.whatwg.org/#dom-element-hasattributens)
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Treats the empty string and NULL $namespace different, while they are actually the same thing.
+   * <php>removeAttribute(string $qualifiedName)</php> (https://dom.spec.whatwg.org/#dom-element-removeattribute)
+       * Should lowercase the qualified name when working with HTML namespace in an HTML document.
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Shouldn't return anything according to spec, but it returns a bool indicating failure or success.
+   * <php>removeAttributeNS(?string $namespace, string $localName)</php> (https://dom.spec.whatwg.org/#dom-element-removeattributens)
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Shouldn't return anything according to spec, but it returns a bool indicating failure or success.
+       * Treats the empty string and NULL $namespace different, while they are actually the same thing.
+   * <php>setAttribute(string $qualifiedName, string $value)</php> (https://dom.spec.whatwg.org/#dom-element-setattribute)
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Should lowercase the qualified name when working with HTML namespace in an HTML document.
+   * <php>setAttributeNS(?string $namespace, string $qualifiedName, string $value)</php> (https://dom.spec.whatwg.org/#dom-element-setattributens)
+       * Internally works with DOMNameSpaceNode (see general issues).
+       * Violates the namespace well-formedness constraints (see spec step "validate and extract").
+       * Treats the empty string and NULL $namespace different, while they are actually the same thing.
+   * <php>setAttributeNode(DOMAttr $attr)</php> (https://dom.spec.whatwg.org/#dom-element-setattributenode)
+       * Behaves incorrectly when namespaced attributes are provided. To solve this, this is nowadays an alias for setAttributeNode.
+   * <php>setAttributeNodeNS(DOMAttr $attr)</php> (https://dom.spec.whatwg.org/#dom-element-setattributenodens)
+       * Should't throw WRONG_DOCUMENT_ERR.
+       * Should throw INUSE_ATTRIBUTE_ERR when the attribute is already attached to another element.
+   * <php>insertAdjacent{Text,Element}</php> (https://dom.spec.whatwg.org/#dom-element-insertadjacenttext and https://dom.spec.whatwg.org/#dom-element-insertadjacentelement)
+       * Due to other implementation issues of internal methods, these can violate the hierarchy constraints.
+
+DOM\NamedNodeMap class
+~~~~~~~~~~~~~~~~~~~~~~
+
+Has the same bugs as DOM\Element::getAttribute.
+
+Issues related to CharacterData-like classes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+According to spec, the methods that operate on strings expect unsigned
+arguments instead of signed arguments. This allows you to do things
+like: ``$text->substringData(1, -1)`` to get the string inside ``$text``
+excluding the first character. This currently isn't the case and will
+become possible by this proposal.
+
+General issues
+~~~~~~~~~~~~~~
+
+-  The rules surrounding the HTML namespace are not respected.
+-  Runtime performance issues with namespaces.
+-  Namespace serialization is incorrect when xmlns attributes exist, or
+   when the namespace of an element is the empty namespace (in some
+   cases).
+-  There is a DOMNameSpaceNode class where namespace declarations are
+   sometimes treated as attributes and sometimes are not. This causes
+   all sorts of inconsistencies. In modern-day DOM spec the internal
+   namespace information is not exposed, but when you see an xmlns
+   declaration they are attributes and can be manipulated properly like
+   attributes. This also causes issues when there is internal namespace
+   information \_and\_ an xmlns attribute. The DOMNameSpaceNode class is
+   also lacking in features because they try to be like attributes but
+   are not due to implementation problems. In modern-day DOM spec, the
+   internal namespace declarations are not attributes. Explicit xmlns
+   attributes exist that are just attributes and have no influence on
+   the namespace declaration, they are only there to help serialization.
+-  Namespace reconciliation can shift nodes between namespaces, which is
+   incorrect.
+-  The ID attribute is not always respected because the current DOM
+   implementation still has the setAttributeId legacy behaviour. (e.g.
+   setAttribute("id") does not work properly in combination with
+   getElementById).
+-  The XML serialization is incorrect in some cases (related to
+   namespace prefix conflicts and the empty namespace).
+
+Class hierarchy
+~~~~~~~~~~~~~~~
+
+The class hierarchy w.r.t. textual nodes is supposed to be:
+
+-  CharacterData extends Node (Actually an interface)
+
+   -  Text extends CharacterData
+
+      -  CDATASection extends Text
+
+   -  ProcessingInstruction extends CharacterData
+   -  Comment extends CharacterData
+
+However in the current implementation, the ProcessingInstruction class
+extends Node instead of CharacterData. Also CharacterData is a class
+instead of an interface in the current implementation, but that's
+because interfaces cannot contain properties in PHP.
+
+General typing issues
+~~~~~~~~~~~~~~~~~~~~~
+
+-  As listed above, there are a lot of places where the implementation
+   uses "string" but should actually use "?string".
+-  DOMNameSpaceNode will never be possibly returned in the spec
+   compliant implementation, so that return type becomes useless.
+-  There are a lot of return types of the form "T|false" because the
+   current implementation can return false on error instead of throwing
+   an exception if "strictErrorChecking" is false. This is a legacy DOM
+   feature that is no longer supported in the modern-day DOM spec. For
+   new classes, the return type would become "T" instead of "T|false".
+
+Other non-spec bugs
+~~~~~~~~~~~~~~~~~~~
+
+There is one other minor bugs that can't easily be fixed without
+breaking BC, so I include it here too:
+
+-  Constructors are not called for custom DOM classes registered by
+   registerNodeClass, but destructors are: https://3v4l.org/S4jOY. This
+   is fixable by just adding the code to call the constructor without
+   arguments.
+
+Bug reports
+~~~~~~~~~~~
+
+Both bugsnet and GitHub contain bug reports that are consequences of
+spec compliance issues. By implementing this proposal, the following
+reports will be closed as fixed:
+
+-  https://bugs.php.net/bug.php?id=47847
+-  https://bugs.php.net/bug.php?id=55294
+-  https://bugs.php.net/bug.php?id=71497
+-  https://bugs.php.net/bug.php?id=75624
+-  https://bugs.php.net/bug.php?id=75779
+-  https://bugs.php.net/bug.php?id=81468
+-  https://bugs.php.net/bug.php?id=81682
+-  https://github.com/php/php-src/issues/12850
+-  https://github.com/php/php-src/issues/11404
+-  https://github.com/php/php-src/issues/8388
+
+Although this list looks small, the impact of this proposal is huge. It
+will fix a lot of issues that are not in this list.
+
+Namespace bug examples
+~~~~~~~~~~~~~~~~~~~~~~
+
+Here are two examples namespace bugs that are not solvable without this
+proposal. This should make it even clearer why the fixes have to be
+opt-in.
+
+xmlns=""
+^^^^^^^^
+
+Try it out: https://3v4l.org/8aqgO
+
+The expected serialization is
+``<outer xmlns="urn:a"><inner xmlns=""/></outer>`` because the inner
+element was created using createElement, which puts the element in no
+namespace. Therefore, the xmlns="" attribute is necessary.
+Unfortunately, the 3v4l snippet lacks the xmlns="" attribute in the
+output. Therefore, if you were to reparse the output from the 3v4l
+snippet, then the inner element will suddenly become part of the urn:a
+namespace, which is incorrect. Fixing this would drastically change the
+behaviour of namespaces, and experience tells me that a lot of people
+don't know that this is wrong.
+
+This is related to https://bugs.php.net/bug.php?id=81468, but note
+however that the expectation in that bug report is wrong because of the
+misunderstanding I explained above about how createElement works.
+
+Shifting
+^^^^^^^^
+
+For the lack of a better term, shifting namespaces means that the prefix
+of the namespace changes on certain operations on the DOM tree. This is
+wrong because the prefix and namespace URI must always be kept as-is.
+
+There are many ways to encounter this, but I recently received a report
+that looked something like this: https://3v4l.org/NSDmO
+
+The element shouldn't have gotten the ``xsd`` prefix, because now the
+XML schema definition is no longer valid as the type is still "string".
+The element should've just been put into the document as-is.
+
+Here's another example of a similar bug:
+https://bugs.php.net/bug.php?id=47847
+
+While it's possible in theory to invent ad-hoc solutions for this, this
+is dangerous. A general solution is impossible without breaking existing
+code, hence this proposal to fix these bugs in an opt-in way.
+
+Alternatives
+------------
+
+Let's discuss some alternatives to this RFC.
+
+Userland solutions
+~~~~~~~~~~~~~~~~~~
+
+People have implemented userland DOM libraries on top of the existing
+DOM extension. However, even userland solutions can't fully work around
+issues caused by PHP's DOM extension. This is because those libraries
+still have to work with broken methods. I often receive bug reports from
+developers of such libraries regarding functionality they're using that
+doesn't interact well because they're indirectly relying on bugs and
+hacks. Some of those bugs are unfixable because they would break BC. The
+real solution is to provide a BC-preserving fix at PHP's side.
+
+An entirely new DOM extension
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+I basically copy-pasted this from my `HTML 5
+RFC </rfc/domdocument_html5_parser>`__.
+
+One might wonder why we don't just create an entirely new DOM extension,
+based on another library, with HTML5 support. There are a couple of
+reasons:
+
+-  Interoperability problems with other extensions (both within php-src
+   and third-party).
+-  Interoperability issues with userland code. Right now you can still
+   import/adopt nodes from the "old DOM" to the "new DOM".
+-  Additional maintenance work and complexity. A spec-compliance "mode"
+   can share almost all code while a new extension cannot.
+-  I don't have time to build this.
+
+Backward Incompatible Changes
+-----------------------------
+
+There are no BC breaks for the reasons given in the introduction. The
+spec-compliance is opt-in.
+
+Proposed PHP Version(s)
+-----------------------
+
+PHP 8.4.
+
+RFC Impact
+----------
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+First and third-party extensions are unaffected because the internal
+data structures and APIs remain the same. Of course, the DOM extension
+itself is heavily affected.
+
+Open Issues
+-----------
+
+None right now.
+
+Future Scope
+------------
+
+When this RFC lands, it will become much easier to add new features to
+the DOM extension. Preferably, I will only add new features to the new
+classes and keep the old classes as-is. An example of a new feature I
+have worked on based on the development branch of this RFC is native CSS
+selector support: https://github.com/nielsdos/php-src/pull/82
+
+Proposed Voting Choices
+-----------------------
+
+One primary vote with 2/3 majority to accept this proposal as a whole.
+
+Patches and Tests
+-----------------
+
+PR: https://github.com/php/php-src/pull/13031 (does not *yet* include
+the type fixes, only contains behaviour fixes atm)
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+References
+----------
+
+-  Pre-RFC pitch: https://externals.io/message/122048
+-  Ported WPT tests:
+   https://github.com/nielsdos/wpt/tree/master/dom/php-out (Yes, this is
+   ugly code as it is mostly automated porting)
+-  DOM 3 spec: https://www.w3.org/TR/DOM-Level-3-Core/
+-  DOM Living Standard: https://dom.spec.whatwg.org/
+
+Changelog
+---------
+
+\* 0.1: Initial version under discussion
 
 Additional Metadata
 -------------------
 
-:Slug: pass_scope_to_magic_accessors
-:Wiki URL: https://wiki.php.net/rfc/pass_scope_to_magic_accessors
+:Original Authors: Niels Dossche nielsdos@php.net
+:Slug: opt_in_dom_spec_compliance
+:Wiki URL: https://wiki.php.net/rfc/opt_in_dom_spec_compliance
