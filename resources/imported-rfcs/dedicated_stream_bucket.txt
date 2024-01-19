@@ -1,0 +1,103 @@
+====== Dedicated StreamBucket class ======
+  * Date: 2024-01-19
+  * Author: Máté Kocsis <kocsismate@php.net>
+  * Status: Draft
+
+===== Introduction =====
+
+When using user filters for stream processing, one of the fundamental concepts is stream buckets. A stream bucket is effectively a chunk of stream which can be extracted from bucket brigades. Most probably, this metaphor comes from firefighting [[bucket brigades|https://en.wikipedia.org/wiki/Bucket_brigade]] who passed buckets of water to each other, standing in a chain.
+
+Back to our original topic, here is an example for a very basic stream filter:
+
+<code PHP>
+class simple_filter extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing) {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+
+stream_filter_register("simple", "simple_filter")
+</code>
+
+//Disclaimer: the example is copy-pasted from https://stackoverflow.com/questions/27103269/what-is-a-bucket-brigade. Courtesy of Bob for providing such an exceptional answer to explain the behavior of user stream filters.//
+
+''$in'' and ''$out'' are two sides of stream bucket brigades: items come from the former one, and you have to pass them to the latter one. The ''stream_bucket_make_writeable()'' function can be used to get the bucket from the brigade, while the ''stream_bucket_new()'' function is used to create a new bucket.
+
+===== Discussion =====
+
+There are a few slightly unfortunate issues how stream buckets are handled which are discussed in the following sections.
+
+==== Lack of a dedicated class ====
+
+The original problem why this RFC is submitted is that there is no dedicated class for stream buckets: ''stream_bucket_make_writeable()'' and ''stream_bucket_new()'' create just ''stdClass'' instances and fill in their ''$bucket'', the ''$data'' and the ''$datalen'' properties on the go.
+
+<code PHP>
+$bucket = stream_bucket_new(fopen('php://temp', 'w+'), '');
+var_dump($bucket);
+
+/*
+object(stdClass)#1 (3) {
+  ["bucket"]=>
+  resource(7) of type (userfilter.bucket)
+  ["data"]=>
+  string(0) ""
+  ["datalen"]=>
+  int(0)
+}
+*/
+</code>
+
+As a consequence, their return type is no more specific than ''object''. Similarly, the second parameters of the ''stream_bucket_append()'' and the ''stream_bucket_prepend()'' functions (which expect stream buckets) accept any kind of objects by checking the existence of the necessary properties.
+
+If we had a dedicated class for stream buckets then the advantages were the usual: better feedback could be provided by static analysis tools, while autosuggestion in IDEs worked out of the box. Additionally, by having typed properties for the ''$data'' and ''$datalen'' properties, we could get additional safeguards.
+
+===== The $bucket property ====
+
+The ''$bucket'' property is a stream bucket resource which is about to be migrated to an object in a major PHP version as per [[rfc:resource_to_object_conversion|Resource to object conversion]]. However, this property won't be useful anymore as soon as it becomes an object, since it can be inlined directly into the containing stream bucket class. Therefore, this RFC proposes to get rid of this property when the conversion happens. Until then, a deprecation is emitted in order to let people know about the planned change.
+
+===== The $datalen property ====
+
+The property would become deprecated in the next minor version and removed in the next major version in favor of ''$dataLength''.
+
+===== The proposed class ====
+
+The final form of the proposed class to be added is the following:
+
+<code PHP>
+final class StreamBucket
+{
+    /**
+     * @var resource
+     * @deprecated
+     */
+    public $bucket;
+    public string $data;
+    /** @deprecated */
+    public int $datalen;
+    /** @deprecated */
+    public int $dataLength;
+}
+
+</code>
+
+===== Vote =====
+
+The RFC consists of a primary vote and a secondary vote. The primary vote requires 2/3, while the secondary ones require a simple majority in order to be accepted.
+
+==== Primary vote ====
+
+<doodle title="Add a dedicated StreamBucket class?" auth="kocsismate" voteType="single" closed="true" closeon="2024-03-19T10:00:00Z">
+   * yes
+   * no
+</doodle>
+
+==== Secondary vote ====
+
+<doodle title="If the primary vote is accepted, when to add the StreamBucket class?" auth="kocsismate" voteType="single" closed="true" closeon="2024-01-19T10:00:00Z">
+   * In the next major version (e.g. PHP 9.0)
+   * in the next minor or major version (e.g. PHP 8.4)
+</doodle>
