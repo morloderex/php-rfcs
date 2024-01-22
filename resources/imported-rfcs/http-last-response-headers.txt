@@ -1,6 +1,6 @@
 ====== PHP RFC: Add http_(get|clear)_last_response_headers() function ======
 
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2024-01-03
   * Author: Gina Peter Banyard <girgias@php.net>
   * Status: Under Discussion
@@ -14,7 +14,6 @@ The [[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$h
 variable is magically created in the local scope whenever an HTTP request is performed through PHP's stream layer,
 i.e. when using the [[https://www.php.net/manual/en/wrappers.http.php|HTTP wrapper]].
 One such usage is using <php>file_get_content()</php> to retrieve the content of a URL.
-
 
 The [[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
 variable will contain all the HTTP headers that were encountered during the request performed via the HTTP wrapper.
@@ -33,6 +32,19 @@ This is impractical and a better interface would be simply checking if the retur
 
 As a replacement, we propose adding functions similar to <php>error_get_last()</php>/<php>error_clear_last()</php> which replaced
 [[https://www.php.net/manual/en/reserved.variables.phperrormsg.php|$php_errormsg]].
+
+===== Motivation =====
+
+The primary motivation for adding this function, is to be able to remove the [[https://www.php.net/manual/en/reserved.variables.httpresponseheader.php|$http_response_header]]
+variable completely. To create this variable one needs to use the <php>zend_set_local_var_str()</php> engine function.
+This is also the last usage of this engine function and its sibling function <php>zend_set_local_var()</php>.
+
+Moreover, this variable needs to be special cased in the optimizer/JIT
+(via the <php>HTTP_RESPONSE_HEADER_ALIAS</php> enum case of <php>zend_ssa_alias_kind</php>).
+Which means that any extension that would use this engine API would misbehave under opcache.
+
+See the [[rfc:http-last-response-headers#backward_incompatible_changes|Backward Incompatible Changes]]
+section for an impact analysis of the removal of this feature.
 
 ===== Proposal =====
 
@@ -71,6 +83,15 @@ if (function_exists('http_get_last_response_headers')) {
 Considering the sparse usage of this feature, the possibility to write cross version compatible code,
 and the possible engine and optimizer simplifications,
 it seems reasonable to slate this feature for removal even without a deprecation notice if the need arises.
+
+===== Rejected ideas =====
+
+One suggested idea was to provide those headers via a by-reference entry to the stream context.
+This idea was rejected by us, and other members of the PHP Foundation,
+as we wish to maintain stream contexts as a stateless configuration data structure passed to the stream.
+
+This one-to-one feature replacement does not prevent the introduction of a more generic solution for other stream wrappers.
+And this pair of new functions can always be slated for future deprecation and removal.
 
 ===== Version =====
 
