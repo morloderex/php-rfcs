@@ -1,104 +1,304 @@
-Add An Optional Parameter $result_code To Shell_exec()
-======================================================
+RFC1867 For Non-POST HTTP Verbs
+===============================
 
 :PHP-RFC: 0888
-:Title: Add An Optional Parameter $result_code To Shell_exec()
-:Author: Luca Petrucci <luca@lucapetrucci.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2021-11-21
-:Version: 1
-
-Introduction
-------------
-
-The shell_exec() function is used to execute an external program and
-grab its entire output as a string, but it lacks a way to capture the
-exit code of the launched program contrarily to all the other functions
-of the same family (exec, system, passthru).
+:Title: RFC1867 For Non-POST HTTP Verbs
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
+:Status: Voting
+:Type: Standards Track
+:Created: 2023-10-06
+:PHP-Version: 8.4
+:Version: 1.0
 
 Proposal
 --------
 
-This RFC proposes the addition of a second, optional parameter
-$result_code to the shell_exec() function: <code php> function
-shell_exec(string $command, &$result_code = null): string|false|null {}
-</code> If $result_code is present, the function will put the return
-code of the program into it. The same parameter and behaviour is found
-in exec(), system() and passthru() functions.
+*If you need a refresher on RFC1867, there's a section below.*
 
-Backward Incompatible Changes
------------------------------
+RFC1867 defines the multipart/form-data content type. This content type
+is used primarily for submitting HTTP forms that contain files. PHP
+supports the parsing of this content type natively, but only for POST
+requests. Specifically, if a request has the method POST and the content
+type multipart/form-data the request body is immediately consumed before
+starting the PHP script and populated into the $_POST and $_FILES
+superglobals. This functionality triggers automatically and is not
+exposed to userland directly.
 
-No backward compatibility breaks.
+With the emergence of REST it has become increasingly popular to use
+other HTTP verbs such as PUT and PATCH where the usage of
+multipart/form-data is entirely valid but not processed by PHP. This
+requires manual parsing of the request body of this non-trivial format.
+Handling large amounts of data in userland may also be suboptimal in
+terms of performance. The corresponding issue has been upvoted over 350
+times. https://bugs.php.net/bug.php?id=55815
 
-Proposed PHP Version(s)
------------------------
+This RFC suggests adding a new function ``request_parse_body()`` to
+expose the existing functionality to userland so that it may be used for
+other HTTP verbs.
 
-Next PHP 8.x, currently PHP 8.2.
+.. code:: php
 
-RFC Impact
-----------
+   /**
+    * @param array<string, int>|null $options
+    */
+   function request_parse_body(?array $options = null): array {}
 
-To SAPIs
-~~~~~~~~
+   // This is a PUT request
+   var_dump($_POST);  // []
+   var_dump($_FILES); // []
 
-None.
+   [$_POST, $_FILES] = request_parse_body();
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+   var_dump($_POST);  // [...]
+   var_dump($_FILES); // [...]
 
-None.
+The function returns an array pair with index 0 in the shape of $_POST
+and index 1 in the shape of $_FILES. If desired, the return values can
+overwrite the $_POST and $_FILES superglobals. This makes it simple to
+reuse existing POST endpoints. The function will obtain its input
+directly from ``sapi_module.read_post()``.
 
-To Opcache
-~~~~~~~~~~
+The function accepts an array of options to override global INI
+settings. See the "$options parameter" section for more details.
 
-None.
+Sanitization
+~~~~~~~~~~~~
 
-New Constants
-~~~~~~~~~~~~~
+Like the automatically invoked multipart parsing,
+``request_parse_body()`` will fail under various conditions.
 
-No new constants introduced.
+-  If the content size exceeds ``post_max_size``.
+-  If Content-Type is missing the boundary attribute.
+-  If the number of multipart parts exceeds
+   ``max_multipart_body_parts``.
+-  If the number of "POST" (non-file) inputs exceeds ``max_input_vars``.
+-  If the number of files exceeds ``max_file_uploads``.
+-  If an input is missing both the ``name`` and ``filename`` attribute.
 
-php.ini Defaults
-~~~~~~~~~~~~~~~~
+All of these conditions emit warnings for the automatically invoked
+multipart parsing. However, with a dedicated function we can benefit
+from exceptions to make parsing errors unmissable. A new Exception class
+``RequestParseBodyException`` is created.
 
-No new php.ini options introduced.
+.. code:: php
 
-Unaffected PHP Functionality
-----------------------------
+   class RequestParseBodyException extends Exception {}
 
--  Behaviour of shell_exec() when called with one parameter will not
-   change;
--  `Backtick
-   operator <https://www.php.net/manual/en/language.operators.execution.php>`__
-   functionality is unaffected.
+It's worth noting that the ``request_parse_body()`` function is not
+idempotent (when reading directly from the SAPI), even if the function
+throws. It is thus not safe to call ``request_parse_body()`` twice. This
+is explained in more detail in the ``php://input`` section below.
 
-Proposed Voting Choices
------------------------
+Supported content types
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Yes/No vote, super majority of 2/3 required to pass.
+Apart from multipart/form-data which is the primary motivation for this
+RFC, ``request_parse_body()`` also supports the
+application/x-www-form-urlencoded format. For
+application/x-www-form-urlencoded the $_FILES-equivalent array is empty.
+If the content type is not supported, an ``InvalidArgumentException`` is
+thrown.
 
-Implementation
+php://input
+~~~~~~~~~~~
+
+Usually, the requests content is accessible through the ``php://input``
+stream. This stream buffers the content of the request so that it may be
+read multiple times. For POST requests, the entire content is read and
+buffered before control is handed over to the PHP script. For non-POST
+verbs the content remains unread until the PHP script does so. As the
+input stream is read it is buffered on the fly.
+
+The singular exception to this buffering mechanism is
+multipart/form-data for which the input stream is empty. The reasoning
+is most likely that multipart requests should not need to read the input
+stream again, since the parsed result is available in $_POST and
+$_FILES. Buffering the input for these requests essentially means that
+all files are written to disk twice, doubling the load on the disk in
+terms of time and space.
+
+For the same reason, ``request_parse_body()`` does not buffer to
+``php://input``. This also means that ``request_parse_body()`` may not
+be called twice, as it destructively consumes
+``sapi_module.read_post()``.
+
+$options parameter
+~~~~~~~~~~~~~~~~~~
+
+A dedicated function presents the opportunity to customize parsing
+limits based on endpoints rather than globally. For example, your
+website may have a public and a login-protected multipart form.
+Increasing ``post_max_size``, ``upload_max_filesize`` or similar
+settings globally may increase the risk for DoS attacks. As such, it may
+be preferable to increase these limits only for specific endpoints.
+
+``request_parse_body()`` accepts a ``$options`` parameter to set
+override the following INI values:
+
+-  max_file_uploads
+-  max_input_vars
+-  max_multipart_body_parts
+-  post_max_size
+-  upload_max_filesize
+
+.. code:: php
+
+   #[Route('/api/videos', methods: ['PUT'])]
+   public function index(): Response {
+       [$post, $files] = request_parse_body(options: [
+           'post_max_size' => '128M',
+       ]);
+
+       // ...
+   }
+
+Providing invalid keys or values will throw a ``ValueError``.
+
+Why not parse the content automatically?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One could argue that since POST automatically triggers the parsing of
+the application/x-www-form-urlencoded and multipart/form-data requests
+the same should be done for PUT, PATCH and other verbs. There are two
+primary reasons not to do that.
+
+The first one is backwards compatibility. At least for multipart, the
+request body is consumed without buffering. Existing code that manually
+parses multipart will break as the input stream will be empty.
+
+The second reason is that a separate function provides more flexibility.
+An endpoint that does not accept multipart can terminate early, instead
+of parsing the request, potentially storing large files, erroring, and
+then deleting the buffered files again.
+
+If you'd like to make use of these benefits for ``POST``, you may
+disable the ``enable_post_data_reading`` ini-setting and then call
+``request_parse_body()`` from your application.
+
+Backwards incompatible changes
+------------------------------
+
+Other than reserving ``request_parse_body()`` and
+``RequestParseBodyException`` in the global namespace there are no
+backwards incompatible changes.
+
+RFC1867 refresher
+-----------------
+
+RFC1867 defines the multipart/form-data content type. This content type
+is used primarily for submitting HTTP forms that contain files. It is
+similar to application/x-www-form-urlencoded in that it contains a list
+of key-value pairs for each form input. Each input may contain
+attributes, as well as the content of the input. Each input is separated
+by a boundary which is an arbitrary string sequence not used in any of
+the input content sections. The boundary is specified in the
+Content-Type header, so that the client knows how to split the sections.
+For files, the original filename and content type are passed as
+attributes. Here's a simple example of what this might look like.
+
+::
+
+   POST / HTTP/1.1
+   Host: localhost:9000
+   Content-Type: multipart/form-data; boundary=---------------------------84000087610663814162942123332
+
+   -----------------------------84000087610663814162942123332
+   Content-Disposition: form-data; name="post_field"
+
+   post content
+   -----------------------------84000087610663814162942123332
+   Content-Disposition: form-data; name="file_field"; filename="original_filename.txt"
+   Content-Type: text/plain
+
+   file content
+   -----------------------------84000087610663814162942123332--
+
+The resulting $_POST and $_FILES superglobals may look like this:
+
+::
+
+   var_dump($_POST);
+   array(1) {
+     ["post_field"]=>
+     string(9) "post data"
+   }
+   var_dump($_FILES);
+   array(1) {
+     ["file_field"]=>
+     array(6) {
+       ["name"]=>
+       string(21) "original_filename.txt"
+       ["full_path"]=>
+       string(21) "original_filename.txt"
+       ["type"]=>
+       string(10) "text/plain"
+       ["tmp_name"]=>
+       string(%d) "/tmp/sometmpfilename"
+       ["error"]=>
+       int(0)
+       ["size"]=>
+       int(12)
+     }
+   }
+
+::
+
+   echo file_get_contents($_FILES['file_name']['tmp_name']);
+   // file content
+
+RFC1867 requests are automatically parsed when the request has the POST
+HTTP verb. Each non-file input is populated to the $_POST superglobal.
+For files, the content is stored in a temporary file and an entry is
+created in $_FILES to provide its metadata, along with a path to the
+temporary file. At the end of the request, any uploaded files that were
+not moved by the application get cleaned up. This prevents attacks that
+attempt to fill the servers disk space.
+
+Rejected ideas
 --------------
 
--  `Pull request (Github) <https://github.com/php/php-src/pull/7663>`__
+$input_stream parameter
+~~~~~~~~~~~~~~~~~~~~~~~
 
-References
-----------
+This RFC previously contained an ``$input_stream`` parameter, with the
+assumption that RoadRunner and special SAPIs might make use it. However,
+on closer inspection at how RoadRunner handles files, this does not seem
+to be the case. For RoadRunner, the Go server already parsers the
+multipart request, saves any files to disk, and transfers the file
+handle directly to the PHP worker. Thus, the PHP worker has no reason to
+parse the request again. New SAPIs like FrankenPHP can make use of
+multipart parsing by tweaking the ``sapi_module.read_post()`` function.
 
--  `Relevant feature request posted by another user
-   (Bugsnet) <https://bugs.php.net/bug.php?id=81493>`__
--  Functions that already have the return_code parameter:
+Since the multipart/form-data content type is used exclusively for
+server requests, and a PHP process can only receive one request per
+execution, the use of ``$input_streams`` seems to be limited to web
+servers written in PHP, like
+`Workerman <https://github.com/walkor/workerman>`__/`AdapterMan <https://github.com/joanhey/AdapterMan>`__.
+However, they currently represent requests as strings rather than
+streams. I'm open to extending this functionality in the future if they
+can demonstrate that they switch to stream-based request processing.
 
-   -  `exec() <https://www.php.net/manual/en/function.exec.php>`__
-   -  `system() <https://www.php.net/manual/en/function.system.php>`__
-   -  `passthru() <https://www.php.net/manual/en/function.passthru.php>`__
+Vote
+----
+
+Voting starts 2023-01-22 and ends 2023-02-05.
+
+As this is a language change, a 2/3 majority is required.
+
+Question: Introduce request_parse_body() in PHP 8.4?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Original Authors: Luca Petrucci, luca@lucapetrucci.net
-:Original Status: Under discussion
-:Slug: shell_exec_result_code_param
-:Wiki URL: https://wiki.php.net/rfc/shell_exec_result_code_param
+:Implementation: https://github.com/php/php-src/pull/11472
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: rfc1867-non-post
+:Wiki URL: https://wiki.php.net/rfc/rfc1867-non-post
