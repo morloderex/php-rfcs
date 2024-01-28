@@ -1,226 +1,276 @@
-Straw Poll: Namespace To Use For CachedIterable And Iterable Functionality
-==========================================================================
+Increasing The Default BCrypt Cost
+==================================
 
 :PHP-RFC: 0818
-:Title: Straw Poll: Namespace To Use For CachedIterable And Iterable Functionality
-:Author: Tyson Andre <tandre@php.net>
-:Status: Withdrawn
-:Type: Informational
-:Created: 2021-06-01
-:Version: 0.2.1
+:Title: Increasing The Default BCrypt Cost
+:Author: Tim Düsterhus <timwolla@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-09-07
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-`CachedIterable </rfc/cachediterable>`__ and successors to the `any()
-and all() on iterables </rfc/any_all_on_iterable>`__ proposed adding
-additional iterable functionality to php. E.g. CachedIterable eagerly
-evaluates any iterable and contains an immutable copy of the keys and
-values of the iterable it was constructed from.
+PHP's default BCrypt cost for ``password_hash`` is unchanged since the
+addition of the `password hashing API </rfc/password_hash>`__ in PHP 5.5
+which was 11 years ago.
 
-After that was created,
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions passed.
+BCrypt's variable cost factor is intended to provide adaptable security
+against increases in processing power and thus increased cracking speed.
+It appears appropriate to reconsider the default value after 11 years
+have passed.
 
-However, as there have not been any RFCs started that propose adding
-functionality using namespaces other than the global namespace in
-existing extensions yet, I'm uncertain as to how voters will interpret
-the "namespaces in bundled extensions" RFC at voting time.
+Technical explanation of the cost factor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In particular,
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions#core_standard_spl
-and
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions#existing_non-namespaces_symbols_and_consistency
-can be interpreted in different ways - the RFC recommends the usage of
-namespaces for functionality in core, but permits functionality to use
-the global namespace if it would be consistent with similar
-non-namespaced functionality already in core/standard/spl.
+Any increase of the cost by ``1`` will double the time it takes to
+calculate a single BCrypt hash.
 
-In addition to that, because that RFC says "may" and "should" instead of
-"must", it can be interpreted differently by different people. (I am
-assuming those words meant something similar to
-https://datatracker.ietf.org/doc/html/rfc2119 but that was not specified
-in the namespaces in bundled extensions RFC)
+Choice of the cost factor
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The cost should be selected to be as large as possible without degrading
+the user experience and without introducing disproportional hardware
+requirements.
+`OWASP <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html#work-factors>`__
+recommends “less than a second” as a rule of thumb.
+
+Processing time for several different CPUs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These times were measured using PHP 8.2 with this script and were
+selected to represent a reasonable range of CPUs that might still be in
+use today. All tests were carried out using wall-power (i.e. the Laptops
+were plugged in and not running from battery).
+
+.. code:: php
+
+   <?php
+   for ($cost = 8; $cost <= 14; $cost++) {
+       $start = microtime(true);
+       for ($i = 0; $i < 100; $i++) {
+           $dummy = password_hash((string) $i, \PASSWORD_BCRYPT, ['cost' => $cost]);
+       }
+       $end = microtime(true);
+       
+       printf("Cost %d: %f total (%f per hash)\n", $cost, ($end - $start), ($end - $start) / 100);
+   }
+
+**Intel(R) Core(TM) i5-2430M CPU @ 2.40GHz (2011)**
+
+Representative for an aging and low-end developer laptop used by
+non-professional developers / students / lower-wage countries.
+
+::
+
+   Cost 8: 2.119621 total (0.021196 per hash)
+   Cost 9: 4.067830 total (0.040678 per hash)
+   Cost 10: 8.063046 total (0.080630 per hash)
+   Cost 11: 16.157652 total (0.161577 per hash)
+   Cost 12: 32.794920 total (0.327949 per hash)
+   Cost 13: 65.690789 total (0.656908 per hash)
+   Cost 14: 131.897865 total (1.318979 per hash)
+
+**Apple M1 Pro (2021)**
+
+Representative of a recent commonly used developer laptop.
+
+::
+
+   Cost 8: 1.519649 total (0.015196 per hash)
+   Cost 9: 3.139973 total (0.031400 per hash)
+   Cost 10: 6.101330 total (0.061013 per hash)
+   Cost 11: 12.102118 total (0.121021 per hash)
+   Cost 12: 24.038673 total (0.240387 per hash)
+   Cost 13: 48.072537 total (0.480725 per hash)
+   Cost 14: 96.567422 total (0.965674 per hash)
+
+**Intel(R) Xeon(R) E-2246G CPU @ 3.60GHz (2019)**
+
+Representative of a modern bare metal production server.
+
+::
+
+   Cost 8: 1.011392 total (0.010114 per hash)
+   Cost 9: 2.021493 total (0.020215 per hash)
+   Cost 10: 3.967762 total (0.039678 per hash)
+   Cost 11: 7.885475 total (0.078855 per hash)
+   Cost 12: 15.852770 total (0.158528 per hash)
+   Cost 13: 31.636997 total (0.316370 per hash)
+   Cost 14: 63.183766 total (0.631838 per hash)
+
+**Intel(R) Xeon(R) CPU E31245 @ 3.30GHz (2011)**
+
+Representative of an aging bare metal production server.
+
+::
+
+   Cost 8: 1.635034 total (0.016350 per hash)
+   Cost 9: 3.203396 total (0.032034 per hash)
+   Cost 10: 6.402601 total (0.064026 per hash)
+   Cost 11: 12.824214 total (0.128242 per hash)
+   Cost 12: 25.627993 total (0.256280 per hash)
+   Cost 13: 52.337828 total (0.523378 per hash)
+   Cost 14: 104.786531 total (1.047865 per hash)
+
+**AMD EPYC 7002 (2019)**
+
+Representative of a common host CPU within a modern virtualized and
+shared-CPU cloud environment. (Note: The author of this RFC was unable
+to verify the exact CPU model, due to the virtualization layer. The
+model name is what the cloud provider claims it to be).
+
+::
+
+   Cost 8: 1.462180 total (0.014622 per hash)
+   Cost 9: 2.955791 total (0.029558 per hash)
+   Cost 10: 5.859765 total (0.058598 per hash)
+   Cost 11: 11.603300 total (0.116033 per hash)
+   Cost 12: 24.426527 total (0.244265 per hash)
+   Cost 13: 48.486861 total (0.484869 per hash)
+   Cost 14: 99.683899 total (0.996839 per hash)
 
 Proposal
 --------
 
-In this straw poll, gather feedback for the functionality from
-`CachedIterable </rfc/cachediterable>`__ and successors to the `any()
-and all() on iterables </rfc/any_all_on_iterable>`__ RFC:
-`any()/all()/none()/find()/reduce() <https://github.com/php/php-src/pull/6053>`__
+The default BCrypt cost shall be increased from ``10`` to either ``11``
+(doubling the time) or ``12`` (quadrupling the time), depending on the
+secondary vote.
+
+A cost of ``12`` is well below 0.5 seconds on all tested CPUs (with the
+slowest CPU being at 330ms) and should feel sufficiently snappy for an
+interactive login in a website even when needing to rehash a cost ``10``
+hash during login.
+
+The more conservative increase to ``11`` stays below 200ms for all
+tested CPUs and still provides reasonable response times when a handful
+of hashes need to be calculated within a single request (e.g. when
+generating and hashing multiple recovery codes for multi-factor
+authentication).
+
+Backward Incompatible Changes
+-----------------------------
+
+Users that rely on the default BCrypt cost will experience increased
+processing time when generating or validating BCrypt hashes. It
+naturally follows that the CPU usage of the application servers will
+increase.
+
+For high-traffic websites it might be necessary to add additional
+application servers to handle the increased load. Alternatively the
+application developer will need to explicitly specify the existing
+BCrypt costs of ``10``, provided they still consider it appropriate for
+their threat model.
+
+The increase of the costs is the entire point of this RFC and thus the
+reasoning for this possibly breaking change is given above.
+
+Proposed PHP Version(s)
+-----------------------
+
+Next PHP 8.x (8.4).
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+None.
+
+To Opcache
+~~~~~~~~~~
+
+None.
+
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None.
+
+Open Issues
+-----------
+
+None.
+
+Unaffected PHP Functionality
+----------------------------
+
+Anything not BCrypt is unaffected (i.e. everything not ``password_*``
+with ``PASSWORD_BCRYPT`` / BCrypt hashes). Users that explicitly specify
+the BCrypt cost are also unaffected.
+
+Future Scope
+------------
+
+None.
 
 Proposed Voting Choices
 -----------------------
 
-Voting on this straw poll starts on June 5, 2021 and ends on June 12,
-2021.
+2/3 majority to increase the default costs:
 
-**Note that due to a limitation of the wiki software, forms must be
-voted on separately.** If you are opposed to this functionality being
-added to PHP in any form, please note this in addition to your preferred
-namespacing choice, given that
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions has passed.
-
-Namespace choices
-~~~~~~~~~~~~~~~~~
-
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions strongly
-discourages some of the previously considered namespace options with too
-few or too many namespace parts.
-
-    Extensions should not use a vendor namespace.
-
-    ...
-
-    **Namespace names should follow CamelCase.**
-
-    ...
-
-    Because these extensions combine a lot of unrelated or only
-    tangentially related functionality, symbols should not be namespaced
-    under the Core, Standard or Spl namespaces. Instead, these
-    extensions should be considered as a collection of different
-    components, and should be namespaced according to these.
-
-Preferred namespacing choice for
-`CachedIterable </rfc/cachediterable>`__
-
-(No namespace alternatives were suggested between announcing the straw
-poll and opening the straw poll in
-https://externals.io/message/114687#114687)
-
-Question: Preferred namespacing choice for CachedIterable
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Increase the default BCrypt cost?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
--  Iterable\CachedIterable
--  CachedIterable
--  Collections\CachedIterable
--  Opposed to previous namespace choices
--  Opposed to adding this functionality to php
+-  Yes
+-  No
 
-| 
+Simple majority to decide the new costs:
 
-Preferred namespacing choice for successors to the `any() and all() on
-iterables </rfc/any_all_on_iterable>`__ RFC:
-`any()/all()/none()/find()/reduce() <https://github.com/php/php-src/pull/6053>`__
-
-Question: Preferred namespacing choice for any()/all()/none()/reduce()/find()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Increase the default BCrypt cost to?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
--  Iterable\any()
--  iterable_any()
--  Opposed to previous namespace choices
--  Opposed to adding this functionality to php
+-  11 (less than 160ms per hash)
+-  12 (less than 330ms per hash)
 
-Functionality of interest in the successor to the `any() and all() on
-iterables </rfc/any_all_on_iterable>`__ RFC:
+Patches and Tests
+-----------------
 
-`Implementation of
-any()/all()/none()/find()/reduce() <https://github.com/php/php-src/pull/6053>`__
+https://github.com/php/php-src/pull/12367
 
-(functionality such as ``reversed()``,
-``flip(iterable): CachedIterable``, etc. (which would require
-``CachedIterable``) is left out of this question)
+Implementation
+--------------
 
-(in this proposal, find() and reduce() act only on values of iterables,
-similar to how `array_reduce <http://php.net/array_reduce>`__ works.
-Passing too many arguments is currently an error for internal functions
-and it is possible that it would be deprecated for user-defined
-functions in the future.)
-
-("Still too small in scope" means you would probably vote against the
-implementation as-is for that reason)
-
-Question: Global functions I would want to add to PHP to act on iterables as described in implementation link
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  any(...)/all(iterable $input, $callback = null): bool
--  none(...): bool
--  find(iterable $input, $callback, $default = null): mixed
--  reduce(iterable $input, $callback, $initial = null): mixed
--  Still too small in scope
--  Opposed to adding this functionality to php
-
-**EDIT: The redundant option "Opposed to adding this functionality to
-php" was added to the vote on global functions after the start of the
-vote** to make it easier to vote on at least one option. See "Preferred
-namespacing choice" for other voters opposed to the functionality.
-
-Preferred namespace case to use for iterable/Iterable
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-I didn't notice this earlier, but the `Namespaces in Bundled Extensions
-RFC </rfc/https///namespaces_in_bundled_extensions>`__ recommended (but
-didn't mandate) that "Namespace names should follow CamelCase." - so I'm
-not sure if ``iterable\`` or ``Iterable\`` makes the most sense to
-others.
-
-This poll asks whether ``iterable\`` or ``Iterable\`` makes more sense -
-It could be argued by some that namespaces such as ``iterable\`` should
-be an exception due to it also being used as a soft reserved keyword
-that is typically lowercase.
-
-https://externals.io/message/114687#114689
-
-    To me, a lower-case namespace like "iterable" just looks wrong,
-    because I'm so used to namespaces, like classes, being UpperCamels.
-
-    The connection to a keyword doesn't seem convincing to me - if
-    anything, it highlights the possible confusion from choosing a
-    namespace name that has a different meaning elsewhere, although I
-    admit no brilliant alternatives spring to mind.
-
-    Regards,
-
-    -- Rowan Tommins [IMSoP]
-
-(Aside: shorter namespace names such as iter were unpopular in a
-`previous straw poll </rfc/any_all_on_iterable_straw_poll_namespace>`__,
-and iter would conflict with https://github.com/nikic/iter)
-
-Question: Preferred namespacing for iterable\\
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-3:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  iterable\\ (lowercase)
--  Iterable\\ (CamelCase)
+https://github.com/php/php-src/commit/42a85fc5d95c0c5e867cafcca8ebfca9d90e6c88
 
 References
 ----------
 
--  https://externals.io/message/114687 "Namespaces in bundled
-   extensions" and iterable additions to the standard library
--  https://wiki.php.net/rfc/namespaces_in_bundled_extensions
--  https://wiki.php.net/rfc/any_all_on_iterable_straw_poll_namespace
+-  https://externals.io/message/120993
+-  https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html
+-  https://phpc.social/@tychotithonus@infosec.exchange/111025157601179075
 
-Changelog
----------
+Rejected Features
+-----------------
 
-0.2.1: Add "Opposed to adding this functionality to php" to the vote on
-which global functions to make voting on at least one option easier and
-note that it was also asked in the previous poll
+None.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tyson Andre, tandre@php.net
-:Original Status: Closed
-:Slug: cachediterable_straw_poll
-:Wiki URL: https://wiki.php.net/rfc/cachediterable_straw_poll
+:Implementation: https://github.com/php/php-src/commit/42a85fc5d95c0c5e867cafcca8ebfca9d90e6c88
+:Original Authors: Tim Düsterhus, timwolla@php.net
+:Original PHP Version: PHP 8.4
+:Slug: bcrypt_cost_2023
+:Wiki URL: https://wiki.php.net/rfc/bcrypt_cost_2023
