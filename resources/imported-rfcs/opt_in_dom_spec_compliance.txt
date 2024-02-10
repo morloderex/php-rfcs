@@ -1,5 +1,5 @@
 ====== PHP RFC: Opt-in DOM spec-compliance ======
-  * Version: 0.1.4
+  * Version: 0.1.5
   * Date: 2024-01-13
   * Author: Niels Dossche <nielsdos@php.net>
   * Status: Under Discussion
@@ -53,26 +53,23 @@ I do propose however to add a note to the DOM documentation that the usage of th
 
 === Adapters ===
 
-The old DOM classes and new DOM classes are internal-data-structure-compatible with each other, so it will be possible to import "old DOM nodes" into the "new DOM" and vice versa. This should also help library developers migrate: they could write an adapter layer or adapter helper functions such that the "new DOM" classes are imported into the "old DOM" that the library may use. This would, for quite a few libraries, avoid the requirement to maintain two different versions of the same library. Of course there are also libraries that expose the DOM classes that are used, they would have a harder time pulling off an adapter interface and there might not be an easy solution for this except to place the burden on the user of such a library.
+The old DOM classes and new DOM classes are internal-data-structure-compatible with each other, so it will be possible to import "old DOM nodes" into the "new DOM". This should also help library developers migrate: they could write an adapter layer or adapter helper functions. This would, for quite a few libraries, reduce the requirement to maintain two different versions of the same library. Of course there are also libraries that expose the DOM classes that are used, they would have a harder time pulling off an adapter interface and there might not be an easy solution for this except to place the burden on the user of such a library.
 
-To accomplish this I propose to add two methods to DOMDocument and two methods to DOM\Document:
+To accomplish this I propose to add a method to DOM\Document:
 
 <PHP>
-class DOMDocument ... {
-    public function importModernNode(DOM\Node $node, bool $deep = false): DOMNode|false;
-}
-
 class DOM\Document ... {
     public function importLegacyNode(DOMNode $node, bool $deep = false): DOM\Node;
 }
 </PHP>
 
-The reason to keep these as separate methods is to not pollute the existing importNode methods' arguments.
+The reason to keep this as a separate method is to not pollute the existing importNode method <php>$node</php> argument.
 
-These methods can fail if an unsupported node is imported (e.g. a document node itself).
-The methods in DOMDocument can return false on failure if the <php>$strictErrorChecking</php> property is set on DOMDocument.
+This method can throw if an unsupported node is imported (e.g. a document node itself), just like importNode already does.
 
 A previous iteration of this proposal also proposed the adopt{Legacy,Modern}Node methods. This could create two different representations (<php>DOM\Node</php> and <php>DOMNode</php>) of the same node at the same time. This can cause weird issues because new DOM and old DOM make different assumptions. To prevent issues, I dropped this from the proposal.
+
+A previous iteration included the importModernNode method that was added to DOMDocument. Upon trying to implement this, I found that it was too difficult to make it work correctly due to limitations in the import code implementation. In particular, in old DOM, namespaces must always be attached to an element. But when importing a node with namespaced attributes, this could sometimes lose the namespace of those attributes because at that point the cloned subtree is not attached to the document yet. While it's probably possible to fix this for most cases, there will always be cases where this causes issues. As such, I rather not provide this functionality than provide it in a half-working/half-broken state. The reverse direction, importLegacyNode, does not suffer from this problem because we have our own namespace handling code for new DOM.
 
 ===== Testing =====
 
@@ -420,6 +417,7 @@ After the project is implemented, this section should contain
 
 ===== Changelog =====
 
+  * 0.1.5: Drop importModernNode
   * 0.1.4: Clarify other spec bugs
   * 0.1.3: Update migration
   * 0.1.2: Mention namespace performance improvement.
