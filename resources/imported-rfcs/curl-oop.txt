@@ -1,0 +1,231 @@
+====== PHP RFC: Add OOP methods to Curl objects ======
+  * Version: 0.1
+  * Date: 2024-02-14
+  * Author: Sara Golemon, pollita@php.net
+  * Status: Under Discussion
+  * First Published at: http://wiki.php.net/rfc/curl-oop
+
+===== Introduction =====
+
+As part of the [[https://github.com/php/php-tasks/issues/6|Resource to object conversion project]],
+the cURL resource types were converted to objects with the release of PHP 8.0 .  Currently, those objects
+are still opaque types for holding and managing the underlying libcurl types, and do not offer any
+APIs for use by script authors.
+
+===== Proposal =====
+
+This RFC aims to add OOP interfaces to the cURL extension, primarily by aliasing free functions to matching methods
+in the `CurlHandle`, `CurlMultiHandle`, and `CurlShareHandle` classes.  Additionally, this RFC aims to make a handful
+of changes to the behaviors and return values of some methods in the interest of presenting a more objects-style API.
+
+==== Exceptions ====
+
+Four new exceptions will be introduced.  A top level `CurlException` to cover all cURL exception types, plus three specific exceptions as children of `CurlException`: `CurlHandleException`, `CurlMultiException`, and `CurlShareException`.
+
+==== CurlHandle ====
+
+The `CurlHandle` class will be expanded as follows:
+
+<code>
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class CurlHandle
+{
+        /**
+         * Behaves similarly to `curl_init(?string $uri = null): \CurlHandle`,
+         * however this constructor implicitly sets CURLOPT_RETURNTRANSFER == true.
+         */
+	public function __construct(?string $uri = null) {}
+
+	/** @alias curl_errno */
+	public function errno(): int {}
+
+	/** @alias curl_error */
+	public function error(): string {}
+
+	/** @alias curl_strerror */
+	static public function strerror(int $code): string {}
+
+	/** @alias curl_escape */
+	public function escape(string $str): string {}
+
+	/** @alias curl_unescape */
+	public function unescape(string $str): string {}
+
+	/**
+         * @throws CurlHandleException
+         *
+         * Similar to `curl_exec(\CurlHandle $ch): string|bool`,
+         * but never returns False, since errors are promoted to exceptions.
+         */
+	public function exec(): string|true {}
+
+	/** @alias curl_pause */
+	public function pause(int $flags): int {}
+
+	/** @alias curl_reset */
+	public function reset(): void {}
+
+	/** @alias curl_getinfo */
+	public function getInfo(?int $option = null): mixed {}
+
+#if LIBCURL_VERSION_NUM >= 0x073E00 /* Available since 7.62.0 */
+	/** @alias curl_upkeep */
+	public function upkeep(): bool {}
+#endif
+
+	/**
+	 * Varies from curl_setopt() to allow fluent chaining.
+	 * @throws CurlHandleException
+	 */
+	public function setOpt(int $option, mixed $value): \CurlHandle {}
+
+	/**
+	 * Returns self to match setOpt() behavior.
+	 * @throws CurlHandleException
+	 */
+	public function setOptArray(array $option): \CurlHandle {}
+}
+</code>
+
+==== CurlMultiHandle ====
+
+The `CurlMultiHandle` class will be expanded as follows:
+
+<code>
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class CurlMultiHandle
+{
+	/**
+	 * Returns self for fluent calling.
+	 * @throws CurlException.
+	 */
+	public function addHandle(\CurlHandle $handle): \CurlMultiHandle {}
+
+	/**
+	 * Returns self for fluent calling.
+	 * @throws CurlException.
+	 */
+	public function removeHandle(\CurlHandle $handle): \CurlMultiHandle {}
+
+	/**
+	 * Returns self for fluent calling.
+	 * @throws CurlException.
+	 */
+	public function setOpt(int $option, mixed $value): \CurlMultiHandle {}
+
+	/** @alias curl_multi_errno */
+	public function errno(): int {}
+
+	/** @alias curl_multi_error */
+	public function error(): ?string {}
+
+	/** @alias curl_multi_strerror */
+	public function strerror(int $error_code): ?string {}
+
+	/**
+	 * Returns TRUE if still running, FALSE otherwise.
+	 * @param int $still_running
+	 * @throws CurlException.
+	 */
+	public function exec(&$still_running): bool {}
+
+	/** @alias curl_multi_getcontent */
+	static public function getContent(\CurlHandle $handle): ?string {}
+
+	/**
+	 * @alias curl_multi_info_read
+	 * @param int $queued_messages
+	 * @return array<string, int|object>|false
+	 * @refcount 1
+	 */
+	public function infoRead(&$queued_messages = null): array|false {}
+
+	/** @alias curl_multi_select */
+	public function select(float $timeout = 1.0): int {}
+}
+</code>
+
+==== CurlShareHandle ====
+
+The `CurlShareHandle` class will be expanded as follows:
+
+<code>
+/**
+ * @strict-properties
+ * @not-serializable
+ */
+final class CurlShareHandle
+{
+
+	/** @alias curl_share_errno */
+	public function errno(): int {}
+
+	/** @alias curl_share_error */
+	public function error(): ?string {}
+
+	/** @alias curl_share_strerror */
+	static public function strerror(): ?string {}
+
+	/**
+	 * Returns self for fluent calling.
+	 * @throws CurlException.
+	 */
+	public function setOpt(int $option, mixed $value): \CurlShareHandle {}
+}
+</code>
+
+==== New Functions ====
+
+To make the functional API more consistent (and provide functions for the OOP implementation to alias), the following two additional functions will be added (psuedo-implementation shown):
+
+<code>
+function curl_multi_error(CurlMultiHandle $multi_handle): ?string {
+    $errno = curl_multi_errno($multi_handle);
+    return $errno ? curl_multi_strerror($errno) ? NULL;
+}
+
+function curl_share_error(CurlShareHandle $share_handle): ?string {
+    $errno = curl_share_errno($share_handle);
+    return $errno ? curl_share_strerror($errno) ? NULL;
+}
+</code>
+
+===== Backward Incompatible Changes =====
+
+No breaking changes for script code.
+Extensions will note small changes in intialization performed by `object_init_ex(return_value, curl_ce);` as now `curl_easy_init()` and other initialization happens in `curl_object_create` rather than deferring to constructor/curl_init().
+
+===== Proposed PHP Version(s) =====
+
+8.4.0
+
+===== Unaffected PHP Functionality =====
+
+Script code written for the original cURL functional API will not be impacted.
+
+===== Proposed Voting Choices =====
+Straight yes/no.
+
+===== Patches and Tests =====
+
+Each existing unit test will be reviewed and duplicated as appropriate to cover the OOP version of the API.
+
+* Work in progress: https://github.com/sgolemon/php-src/commits/curli  Note that as a work in progress this may not 100% match the proposal above until it is complete.
+
+===== Implementation =====
+
+TBD
+
+===== References =====
+
+TBD
+
+===== Rejected Features =====
+
+TBD
