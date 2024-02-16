@@ -69,7 +69,7 @@ considered idiomatic prior to PHP 7.4:
        }
    }
 
-As of PHP 8.2, if type enforcement is the only need, that can be
+As of PHP 8.3, if type enforcement is the only need, that can be
 abbreviated all the way down to:
 
 .. code:: php
@@ -482,7 +482,7 @@ legal syntax:
    }
 
 By way of comparison, here is the same logic implemented via methods in
-PHP 8.2:
+PHP 8.3:
 
 .. code:: php
 
@@ -981,6 +981,12 @@ satisfy an interface. This is the same relationship as for methods. The
 ``public`` keyword on the property is required for syntax consistency,
 but other visibilities are not supported.
 
+We have deliberately chosen to not support ``public string $both`` in
+interfaces, without specifying the required hooks. That is because the
+most common use case would be a get-only property, but it's unclear if
+undefined hooks should mean "get only" or "get and set". To avoid
+ambiguity, the expected hooks must be specified explicitly.
+
 Abstract properties
 ~~~~~~~~~~~~~~~~~~~
 
@@ -1010,7 +1016,7 @@ methods.
    {
        // This satisfies the requirement and also makes it settable, which is valid.
        public string $readable;
-       
+
        // This would NOT satisfy the requirement, as it is not publicly readable.
        protected string $readable;
 
@@ -1028,6 +1034,22 @@ An abstract property on an abstract class may provide implementations
 for any hook, but must have either ``get`` or ``set`` declared but not
 defined (as in the example above). A property on an interface may not
 implement any hooks.
+
+.. code:: php
+
+   abstract class A
+   {
+       // This provides a default (but overridable) set implementation, and requires 
+       // child classes to provide a get implementation.
+       abstract public string $foo { 
+           get;
+           set { $field = $value};
+       }
+   }
+
+As with interfaces, omitting a hook indicates no requirement for it, and
+specifying neither hook is not supported, for all the same reasons as
+interfaces.
 
 Abstract property types
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -1094,31 +1116,6 @@ is used both declare the same property with hooks, an error is issued.
 We anticipate that being a very rare edge case, and thus no additional
 resolution machinery is necessary.
 
-Interaction with asymmetric visibility
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Swift and C#, the languages on which this design is modeled, both
-support asymmetric visibility in addition to property hooks (by whatever
-name). However, they use different syntaxes. The C# syntax in particular
-includes the visibility on the ``get`` or ``set`` hook.
-
-That would cause a problem for PHP. As noted above, property hooks are
-incompatible with ``array`` properties. However, there is no conceptual
-reason for asymmetric visibility to be incompatible with array
-properties, and there are ample use cases for wanting to support that.
-
-However, using the C#-style syntax for visibility would either
-inherently forbid asymmetric visibility on arrays (undesirable), or
-necessitate more complex syntax to determine if references should or
-should not be disabled on a property. Both are poor options.
-
-For that reason, any concept of asymmetric visibility has been omitted
-from this RFC. Should asymmetric visibility be determined a desirable
-feature in the future, a left-side syntax as used by Swift and as
-demonstrated in the original `Asymmetric
-Visibility </rfc/asymmetric-visibility>`__ RFC would be a complementary
-addition, and the best option in practice.
-
 Interaction with readonly
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1138,7 +1135,7 @@ either.
 Interaction with magic methods
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PHP 8.2 will invoke the ``__get()``, ``__set()``, ``__isset()``, and
+PHP 8.3 will invoke the ``__get()``, ``__set()``, ``__isset()``, and
 ``__unset()`` magic methods if a property is accessed and it is either
 not defined, OR it is defined but not visible from the calling scope.
 The presence of hooks on a defined property does not change that
@@ -1246,10 +1243,12 @@ sumamrized below, with explanations afterward.
 -  ``var_dump()``: Use raw value
 -  ``serialize()``: Use raw value
 -  ``unserialize()``: Use raw value
+-  ``__serialize()``/``__unserialize()``: Custom logic, uses get/set
+   hook
 -  Array casting: Use raw value
 -  ``var_export()``: Use get hook
 -  ``json_encode()``: Use get hook
--  ``JsonSerializable``: Use get hook
+-  ``JsonSerializable``: Custom logic, uses get hook
 -  ``get_object_vars()``: Use get hook
 
 ``serialize()`` and ``var_dump()`` are both intended to show the
@@ -1262,6 +1261,10 @@ Similarly, ``unserialize()`` will write to a property's backing value
 directly, without invoking ``set``. If the input has a value for a
 virtual property, an error will be thrown.
 
+Note that if the ``__serialize()`` or ``__unserialize()`` magic methods
+are used, those will run like any other method and therefore read
+through the ``get`` hook.
+
 When casting an object to an array (``$arr = (array) $obj``), currently
 the visibility of properties is ignored; the keys returned may have an
 extra ``*`` in them to indicate that they were private, but that's it.
@@ -1273,7 +1276,7 @@ be called as a normal method and have the same access to properties as
 any other method (that is, through the ``get`` hook if present), and may
 return whatever value it wishes.
 
-In PHP 8.2, using ``json_encode()`` on an object that does not implement
+In PHP 8.3, using ``json_encode()`` on an object that does not implement
 ``JsonSerializable`` will return a JSON object of key/value pairs of the
 public properties only, regardless of what scope it is called from. The
 intent is to serialize the "public face" of the object. For that reason,
@@ -1296,11 +1299,11 @@ defined.To minimize asymmetry, therefore, we have chosen to invoke
 ``get`` hooks on properties for ``var_export()``.
 
 Reflection
-----------
+~~~~~~~~~~
 
 ``ReflectionProperty`` has several new methods to work with hooks.
 
--  ``GetHooks(): array`` returns an array of ``\ReflectionMethod``
+-  ``getHooks(): array`` returns an array of ``\ReflectionMethod``
    objects keyed by the hook they are for. So for example, a property
    with both ``get`` and ``set`` hook will return a 2 element array with
    keys ``get`` and ``get``, each of which are a ``\ReflectionMethod``
@@ -1387,6 +1390,73 @@ expected.
    // Stack trace:
    // #0 example.php(4): C->$prop::set(Object(SensitiveParameterValue))
    // #1 {main}
+
+Frequently Asked Questions
+--------------------------
+
+Why isn't asymmetric visibility included, like in C#?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Swift and C#, the languages on which this design is modeled, both
+support asymmetric visibility in addition to property hooks (by whatever
+name). However, they use different syntaxes. The C# syntax in particular
+includes the visibility on the ``get`` or ``set`` hook.
+
+That would cause a problem for PHP. As noted above, property hooks are
+incompatible with ``array`` properties. However, there is no conceptual
+reason for asymmetric visibility to be incompatible with array
+properties, and there are ample use cases for wanting to support that.
+
+However, using the C#-style syntax for visibility would either
+inherently forbid asymmetric visibility on arrays (undesirable), or
+necessitate more complex syntax to determine if references should or
+should not be disabled on a property. Both are poor options.
+
+For that reason, any concept of asymmetric visibility has been omitted
+from this RFC. Should asymmetric visibility be determined a desirable
+feature in the future, a left-side syntax as used by Swift and as
+demonstrated in the original `Asymmetric
+Visibility </rfc/asymmetric-visibility>`__ RFC would be a complementary
+addition, and the best option in practice.
+
+Why do set hooks not return the value to set?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An alternate implementation would be to have a set hook return a value,
+and that value be what is assigned. While the seemingly obvious answer,
+it is not as robust as the approach described here.
+
+Primarily, that is because it disallows any action *after* the
+assignment happens. Only "before" actions are allowed, because once the
+value is returned no further code in the hook executes (like any other
+function).
+
+Some actions, however, will want to run after the assignment is
+confirmed. Change-logging, for instance, shouldn't record until the
+change is confirmed and "committed." That's because the assignment
+itself still might fail, for instance if the passed ``$value`` has a
+wider type than the property itself, and the code in the hook fails to
+propertly normalize it.
+
+For that reason, we need a way to assign and confirm the property write
+while still allowing code to run after it. Swift approaches that with a
+separate "beforeSet" and "didSet" hook; howevever, as this design opts
+for a single ``set`` hook rather than three, the return value is not a
+viable option.
+
+Why the $field magic value?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is primarily for convenience, as ``$field`` is shorter to type, and
+more consistent. It also makes common code easier to copy-paste (which,
+for better or worse, is likely to happen for code fragments this small).
+Additionally, using a generic variable name will almost certainly be
+necessary for reusable hooks, should those ever be adopted. (See Future
+Scope, below.)
+
+Of note, Kotlin uses the exact same design with exact same variable
+name, and we are not aware of it causing any confusion in the Kotlin
+world.
 
 Usage examples
 --------------
