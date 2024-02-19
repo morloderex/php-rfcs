@@ -241,7 +241,7 @@ $u->fullName = 'Ilija Tovilo';
 print $u->getFirst();
 </code>
 
-The ''set'' hook body is an arbitrarily complex method body, which accepts one argument.  The argument is implicitly typed to the same type as the property.  Its return type is unspecified, and will be silently discarded.
+The ''set'' hook body is an arbitrarily complex method body, which accepts one argument.  The argument is implicitly typed to the same type as the property.  Its return type is unspecified, and will silently be treated as ''void''.
 
 Specifying the argument name is optional.  If not specified, it defaults to ''$value''.  That is, the following ''set'' hook is identical to the previous:
 
@@ -352,7 +352,7 @@ class User
 }
 </code>
 
-As noted, the return value of ''set'', if any, is discarded.  That means it may also use the short-hand syntax, as whatever value the expression evaluates to will be ignored.  That is, the following is an example of legal syntax:
+Although the code above resembles short-closure syntax, the ''set'' operation will still return void, even if using the short-hand syntax above.  That is, the following is an example of legal syntax:
 
 <code php>
 class User
@@ -474,7 +474,7 @@ $x = 'boop';
 
 Setting by reference, however, is not supported, as its semantics are not well-defined.  This behavior mirrors how the magic methods <php>__get()</php> and <php>__set()</php> handle references.  (They are, in a sense, generic virtual properties.)
 
-Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.  (Note: We are still confirming that this can be caught properly; this part of the design may change before the RFC goes to a vote.)
+Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.
 
 <PHP>
 foreach ($someObjectWithHooks as $key => $value) {
@@ -538,7 +538,7 @@ $c->arr['beep'] = 'boop';
 $c->arr[] = 'narf';
 </PHP>
 
-This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
+This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be typed as an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
 
 In practice, a more appropriate and idiomatic usage of hooked arrays would be like so:
 
@@ -558,6 +558,8 @@ class C
 </PHP>
 
 The "passthrough" <php>get</php> implementation creates a virtual property, which disables writing directly to the <php>$elements</php> property.  As it is a virtual property, returning by reference would also be allowed, if desired.
+
+It would also be possible to make <php>addElement()</php> private/protected, in order to simulate private-write, public-read properties.  That said, the companion [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would provide a much more elegant approach.
 
 ==== Default values ====
 
@@ -604,7 +606,7 @@ class PositivePoint extends Point
 
 Each hook overrides parent implementations independently of each other.
 
-If a child class adds hooks, any default set on the property is removed.  That is consistent with how inheritance works already; if a property is redeclared in a child, its default is removed or must be re-assigned.  Since hooked properties may not have default values, the default is omitted.  It may be re-assigned in the class's constructor if desired (in which case it would call the ''set'' hook).
+If a child class adds hooks, any default set on the property is removed.  That is consistent with how inheritance works already; if a property is redeclared in a child, its default is removed or must be re-assigned.  If a property becomes virtual due to inheritance (because the neither of the resulting ''get'' and ''set'' hooks use <php>$field</php>), then it may not have a default value.  It may be re-assigned in the class's constructor if desired (in which case it would call the ''set'' hook).
 
 === Accessing parent hooks ===
 
@@ -757,9 +759,9 @@ class C2 implements I
 }
 </PHP>
 
-Interfaces are only concerned with public access, so the presence of non-public properties is both unaffected by an interface and cannot satisfy an interface.  This is the same relationship as for methods.  The ''public'' keyword on the property is required for syntax consistency, but other visibilities are not supported.
+Interfaces are only concerned with public access, so the presence of non-public properties is both unaffected by an interface and cannot satisfy an interface.  This is the same relationship as for methods.  The ''public'' keyword on the property is required for syntax consistency, but other visibilities are not supported, nor is the long-deprecated ''var''.
 
-We have deliberately chosen to not support <php>public string $both</php> in interfaces, without specifying the required hooks.  That is because the most common use case would be a get-only property, but it's unclear if undefined hooks should mean "get only" or "get and set".  To avoid ambiguity, the expected hooks must be specified explicitly.
+We have deliberately chosen to not support <php>public string $both</php> in interfaces, without specifying the required hooks.  That is because the most common use case would be a get-only property, but it's unclear if undefined hooks should mean "get only" or "get and set".  It may also imply that the property may be referenced, which may not be the case depending on the implementing class.  To avoid ambiguity, the expected hooks must be specified explicitly.
 
 ==== Abstract properties ====
 
@@ -947,7 +949,7 @@ Similarly, <php>unserialize()</php> will write to a property's backing value dir
 
 Note that if the <php>__serialize()</php> or <php>__unserialize()</php> magic methods are used, those will run like any other method and therefore read through the <php>get</php> hook.
 
-When casting an object to an array (<php>$arr = (array) $obj</php>), currently the visibility of properties is ignored; the keys returned may have an extra <php>*</php> in them to indicate that they were private, but that's it.  As this operation currently reveals internal implementation details, it also will not invoke the <php>get</php> hook.
+When casting an object to an array (<php>$arr = (array) $obj</php>), currently the visibility of properties is ignored; the keys returned may have an extra prefix in them to indicate that they were private, but that's it.  As this operation currently reveals internal implementation details, it also will not invoke the <php>get</php> hook.
 
 <php>JsonSerializable</php> is a non-issue; its <php>jsonSerialize</php> method will be called as a normal method and have the same access to properties as any other method (that is, through the <php>get</php> hook if present), and may return whatever value it wishes.
 
@@ -1022,7 +1024,7 @@ $c->prop = 'secret';
 
 ==== Why isn't asymmetric visibility included, like in C#? ====
 
-Swift and C#, the languages on which this design is modeled, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibility on the ''get'' or ''set'' hook.
+Kotlin, Swift, and C#, all of which have a similar accessor model to that shown here, both support asymmetric visibility in addition to property hooks (by whatever name).  However, they use different syntaxes.  The C# syntax in particular includes the visibility on the ''get'' or ''set'' hook.
 
 That would cause a problem for PHP.  As noted above, property hooks are incompatible with ''array'' properties.  However, there is no conceptual reason for asymmetric visibility to be incompatible with array properties, and there are ample use cases for wanting to support that.
 
@@ -1095,7 +1097,7 @@ As the above code is very rare in the wild and rather contrived, and easily work
 
 ===== Proposed PHP Version(s) =====
 
-PHP 8.3.
+PHP 8.4.
 
 
 ===== Future Scope =====
