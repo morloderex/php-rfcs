@@ -115,6 +115,48 @@ class User
 
 This code introduces a new non-empty requirement, but does not change the outward syntax of reading or writing to ''$name'', does not hinder static analysis, and does not fold multiple properties into a single hard-to-follow method.
 
+Similarly, using methods may also impose an extra syntax burden on callers in "read and update" situations.  For example:
+
+<PHP>
+class Foo
+{
+    private int $runs = 0;
+    
+    public function getRuns(): int { return $this->runs; }
+    
+    public function setRuns(int $runs): void
+    {
+      if ($runs <= 0) throw new Exception();
+      $this->runs = $runs;
+    }
+}
+
+$f = new Foo();
+
+$f->setRuns($f->getRuns() + 1);
+</PHP>
+
+With property hooks, this can be simplified to:
+
+
+<PHP>
+class Foo
+{
+    private int $runs = 0 {
+        set {
+            if ($value <= 0) throw new Exception();
+            $field = $value;
+        }
+    }
+}
+
+$f = new Foo();
+
+$f->runs++;
+</PHP>
+
+Which is much more ergonomic from the user's point of view.  (A <php>incrementRuns()</php> method would also work in this case, but would only support the one single use case of incrementing, not general read and write.)
+
 ===== Proposal Summary =====
 
 This RFC introduces two "hooks" to override the default "get" and "set" behavior of a property.  Although not included in this initial version, the design includes the ability to support more hooks in the future.  (See the Future Scope section below.)  Taken together, they allow for a majority of common reasons to add "just in case" methods to a property to be implemented without methods, leading to shorter code and more flexibility to improve the code without a hard API break.
