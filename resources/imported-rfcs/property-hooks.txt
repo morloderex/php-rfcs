@@ -12,7 +12,7 @@ Developers often use methods to wrap and guard access to object properties. Ther
 
 The combination of this RFC and the [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC effectively replicate and replace the previous [[rfc:property_accessors|Property Accessors]] RFC.  Much of the implementation is derived from Nikita's original work on that RFC.
 
-The design and syntax below is most similar to [[https://kotlinlang.org/docs/properties.html#getters-and-setters|Kotlin]], although it also draws influence from C# and [[https://docs.swift.org/swift-book/documentation/the-swift-programming-language/properties/#Computed-Properties|Swift]].  Python and Javascript have similar features via a different syntax, although that syntax would not be viable for PHP.  Ruby treats properties and methods as nearly the same, so achieves this functionality as a side effect.  In short, "property accessors" are a very common feature in major, mainstream programming languages.
+The design and syntax below is most similar to [[https://kotlinlang.org/docs/properties.html#getters-and-setters|Kotlin]], although it also draws influence from C# and [[https://docs.swift.org/swift-book/documentation/the-swift-programming-language/properties/#Computed-Properties|Swift]].  Python and Javascript have similar features via a different syntax, although that syntax would not be viable for PHP.  (See the FAQ section below for an explanation.)  Ruby treats properties and methods as nearly the same, so achieves this functionality as a side effect.  In short, "property accessors" are a very common feature in major, mainstream programming languages.
 
 A primary use case for hooks is actually to **not** use them, but retain the ability to do so in the future, should it become necessary. In particular, developers often implement <php>getFoo</php>/<php>setFoo</php> methods on a property not because they are necessary, but because they might become necessary in a hypothetical future, and changing from a property to a method at that point becomes an API change.
 
@@ -1073,6 +1073,39 @@ $c->prop = 'secret';
 </PHP>
 
 ===== Frequently Asked Questions =====
+
+==== Why not Python/Javascript-style accessor methods? ====
+
+Of the 5 languages we surveyed that had property accessors, C#, Swift, and Kotlin put the accessor/hook logic on the property, as is done here.  Python and Javascript have no property declaration, instead having an annotation on a method that turns it into a getter/setter.  Using a Javascript-inspired syntax, in PHP that might look like:
+
+<PHP>
+class Person
+{
+    public string $firstName;
+
+    public function __construct(private string $first, private string $last) {}
+
+    public function get firstName(): string
+    {
+        return $this->first . " " . $this->last;
+    }
+    
+    public function set firstName(string $value): void
+    {
+        [$this->first, $this->last] = explode(' ', $value);
+    }
+}
+</PHP>
+
+While that may seem superficially preferable, it is not workable for a number of reasons.
+
+  - What is the property type of the ''$firstName'' property?  Presumably string, but there's nothing inherent that forces, ''public string $firstName'', ''get firstName()''s return and ''set firstName()''s parameter to be the same.  Even if we could detect it as a compile error, it means one more thing that the developer has to keep track of and get right.  Architecture should "make invalid states impossible", and this does not.  (Python and Javascript are both largely untyped, which is why they don't have this issue.)
+  - Is declaring the property itself still required?  If so, that's one more place the developer needs to manually keep the name and type in sync.  If not, then how are default implementations handled?  (Python and Javascript both do not pre-define properties, which is why they don't have this issue.)
+  - In cases where you want the default behavior for get or set, and to just override the other, does omitting the corresponding default version mean it's not defined, or uses the default?  In JS and Python, omitting means "not supported."  But then how does one do the "validate on set but otherwise change nothing" case?  It would require fully reimplementing both get and set, which is a lot more work.  Or, potentially, requiring declaring the property itself explicitly, which has all the issues noted in the previous point.
+  - What about visibility?  Do the get/set methods need to have the same visibility as the property?  If not, does that become a way to do asymmetric visibility?  But then even if not, the visibility would be repeated multiple times.  What about inconsistency between the method's visibility and the property visibility?  How is that handled?  (Python and Javascript do not have visibility modifiers in the sense PHP does, which is why they don't have this issue.)
+  - This works fine for virtual properties, but what about non-virtual properties?  Is that where you need to declare the property as well?  Does that conflict with the methods, or complement it?  That means the property's definition is spread out to multiple places, potentially hundreds of lines apart.
+
+Essentially, the tagged-method approach can work well in languages without explicit typed properties, where all objects are really just dictionaries with funny syntax (Python and Javascript).  In languages with explicit typed properties, that becomes vastly more cumbersome and un-ergonomic.  Of note, all three languages surveyed that have explicit typed properties (C#, Swift, and Kotlin) use on-the-property accessor definitions instead.  As PHP is also a language with explicit typed properties, following suit makes logical sense.
 
 ==== Why isn't asymmetric visibility included, like in C#? ====
 
