@@ -1088,9 +1088,29 @@ For that reason, any concept of asymmetric visibility has been omitted from this
 
 An alternate implementation would be to have a set hook return a value, and that value be what is assigned.  While the seemingly obvious answer, it is not as robust as the approach described here.
 
-Primarily, that is because it disallows any action //after// the assignment happens.  Only "before" actions are allowed, because once the value is returned no further code in the hook executes (like any other function).
+For one, what do virtual setters do?  Consider the example from earlier, with this set hook:
+
+<PHP>
+class Person
+{
+    public string $fullName { 
+        set => [$this->first, $this->last] = explode(' ', \ucfirst($value)); 
+    }
+
+    public string $fullName { 
+        set {
+            [$this->first, $this->last] = explode(' ', \ucfirst($value));
+        }
+    }
+}
+</PHP>
+
+In both the short and long syntaxes, the result is ambiguous.  In the short-hand version, does that return an array, containing the values of ''$this->first'' and ''$this->last''?  Does that mean ''$fullName'' now has a backing value?  In the long version, there's no ''return'' keyword.  But functions in PHP that do not return evaluate to null.  Does that mean ''$fullName'' is assigned null?  How do we differentiate between virtual properties and properties with a setter that sets null?  Even if solutions could be determined (which is not guaranteed), it is extremely non-obvious what the behavior should be, which would lead to various subtle and annoying bugs.
+
+Another reason return-to-set won't work is because it disallows any action //after// the assignment happens.  Only "before" actions are allowed, because once the value is returned no further code in the hook executes (like any other function).
 
 Some actions, however, will want to run after the assignment is confirmed.  Change-logging, for instance, shouldn't record until the change is confirmed and "committed."  That's because the assignment itself still might fail, for instance if the passed <php>$value</php> has a wider type than the property itself, and the code in the hook fails to propertly normalize it.
+
 
 For that reason, we need a way to assign and confirm the property write while still allowing code to run after it.  Swift approaches that with a separate "beforeSet" and "didSet" hook; howevever, as this design opts for a single <php>set</php> hook rather than three, the return value is not a viable option.
 
