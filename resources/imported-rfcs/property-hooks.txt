@@ -103,7 +103,7 @@ class User
             if (strlen($value) === 0) {
                 throw new ValueError("Name must be non-empty");
             }
-            $field = $value;
+            $this->name = $value;
         }
     }
 
@@ -145,7 +145,7 @@ class Foo
     private int $runs = 0 {
         set {
             if ($value <= 0) throw new Exception();
-            $field = $value;
+            $this->runs = $value;
         }
     }
 }
@@ -209,9 +209,11 @@ This RFC applies to object properties only, not static properties.  Static prope
 
 For a property to use a hook, it must replace its trailing '';'' with a code block denoted by ''{ }''.  Inside the block are one or more hook implementations, for which the order is explicitly irrelevant.  It is a compile error to have an empty hook block.
 
-The ''get'' and ''set'' hooks override the PHP default read and write behavior.  They may be implemented individually or together.  Within each hook, the "unfiltered" value of the property is available as <php>$field</php>.  Note that <php>$field</php> is a compile-time macro that translates to <php>$this->propertyName</php> in the engine.  The main implication of that is more esoteric variable forms (such as <php>$$var</php>) will not work with <php>$field</php>, though they shouldn't be used anyway.  Using <php>$this->propertyName</php> directly is supported, but not recommended.
+The ''get'' and ''set'' hooks override the PHP default read and write behavior.  They may be implemented individually or together.  Within each hook, the "unfiltered" value of the property is available as <php>$this->propertyName</php>.  Outside of the hook, <php>$this->propertyName</php> calls will still go through the relevant hook.
 
-A normal property has a stored "backing value" that is part of the object, and part of the memory layout of the class.  However, if a property has at least one hook, and none of them make use of <php>$field</php>, then no backing value will be created and there will be no data stored in the object automatically (just as if there were no property, just methods).  Such properties are known as "virtual properties," as they have no materialized stored value.
+A normal property has a stored "backing value" that is part of the object, and part of the memory layout of the class.  However, if a property has at least one hook, and none of them make use of <php>$this->propertyName</php>, then no backing value will be created and there will be no data stored in the object automatically (just as if there were no property, just methods).  Such properties are known as "virtual properties," as they have no materialized stored value.
+
+Be aware, the detection logic works on <php>this->propertyName</php> directly, not on dynamic forms of it like <php>$prop = 'beep'; $this->$prop</php>.  That will not trigger a backing value.
 
 ==== get ====
 
@@ -237,16 +239,16 @@ print $u->fullName;
 
 The <php>get</php> hook body is an arbitrarily complex method body, which MUST return a value that is type compatible with the property.
 
-The example above creates a virtual property, as there is at least one hook and it does not use <php>$field</php>.  Because it is virtual, there is no default <php>set</php> behavior (as there's nowhere to save to).  Thus, any attempt to write to the property will result in an <php>Error</php> being thrown.
+The example above creates a virtual property, as there is at least one hook and it does not use <php>$this->fulName</php>.  Because it is virtual, there is no default <php>set</php> behavior (as there's nowhere to save to).  Thus, any attempt to write to the property will result in an <php>Error</php> being thrown.
 
-The following example does make use of <php>$field</php>, however, and thus a backing value will be created, and write operations will simply write to the property as normal.
+The following example does make use of <php>$this->propertyName</php>, however, and thus a backing value will be created, and write operations will simply write to the property as normal.
 
 <PHP>
 class Loud
 {
     public string $name {
         get {
-            return strtoupper($field);
+            return strtoupper($this->name);
         }
     }
 }
@@ -334,7 +336,7 @@ class User {
     public string $username {
         set($value) {
             if (strlen($value) > 10) throw new \InvalidArgumentException('Too long');
-            $field = strtolower($value);
+            $this->username = strtolower($value);
         }
     }
 }
@@ -359,7 +361,7 @@ class Person
 {
     public UnicodeString $name {
         set(string|UnicodeString $value) {
-            $field = $value instanceof UnicodeString ? $value : new UnicodeString($value);        
+            $this->name = $value instanceof UnicodeString ? $value : new UnicodeString($value);        
         }
     }
 }
@@ -468,7 +470,7 @@ The most notable implication of this is that non-trivial hooks may sub-call to a
 <code php>
 class Person {
     public string $phone {
-        set => $field = $this->sanitizePhone($value);
+        set => $this->phone = $this->sanitizePhone($value);
     }
     
     private function sanitizePhone(string $value): string {
@@ -482,8 +484,6 @@ class Person {
     }
 }
 </code>
-
-Note that <php>$field</php> is only valid in the hook itself, not in a sub-called method.  That is, writing to <php>$field</php> from within <php>sanitizePhone()</php> would just write to a local variable by that name, not to the property.
 
 ==== References ====
 
@@ -499,8 +499,8 @@ class Foo
     public string $bar;
 
     public string $baz {
-        get => $field;
-        set => $field = strtoupper($value);
+        get => $this->baz;
+        set => $this->baz = strtoupper($value);
     }
 }
 
@@ -580,10 +580,10 @@ class C
     private bool $hasChanged = false;
     
     public array $arr {
-        get => $field + ['extra' => 'stuff'];
+        get => $this->arr + ['extra' => 'stuff'];
         set {
             $this->hasChanged = true;
-            $field = $value;
+            $this->arr = $value;
         }
     }
 }
@@ -645,7 +645,7 @@ Default values are listed before the hook block.
 class User
 {
     public string $role = 'anonymous' {
-        set => $field = strlen($value) <= 10 ? $value : throw new \Exception('Too long');
+        set => $this->role = strlen($value) <= 10 ? $value : throw new \Exception('Too long');
     }
 }
 </PHP>
@@ -670,7 +670,7 @@ class PositivePoint extends Point
             if ($x < 0) {
                 throw new \InvalidArgumentException('Too small');
             }
-            $field = $x;
+            $this->x = $x;
         }
     }
 }
@@ -734,7 +734,7 @@ Hooks may also be declared ''final'', in which case they may not be overridden.
 class User 
 {
     public string $username {
-        final set($value) => $field = strtolower($value);
+        final set($value) => $this->username = strtolower($value);
     }
 }
 
@@ -742,10 +742,10 @@ class Manager extends User
 {
     public string $username {
         // This is allowed
-        get => strtoupper($field);
+        get => strtoupper($this->username);
         
         // But this is NOT allowed, because set is final in the parent.
-        set => $field = strtoupper($value);
+        set => $this->username = strtoupper($value);
     }
 }
 </code>
@@ -756,14 +756,14 @@ Declaring hooks ''final'' on a property that is declared ''final'' is redundant 
 
 <PHP>
 class User 
-{   
+{
     // Child classes may not add hooks of any kind to this property.
     public final string $name;
 
     // Child classes may not add any hooks or override set,
     // but this set will still apply.
     public final string $username {
-        set => $field = strtolower($value);
+        set => $this->username = strtolower($value);
     }
 }
 </PHP>
@@ -865,7 +865,7 @@ class C extends A
     // This satisfies the requirement exactly, so is sufficient. It may only
     // be written to, and only from protected scope.    
     protected string $writeable {
-        set => $field = $value;
+        set => $this->writeable = $value;
     }
   
     // This expands the visibility from protected to public, which is fine.
@@ -882,7 +882,7 @@ abstract class A
     // child classes to provide a get implementation.
     abstract public string $foo { 
         get;
-        set { $field = $value};
+        set { $this->foo = $value};
     }
 }
 </PHP>
@@ -953,8 +953,8 @@ class C
 {
     private string $normalizedName;
     private string $name {
-        get => $field;
-        set => $field = ucfirst($value);
+        get => $this->name;
+        set => $this->name = ucfirst($value);
     }
     
     public function __set($var, $val)
@@ -996,7 +996,7 @@ For example, we predict the following to be the extent of most combinations of h
 class User
 {
     public function __construct(
-        public string $username { set => $field = strtolower($value); }
+        public string $username { set => $this->username = strtolower($value); }
     ) {}
 }
 </code>
@@ -1173,12 +1173,6 @@ Some actions, however, will want to run after the assignment is confirmed.  Chan
 
 
 For that reason, we need a way to assign and confirm the property write while still allowing code to run after it.  Swift approaches that with a separate "beforeSet" and "didSet" hook; howevever, as this design opts for a single <php>set</php> hook rather than three, the return value is not a viable option.
-
-==== Why the $field magic value? ====
-
-This is primarily for convenience, as <php>$field</php> is shorter to type, and more consistent.  It also makes common code easier to copy-paste (which, for better or worse, is likely to happen for code fragments this small).  Additionally, using a generic variable name will almost certainly be necessary for reusable hooks, should those ever be adopted.  (See Future Scope, below.)
-
-Of note, Kotlin uses the exact same design with exact same variable name, and we are not aware of it causing any confusion in the Kotlin world.
 
 ===== Usage examples =====
 
