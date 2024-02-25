@@ -21,28 +21,41 @@ In most cases this is sufficient but in cases of handling integer values above 2
 
 ===== Proposal =====
 
-This RFC proposes to perform rounding on given int and return the resulting int if possible.
+This RFC proposes to perform rounding on given int and return the resulting int if possible by default.
 In case of integer under-/overflow the value will be casted to a float (double) and rounded based on the floating point number as it's done currently.
 
 For ''ceil'', ''floor'' and ''round'' with ''precision >= 0'' this means a given int gets returned as is.
 
+An additional argument will be introduced `bool force_float`.
+In PHP 8.4 this will default to `force_float=true` to keep current behavior but the new behavior can already be used by passing `force_float=false`.
+In PHP 9.0 the default will change to `force_float=true` to get the new behavior by default but the previous behavior can be forced with `force_float=true`.
+
+
 The behavior will be as follows:
 <code>
-ceil(float): float
-floor(float): float
-round(float): float
+// No change, rounding floating point number will keep processing and returning float as it does now
+ceil(float, force_float=false): float
+ceil(float, force_float=true): float
+floor(float, force_float=false): float
+floor(float, force_float=true): float
+round(float, force_float=false): float
+round(float, force_float=true): float
 
-ceil(int): int
-floor(int): int
-round(int, precision: >= 0): int
-round(int, precision: < 0): int|float // implicit cast to float only in case of integer under-/overflow
+// rounding integers with force_float=false will process and return int if possible
+// else with force_float=true it will process on int but cast the result to float to keep previous behavior
+ceil(int, force_float=false): int
+ceil(int, force_float=true): float
+floor(int, force_float=false): int
+floor(int, force_float=true): float
+round(int, precision: >= 0, force_float=false): int
+round(int, precision: < 0, force_float=false): int|float // implicit cast to float only in case of integer under-/overflow
+round(int, force_float=true): float
+
 </code>
 
 This will result in less implicit casts and more precise rounding of integers above 2^53.
 
 The ''int''-type is compatible to ''float'', returning an int instead of a float will still be a number accepted for type-hints of ''int'', ''float'', ''int|float'' or ''mixed'' with strict_types enabled.
-
-Even if the returned type is compatible to the current returned type this is considered a breaking change on high frequently used functions and as such there will be a deprecation phase as described in "Backward Incompatible Changes" below.
 
 As a result PHP will behave more precise on rounding integer values.
 
@@ -55,7 +68,7 @@ function returnFloat($v): float { return $v; }
 var_dump(round(1));
 var_dump(round(1.0));
 var_dump(round(987654321098765432, precision: -3));
-var_dump(round(987654321098765432, precision: -4));
+var_dump(round(987654321098765432, precision: -4)); // integer overflow
 var_dump(takeFloat(round(987654321098765432, precision: -3)));
 var_dump(returnFloat(round(987654321098765432, precision: -3)));
 </code>
@@ -70,21 +83,17 @@ float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 </code>
 
-8.4 behavior (deprecation phase):
+8.4 behavior:
 <code>
-Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(1)
 float(1)
-Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
-Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
-Deprecated: Rounding an int will return an int instead of a float in the future, consider casting argument 'num' to float to keep current behavior.
 float(9.87654321098766E+17)
 </code>
 
-9.0 behavior (Changed behavior):
+9.0 behavior (Changed default behavior):
 <code>
 int(1)
 float(1)
@@ -96,18 +105,14 @@ float(9.87654321098766E+17)
 
 ===== Backward Incompatible Changes =====
 
-A BC break happens on type reporting functions like ''is_float'', ''get_debug_type'', ''gettype'' and strict comparison ''==='' will now report an int. Because of that there will be a deprecation phase so users are able to detect these cases and can act accordingly.
+A BC break happens on type reporting functions like ''is_float'', ''get_debug_type'', ''gettype'' and strict comparison ''==='' will now report an int on rounding integers by default.
 
-As such PHP 8.4 will report a deprecation message in case ''round'', ''ceil'' and ''floor'' would return an int. For as long as the deprecation phase the resulting int gets casted back to ''float'' before return.
-
-The old implicit behavior can be forced by explicitly casting the value ''round((float)$num)''. This does not trigger a deprecation message and will not change behavior after the deprecation phase.
-
-In PHP 9.0 the new behavior on rounding integers will be in place without further messages.
+The old behavior can be forced by explicitly passing `force_float=true` argument or by explicitly casting the result back to float ''(float)round($num)''.
 
 
 ===== Proposed PHP Version(s) =====
-  * Add deprecation message in PHP 8.next
-  * Change behavior as described in next major version.
+  * Introduce new argument `force_float=true` in PHP 8.next
+  * Change default to `force_float=false` as described in PHP 9.
 
 ===== RFC Impact =====
 ==== To SAPIs ====
@@ -117,9 +122,7 @@ none
 none
 
 ==== To Opcache ====
-It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
-
-Please explain how you have verified your RFC's compatibility with opcache.
+none
 
 ==== New Constants ====
 none
@@ -134,7 +137,8 @@ Make sure there are no open issues when the vote starts!
 Rounding floating point numbers will not be effected in any way.
 
 ===== Future Scope =====
-This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+After PHP 9 it can be considered to deprecate and remove the `force_float` argument again but due to very long future this is not part of this RFC.
+
 
 ===== Proposed Voting Choices =====
 One primary vote (requires 2/3 majority): Round on int and return int? 
@@ -160,9 +164,5 @@ After the project is implemented, this section should contain
 
 PHP is a loosely typed langue and as such it's extremely uncommon to have to call different rounding functions for rounding ''int'' vs. ''float''.
 Also the normal ''round'' already does the trick and mostly you won't know better until you get bitten by floating point.
-
-=== Add function argument ===
-
-Same as "Add new function" PHP is a loosely typed langue and as such it's extremely uncommon to have to define different arguments for ''int'' vs. ''float''.
 
 
