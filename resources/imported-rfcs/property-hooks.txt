@@ -210,11 +210,13 @@ This RFC applies to object properties only, not static properties.  Static prope
 
 For a property to use a hook, it must replace its trailing '';'' with a code block denoted by ''{ }''.  Inside the block are one or more hook implementations, for which the order is explicitly irrelevant.  It is a compile error to have an empty hook block.
 
-The ''get'' and ''set'' hooks override the PHP default read and write behavior.  They may be implemented individually or together.  Within each hook, the "unfiltered" value of the property is available as <php>$this->propertyName</php>.  Outside of the hook, <php>$this->propertyName</php> calls will still go through the relevant hook.
+The ''get'' and ''set'' hooks override the PHP default read and write behavior.  They may be implemented individually or together.  When a hook is called, inside that hook or any subsequent method calls it makes <php>$this->propertyName</php> will refer to the "unfiltered" value of the property.  When accessed outside of the hook, <php>$this->propertyName</php> calls will still go through the relevant hook.
+
+This is enforced at runtime based on the call stack so if a ''get'' hook for property <php>$foo</php> calls method <php>bar()</php>, then inside that method <php>$this->foo</php> will refer to the raw property.  If <php>bar()</php> is called from somewhere other than the hook, reading from <php>$this->foo</php> will trigger the ''get'' hook.  This behavior is identical to that already used by <php>__get</php> and <php>__set</php> today.
 
 A normal property has a stored "backing value" that is part of the object, and part of the memory layout of the class.  However, if a property has at least one hook, and none of them make use of <php>$this->propertyName</php>, then no backing value will be created and there will be no data stored in the object automatically (just as if there were no property, just methods).  Such properties are known as "virtual properties," as they have no materialized stored value.
 
-Be aware, the detection logic works on <php>$this->propertyName</php> directly, not on dynamic forms of it like <php>$prop = 'beep'; $this->$prop</php>.  That will not trigger a backing value.
+Be aware, the detection logic works on <php>$this->propertyName</php> directly at compile time, not on dynamic forms of it like <php>$prop = 'beep'; $this->$prop</php>.  That will not trigger a backing value.
 
 ==== get ====
 
