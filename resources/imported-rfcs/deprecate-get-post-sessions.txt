@@ -1,0 +1,64 @@
+====== PHP RFC: Deprecate GET/POST sessions ======
+
+  * Version: 0.1
+  * Date: 2024-03-03
+  * Authors: Kamil Tekiela <dharman@php.net>
+  * Status: Discussion
+  * Target Version: PHP 8.4
+  * Implementation: https://github.com/php/php-src/pull/13578
+
+===== Introduction =====
+
+PHP supports two ways to propagate session token ID: via cookies and through GET or POST parameters. Cookies are the default preferred method that has become the de facto standard way of doing it. Using URL parameters and hidden form input fields has many drawbacks, both in terms of security and usability, but since cookies may not always be available, PHP provides that as an alternative option. [[https://www.php.net/manual/en/session.idpassing.php|PHP documentation on passing session ID]]
+
+To ease the implementation of this fallback mechanism, a feature called <php>use_trans_sid</php> is available which will automatically transform all relative URLs to include the session token ID. This way, if cookies are not enabled then PHP can seamlessly switch over to using URL parameters. 
+
+Using GET/POST to propagate session identifiers is generally considered a bad practice. For example, see [[https://security.stackexchange.com/q/14093/188415|Why is passing the session id as URL parameter insecure?]]
+
+===== Proposal =====
+
+The proposal is to deprecate both features: initialization of session from identifier received via GET/POST, and automatic transformation of URLs in the script's output. 
+
+However, we should not deprecate these INI settings completely. It's estimated that the vast majority of PHP installations have both of these features disabled (either consciously or by default) in their INI files. Thus the deprecation will only apply to setups which have either of these INI settings enabled. 
+
+Setups that use default settings, such as the following, will NOT trigger a deprecation warning:
+
+
+  session.use_cookies=On
+  session.use_only_cookies=On
+  session.use_trans_sid=Off
+
+
+Installations that have either of these switches in a different position will generate a deprecation warning:
+
+  session.use_cookies=Off ; Will generate a deprecation warning
+  session.use_only_cookies=Off ; Will generate a deprecation warning
+  session.use_trans_sid=On ; Will generate a deprecation warning
+
+
+The goal is to remove these features completely in PHP 9.0. The above INI entries will be removed, as well as additional entries called <php>session.trans_sid_tags</php>, <php>session.trans_sid_hosts</php> and <php>session.referer_check</php>. The constant <php>SID</php> will also be removed.
+
+===== Backward Incompatible Changes =====
+
+Apart from generating a deprecation notice, no other immediate backward incompatible changes are foreseen. However, once these settings get removed in the next major PHP version, using any of the INI settings will become impossible. 
+
+Using automatic transformation of URLs will not be possible out of the box. To keep using this feature, PHP users will have to implement it in userland. While PHP will not read the session token from GET/POST parameters automatically anymore, it will remain possible to start a session with an ID received in such a way by manually setting it via <php>session_id()</php>
+
+===== Version =====
+
+Deprecation in the next minor version, PHP 8.4.
+
+Removal in PHP 9.0. 
+
+===== Vote =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on _ and will end on _.
+ 
+<doodle title="Accept Deprecate GET/POST session identifiers" auth="dharman" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+
