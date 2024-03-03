@@ -1,299 +1,207 @@
-Deprecate Dynamic Properties
-============================
+Deprecate Implicitly Nullable Parameter Types
+=============================================
 
 :PHP-RFC: 0833
-:Title: Deprecate Dynamic Properties
-:Author: Nikita Popov <nikic@php.net>
-:Status: Implemented
+:Title: Deprecate Implicitly Nullable Parameter Types
+:Author: Máté Kocsis <kocsismate@php.net>, Gina Peter Banyard <girgias@php.net>
+:Status: Voting
 :Type: Standards Track
-:Created: 2021-08-23
-:PHP-Version: 8.2
-:Version: 1.0
+:Created: 2023-12-20
+:PHP-Version: 8.4
+:Version: 0.2
 
 Introduction
 ------------
 
-When writing to a property that has not been declared, PHP will silently
-create a dynamic property instead. In modern code, this is rarely done
-intentionally. This RFC proposes to deprecate and later remove the
-creation of dynamic properties, unless the class explicitly allows
-dynamic properties. stdClass and \__get/__set are not affected by this
-change.
+PHP supports nullable type declarations as of PHP 7.1 with the `?T
+syntax </rfc/nullable_types>`__, and with the `T|null
+syntax </rfc/union_types_v2>`__ as of PHP 8.0 when generalized support
+for union types was added.
+
+However, it has been possible to use `scalar type
+declarations </rfc/scalar_type_hints_v5>`__ as of PHP 7.0, the `callable
+type </rfc/callable>`__ as of PHP 5.4, ``array`` as of PHP 5.1, and
+class types as of PHP 5.0.
+
+As there wasn't a syntax for nullable type declarations at the time, PHP
+5.1 enabled using ``null`` (and only ``null``) as a default value for
+typed parameters, making them implicitly nullable.
+
+However, the implicitly nullable semantics are confusing and conflict
+with other language rules, in particular because such type declarations
+can be misleading as to what types they actually accept.
+
+Furthermore, this syntax still permits signatures such as:
 
 .. code:: php
 
-   class User {
-       public $name;
-   }
+   function foo(T1 $a, T2 $b = null, T3 $c) {}
 
-   $user = new User;
+which appears to suggest an optional parameter before a required one.
+Even though signatures which contain an optional parameter before a
+required one were `deprecated in PHP
+8.0 <https://github.com/php/php-src/pull/5067>`__, the case of
+implicitly nullable types was left alone at that time due to BC
+concerns. This exclusion caused some bugs in the detection of which
+signatures should emit the deprecation notice. Indeed, the following
+signature only emits a deprecation as of `PHP
+8.1 <https://github.com/php/php-src/commit/c939bd2f10b41bced49eb5bf12d48c3cf64f984a>`__:
 
-   // Assigns declared property User::$name.
-   $user->name = "foo";
+.. code:: php
 
-   // Oops, a typo:
-   $user->nane = "foo";
-   // PHP <= 8.1: Silently creates dynamic $user->nane property.
-   // PHP    8.2: Raises deprecation warning, still creates dynamic property.
-   // PHP    9.0: Throws Error exception.
+   function bar(T1 $a, ?T2 $b = null, T3 $c) {}
 
-"Dynamic property" here refers to a property that has not been declared
-in the class. It has no relation to the access style (e.g.
-``$user->{'na' . 'me'}`` is still an access to a declared property).
+And the signature that uses the generalized union type signature:
 
-Motivation
-~~~~~~~~~~
+.. code:: php
 
-The motivation for this change is twofold: To prevent mistakes (due to
-typos or renames) in the common case, and to make intentional uses
-explicit. The core problem is that reading from a non-existing property
-issues a diagnostic that makes the issue immediately apparent, while
-writing to a non-existing property is entirely silent. PHP gives no
-indication whatsoever that the programmer has made a mistake.
+   function test(T1 $a, T2|null $b = null, T3 $c) {}
 
-A common counter-argument is that even if PHP itself does not detect the
-mistake, static analysis still can. While this is true to a degree,
-there are a number of problems:
+only emits the deprecation notice properly as of `PHP
+8.3 <https://github.com/php/php-src/pull/11497>`__.
 
-#. Static analysis in IDEs (probably the most widespread type of static
-   analysis used in PHP) has to be conservative about diagnostics
-   relating to dynamic properties. For example, PhpStorm treats creation
-   of dynamic properties as only a weak warning (non-intrusive grey
-   underline), because it cannot distinguish whether this dynamic
-   property assignment is indeed a bug, or an intentional use. Treating
-   dynamic property creation as a more severe error would result in
-   false positives in cases where dynamic properties are used
-   intentionally. The ``#[AllowDynamicProperties]`` attribute proposed
-   in this RFC makes the cases where dynamic properties are used
-   intentionally explicit. This means that static analysis tooling can
-   both a) suppress any diagnostic in explicitly allowed cases and b)
-   report a hard error in all other cases, without producing any false
-   positives.
-#. Static analysis can only analyze assignments with a known object type
-   and property name. This does not include any kind of dynamic
-   assignments, such as those that may be performed by a serializer,
-   hydrator or any other mechanism that directly populates objects
-   without going through a constructor. Static analysis also requires a
-   fully-typed codebase, as the actually assigned property may otherwise
-   not be known.
-#. On a more philosophical note, I believe that a programming language
-   should be usable without external tooling. While IDE use is
-   widespread among PHP programmers, it should still be possible to
-   write PHP code in a text editor like vim without exposing you to
-   silent bug classes.
+It should be noted that the example signatures above were deprecated
+prior to the introduction of `named parameters </rfc/named_params>`__,
+which actually allowed calls to such functions in 8.0, but this was
+`corrected in PHP
+8.1 <https://github.com/php/php-src/commit/afc4d67c8b4e02a985a4cd27b8e79b343eb3c0ad>`__.
+[1]
 
-Finally, if classes using dynamic properties are explicitly declared,
-then we no longer need to reserve space for them on each object. This
-would reduce the size of all objects (that don't opt-in to dynamic
-properties) by 8 bytes. However, this is a fairly long-term benefit that
-will require additional technical work to realize.
+Therefore, as of PHP 8.1, any parameter that has a default value prior
+to a required one is effectively a required parameter, and will throw an
+``ArgumentCountError`` exception if the parameter is not provided, be
+that positionally or via a named argument. In consequence, support for
+implicitly nullable types already causes confusion about what should be
+permitted and what should not.
+
+Another issue with implicitly nullable types is in relation to
+inheritance. It is rather confusing that if a child class has the exact
+same type signature as the parent, but a different default value, this
+would cause an LSP violation error to be thrown.
+
+It should be noted, that prior to PHP 7.1 it was *actually* possible to
+violate the LSP by changing the default value away from ``null``. This
+was fixed as part of the introduction of `nullable
+types </rfc/nullable_types>`__.
+
+As demonstrated, supporting this "feature" not only causes confusion for
+userland, but is also a source of bugs and unneeded complexity within
+the engine which needs to handle its edge cases (e.g. to promote an
+implicitly nullable intersection type to a DNF type).
+
+Implicitly nullable types were added to work around the limitations of
+PHP 5's primitive type declaration system; as those limitations do not
+exist anymore, we propose to deprecate this feature.
 
 Proposal
 --------
 
-The creation of dynamic properties on classes that aren't marked with
-the ``#[AllowDynamicProperties]`` attribute is deprecated in PHP 8.2 and
-becomes an Error exception in PHP 9.0. All used properties should be
-declared in the class declaration.
+Deprecate implicitly nullable types which are written with the following
+signature:
 
 .. code:: php
 
-   class Foo {}
-   $foo = new Foo;
+   function foo(T $var = null) {}
 
-   // Deprecated: Creation of dynamic property Foo::$bar is deprecated
-   $foo->bar = 1;
-
-   // No deprecation warning: Dynamic property already exists.
-   $foo->bar = 2;
-
-Classes marked with ``#[AllowDynamicProperties]`` as well as their
-children can continue using dynamic properties without deprecation or
-removal. The only bundled class marked as ``#[AllowDynamicProperties]``
-is ``stdClass``.
+by emitting the following deprecation notice at compile time:
 
 .. code:: php
 
-   $obj = (object) []; // = new stdClass;
+   Deprecated: Implicitly marking parameter $var as nullable is deprecated, the explicit nullable type must be used instead
 
-   // No deprecation warning
-   $obj->foo = 1;
-
-   #[AllowDynamicProperties]
-   class Test {}
-   class Test2 extends Test {}
-
-   // No deprecation warning
-   $obj = new Test;
-   $obj->bar = 1;
-
-   // No deprecation warning
-   $obj = new Test2;
-   $obj->bar = 1;
-
-It should be noted that properties accessed through
-``__get()``/``__set()`` are not considered as "dynamic properties". The
-following example does not generate any deprecation warnings:
-
-.. code:: php
-
-   class ArrayLikeObject {
-       private array $data = [];
-       public function &__get($name) { return $this->data[$name]; }
-       public function __isset($name, $value) { return isset($this->data[$name]; }
-       public function __set($name, $value) { $this->data[$name] = $value; }
-       public function __unset($name) { unset($this->data[$name]; }
-   }
-
-   $obj = new ArrayLikeObject;
-
-   // Calls ArrayLikeObject::__set(), no deprecation warning.
-   $obj->foo = 1;
+And remove support for implicitly nullable types in PHP 9.
 
 Backward Incompatible Changes
 -----------------------------
 
-Removing support for dynamic properties constitutes a significant
-backwards compatibility break. While modern PHP code consistently
-declares used properties, this is not necessarily the case for legacy
-code. When encountered with a dynamic property deprecation warning,
-there are a number of things that can be done to avoid it.
+Using an implicitly nullable type will emit a deprecation notice.
 
-The simplest and most common would be to simply add the property
-declaration:
+Impact analysis and migration paths
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Out of the top 2000 composer packages 880 use implicitly nullable types.
+[2] One explanation for such a high usage is that using implicitly
+nullable types was mandated by Symfony's coding style.
+
+However, there exist a variety of tools to automatically update code to
+use explicit nullable types from the ``T $parameter = null`` syntax to
+``?T $parameter = null``. And Symfony used one of them to migrate their
+codebase, and change their coding style, in anticipation of this RFC.
+[3]
+
+Two such tools are
+`PHP-CS-Fixer <https://github.com/PHP-CS-Fixer/PHP-CS-Fixer>`__ with the
+``nullable_type_declaration_for_default_null_value`` fixer, and
+`PHP_CodeSniffer <https://github.com/PHPCSStandards/PHP_CodeSniffer/>`__
+using the
+``SlevomatCodingStandard.TypeHints.NullableTypeForNullDefaultValue``
+sniff from the `Slevomat Coding
+Standard <https://github.com/slevomat/coding-standard>`__.
+
+It should be noted that it is possible to ignore the commit which fixes
+these issues from the ``git blame`` command since git version 2.23 via
+the ``--ignore-rev`` argument flag or the creation of a
+``.git-blame-ignore-revs`` file which is passed to the
+``--ignore-revs-file`` argument flag.
+
+This flag can also be automatically configured using:
+
+::
+
+   shell
+   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+One other issue which might be revealed when converting implicitly
+nullable types to explicit ones without removing the default ``null``
+value, is that an optional parameter might now exist before a mandatory
+one. Which will cause a secondary deprecation notice as this was
+`deprecated in PHP 8.0 <https://github.com/php/php-src/pull/5067>`__ as
+previously mentioned.
+
+As the ``?T`` syntax has existed since PHP 7.1, which is 7 years old,
+the various tools available to fix this issue automatically, and this
+issue being easily resolved as it requires a single change at the
+declaration site (instead of potentially infinite call-site changes), we
+deem this deprecation to be easily handled and fixed.
+
+Code change examples
+~~~~~~~~~~~~~~~~~~~~
+
+The following example:
 
 .. code:: php
 
-   class Test {
-       public $value; // <-- Add property declaration.
-
-       public function __construct($value) {
-           $this->value = $value;
+   class Foo {
+       public function bar(int $x = null, float $y) {
+           // ...
        }
    }
 
-For classes that intentionally don't have a fixed set of properties,
-it's possible to either implement magic ``__get()``/``__set()`` or mark
-the class using the ``#[AllowDynamicProperties]`` attribute. Marking a
-class with ``#[AllowDynamicProperties]`` is fully backwards-compatible
-with earlier PHP versions, because prior to PHP 8.0 this would be
-interpreted as a comment, and the use non-existent classes as attributes
-is not an error.
-
-In some cases it is desirable to associate information with objects that
-you do not own. Previously, it was possible to add a dynamic property
-for this purpose. Instead, a ``WeakMap`` should be used to store the
-information in a non-intrusive way:
+should end up looking like:
 
 .. code:: php
 
-   class Test {
-       private WeakMap $extraInfo;
-
-       public function addExtraInfo(object $obj) {
-           // Instead of:
-           $obj->extraInfo = ...;
-           // Use:
-           $this->extraInfo[$obj] = ...;
+   class Foo {
+       public function bar(?int $x, float $y) {
+           // ...
        }
    }
 
-In rare cases, dynamic properties are used for lazy initialization. For
-example Symfony's
-`Constraint::$groups <https://github.com/symfony/symfony/blob/6.0/src/Symfony/Component/Validator/Constraint.php>`__
-property is not declared and then dynamically created inside
-``__get()``. This use-case can be accommodated by declaring the
-property, but then unsetting it in the constructor:
+Version
+-------
 
-.. code:: php
-
-   abstract class Constraint {
-       public $groups;
-
-       public function __construct() {
-           unset($this->groups);
-       }
-
-       public function __get($name) {
-           // Will get called on first access, but once initialized.
-           $this->groups = ...;
-       }
-   }
-
-A declared property that has been unset remains a declared property, and
-will not result in a dynamic property when it is reinitialized.
-
-Discussion
-----------
-
-Alternative opt-in to dynamic properties
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-This RFC offers ``#[AllowDynamicProperties]`` as a way to opt-in to the
-use of dynamic properties. A previous version of this proposal instead
-suggested to extend from ``stdClass``, and make ``stdClass`` the only
-class with first-class dynamic property support.
-
-The difference between these approaches is in the end goal:
-``#[AllowDynamicProperties]`` requires making classes that rely on
-dynamic properties explicit and prevents accidental use of dynamic
-properties. This is a big win for the ecosystem, but it does not have
-much effect on the overall complexity of the language or implementation,
-as dynamic properties still need to be supported on arbitrary classes.
-Requiring an extension of ``stdClass`` would allow us to actually remove
-the "dynamic properties" concept from the language in the future:
-``stdClass`` would effectively just provide very optimized
-implementations of ``__get()`` and ``__set()``.
-
-While completely removing dynamic properties is a worthwhile end goal,
-we also need to acknowledge that dynamic properties have played an
-important historical role in PHP, and legacy codebases in particular may
-be making heavy use of them. While adding an attribute provides a
-straightforward upgrade path, extending ``stdClass`` may not always be
-easily possible due to lack of multiple inheritance support. For this
-reason, this RFC pursues the more conservative attribute-based approach.
-
-We may still wish to remove dynamic properties entirely at some later
-point. Having the ``#[AllowDynamicProperties]`` attribute will make it
-much easier to evaluate such a move, as it will be easier to analyze how
-much and in what way dynamic properties are used in the ecosystem.
-
-Opt-out of dynamic properties instead
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The `Locked classes RFC </rfc/locked-classes>`__ took an alternative
-approach to this problem space: Rather than deprecating/removing dynamic
-properties and providing an opt-in for specific classes, it instead
-allowed marking specific classes as ``locked`` in order to forbid
-creation of dynamic properties on them.
-
-I don't believe that this is the right strategy, because in contemporary
-code, classes being "locked" is the default state, while classes that
-require dynamic properties are a rare exception. Additionally, this
-requires that class owners (which may be 3rd party packages)
-consistently add the "locked" keyword to be effective.
-
-An alternative that has been discussed in the context of the `language
-evolution
-proposal <https://github.com/nikic/php-rfcs/blob/language-evolution/rfcs/0000-language-evolution.md#forbidding-dynamic-object-properties>`__
-is to instead disallow the use of dynamic properties in a file through a
-declare directive (whether that be a fine-grained option or an "edition"
-mechanism). This does not require the cooperation of 3rd-party
-libraries.
-
-However, based on the discussion on the language evolution proposal,
-this would only delay the time where disallowed dynamic properties
-become the default and only behavior, as there was a strong consensus
-that diverging language behavior should not be maintained indefinitely.
-Dynamic properties would ultimately still get deprecated and removed.
+Next minor version, PHP 8.4.
 
 Vote
 ----
 
-Voting started 2021-11-12 and ended 2021-11-26.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Question: Deprecate dynamic property creation with #[AllowDynamicProperties] opt-in?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Voting started on 2024-02-28 and will end on 2024-03-13.
+
+Question: Accept Deprecate implicitly nullable parameter types RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -301,11 +209,20 @@ Voting Choices
 -  Yes
 -  No
 
+References
+----------
+
+[1] https://externals.io/message/114007#114026
+
+[2] https://gist.github.com/kocsismate/cf3bdfbf35eb10224ee5ecd29b39656b
+
+[3] https://github.com/symfony/symfony/pull/53612
+
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/7571
-:Original Authors: Nikita Popov nikic@php.net
-:Original PHP Version: PHP 8.2
-:Slug: deprecate_dynamic_properties
-:Wiki URL: https://wiki.php.net/rfc/deprecate_dynamic_properties
+:Implementation: https://github.com/php/php-src/pull/12959
+:Original Authors: Máté Kocsis kocsismate@php.net, Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Slug: deprecate-implicitly-nullable-types
+:Wiki URL: https://wiki.php.net/rfc/deprecate-implicitly-nullable-types
