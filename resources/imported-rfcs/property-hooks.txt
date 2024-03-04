@@ -479,7 +479,9 @@ class Person {
 
 Because the presence of hooks intercept the read and write process for properties, they cause issues when acquiring a reference to a property or with indirect modification (such as ''$this->arrayProp['key'] = 'value';'').
 
-For that reason, the presence of any hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
+That is because any attempted modification of the value by reference would bypass a ''set'' hook, if one is defined.  If there is no ''set'' hook, however, there is nothing to bypass, so returning by reference is generally not problematic.
+
+For that reason, the presence of a ''set'' hook must necessarily also disallow acquiring a reference to a property or indirect modification on a property.
 
 For example:
 
@@ -505,11 +507,37 @@ $foo->bar = &$x;
 $foo->baz = &$x;
 </PHP>
 
-For the vast majority of properties this causes no issue, as reading or writing to properties by reference is extremely rare.  However, there are some edge cases where references to properties are necessary.  Arguably, the lack of support for references would technically make adding hooks to a property a nominal BC break for that class, but property references are so rare that we consider it acceptable, especially with the addition below.
+For a property with only a ''get'' hook, it is possible to safely obtain a reference.  To do so, prefix the hook name with <php>&</php>:
 
-There is one exception to the above: if a property is virtual, then there is no presumed connection between the get and set operations.  Since the <php>set</php> hook couldn't be expected to update-in-place anyway, we have chosen to allow references to be opt-in for the <php>get</php> hook on virtual properties, only.  To do so, the <php>get</php> hook may be prefixed with <php>&</php>, which will cause it to return a reference to whatever its body returns, rather than the value itself.  Subsequent writes to that reference will not trigger the <php>set</php> hook.
+<PHP>
+class Foo
+{
+    public string $baz {
+        &get {
+          if ((!isset($this->baz)) {
+            $this->baz = $this->computeBaz();
+          }
+          return $baz;
+        }
+    }
+}
 
-That means the following is allowed:
+$foo = new Foo();
+
+// This triggers the get hook, which lazily computes and caches the string.
+// It then returns it by reference.
+print $foo->baz;
+
+// This obtains a reference to the baz property.
+$temp = $foo->baz;
+
+// $foo->baz is updated to "update".
+$temp = 'update';
+</PHP>
+
+For the vast majority of properties this causes no issue, as reading or writing to properties by reference is extremely rare.  However, there are some edge cases where references to properties are necessary.  Arguably, the lack of support for references would technically make adding hooks to a property a nominal BC break for that class, but property references are so rare (especially public references) that we consider it acceptable, especially with the addition below.
+
+There is one exception to the above: if a property is virtual, then there is no presumed connection between the get and set operations.  Since the <php>set</php> hook couldn't be expected to update-in-place anyway, the issue of bypassing a write isn't relevant.  Additionally, it is unlikely that the ''get'' operation will return a reference to a property of the object to begin with.  For that reason, ''&get'' by reference is allowed for virtual properties, regardless of whether or not there is a ''set'' hook.  
 
 <PHP>
 class Foo
@@ -523,7 +551,7 @@ class Foo
         }
     }
 }
- 
+
 $foo = new Foo();
 
 // This invokes "set", and sets $_baz to "BEEP".
@@ -536,7 +564,9 @@ $x =& $foo->baz;
 $x = 'boop';
 </PHP>
 
-Setting by reference, however, is not supported, as its semantics are not well-defined.  This behavior mirrors how the magic methods <php>__get()</php> and <php>__set()</php> handle references.  (They are, in a sense, generic virtual properties.)
+Setting by reference, however, is not supported, as its semantics are not well-defined.
+
+This behavior mirrors how the magic methods <php>__get()</php> and <php>__set()</php> handle references.  (They are, in a sense, generic virtual properties.)
 
 Additionally, iterating an object's properties by reference will throw an error if any of the properties have hooks defined.
 
