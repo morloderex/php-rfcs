@@ -1281,6 +1281,25 @@ The proper solution for this problem is to update the engine to differentate bet
 
 A future RFC that makes that engine change and then enables an optional return-to-set feature for set hooks is certainly possible, and the authors would support that.  It would have no BC breakage for the hooks feature itself.  
 
+==== Assignment by reference ====
+
+This RFC does not support assign-by-reference for hooked properties.  That is a very rare edge case, and the current dynamic-property mechanism (<php>__set</php>) doesn't support it either, so it is no great loss, even though there is, technically, a very small potential for breakage if someone is trying to write to a public property of another class, and that class's author changes it to add hooks.  (We are not aware of any cases of this in the wild.)
+
+It may be possible to allow assign-by-ref in the future, though it would be rather involved, which is why it has been left out of this RFC.  We are, however, documenting the moving parts involved for future reference.
+
+Assigning by reference involves a couple of steps:
+
+  * If the value to be assigned (right side of a <php>=&</php> operation) is not already a reference, wrap it into a reference.
+  * Assign that (possibly newly created) reference value to the variable specified on the left side of the operator.
+  * The result is the left-side variable is now a reference to some pre-existing value, as are any other references that already exist (and increments refcounts as appropriate).
+  * If the left-side variable was previously a reference already, the previous reference is lost (and refcounts decremented as appropriate).
+
+To support assign-by-ref, we would need to differentiate between an incoming value and incoming reference, as the presence of a ''set'' hook means we could not do the "wrap if it's not already" logic that a normal reference assignment does (as it would need to happen inside the hook body in user space).  There are two options: One would be to make the parameter to ''set'' by-reference, and provide a boolean flag to indicate if the method body should save it by reference or not.  This seems quite ugly and error prone.
+
+The other would be to introduce a by-ref version of set (potentially named ''setref'' or ''bindref'', though that is by now means locked in) that would get called instead, should the engine encounter <php>$foo->hookedProperty =? $var</php>.  If no ''set'' hook is defined on a backed property (but not virtual), it MAY be possible to automate the default behavior, but that would have to be determined at that time.
+
+Again, this is a very small edge case so we have opted to not address it now.  Such a change could be made in a BC-friendly way in a future RFC.
+
 ===== Proposed Voting Choices =====
 
 This is a simple yes-or-no vote to include this feature. 2/3 majority required to pass. 
