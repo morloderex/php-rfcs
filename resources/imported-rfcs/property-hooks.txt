@@ -872,6 +872,8 @@ class C2 implements I
 
 Interfaces are only concerned with public access, so the presence of non-public properties is both unaffected by an interface and cannot satisfy an interface.  This is the same relationship as for methods.  The ''public'' keyword on the property is required for syntax consistency, but other visibilities are not supported, nor is the long-deprecated ''var''.
 
+An interface may not specify if the ''get'' hook should return by reference.  A class may satisfy a ''get'' requirement with either a by-val or by-ref ''get'' method, as appropriate.
+
 We have deliberately chosen to not support <php>public string $foo</php> in interfaces, without specifying the required hooks.  That is because the most common use case would be a get-only property, but it's unclear if undefined hooks should mean "get only" or "get and set".  It may also imply that the property may be referenced, which may not be the case depending on the implementing class.  To avoid ambiguity, the expected operations must be specified explicitly.
 
 Of note, an interface property that only requires <php>get</php> may be satisfied by a public <php>readonly</php> property, as the restrictions of <php>readonly</php> only apply on write.  However, an interface property that requires <php>set</php> is incompatible with a <php>readonly</php> property, as public-write would be disallowed.
@@ -1208,6 +1210,28 @@ The larger issue is that <php>parent::$x</php> can't be just a stand-in for the 
 So we have the choice between making <php>$a = parent::$prop</php> and <php>parent::$prop = $a</php> work, but *nothing else*, inexplicably (creating confusion) or the slightly longer syntax of <php>$a = parent::$prop::get()</php> and <php>parent::$prop::set($a)</php> that wouldn't support those other operations anyway so there's no confusion.
 
 We feel the current approach is the better trade off, but if the consensus generally is for the shorter-but-inconsistent syntax, that can be changed.
+
+==== Why no explicit "virtual" flag? ====
+
+One change that was suggested was to require virtual properties to be marked with a ''virtual'' keyword or similar, rather than relying on auto-detecting if a property should be backed.  We considered this approach, and it has its merits for explicitness, but on further investigation determined that it would not be feasiable due to inheritance.  
+
+Specifically, for implementation reasons if a child class extends a parent with a backed property and provides hooks that do not use the backing value, the class still has a masked property on it.  Conversely, if a parent class has a virtual property a child class may override it and use a backing value, which will then be created.  Essentially, a property is "backed" (as far as the engine is concerned) if any class in its hierarchy is backed.
+
+That would mean, however, that the ''virtual'' keyword is unreliable, as a parent or child class could trigger different behavior.  Consider:
+
+<PHP>
+class P {
+    public virtual $prop { get => ...; set { ... }; }
+}
+
+class C extends P {
+    public virtual $prop { get => strtoupper(parent::$prop::get()); }
+}
+</PHP>
+
+In this case, <php>C::$prop</php> is marked as virtual, because it technically does not read from a backing store itself.  However, if <php>P::$prop</php> is not-virtual, that means the ''virtual'' declaration on ''C'' is technically wrong, as there is a backing value named <php>$prop</php>.  If <php>P::$prop</php> changes between virtual and non, this could end up being a BC break.
+
+While there are ways that the engine could be made to handle that scenario without crashing, the syntax would still be confusing to the user.  We therefore believe that the current approach of "if <php>$this->prop</php> is used, it's backed" is simpler for the user in practice, less misleading, and easier for the engine.
 
 ===== Usage examples =====
 
