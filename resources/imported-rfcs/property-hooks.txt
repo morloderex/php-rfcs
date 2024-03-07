@@ -1209,6 +1209,28 @@ So we have the choice between making <php>$a = parent::$prop</php> and <php>pare
 
 We feel the current approach is the better trade off, but if the consensus generally is for the shorter-but-inconsistent syntax, that can be changed.
 
+==== Why no explicit "virtual" flag? ====
+
+One change that was suggested was to require virtual properties to be marked with a ''virtual'' keyword or similar, rather than relying on auto-detecting if a property should be backed.  We considered this approach, and it has its merits for explicitness, but on further investigation determined that it would not be feasiable due to inheritance.  
+
+Specifically, for implementation reasons if a child class extends a parent with a backed property and provides hooks that do not use the backing value, the class still has a masked property on it.  Conversely, if a parent class has a virtual property a child class may override it and use a backing value, which will then be created.  Essentially, a property is "backed" (as far as the engine is concerned) if any class in its hierarchy is backed.
+
+That would mean, however, that the ''virtual'' keyword is unreliable, as a parent or child class could trigger different behavior.  Consider:
+
+<PHP>
+class P {
+    public virtual $prop { get => ...; set { ... }; }
+}
+
+class C extends P {
+    public virtual $prop { get => strtoupper(parent::$prop::get()); }
+}
+</PHP>
+
+In this case, <php>C::$prop</php> is marked as virtual, because it technically does not read from a backing store itself.  However, if <php>P::$prop</php> is not-virtual, that means the ''virtual'' declaration on ''C'' is technically wrong, as there is a backing value named <php>$prop</php>.  If <php>P::$prop</php> changes between virtual and non, this could end up being a BC break.
+
+While there are ways that the engine could be made to handle that scenario without crashing, the syntax would still be confusing to the user.  We therefore believe that the current approach of "if <php>$this->prop</php> is used, it's backed" is simpler for the user in practice, less misleading, and easier for the engine.
+
 ===== Usage examples =====
 
 We have collected a series of examples that show what we expect to be typical hook usage.  (Or, arguably, the kind of things one could do that wouldn't require adding a method for in case you want to do them in the future.)  It is non-normative, but gives a sense of how hooks can be used to improve a code base (or things that can be added later without needing to create methods "just in case").
