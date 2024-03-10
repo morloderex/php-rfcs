@@ -12,7 +12,7 @@ PHP contains several build-in rounding functions [[https://www.php.net/round|rou
 
 Except ''number_format'' all of these functions take a ''float|int'', do a cast to ''float'', process on floating point number only and finally return a '' float''.
 
-As a result of ''round'', ''ceil'' and ''floor'' you get a floating point number rounded to your needs.
+As a result of ''round'', ''ceil'' and ''floor'' the resulting value will be a floating point number rounded to your needs.
 
 In most cases this is sufficient but in cases of handling integer values above 2^53 you start to end up with unexpected results due to floating point arithmetic and precision loss.
 
@@ -21,11 +21,16 @@ In most cases this is sufficient but in cases of handling integer values above 2
 
 ===== Proposal =====
 
-This RFC proposes to perform rounding on given int and return the resulting int if possible by default.
+This RFC proposes to perform rounding on given int and return a rounded int value if possible by default.
 In case of integer under-/overflow the value will be casted to a float (double) and rounded based on the floating point number as it's done currently.
 
 For ''ceil'', ''floor'' and ''round'' with ''precision >= 0'' this means a given int gets returned as is.
+----
+Rounding a given float will perform rounding on floating point number directly and return float as it's done currently.
+There will be no implicit cast to int because floats (double) can represent a much wider range of numbers than int (32 or 64 bit).
 
+Floating point numbers on the other hand gets imprecise on representing numbers > 2^53 but passing a float to be rounded such imprecision must be known in first place already.
+----
 An additional argument will be introduced ''bool force_float''.
 In PHP 8.next this will default to ''force_float=true'' to keep current behavior but the new behavior can already be used by passing ''force_float=false''.
 In PHP 9.0 the default will change to ''force_float=true'' to get the new behavior by default but the previous behavior can be forced with ''force_float=true''.
@@ -67,6 +72,7 @@ var_dump(round(1));
 var_dump(round(1.0));
 var_dump(round(987654321098765432, precision: -3));
 var_dump(round(987654321098765432, precision: -4)); // integer overflow
+var_dump(round(10000000000000055296)); // input is float
 var_dump(takeFloat(round(987654321098765432, precision: -3)));
 var_dump(returnFloat(round(987654321098765432, precision: -3)));
 
@@ -76,6 +82,7 @@ var_dump(round(1, force_float=true));
 var_dump(round(1.0, force_float=true));
 var_dump(round(987654321098765432, precision: -3, force_float=true));
 var_dump(round(987654321098765432, precision: -4, force_float=true)); // integer overflow
+var_dump(round(10000000000000055296, force_float=true)); // input is float
 var_dump(takeFloat(round(987654321098765432, precision: -3, force_float=true)));
 var_dump(returnFloat(round(987654321098765432, precision: -3, force_float=true)));
 
@@ -85,6 +92,7 @@ var_dump(round(1, force_float=false));
 var_dump(round(1.0, force_float=false));
 var_dump(round(987654321098765432, precision: -3, force_float=false));
 var_dump(round(987654321098765432, precision: -4, force_float=false)); // integer overflow
+var_dump(round(10000000000000055296, force_float=false)); // input is float
 var_dump(takeFloat(round(987654321098765432, precision: -3, force_float=false)));
 var_dump(returnFloat(round(987654321098765432, precision: -3, force_float=false)));
 </code>
@@ -95,6 +103,7 @@ float(1)
 float(1)
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 #########################
@@ -107,6 +116,7 @@ float(1)
 float(1)
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 #########################
@@ -114,6 +124,7 @@ float(1)
 float(1)
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 #########################
@@ -121,6 +132,7 @@ int(1)
 float(1)
 int(987654321098765000)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 </code>
@@ -131,6 +143,7 @@ int(1)
 float(1)
 int(987654321098765000)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 #########################
@@ -138,6 +151,7 @@ float(1)
 float(1)
 float(9.87654321098766E+17)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 #########################
@@ -145,6 +159,7 @@ int(1)
 float(1)
 int(987654321098765000)
 float(9.8765432109877E+17)
+float(1.0000000000000055E+19)
 float(9.87654321098766E+17)
 float(9.87654321098766E+17)
 </code>
