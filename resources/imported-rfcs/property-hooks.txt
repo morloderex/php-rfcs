@@ -589,7 +589,7 @@ Both of these possible approaches also handle only explicit additions and modifi
 
 Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while a ''set'' hook may be applied to array properties attempting to write to a key of a backed array property that has hooks (using ''[]'' or ''['some key']'') will result in a runtime error being thrown.
 
-This restriction does not apply to <php>get</php> operations, as the hook would run to return the whole array, and then dereferencing off of it for an individual key is safe.  Additionally, ''&get'' hooks are allowed for arrays as well, provided there is no ''set'' hook.
+This restriction does not apply to <php>get</php> operations, as the hook would run to return the whole array, and then dereferencing off of it for an individual key is safe.  Additionally, ''&get'' hooks are allowed for arrays as well, provided there is no ''set'' hook, and writing to a key on an array returned by reference is also allowed, provided there is no ''set'' hook. 
 
 To summarize in code:
 
@@ -598,35 +598,94 @@ class C
 {
     private bool $hasChanged = false;
     
-    public array $arr {
-        get => $this->arr + ['extra' => 'stuff'];
+    public array $get {
+        &get {
+          if (empty($this->get)) $this->get['first'] = 1;
+          return $this->get;
+        }
+    }
+
+    public array $getRef {
+        &get {
+          if (empty($this->getRef)) $this->getRef['first'] = 1;
+          return $this->getRef;
+        }
+    }
+
+    public array $hasSet {
+        get => $this->hasSet + ['extra' => 'stuff'];
         set {
             $this->hasChanged = true;
-            $this->arr = $value;
+            $this->hasSet = $value;
         }
     }
 }
 
 $c = new C();
 
+// get-only
+
+// OK, returns the whole array, lazy-initialized.
+print_r($c->get);
+
+// OK; the hook returns the whole array,
+// then the 'beep' key is accessed.
+print $c->get['first'];
+
+// OK.  The entire array is overwritten 
+// like any other public property.
+$c->get = ['new' => 'array'];
+
+// Does not affect the object at all.
+// The array is returned by value, then the local
+// copy is modified, with no connection to the
+// original property.
+$c->get['beep'] = 'boop';
+
+// No-op, for the same reason.
+$c->get[] = 'narf';
+
+// &get only
+
+// OK, returns the whole array, lazy-initialized.
+print_r($c->getRef);
+
+// OK; the hook returns the array by reference,
+// then the 'beep' key is accessed.
+print $c->getRef['first'];
+
+// OK.  The entire array is overwritten 
+// like any other public property.
+$c->getRef = ['new' => 'array'];
+
+// OK, because the write here happens to the
+// array reference returned by the &get method,
+// which then propagates back to the property.
+$c->getRef['beep'] = 'boop';
+
+// OK, for the same reason.
+$c->getRef[] = 'narf';
+
+// with set hook
+
 // OK, returns the whole array,
 // with the extra key on the end.
-print_r($c->arr);
+print_r($c->hasSet);
 
 // OK; the hook returns the array by value,
 // then the 'beep' key is accessed.
-print $c->arr['beep'];
+print $c->hasSet['beep'];
 
 // OK.  The entire array is overwritten,
 // and passed to set as $value to do with
 // as it pleases.
-$c->arr = ['new' => 'array'];
+$c->hasSet = ['new' => 'array'];
 
 // Error.
-$c->arr['beep'] = 'boop';
+$c->hasSet['beep'] = 'boop';
 
 // Error.
-$c->arr[] = 'narf';
+$c->hasSet[] = 'narf';
 </PHP>
 
 This check cannot be done at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be typed as an iterable or mixed, so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
