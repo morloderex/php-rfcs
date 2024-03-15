@@ -532,7 +532,9 @@ $temp =& $foo->baz;
 $temp = 'update';
 </PHP>
 
-A caller may only obtain a reference to a property that has declared ''&get''.  Attempting to get a reference on a ''get'' property will trigger an error.  If it just uses ''get'', then obtaining a reference is not allowed as it would allow any arbitrary code to modify a possibly-private property.  If the property does use ''&get'', it implies the class author is aware of that exposure situation and sees it as a feature, not a bug.  
+A caller may only obtain a reference to a property that has declared ''&get''.  Attempting to get a reference on a ''get'' property will trigger an error.  If it just uses ''get'', then obtaining a reference is not allowed as it would allow any arbitrary code to modify a possibly-private property.  If the property does use ''&get'', it implies the class author is aware of that exposure situation and sees it as a feature, not a bug.
+
+Implementing both ''get'' and ''&get'' simultaneously is a compile error.
 
 There is one exception to the above: if a property is virtual, then there is no presumed connection between the get and set operations.  Since the <php>set</php> hook couldn't be expected to update-in-place anyway, the issue of bypassing a write isn't relevant.  Additionally, it is unlikely that the ''get'' operation will return a reference to a property of the object to begin with.  For that reason, ''&get'' by reference is allowed for virtual properties, regardless of whether or not there is a ''set'' hook.  
 
@@ -580,6 +582,23 @@ To summarize:
       * ''&get''/''set'' - Legal, may assign by reference.
       * ''set'' - Legal, but not particularly useful.
 
+Be aware that a ''&get'' hook may return a value by reference that does not correspond to a property of the object.  This is true for both backed and virtual properties.  In that case, writing to the returned value may not have the expected effect.
+
+<PHP>
+class C {
+    public string $a { 
+        &get { 
+            $b = $this->a;
+            return $b;
+        }
+}
+$c = new C();
+$c->a = 'beep';
+// $c is unchanged.
+</PHP>
+
+This concern is the same as for a ''&getA()'' method, however, so it is not an edge case limited to hooks.
+
 Additionally, iterating an object's properties by reference will throw an error if it encounters a property that has a hook defined.  (It will not error until it reaches that property.)
 
 <PHP>
@@ -594,17 +613,138 @@ foreach ($someObjectWithHooks as $key => &$value) {
 
 ==== Arrays ====
 
-There is an additional caveat regarding <php>array</php> properties.  Assigning a value to an array property consists of obtaining a pointer to that property and modifying it in place without knowledge of whether that array came from a property with hooks. It is also common in some systems to acquire references to arrays and modify them in some other place.  That would, as above, bypass any ''set'' hooks that have been defined.
+There is an additional caveat regarding arrays. Modifications to arrays stored in properties may happen "in-place", meaning without causing a copy of the array. However, there's no way to achieve this behavior with by-value getter and setter methods.
 
-Furthermore, providing a good API for an array modification seems impossible. The simplest approach would be to copy the array, modify it accordingly, and pass it to ''set'' hook. This would have a large and obscure performance penalty, and a ''set'' implementation would have no way of knowing which values had changed, leading to, for instance, code needing to revalidate all elements even if only one has changed.
 
-Another approach might be a separate hook, e.g. ''setOffset(array $keys, $value)'' where $keys is a list of keys (for example, <php>$foo['bar']['baz']</php>). Assuming the user would like to apply the change to the array, they would need to iterate the keys, fetch the offset by-reference, and at the end assign the value to the last reference. This has terrible performance characteristics and is non-trivial to implement for the end-user.
+<PHP>
+class Test {
+    public $array = [];
 
-Both of these possible approaches also handle only explicit additions and modification.  They would not address appending (''[]'') or operations such as ''unset'', which would introduce even more complexity.
+    public function getArray() {
+        echo "getArray()\n";
+        return $this->array;
+    }
 
-Because all API solutions that come to mind are bad it is the opinion of the authors that for arrays, dedicated mutator methods are always the superior API choice.  Therefore, while a ''set'' hook may be applied to array properties attempting to write to a key of a backed array property that has hooks (using ''[]'' or ''['some key']'') will result in a runtime error being thrown.
+    public function setArray($array) {
+        echo "setArray()\n";
+        $this->array = $array;
+    }
+}
 
-This restriction does not apply to <php>get</php> operations, as the hook would run to return the whole array, and then dereferencing off of it for an individual key is safe.  Additionally, ''&get'' hooks are allowed for arrays as well, provided there is no ''set'' hook for a backed property, and writing to a key on an array returned by reference is also allowed.  However, if the returned array is not the backing property, writes to it may not propagate to the object in an expected way.
+$test = new Test();
+
+// This is what we actually want. The array is modified directly, without any performance overhead.
+$test->array[] = 'foo';
+
+// getArray() returns a temporary value, modifying it has no effect. This approach does not work.
+$test->getArray()[] = 'foo';
+
+// Storing the value from getArray() in a temporary variable, modifying it and assigning it back
+// works as expected.  However, there's an implicit copy on line 2, because the array is referenced
+// from both $array and $test->array. The array is copied, just for the copy to immediately
+// overwrite the original value.
+$array = $test->getArray();
+$array[] = 'foo';
+$test->setArray($array); 
+</PHP>
+
+The obvious solution to this is to return from ''getArray'' by reference.
+
+<PHP>
+class Test {
+    // ...
+    public function &getArray() {
+        echo "getArray()\n";
+        return $this->array;
+    }
+    // ...
+}
+
+// Now it works!
+$test->getArray()[] = 'foo';
+</PHP>
+
+However, this comes a significant issue: ''setArray'' expects to observe changes to ''$array'', but to no avail. An in-place array modification consists of calling ''&getArray'' and modifying the array stored in the reference. At no point is ''setArray'' invoked.
+
+These problems exist in the exact same way for hooks.
+
+<PHP>
+class Test {
+    public $array {
+        &get {
+            echo "getArray()\n";
+            return $this->array;
+        }
+        set {
+            echo "setArray()\n";
+            $this->array = $value;
+        }
+    }
+}
+
+$test = new Test();
+// Appending to an array invokes &get and modifies 
+// the array stored in the returned reference, bypassing
+// the set hook entirely.
+$test->array[] = 'foo';
+</PHP>
+
+Two mitigations immediately come to mind, but they each come with significant limitations.
+
+  - We may introduce various hooks for array modification. For example, <php>$test->array[] = 'foo'</php> may invoke an ''offsetAppend'' hook. <php>unset($test->array['foo'])</php> may call an ''offsetUnset'' hook, etc. However, a complete solution is impossible. Imagine <php>sort($test->array)</php>, along with all the other functions that modify the array by-reference. They can make arbitrary changes to the array, which are not directly translatable to a hook.
+  - We may create an implicit copy to the array, and silently pass it back to ''set''. This comes with the aforementioned performance issue. Moreover, assuming a large array is passed to ''set'' containing validation, the `set` hook is burdened with the task of figuring out _what_ in the array has changed, or rechecking it in full.
+
+Neither of these approaches are satisfactory. Because all API solutions that come to mind are bad, it is the opinion of the authors that for arrays, dedicated mutator methods with a narrow contract are always the superior API choice. 
+
+```php
+class Test {
+    public $_array;
+    public $array {
+        get => $this->_array;
+    }
+
+    public function addArray($value) {
+        // We can validate $value, without re-validating the entire array.
+        $this->array[] = $value;
+    }
+}
+
+$test = new Test();
+$test->addArray('foo');
+```
+
+With asymmetric visibility that was previously proposed, the example can be further simplified.
+
+```php
+class Test {
+    public private(set) $array;
+
+    public function addArray($value) {
+        $this->array[] = $value;
+    }
+}
+```
+
+It would also be possible to make <php>addElement()</php> private/protected, in order to simulate private-write, public-read properties.  That said, the previously proposed [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would provide a much more elegant approach in that case:
+
+<PHP>
+// This example not provided by this RFC.
+// It's just to show how asymmetric visibility would solve this use case better.
+class C 
+{
+    public private(set) array $elements;
+
+    public function addElement(string $element): void
+    {
+        // Some kind of validation here.
+        $this->elements[] = $element;
+    }
+}
+</PHP>
+
+For these reasons, we have disallowed intrinsically-reference array operations (''[]'' and writing to ''['foo']'') on array properties when a ''set'' hook is present.  
+
+Here is a exhaustive list of possible hook combinations and their supported operations.
 
 To summarize:
 
@@ -625,8 +765,6 @@ To summarize:
 
 These rules cannot be enforced at compile time, as we cannot reliably tell at compile time whether a property is an array or not, as it could be typed as an iterable or mixed (or untyped), so runtime enforcement would be required anyway.  There are also valid usecases for arrays with some hooks, such as a ''get''-only virtual array, which make forbidding hooks entirely undesireable.
 
-
-
 This does allow for some use cases of arrays to have a get hook and still behave "normally" as far as index writing goes.  For example, a lazy-initialized array that is then "fully public" thereafter:
 
 <PHP>
@@ -637,42 +775,6 @@ class C
           $this->list ??= $this->defaultListValue();
           return $this->list;
         }
-    }
-}
-</PHP>
-
-In practice, however, a more appropriate and idiomatic usage of hooked arrays would be like so:
-
-<PHP>
-class C 
-{
-    private array $_elements;
-
-    public array $elements {
-        get => $this->_elements;
-    }
-
-    public function addElement(string $element): void {
-        $this->_elements[] = $element;
-    }
-}
-</PHP>
-
-The "passthrough" <php>get</php> implementation creates a virtual property, which disables writing directly to the <php>$elements</php> property.  That allows for future write logic to be added, as a ''set'' hook would not be compatible with the previous example.
-
-It would also be possible to make <php>addElement()</php> private/protected, in order to simulate private-write, public-read properties.  That said, the companion [[rfc:asymmetric-visibility|Asymmetric Visibility]] RFC would provide a much more elegant approach:
-
-<PHP>
-// This example not provided by this RFC.
-// It's just to show how asymmetric visibility would solve this use case better.
-class C 
-{
-    public private(set) array $elements;
-
-    public function addElement(string $element): void
-    {
-        // Some kind of validation here.
-        $this->elements[] = $element;
     }
 }
 </PHP>
