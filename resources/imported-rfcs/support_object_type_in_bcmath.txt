@@ -1,8 +1,8 @@
-====== PHP RFC: Support object type in BCMath ======
-  * Version: 0.5
+====== PHP RFC: Your Title Here ======
+  * Version: 0.1
   * Date: 2024-03-24
   * Author: Saki Takamachi, saki@php.net
-  * Status: Discussion
+  * Status: Draft
   * First Published at: https://wiki.php.net/rfc/support_object_type_in_bcmath
 
 ===== Introduction =====
@@ -14,13 +14,11 @@ Of course, it is also possible to treat BCMath like an object if you devise some
 This RFC proposes support for object types in BCMath. Please take a look at the usage example first.
 
 <code>
-use BcMath\Number;
-
-$num = new Number('1');
-$num2 = new Number('2');
+$num = new BcNum('1');
+$num2 = new BcNum('2');
 $result = $num + $num2;
 
-$result->value; // '3'
+$result->getValue(); // '3'
 var_dump($num > $num2); // false
 </code>
 
@@ -29,309 +27,96 @@ Operator overloading allows you to treat objects as if they were computing or co
 The following example is equivalent to the above example.
 
 <code>
-use BcMath\Number;
-
-$num = new Number('1');
-$num2 = new Number('2');
+$num = new BcNum('1');
+$num2 = new BcNum('2');
 $result = $num->add($num2);
 
-$result->value; // '3'
+$result->getValue(); // '3'
 var_dump($num->gt($num2)); // false
 </code>
 
-`new BCMath()` is difficult to understand what "BCMath object" specifically refers to, so we will use "Number".
-
-(Updated 03/26)
-One important thing to note first: existing global settings related to scale are not used by Number. Therefore, **no matter what is set in the global settings, it has no effect on the behavior of Number**.
-
-==== namespace ====
-(updated 03/27)
-Use namespace "BCMath" for this class according to the following RFC:
-https://wiki.php.net/rfc/namespaces_in_bundled_extensions
-
-In the RFC example, the symbols use common names, so I follow suit and use the symbol "Number".
-
-Therefore, the fully qualified name of the class would be:
-<code>
-BCMath\Number;
-</code>
-
-==== It is immutable ====
-There is a concept called "value object" that is often seen in domain-driven design, etc., and Number is exactly what should be treated as a value object. That is, the object must be immutable.
-
-No matter what we do, the original object remains unchanged and always returns a new object.
-
-==== Stringable ====
-In addition to referencing the value property to obtain the value of Number, you can also obtain the value by casting to the string type.
-<code>
-use BcMath\Number;
-
-$num = new Number('1');
-var_dump((string) $num); // '1'
-</code>
+`new BCMath()` is difficult to understand what "BCMath object" specifically refers to, so we will use "BcNum". The reason it's "BcNum" instead of "BCNum" is because it needs to follow current PHP naming conventions.
 
 ==== Constructor ====
 
 The constructor signature is:
 <code>
-public function __construct(string|int $num, ?int $scale = null) {}
+public function __construct(string $num, ?int $scale = null) {}
 </code>
 
-Since there is no need to consider errors for integers in the range that can be represented by ints, it is reasonable to accept ints in the constructor.
-
-$scale is optional. If omitted, $scale will be automatically set so that $num will fit all the way to the end. **No global settings are used.** Adjusts the digits in $num based on the scale set in the constructor. See code example.
+$scale is optional. if omitted, the BCMath global setting will be used. Adjusts the digits in $num based on the scale set in the constructor. See code example.
 <code>
-use BcMath\Number;
+$num = new BcNum('1.23456789', 4);
+$num->getValue(); // '1.2345'
 
-$num = new Number('1.23456789', 4);
-$num->value; // '1.2345'
-
-$num2 = new Number('1', 4);
-$num2->value; // '1.0000'
-
-$num3 = new Number('1.23456789');
-$num3->value; // '1.23456789'
+$num2 = new BcNum('1', 4);
+$num2->getValue(); // '1.0000'
 </code>
 
 At this point, the digits are already adjusted.
 
-==== Poperties ====
-(03/26 updated) This class has properties "value" and "scale". Both are read-only.
-
-<code>
-namespace BcMath;
-
-class Number
-{
-    public readonly string $value;
-    public readonly int $scale;
-}
-</code>
-
-==== Methods ====
-(updated 3/27)
-The argument "$scale" has been removed from methods. However, constructors are excluded.
-
-In addition to calculations using operators, Number also supports calculations using methods. 
-Basically, it corresponds to the bcXXX functions. See stub.
-
-<code>
-namespace BCMath;
-
-class Number
-{
-    public function __construct(string|int $num, ?int $scale = null) {}
-
-    public function add(Number|string|int $num): Number {}
-
-    public function sub(Number|string|int $num): Number {}
-
-    public function mul(Number|string|int $num): Number {}
-
-    public function div(Number|string|int $num): Number {}
-
-    public function mod(Number|string|int $num): Number {}
-
-    public function powmod(Number|string|int $exponent, string $modulus): Number {}
-
-    public function pow(Number|string|int $exponent): Number {}
-
-    public function sqrt(): Number {}
-
-    public function comp(Number|string|int $num): int {}
-
-    public function floor(): Number {}
-
-    public function ceil(): Number {}
-
-    public function round(int $precision = 0, int $mode = PHP_ROUND_HALF_UP): Number {}
-
-    public function eq(Number|string|int $num): bool {}
-
-    public function gt(Number|string|int $num): bool {}
-
-    public function gte(Number|string|int $num): bool {}
-
-    public function lt(Number|string|int $num): bool {}
-
-    public function lte(Number|string|int $num): bool {}
-
-    public function withScale(int $scale): Number {}
-}
-</code>
-
-The bcXXX functions accept numbers to calculate as string, while Number accepts Number instance, string, and int.
-
-=== Major difference from bcXXX functions ===
-I think the differences in arguments are easy to understand, so I will omit them.
-
-**The notable difference here is "behavior when $scale is not specified".**
-
-For example, if omit $scale in bcadd, it will look like this:
-<code>
-bcadd('1.23', '2.111'); // Global settings are used. If set to 0, '3' is returned.
-</code>
-
-With Number it works like this:
-<code>
-use BcMath\Number;
-
-$num = new Number('1.23', 2);
-$num2 = new Number('2.111', 3);
-
-// If scale is omitted, the larger scale of $num and $num2 is used.
-// In this example, the scale of $num2 is larger, so the calculation is done with $scale = 3.
-$result = $num->add($num2); // A Number containing '3.341' will be returned.
-</code>
-
-In this way, **the calculation of Number does not use the global setting $scale.**
-
-If $num2 is not Number, the following behavior:
-<code>
-use BcMath\Number;
-
-// $num2 is int
-$num->add(4); // Equivalent to "$num->add(new Number('4', $num->scale));"
-
-// $num2 is string
-$num->add('2.3355'); // Equivalent to "$num->add(new Number('2.3355', $num->scale));"
-</code>
-
-(updated 3/27)
-If one is not a Number instance, the scale of the only Number instance is used as is.
-
-=== Comparison method ===
-
-These are equivalent to the following operators:
-^ method ^ operator ^
-| comp | <=> |
-| eq | == |
-| gt | > |
-| gte | >= |
-| lt | < |
-| lte | <= |
-
-=== withScale ===
-
-withScale() sets the new scale. However, note that Number is immutable, so a new instance will be returned.
-<code>
-use BcMath\Number;
-
-$num = new Number('1.23', 2);
-$newNum = $num->withScale(4);
-
-$num->scale; // 2
-$newNum->scale; // 4
-
-$num->value; // '1.23'
-$newNum->value; // '1.2300'
-</code>
-
-==== Operator overload ====
-
-See the table below for supported operators.
-
-^ type ^ support ^
-| comparison | yes |
-| add | yes |
-| sub | yes |
-| mul | yes |
-| div | yes |
-| mod | yes |
-| pow | yes |
-| bit shift | no |
-| bit wise | no |
-
-The calculation with the operator is equivalent to not specifying scale in the method.
-
-Therefore, calculations such as the following are allowed:
-
-(updated 3/27)
-<code>
-use BcMath\Number;
-
-$num = new Number('1.23', 2);
-$result = $num + 2;
-$result->value; // '3.23'
-
-$num = new Number('1.23', 2);
-$result = $num + '1.23456';
-$result->value; // '2.46'
-$result->scale; // 2
-</code>
-
-=== Increment and decrement ===
-
-Incrementing and decrementing Number behaves similarly to GMP objects.
-
-<code>
-use BcMath\Number;
-
-$num = new Number('1.23', 2);
-$numA = $num;
-
-$num++; // Here, $num will change to a new object.
-
-$num->value; // '2.23'
-$numA->value; // '1.23'
-</code>
-
-==== Exception ====
-There are several times when you should throw an exception, such as division by 0. This is the same as the existing bcXXX functions. Therefore, we will not prepare a new exception class specifically for Number.
+==== It is immutable ====
+There is a concept called "value object" that is often seen in domain-driven design, etc., and BcNum is exactly what should be treated as a value object. That is, the object must be immutable.
 
 ===== Backward Incompatible Changes =====
-This is a new feature, so it doesn't break anything that already exists. The only concern is whether there is already a library that defines a class called "Number" without a namespace.
-
-See search results on GitHub.
-https://github.com/search?type=code&auto_enroll=true&q=%22new+Number%28%22+language%3APHP+
-
-There's only one result, and it's my repository, so there's nothing wrong with it.
+What breaks, and what is the justification for it?
 
 ===== Proposed PHP Version(s) =====
-I suggest implementing it in the next minor version (currently 8.4) or the next major version (currently 9.x).
-Personally I'd like 8.4, but it might be worth a second vote on this. (Before that, it would be helpful if we could discuss this.)
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-Add BCMath\Number to all environments.
+Describe the impact to CLI, Development web server, embedded PHP etc.
 
 ==== To Existing Extensions ====
-Only BCMath is affected.
+Will existing extensions be affected?
 
 ==== To Opcache ====
-None;
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
 
 ==== New Constants ====
-None.
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
 
 ==== php.ini Defaults ====
-None.
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
 
 ===== Open Issues =====
-None.
+Make sure there are no open issues when the vote starts!
 
 ===== Unaffected PHP Functionality =====
-There is no effect on anything other than BCMath.
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
 
 ===== Future Scope =====
-None;
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
 
 ===== Proposed Voting Choices =====
-There is a yes/no choice whether to accept this RFC and requires a 2/3 majority vote to be accepted.
-
-(There may be a second vote on which PHP version to release.)
+Include these so readers know where you are heading and can discuss the proposed voting options.
 
 ===== Patches and Tests =====
-Prototype:
-https://github.com/php/php-src/pull/13741
+Links to any external patches and tests go here.
 
-Not all features have been implemented yet.
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
-It's still a prototype.
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
 
 ===== References =====
-https://externals.io/message/122651 (Mailing list thread before creating RFC)
+Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
-None;
+Keep this updated with features that were discussed on the mail lists.
