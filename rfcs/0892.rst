@@ -1,18 +1,422 @@
-No Title
-========
+Support Object Type In BCMath
+=============================
 
 :PHP-RFC: 0892
-:Title: No Title
-:Author: Unknown
-:Status: Unknown
+:Title: Support Object Type In BCMath
+:Author: Saki Takamachi <saki@php.net>
+:Status: Draft
 :Type: Unknown
-:Created: 2023-08-19
-:Version: 1.0
+:Created: 2024-03-24
+:Version: 0.1
 
-**Moved to**\ https://wiki.php.net/rfc/property-capture
+Introduction
+------------
+
+BCMath currently only supports procedural functionality and does not
+support object types. Object-based programming is mainstream these days,
+so it's a bit outdated from that perspective. Also, the GMP extension,
+which is likely to have similar needs to BCMath, already supports object
+types.
+
+Of course, it is also possible to treat BCMath like an object if you
+devise some ideas in userland. However, things like operator overloading
+cannot be implemented in userland.
+
+Proposal
+--------
+
+This RFC proposes support for object types in BCMath. Please take a look
+at the usage example first.
+
+::
+
+   $num = new BcNum('1');
+   $num2 = new BcNum('2');
+   $result = $num + $num2;
+
+   $result->getValue(); // '3'
+   var_dump($num > $num2); // false
+
+Operator overloading allows you to treat objects as if they were
+computing or comparing primitive values. Also, for reasons explained
+later, it supports not only calculations using operators, but also
+calculations using methods.
+
+The following example is equivalent to the above example.
+
+::
+
+   $num = new BcNum('1');
+   $num2 = new BcNum('2');
+   $result = $num->add($num2);
+
+   $result->getValue(); // '3'
+   var_dump($num->gt($num2)); // false
+
+\`new BCMath()\` is difficult to understand what "BCMath object"
+specifically refers to, so we will use "BcNum". The reason it's "BcNum"
+instead of "BCNum" is because it needs to follow current PHP naming
+conventions.
+
+It is immutable
+~~~~~~~~~~~~~~~
+
+There is a concept called "value object" that is often seen in
+domain-driven design, etc., and BcNum is exactly what should be treated
+as a value object. That is, the object must be immutable.
+
+No matter what we do, the original object remains unchanged and always
+returns a new object.
+
+Stringable
+~~~~~~~~~~
+
+In addition to using the getter method to obtain the value of BcNum, you
+can also obtain the value by casting to the string type.
+
+::
+
+   $num = new BcNum('1');
+   var_dump((string) $num); // '1'
+
+Constructor
+~~~~~~~~~~~
+
+The constructor signature is:
+
+::
+
+   public function __construct(string|int $num, ?int $scale = null) {}
+
+Since there is no need to consider errors for integers in the range that
+can be represented by ints, it is reasonable to accept ints in the
+constructor.
+
+$scale is optional. if omitted, the BCMath global setting will be used.
+Adjusts the digits in $num based on the scale set in the constructor.
+See code example.
+
+::
+
+   $num = new BcNum('1.23456789', 4);
+   $num->getValue(); // '1.2345'
+
+   $num2 = new BcNum('1', 4);
+   $num2->getValue(); // '1.0000'
+
+At this point, the digits are already adjusted. And, as explained later
+in the Methods section, **the global setting $scale is only used in the
+constructor**.
+
+Poperties
+~~~~~~~~~
+
+This class has no properties. It actually has a value internally, but it
+is not exposed to userland as a property.
+
+Methods
+~~~~~~~
+
+In addition to calculations using operators, BcNum also supports
+calculations using methods. This is because BcMath is arbitrary
+precision mathematics, so the use of scales must be taken into account.
+
+We cannot specify scale when calculating using operators, so if want to
+specify scale, use a method to calculate it.
+
+Basically, it corresponds to the bcXXX functions. See stub.
+
+::
+
+   class BcNum
+   {
+       public function __construct(string|int $num, ?int $scale = null) {}
+
+       public function add(BcNum|string|int $num, ?int $scale = null): BcNum {}
+
+       public function sub(BcNum|string|int $num, ?int $scale = null): BcNum {}
+
+       public function mul(BcNum|string|int $num, ?int $scale = null): BcNum {}
+
+       public function div(BcNum|string|int $num, ?int $scale = null): BcNum {}
+
+       public function mod(BcNum|string|int $num, ?int $scale = null): BcNum {}
+
+       public function powmod(BcNum|string|int $exponent, string $modulus, ?int $scale = null): BcNum {}
+
+       public function pow(BcNum|string|int $exponent, ?int $scale = null): BcNum {}
+
+       public function sqrt(?int $scale = null): BcNum {}
+
+       public function comp(BcNum|string|int $num, ?int $scale = null): int {}
+
+       public function floor(): BcNum {}
+
+       public function ceil(): BcNum {}
+
+       public function round(int $precision = 0, int $mode = PHP_ROUND_HALF_UP): BcNum {}
+
+       public function eq(BcNum|string|int $num, ?int $scale = null): bool {}
+
+       public function gt(BcNum|string|int $num, ?int $scale = null): bool {}
+
+       public function gte(BcNum|string|int $num, ?int $scale = null): bool {}
+
+       public function lt(BcNum|string|int $num, ?int $scale = null): bool {}
+
+       public function lte(BcNum|string|int $num, ?int $scale = null): bool {}
+
+       public function getScale(): int {}
+
+       public function setScale(int $scale): BcNum {}
+
+       public function getValue(): string {}
+   }
+
+The bcXXX functions accept numbers to calculate as string, while BcNum
+accepts BcNum instance, string, and int.
+
+Major difference from bcXXX functions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+I think the differences in arguments are easy to understand, so I will
+omit them.
+
+**The notable difference here is "behavior when $scale is not
+specified".**
+
+For example, if omit $scale in bcadd, it will look like this:
+
+::
+
+   bcadd('1.23', '2,111'); // Global settings are used. If set to 0, '3' is returned.
+
+With BcNum it works like this:
+
+::
+
+   $num = new BcNum('1.23', 2);
+   $num2 = new BcNum('2.111', 3);
+
+   // If scale is omitted, the larger scale of $num and $num2 is used.
+   // In this example, the scale of $num2 is larger, so the calculation is done with $scale = 3.
+   $result = $num->add($num2); // A BcNum containing '3.341' will be returned.
+
+In this way, **the calculation of BcNum does not use the global setting
+$scale.**
+
+If $num2 is not BcNum, the following behavior:
+
+::
+
+   // $num2 is int
+   $num->add(4); // Equivalent to "$num->add(new BcNum('4', 0));"
+
+   // $num2 is string
+   $num->add('2.3355'); // Equivalent to "$num->add(new BcNum('2.3355', 4));"
+
+Comparison method
+^^^^^^^^^^^^^^^^^
+
+These are equivalent to the following operators:
+
+====== ========
+method operator
+====== ========
+comp   <=>
+eq     ==
+gt     >
+gte    >=
+lt     <
+lte    <=
+====== ========
+
+getScale, setScale
+^^^^^^^^^^^^^^^^^^
+
+getScale() returns the scale value set in the BcNum instance.
+
+::
+
+   $num = new BcNum('1.23', 2);
+   $num->getScale(); // 2
+
+setScale() sets the new scale. However, note that BcNum is immutable, so
+a new instance will be returned.
+
+::
+
+   $num = new BcNum('1.23', 2);
+   $newNum = $num->setScale(4);
+
+   $num->getScale(); // 2
+   $newNum->getScale(); // 4
+
+   $num->getValue(); // '1.23'
+   $newNum->getValue(); // '1.2300'
+
+getValue
+^^^^^^^^
+
+getValue() simply returns the value of BcNum as a string. This has the
+same behavior as casting to string.
+
+Operator overload
+~~~~~~~~~~~~~~~~~
+
+See the table below for supported operators.
+
+========== =======
+type       support
+========== =======
+comparison yes
+add        yes
+sub        yes
+mul        yes
+div        yes
+mod        yes
+pow        yes
+bit shift  no
+bit wise   no
+========== =======
+
+The calculation with the operator is equivalent to not specifying scale
+in the method.
+
+Therefore, calculations such as the following are allowed:
+
+::
+
+   $num = new BcNum('1.23', 2);
+   $result = $num + 2;
+   $result->getValue(); // '3.23'
+
+   $num = new BcNum('1.23', 2);
+   $result = $num + '1.23456';
+   $result->getValue(); // '2.46456'
+
+Increment and decrement
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Incrementing and decrementing BcNum behaves similarly to GMP objects.
+
+::
+
+   $num = new BcNum('1.23', 2);
+   $numA = $num;
+
+   $num++; // Here, $num will change to a new object.
+
+   $num->getValue(); // '2.23'
+   $numA->getValue(); // '1.23'
+
+Exception
+~~~~~~~~~
+
+There are several times when you should throw an exception, such as
+division by 0. This is the same as the existing bcXXX functions.
+Therefore, we will not prepare a new exception class specifically for
+BcNum.
+
+Backward Incompatible Changes
+-----------------------------
+
+This is a new feature, so it doesn't break anything that already exists.
+The only concern is whether there is already a library that defines a
+class called "BcNum" without a namespace.
+
+See search results on GitHub.
+https://github.com/search?type=code&auto_enroll=true&q=%22new+BcNum%28%22+language%3APHP+
+
+There's only one result, and it's my repository, so there's nothing
+wrong with it.
+
+Proposed PHP Version(s)
+-----------------------
+
+I suggest implementing it in the next minor version (currently 8.4) or
+the next major version (currently 9.x). Personally I'd like 8.4, but it
+might be worth a second vote on this. (Before that, it would be helpful
+if we could discuss this.)
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Only BCMath is affected.
+
+To Opcache
+~~~~~~~~~~
+
+None;
+
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None.
+
+Open Issues
+-----------
+
+None.
+
+Unaffected PHP Functionality
+----------------------------
+
+There is no effect on anything other than BCMath.
+
+Future Scope
+------------
+
+None;
+
+Proposed Voting Choices
+-----------------------
+
+There is a yes/no choice whether to accept this RFC and requires a 2/3
+majority vote to be accepted.
+
+(There may be a second vote on which PHP version to release.)
+
+Patches and Tests
+-----------------
+
+Prototype: https://github.com/php/php-src/pull/13741
+
+Not all features have been implemented yet.
+
+Implementation
+--------------
+
+It's still a prototype.
+
+References
+----------
+
+https://externals.io/message/122651 (Mailing list thread before creating
+RFC)
+
+Rejected Features
+-----------------
+
+None;
 
 Additional Metadata
 -------------------
 
-:Slug: syntax-to-capture-variables-when-declaring-anonymous-classes
-:Wiki URL: https://wiki.php.net/rfc/syntax-to-capture-variables-when-declaring-anonymous-classes
+:Original Authors: Saki Takamachi, saki@php.net
+:Original Status: Discussion
+:Slug: support_object_type_in_bcmath
+:Wiki URL: https://wiki.php.net/rfc/support_object_type_in_bcmath
