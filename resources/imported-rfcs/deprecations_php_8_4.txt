@@ -112,8 +112,27 @@ Implementation: https://github.com/php/php-src/pull/12309
 
 ==== session.sid_length and session.sid_bits_per_character ====
 
-TODO: https://github.com/php/php-src/issues/12418#issuecomment-1763034403
+Author: Tim Düsterhus <timwolla@php.net>
 
+PHP’s session extension currently contains two INI settings that allow the administrator to respectively control the length and the possible characters within emitted session IDs.
+
+  * The length may be configured as any value between 22 and 256.
+  * The bits per character may be selected to be either 4 (''[0-9a-f]''), 5 (''[0-9a-v]''), or 6 (''[0-9a-zA-Z,-]''), returning the characters indicated by the regular expression character group within the parentheses.
+
+In [[https://github.com/php/php-src/issues/12418|issue #12418]] it was reported that configuring 6 bits per character might generate session IDs that are rejected by WAF applications, such as mod_security. The 6 bits per character configuration might generate session IDs containing dashes, more specifically two consecutive dashes. Within an SQL query two consecutive dashes indicate the start of a comment, which is a common technique when exploiting SQL injection vulnerabilities, leading to a false positive within the WAF and rejecting any requests containing such a session ID.
+
+The default is a 32 character SID, with 4 Bits of entropy per character, resulting in a 128 Bit session ID. 128 Bits of entropy [[https://security.stackexchange.com/a/102163/21705|is generally considered the correct choice for a secret value]]. More is unnecessary and less raises eyebrows. Guessing a 128 Bit value with a probability of 10^-11 would require roughly 2^46 guesses. At 100_000 guesses per second it would take 23 years to even reach this negligible probability.
+
+In other words changing the default values will either generate session IDs that raise eyebrows (4 bits per character with less than 32 characters or 5 bpc for less than 26 characters) or generate session IDs that are needlessly strong, increasing CPU costs, due to the additional randomness required, and increasing the chance for interoperability problems, such as the mod_security example.
+
+For this reason we propose to deprecate the two INI settings in favor of the opinionated choice of the current defaults of a 32 character hexadecimal session ID.
+
+The hexadecimal character set is not expected to cause any interoperability issues, as it is the most limited one of the currently available ones and hexadecimal identifiers are likely the most commonly used. While this would increase the length of the session ID from the previous minimum of 22 characters (which is a secure choice when combined with 6 bits per character) to 32, we do not expect this to be an issue in practice. The difference in traffic is minimal and a hexadecimal session ID is trivially packed into a 16 Byte binary string using <php>hex2bin</php>, should storage requirements of the session backend be a concern.
+
+<doodle title="Deprecate the INI settings ’session.sid_length’ and ‘session.sid_bits_per_character’?" auth="timwolla" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ==== Constant SID ====
 
