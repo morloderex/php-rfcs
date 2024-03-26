@@ -1,5 +1,5 @@
 ====== PHP RFC: Support object type in BCMath ======
-  * Version: 0.2
+  * Version: 0.3
   * Date: 2024-03-24
   * Author: Saki Takamachi, saki@php.net
   * Status: Discussion
@@ -37,6 +37,9 @@ var_dump($num->gt($num2)); // false
 
 `new BCMath()` is difficult to understand what "BCMath object" specifically refers to, so we will use "BcNum". The reason it's "BcNum" instead of "BCNum" is because it needs to follow current PHP naming conventions.
 
+(Updated 03/26)
+One important thing to note first: existing global settings related to scale are not used by BcNum. Therefore, **no matter what is set in the global settings, it has no effect on the behavior of BcNum**.
+
 ==== It is immutable ====
 There is a concept called "value object" that is often seen in domain-driven design, etc., and BcNum is exactly what should be treated as a value object. That is, the object must be immutable.
 
@@ -58,16 +61,19 @@ public function __construct(string|int $num, ?int $scale = null) {}
 
 Since there is no need to consider errors for integers in the range that can be represented by ints, it is reasonable to accept ints in the constructor.
 
-$scale is optional. if omitted, the BCMath global setting will be used. Adjusts the digits in $num based on the scale set in the constructor. See code example.
+$scale is optional. If omitted, $scale will be automatically set so that $num will fit all the way to the end. **No global settings are used.** Adjusts the digits in $num based on the scale set in the constructor. See code example.
 <code>
 $num = new BcNum('1.23456789', 4);
 $num->value; // '1.2345'
 
 $num2 = new BcNum('1', 4);
 $num2->value; // '1.0000'
+
+$num3 = new BcNum('1.23456789');
+$num3->value; // '1.23456789'
 </code>
 
-At this point, the digits are already adjusted. And, as explained later in the Methods section, **the global setting $scale is only used in the constructor**.
+At this point, the digits are already adjusted.
 
 ==== Poperties ====
 (03/26 updated) This class has properties "value" and "scale". Both are read-only.
@@ -157,10 +163,10 @@ In this way, **the calculation of BcNum does not use the global setting $scale.*
 If $num2 is not BcNum, the following behavior:
 <code>
 // $num2 is int
-$num->add(4); // Equivalent to "$num->add(new BcNum('4', 0));"
+$num->add(4); // Equivalent to "$num->add(new BcNum('4'));"
 
 // $num2 is string
-$num->add('2.3355'); // Equivalent to "$num->add(new BcNum('2.3355', 4));"
+$num->add('2.3355'); // Equivalent to "$num->add(new BcNum('2.3355'));"
 </code>
 
 === Comparison method ===
@@ -248,7 +254,7 @@ Personally I'd like 8.4, but it might be worth a second vote on this. (Before th
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-None.
+Add BcNum to all environments.
 
 ==== To Existing Extensions ====
 Only BCMath is affected.
