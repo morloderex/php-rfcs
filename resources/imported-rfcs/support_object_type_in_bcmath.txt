@@ -1,5 +1,5 @@
 ====== PHP RFC: Support object type in BCMath ======
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2024-03-24
   * Author: Saki Takamachi, saki@php.net
   * Status: Discussion
@@ -18,7 +18,7 @@ $num = new BcNum('1');
 $num2 = new BcNum('2');
 $result = $num + $num2;
 
-$result->getValue(); // '3'
+$result->value; // '3'
 var_dump($num > $num2); // false
 </code>
 
@@ -31,7 +31,7 @@ $num = new BcNum('1');
 $num2 = new BcNum('2');
 $result = $num->add($num2);
 
-$result->getValue(); // '3'
+$result->value; // '3'
 var_dump($num->gt($num2)); // false
 </code>
 
@@ -43,7 +43,7 @@ There is a concept called "value object" that is often seen in domain-driven des
 No matter what we do, the original object remains unchanged and always returns a new object.
 
 ==== Stringable ====
-In addition to using the getter method to obtain the value of BcNum, you can also obtain the value by casting to the string type.
+In addition to referencing the value property to obtain the value of BcNum, you can also obtain the value by casting to the string type.
 <code>
 $num = new BcNum('1');
 var_dump((string) $num); // '1'
@@ -61,16 +61,24 @@ Since there is no need to consider errors for integers in the range that can be 
 $scale is optional. if omitted, the BCMath global setting will be used. Adjusts the digits in $num based on the scale set in the constructor. See code example.
 <code>
 $num = new BcNum('1.23456789', 4);
-$num->getValue(); // '1.2345'
+$num->value; // '1.2345'
 
 $num2 = new BcNum('1', 4);
-$num2->getValue(); // '1.0000'
+$num2->value; // '1.0000'
 </code>
 
 At this point, the digits are already adjusted. And, as explained later in the Methods section, **the global setting $scale is only used in the constructor**.
 
 ==== Poperties ====
-This class has no properties. It actually has a value internally, but it is not exposed to userland as a property.
+(03/26 updated) This class has properties "value" and "scale". Both are read-only.
+
+<code>
+class BcNum
+{
+    public readonly string $value;
+    public readonly int $scale;
+}
+</code>
 
 ==== Methods ====
 In addition to calculations using operators, BcNum also supports calculations using methods. This is because BcMath is arbitrary precision mathematics, so the use of scales must be taken into account.
@@ -118,11 +126,7 @@ class BcNum
 
     public function lte(BcNum|string|int $num, ?int $scale = null): bool {}
 
-    public function getScale(): int {}
-
-    public function setScale(int $scale): BcNum {}
-
-    public function getValue(): string {}
+    public function withScale(int $scale): BcNum {}
 }
 </code>
 
@@ -170,29 +174,19 @@ These are equivalent to the following operators:
 | lt | < |
 | lte | <= |
 
-=== getScale, setScale ===
+=== withScale ===
 
-getScale() returns the scale value set in the BcNum instance.
+withScale() sets the new scale. However, note that BcNum is immutable, so a new instance will be returned.
 <code>
 $num = new BcNum('1.23', 2);
-$num->getScale(); // 2
+$newNum = $num->withScale(4);
+
+$num->scale; // 2
+$newNum->scale; // 4
+
+$num->value; // '1.23'
+$newNum->value; // '1.2300'
 </code>
-
-setScale() sets the new scale. However, note that BcNum is immutable, so a new instance will be returned.
-<code>
-$num = new BcNum('1.23', 2);
-$newNum = $num->setScale(4);
-
-$num->getScale(); // 2
-$newNum->getScale(); // 4
-
-$num->getValue(); // '1.23'
-$newNum->getValue(); // '1.2300'
-</code>
-
-=== getValue ===
-
-getValue() simply returns the value of BcNum as a string. This has the same behavior as casting to string.
 
 ==== Operator overload ====
 
@@ -216,11 +210,11 @@ Therefore, calculations such as the following are allowed:
 <code>
 $num = new BcNum('1.23', 2);
 $result = $num + 2;
-$result->getValue(); // '3.23'
+$result->value; // '3.23'
 
 $num = new BcNum('1.23', 2);
 $result = $num + '1.23456';
-$result->getValue(); // '2.46456'
+$result->value; // '2.46456'
 </code>
 
 === Increment and decrement ===
@@ -233,8 +227,8 @@ $numA = $num;
 
 $num++; // Here, $num will change to a new object.
 
-$num->getValue(); // '2.23'
-$numA->getValue(); // '1.23'
+$num->value; // '2.23'
+$numA->value; // '1.23'
 </code>
 
 ==== Exception ====
