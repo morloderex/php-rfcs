@@ -1,0 +1,196 @@
+====== PHP RFC: Invoke __callStatic when non-static public methods are called statically ======
+
+  * Version: 0.9
+  * Date: 2014-03-29
+  * Author: Jaehan Seo, daddyofsky@gmail.com
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/complete_callstatc_magic
+
+
+===== Introduction =====
+The **_ _callStatic** magic method should be invoked when a method is not callable in static context.
+
+
+In PHP manual, _ _callStatic is described like below. 
+
+
+[[https://www.php.net/manual/en/language.oop5.overloading.php#object.callstatic|__callStatic()]] is triggered when invoking inaccessible methods in a static context.
+
+
+In this context, interpreting **inaccessible** merely as **invisible** is insufficient because it omits whether the call is being made statically. It would be clearer to interpret it as **not callable** in a static context.
+
+
+Non-static public methods are visible but cannot be called statically. Therefore, instead of throwing an error, the **_ _callStatic** method should be invoked when attempting to call a public method statically.
+
+
+
+Here are examples of the current code and how the code would look if this RFC is accepted.
+
+
+==== Case 1 ====
+
+<code php>
+<?php
+namespace App\Models;
+ 
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+
+class User extends Model
+{
+    public function scopeActive(Builder $query): void
+    {
+        $query->where('active', 1);
+    }
+}
+
+$users = User::active()->get();
+</code>
+
+This is an example of a local scope using Laravel Eloquent ORM.  
+
+This code has the advantage of being able to categorize scope methods.  
+However, the IDE cannot find **active** method, and the **Go to Definition** feature cannot be used.
+
+Somewhere in the internal code, there is code that matches the **active** method to the **scopeActive** method, but it's hidden, not easy to find.
+
+
+
+<code php>
+<?php
+namespace App\Models;
+ 
+use Illuminate\Database\Eloquent\Model;
+
+class User extends Model
+{
+    public function active(): static
+    {
+        $this->query()->where('active', 1);
+        
+        return $this;
+    }
+}
+
+$users = User::active()->get();
+</code>
+
+This code is very clear, aside from the fact that the method is not static.  
+
+The IDE recognizes **active** methods well and the **Go to definition** feature also works properly.
+
+==== Case 2 ====
+
+Let's try to create a simple router class similar to the one in Laravel.
+
+<code php>
+<?php
+
+class Router
+{
+    public static __callStatic($method, $args)
+    {
+        return (new RealRouter())->$method(...$args);
+    }
+}
+
+class RealRouter
+{
+    public function prefix(): static
+    {
+        // some code
+        
+        return $this;
+    }
+    public function group(): static {}
+    ...
+} 
+
+Router::prefix()->group();
+</code>
+
+Even if there are only a few core methods, it cannot be made into a single file.  
+
+In this case as well, the IDE cannot find **prefix** method, and the **Go to Definition** feature cannot be used.  
+
+Certainly, you can add PHPDoc to the router class to make it recognize prefix methods, but still, you cannot directly move to the original method using the go to definition feature.
+
+
+There is another problem: the result of calling a **prefix** method changes from the **Router** class to the **RealRouter** class. Of course, it can be adjusted in **_ _callStatic**, but it's confusing.
+
+
+
+<code php>
+<?php
+
+class Router
+{
+    public static __callStatic($method, $args)
+    {
+        return (new RealRouter())->$method(...$args);
+    }
+
+    public function prefix() {}
+    public function group() {}
+    ...
+}
+
+Router::prefix()->group();
+</code>
+
+Aside from the fact that the method is not static, this code is very clear too.
+
+
+When I raised this issue, many people said that the code would be unclear and obscure. But in reality, it's the opposite. As can be seen in the above examples, the code becomes clearer, and navigation through the IDE works much better.  
+
+Of course, calling non-static methods in a static-like manner can be confusing, but in modern PHP, it has already become common practice.  
+
+This change might not be favored by the people who develop the PHP language itself, but from the perspective of a user(anonymous programmer using PHP language), it allows for easier and more flexible use.
+
+
+===== Proposal =====
+The proposal is simple.
+Instead of throwing an error when a non-static public method is called statically, the **_ _callStatic** method should be invoked.
+
+<code php>
+<?php
+class MyClas
+{
+    public static function __callStatic($method, $args)
+    {
+        echo '__callStatic : ' . $method . " is called statically.\n";
+    }
+    
+    public function nonStaticPublicMethod() {}
+}
+
+MyClass::nonStaticPublicMethod();
+</code>
+
+==== Before ====
+<code>
+Fatal error: Uncaught Error: Non-static method MyClass::publicMethod() cannot be called statically in ...
+</code>
+
+==== After ====
+<code>
+__callStatic : nonStaticPublicMethod is called statically.
+</code>
+
+===== Backward Incompatible Changes =====
+None
+
+===== Proposed PHP Version(s) =====
+PHP 8.4
+
+===== Open Issues =====
+None
+
+===== Unaffected PHP Functionality =====
+
+===== Patches and Tests =====
+Not yet. Need volunteer.
+
+===== References =====
+https://github.com/php/php-src/issues/13813  
+https://externals.io/message/122782
