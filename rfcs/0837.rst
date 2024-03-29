@@ -3,7 +3,7 @@ Deprecations For PHP 8.4
 
 :PHP-RFC: 0837
 :Title: Deprecations For PHP 8.4
-:Author: Niels Dossche <nielsdos@php.net>
+:Author: Niels Dossche <nielsdos@php.net>, Gina Peter Banyard <girgias@php.net>, Máté Kocsis <kocsismate@php.net>
 :Status: Draft
 :Type: Unknown
 :Created: 2023-07-25
@@ -19,10 +19,28 @@ The following list provides a short overview of the functionality
 targeted for deprecation, while more detailed explanation is provided in
 the Proposal section:
 
--  ``DOMAttr::schemaTypeInfo`` and ``DOMElement::schemaTypeInfo``
+-  Soft-deprecated ``DOMDocument`` and ``DOMEntity`` properties
 -  ``DOMImplementation::getFeature($feature, $version)``
 -  Constant ``DOM_PHP_ERR``
 -  ``mysqli_ping()`` and ``mysqli::ping()``
+-  ``unserialize()``'s 'S' tag
+-  ``session.sid_length`` and ``session.sid_bits_per_character``
+-  Constant ``SID``
+-  ``SplFixedArray::__wakeup()``
+-  ``xml_set_object()`` and ``xml_set_*_handler()`` with string method
+   names
+-  Passing ``null`` and ``false`` to ``dba_key_split()``
+-  Non-numeric seed strings in xxh3
+-  Constants ``SUNFUNCS_RET_STRING``, ``SUNFUNCS_RET_DOUBLE``,
+   ``SUNFUNCS_RET_TIMESTAMP``
+-  Deprecate proprietary CSV escaping mechanism
+-  Constant ``E_STRICT``
+-  Deprecate return invalid types for user output handler callables
+-  file_put_contents() with $data as an array
+-  Deprecate ``mysqli_refresh()``
+-  Deprecate ``mysqli_kill()``
+-  Deprecate ``lcg_value()``
+-  Deprecate ``uniqid()``
 
 Proposal
 --------
@@ -31,21 +49,23 @@ Each feature proposed for deprecation is voted separately and requires a
 2/3 majority. All votes refer to deprecation in PHP 8.4 and removal in
 PHP 9.
 
-DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Soft-deprecated DOMDocument and DOMEntity properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-schemaTypeInfo used to be a feature of DOM Core Level 3
-https://www.w3.org/TR/2003/WD-DOM-Level-3-Core-20030226/DOM3-Core.html#core-Attr-schemaTypeInfo,
-but it was never implemented in PHP, i.e. it always returns NULL. That
-return value is not even correct, as schemaTypeInfo is not supposed to
-be nullable. Furthermore, the feature has been removed from the current
-living DOM spec. It doesn't make sense to keep a feature alive that has
-never been implemented and is removed by the reference specification.
+Author: Máté Kocsis kocsismate@php.net
 
-TODO: check impact
+The following properties have already been soft-deprecated for a long
+time:
 
-Question: Deprecate DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-  ``DOMDocument::$actualEncoding``: it is just an alias to
+   ``DOMDocument::$encoding``
+-  ``DOMDocument::$config``: it has always returned null
+-  ``DOMEntity::$actualEncoding``: it has always returned null
+-  ``DOMEntity::$encoding``: it has always returned null
+-  ``DOMEntity::$version``: it has always returned null
+
+Question: Deprecate and remove the aforementioned DOMDocument and DOMEntity properties?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -55,6 +75,8 @@ Voting Choices
 
 DOMImplementation::getFeature($feature, $version)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Niels Dossche nielsdos@php.net
 
 ``DOMImplementation::getFeature($feature, $version)`` used to be a
 feature of DOM Core Level 3
@@ -79,14 +101,477 @@ Voting Choices
 Constant DOM_PHP_ERR
 ~~~~~~~~~~~~~~~~~~~~
 
-TODO: See reasoning:
-https://github.com/php/php-src/pull/11927#issuecomment-1672129591
+Author: Niels Dossche nielsdos@php.net
+
+PR https://github.com/php/php-src/pull/11927 got rid of the last use of
+DOM_PHP_ERR in PHP. It is a non-standard and non-well-defined error
+code. The last use was for an out-of-memory situation but that's
+inconsistent as we normally use INVALID_STATE_ERR for that.
+
+GitHub search reveals `174
+matches <https://github.com/search?q=DOM_PHP_ERR+language%3APHP&type=code&l=PHP>`__
+(as of Jan 20 2024) for DOM_PHP_ERR. There are occurrences in
+string-form, i.e. ``"DOM_PHP_ERR"`` that normally doesn't get affected,
+some in code quality/compatibility tools, and some in php-src fork's
+stub files.
+
+The remaining actual use is in Symfony's DOMCaster in an array that maps
+a constant back to its actual name. They can fix the deprecation by
+replacing the constant with its value until versions older than PHP 8.4
+no longer need to be supported by the library. There don't seem to be
+any other actual users of this.
+
+Question: Deprecate DOM_PHP_ERR?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-2:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 mysqli_ping() and mysqli::ping()
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-TODO: See reasoning:
+The purpose of ``mysqli_ping()`` and ``$mysqli->ping()`` is to check
+whether the connection is live and attempt reconnection if it is not.
+This only works if mysqli is compiled with libmysql. The support for
+this has been removed in PHP 8.2. As it's no longer possible to use
+automatic reconnection in PHP 8.2, the ``mysqli_ping()`` function has
+become useless.
+
+For users who simply want to check if the connection is alive, they can
+use ``DO 1`` or similar SQL query to see if it succeeds. There is no
+need to offer such functionality in PHP anymore.
+
+See reasoning:
 https://github.com/php/php-src/pull/11912#issuecomment-1671762583
+
+Question: Deprecate mysqli_ping()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-3:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Pull request: https://github.com/php/php-src/pull/11945
+
+unserialize()'s 'S' tag
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Tim Düsterhus timwolla@php.net
+
+Strings serialized with PHP's native serialization mechanism are
+represented with the (lowercase) ``s`` tag, followed by the length of
+the string and the raw binary representation of the string contents.
+During the development of the never-released PHP 6, the serialization
+format of binary strings `was
+changed <https://github.com/php/php-src/commit/1f2d5e3b00d19bd6d0db40d7fc2badaa2d65082e>`__
+to use an escaped representation for non-ASCII characters, likely to
+make the serialization output compatible with PHP 6's Unicode strings
+where not all byte sequences are valid. This escaped format was then
+represented with the uppercase ``S`` tag `in a follow-up
+commit <https://github.com/php/php-src/commit/7ccba6624df074051f24efabd5d88d9c0d2a8ec0>`__
+and support for that uppercase ``S`` tag `added to PHP
+5 <https://github.com/php/php-src/commit/8f5310afad0eeef6f2e45a03f6ff7d4a2a7653ce>`__
+in an attempt to provide interoperability with serialized binary strings
+between PHP 5 and PHP 6. This support for the uppercase ``S`` tag
+remains in PHP until today.
+
+PHP's native serializer is a security-sensitive part of the standard
+library, the simpler the logic the smaller the chance for security
+issues and the easier it is to verify the code for correctness. There
+are no tests verifying the functionality of the uppercase ``S`` tag and
+no released version emitted the uppercase ``S`` tag, thus deprecating
+and ultimately removing the support for the ``S`` tag is exceedingly
+unlikely to affect anyone.
+
+Implementation: https://github.com/php/php-src/pull/12309
+
+Question: Deprecate unserialize()’s ‘S’ tag?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-4:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+session.sid_length and session.sid_bits_per_character
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Tim Düsterhus timwolla@php.net
+
+PHP’s session extension currently contains two INI settings that allow
+the administrator to respectively control the length and the possible
+characters within emitted session IDs.
+
+-  The length may be configured as any value between 22 and 256.
+-  The bits per character may be selected to be either 4 (``[0-9a-f]``),
+   5 (``[0-9a-v]``), or 6 (``[0-9a-zA-Z,-]``), returning the characters
+   indicated by the regular expression character group within the
+   parentheses.
+
+In `issue #12418 <https://github.com/php/php-src/issues/12418>`__ it was
+reported that configuring 6 bits per character might generate session
+IDs that are rejected by WAF applications, such as mod_security. The 6
+bits per character configuration might generate session IDs containing
+dashes, more specifically two consecutive dashes. Within an SQL query
+two consecutive dashes indicate the start of a comment, which is a
+common technique when exploiting SQL injection vulnerabilities, leading
+to a false positive within the WAF and rejecting any requests containing
+such a session ID.
+
+The default is a 32 character SID, with 4 bits of entropy per character,
+resulting in a 128-bit session ID. 128 bits of entropy `is generally
+considered the correct choice for a secret
+value <https://security.stackexchange.com/a/102163/21705>`__. More is
+unnecessary and less raises eyebrows. Guessing a 128 Bit value with a
+probability of 10^-11 would require roughly 2^46 guesses. At 100_000
+guesses per second it would take 23 years to even reach this negligible
+probability.
+
+In other words changing the default values will either generate session
+IDs that raise eyebrows (4 bits per character with less than 32
+characters or 5 bpc for less than 26 characters) or generate session IDs
+that are needlessly strong, increasing CPU costs, due to the additional
+randomness required, and increasing the chance for interoperability
+problems, such as the mod_security example.
+
+For this reason we propose to deprecate the two INI settings in favor of
+the opinionated choice of the current defaults of a 32 character
+hexadecimal session ID.
+
+The hexadecimal character set is not expected to cause any
+interoperability issues, as it is the most limited one of the currently
+available ones and hexadecimal identifiers are likely the most commonly
+used. While this would increase the length of the session ID from the
+previous minimum of 22 characters (which is a secure choice when
+combined with 6 bits per character) to 32, we do not expect this to be
+an issue in practice. The difference in traffic is minimal and a
+hexadecimal session ID is trivially packed into a 16 Byte binary string
+using ``hex2bin()``, should storage requirements of the session backend
+be a concern.
+
+Question: Deprecate the INI settings ‘session.sid_length’ and ‘session.sid_bits_per_character’?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-5:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Constant SID
+~~~~~~~~~~~~
+
+Author: Máté Kocsis kocsismate@php.net
+
+Constant ``SID`` is created when a session is initialized, containing
+the current session ID. Unlike other constants value, it changes to the
+new ID when ``php_session_reset_id()`` is called. This behavior
+contradicts to any other well behaved constants, therefore it's
+deprecated.
+
+Question: Deprecate and remove the aforementioned SID constant?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-6:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Deprecate SplFixedArray::__wakeup()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO: https://github.com/php/php-src/pull/9704
+
+xml_set_object() and xml_set_*_handler() with string method names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+The XML extension allows registering callbacks that are invoked when
+encountering certain XML triggers, such as the start of a new element or
+a processing instruction, via the relevant ``xml_set_*_handler()``
+function.
+
+However, these functions also allow setting a method name, as a string,
+that should be called on the object provided via ``xml_set_object()``.
+This behaviour is very strange and seems to date prior to the
+introduction of proper callables for object methods via the
+``[$objInstance, 'methodName']`` syntax.
+
+The proposal is to deprecate the ``xml_set_object()`` function and
+passing non-callable strings to the ``xml_set_*_handler()`` functions.
+This would also mean to unset a handler the value of ``null`` must be
+used instead of an empty string witch is also currently allowed.
+
+Question: Deprecate xml_set_object() and xml_set_*_handler() with string method names
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-7:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Deprecate passing null and false to dba_key_split()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+The signature of ``dba_key_split()`` is currently
+``function dba_key_split(string|false|null $key): array|false {}``.
+
+However, passing ``null`` or ``false`` to this function will make it
+immediately return ``false``, this is the case since at least PHP 5.3,
+probably earlier.
+
+Moreover, since PHP 8.0, this is the only way for this function to
+return ``false``.
+
+The proposal is to deprecate passing ``null`` and ``false`` to the
+``$key`` parameter, which will allow to clean up the return type of this
+function in the next major version to just ``array``.
+
+Question: Deprecate passing null and false to dba_key_split()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-8:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Non-numeric seed strings in xxh3
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO: https://github.com/php/php-src/issues/10305
+
+Constants SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Jorg Sowa jorg.sowa@gmail.com
+
+The functions ``date_sunrise()``/``date_sunset()`` are `already
+deprecated since PHP
+8.1 <https://wiki.php.net/rfc/deprecations_php_8_1>`__ and will be
+removed in the next major version.
+
+The proposal is to deprecate constants SUNFUNCS_RET_STRING,
+SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP which are used exclusively
+with those functions.
+
+Question: Deprecate constants SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE, SUNFUNCS_RET_TIMESTAMP
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-9:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation: https://github.com/php/php-src/pull/12978
+
+Deprecate proprietary CSV escaping mechanism
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+TODO: Follow-up on https://wiki.php.net/rfc/kill-csv-escaping
+
+See: https://github.com/php/doc-en/issues/3086
+
+Remove E_STRICT error level and deprecate E_STRICT constant
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author of implementation: Michael Voříšek (mvorisek)
+
+RFC author: Jorg Sowa jorg.sowa@gmail.com, Michael Voříšek (mvorisek)
+
+Implementation: https://github.com/php/php-src/pull/13053
+
+The error level E_STRICT has no meaning `since PHP
+7.0 <https://wiki.php.net/rfc/reclassify_e_strict>`__ after changing it
+to other error levels. It was left for better compatibility after an
+removal in `PHP 7.4 <https://github.com/php/php-src/pull/4401>`__.
+
+In theory extensions could still emit it. I propose to remove E_STRICT
+error level and deprecate E_STRICT constant.
+
+Deprecate strtok() function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Michael Voříšek (mvorisek)
+
+Implementation: TODO - deprecate strtok() function thru stub
+
+Deprecate strtok() function as it is stateful. This function is not well
+known/used and the stateful behaviour is very easily to be overseen,
+leading to a situations where it might time take to debug, especially
+when the strtok() calls are not closely together or even mixed within
+fibers - https://3v4l.org/eplIO . Another related downside is that the
+string is kept allocated when not fully consumed by strtok() calls
+making this function more or less leading. Therefore, let's deprecate
+this function with unwanted global state in favor or strpos, explode or
+preg_split functions.
+
+Deprecate return invalid types for user output handler callables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+It doesn't enforce the return type of string|false (false has special
+meaning here which is unfortunate) converts ``true`` to an empty string.
+Other implementation bug is suppressing the Array conversion warning due
+to how the outputs are being buffered/written
+
+See https://github.com/php/doc-en/pull/3126#discussion_r1460917389
+
+file_put_contents() with $data as an array
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Gina Peter Banyard girgias@php.net
+
+TODO: this is surprising, not widely used, and cannot support iterable
+as how should an object implementing Stringable and Traversable be
+interpreted
+
+Deprecate mysqli_refresh()
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Kamil Tekiela dharman@php.net
+
+The ``mysqli_refresh()`` function and its OO counterpart
+``$mysqli->refresh()`` are just a wrapper for the ``COM_REFRESH``
+command. The ``COM_REFRESH`` command has been deprecated as of MySQL
+5.7. The ``mysqli_refresh()`` function has very easy alternatives as
+it's just a binary protocol version of the SQL ``FLUSH`` command. On top
+of this, the FLUSH command accepts more parameters than the COM_REFRESH
+command, which makes ``mysqli_refresh()`` the worse option of the two.
+
+The proposal is to deprecate the ``mysqli_refresh()`` function and its
+OO counterpart, and promote usage of SQL queries, e.g.
+``FLUSH LOGS, FLUSH TABLES, FLUSH HOSTS`` etc.
+
+All of the MYSQLI_REFRESH_\* constants will be removed too.
+
+Question: Deprecate mysqli_refresh()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-10:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation and more explanations can be found at:
+https://github.com/php/php-src/pull/11929
+
+Deprecate mysqli_kill()
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Author: Kamil Tekiela dharman@php.net
+
+The ``mysqli_kill()`` function and its OO counterpart
+``$mysqli->kill()`` are just a wrapper for the ``COM_PROCESS_KILL``
+command. The ``COM_PROCESS_KILL`` command has been deprecated as of
+MySQL 5.7. The usage of this command is to kill a running MySQL process.
+It's the same as executing ``KILL processlist_id`` SQL statement.
+
+The only issue with deprecating this function in PHP is the way in which
+it has been used in PHP unit tests. The ``mysqli_kill()`` function has
+been used in PHP unit tests to kill the same MySQL process that has
+executed the command, effectively killing itself. Using the ``KILL`` SQL
+command would have resulted in PHP throwing an error about interrupted
+connection, while using the ``mysqli_kill()`` function does not.
+Suicidal use of this function was unlikely to be an intended use case.
+There's no reason to support such behaviour from mysqli. Users who truly
+need this behaviour can emulate it in userland using the ``KILL``
+statement.
+
+The proposal is to deprecate the ``mysqli_kill()`` function and
+``$mysqli->kill()``, in favour of using the ``KILL`` statement.
+
+Question: Deprecate mysqli_kill()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-11:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation: https://github.com/php/php-src/pull/11926
+
+Deprecate lcg_value()
+~~~~~~~~~~~~~~~~~~~~~
+
+Author: Tim Düsterhus timwolla@php.net
+
+TODO: Contradicting documentation about the returned range, catastrophic
+failure if the state of the underlying RNG is nulled, fallback an
+extremely short period if half of the state of the underlying RNG is
+nulled, probably biased towards larger numbers (but hard to determine
+for sure). There is a better replacement in Randomizer::getFloat() since
+PHP 8.3.
+
+Deprecate uniqid()
+~~~~~~~~~~~~~~~~~~
+
+Author: Tim Düsterhus timwolla@php.net
+
+TODO: Commonly misused where strong randomness is required,
+documentation is full of warnings. Output is effectively a
+transformation of the current timestamp.
+
+Polyfill (64 bit PHP only):
+
+.. code:: php
+
+   function my_uniqid(string $prefix = '', bool $more_entropy = false) {
+       static $last = null;
+       do {
+           $microtime = \microtime();
+       } while ($microtime === $last);
+       $last = $microtime;
+
+       [$usec, $sec] = \explode(" ", $microtime, 2);
+       $usec = \substr($usec, 2);
+       $usec %= 0x100000;
+
+       if ($more_entropy) {
+           $seed = (((float)random_int(0, 4294967295)) / 4294967295) * 10.0;
+
+           return \sprintf("%s%08x%05x%.8F", $prefix, $sec, $usec, $seed);
+       } else {
+           return \sprintf("%s%08x%05x", $prefix, $sec, $usec);
+       }
+   }
 
 Backward Incompatible Changes
 -----------------------------
@@ -98,6 +583,6 @@ Additional Metadata
 -------------------
 
 :Implementation: TBD
-:Original Authors: Niels Dossche nielsdos@php.net
+:Original Authors: Niels Dossche nielsdos@php.net, Gina Peter Banyard girgias@php.net, Máté Kocsis kocsismate@php.net
 :Slug: deprecations_php_8_4
 :Wiki URL: https://wiki.php.net/rfc/deprecations_php_8_4
