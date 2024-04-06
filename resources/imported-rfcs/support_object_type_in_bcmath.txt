@@ -1,5 +1,5 @@
 ====== PHP RFC: Support object type in BCMath ======
-  * Version: 0.7
+  * Version: 0.8
   * Date: 2024-03-24
   * Author: Saki Takamachi, saki@php.net
   * Status: Discussion
@@ -13,7 +13,7 @@ Of course, it is also possible to treat BCMath like an object if you devise some
 ===== Proposal =====
 This RFC proposes support for object types in BCMath. Please take a look at the usage example first.
 
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1');
@@ -22,13 +22,13 @@ $result = $num + $num2;
 
 $result->value; // '3'
 var_dump($num > $num2); // false
-</code>
+</PHP>
 
 Operator overloading allows you to treat objects as if they were computing or comparing primitive values. Also, it supports not only calculations using operators, but also calculations using methods.
 
 The following example is equivalent to the above example.
 
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1');
@@ -37,49 +37,58 @@ $result = $num->add($num2);
 
 $result->value; // '3'
 var_dump($num->gt($num2)); // false
-</code>
+</PHP>
 
 `new BCMath()` is difficult to understand what "BCMath object" specifically refers to, so we will use "Number".
 
-(Updated 03/26)
 One important thing to note first: existing global settings related to scale are not used by Number. Therefore, **no matter what is set in the global settings, it has no effect on the behavior of Number**.
 
 ==== namespace ====
-(updated 03/27)
+
 Use namespace "BCMath" for this class according to the following RFC:
 https://wiki.php.net/rfc/namespaces_in_bundled_extensions
 
 In the RFC example, the symbols use common names, so I follow suit and use the symbol "Number".
 
 Therefore, the fully qualified name of the class would be:
-<code>
+<PHP>
 BCMath\Number;
-</code>
+</PHP>
 
 ==== It is immutable ====
 There is a concept called "value object" that is often seen in domain-driven design, etc., and Number is exactly what should be treated as a value object. That is, the object must be immutable.
 
 No matter what we do, the original object remains unchanged and always returns a new object.
 
+==== final readonly class ====
+
+BCMath\Number is a final readonly class. Since it is an immutable class, the property must be readonly.
+
+If this class is made inheritable, and if there is a property defined by the user, it is difficult to know which operand property to pass, the left or right operand, to the object resulting from the calculation using operator overloading. Therefore, use the final modifier.
+
+Since this is final, there is no difference between making the property read-only and making the class itself read-only. For ease of understanding, this RFC uses readonly classes.
+<PHP>
+final readonly class Number{}
+</PHP>
+
 ==== Stringable ====
 In addition to referencing the value property to obtain the value of Number, you can also obtain the value by casting to the string type.
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1');
 var_dump((string) $num); // '1'
-</code>
+</PHP>
 
 ==== Constructor ====
 
 The constructor signature is:
-<code>
+<PHP>
 public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_TOWARD_ZERO) {}
-</code>
+</PHP>
 
 Since there is no need to consider errors for integers in the range that can be represented by ints, it is reasonable to accept ints in the constructor.
 
-(Updated 04/04)
 **The scale of the value is always implicitly calculated from the given $num.**
 
 In many cases, Number Class can automatically calculate the scale of the calculation result. However, in three cases, when using a div, sqrt and when the pow's exporent is a negative value, the scale cannot be determined automatically if the value is not divisible. In some cases, calculations need to continue indefinitely. This is not reasonable, so in these three cases the calculation must be stopped midway.
@@ -93,7 +102,7 @@ In addition to these three cases, `$roundMode` is used when scale is specified i
 powmod has some restrictions on the arguments, so it will not prevent from automatically calculating the scale.
 
 See code example.
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('2'); // value is '2'
@@ -107,91 +116,86 @@ $num->div('3'); // value is '0.66667', max scale is 0 + 5 = 5, round mode is PHP
 
 $num = new Number('1.2345', 2); // value is '1.2345'
 $num / 7; // value is '0.176357', max scale is 4 + 2 = 6
-</code>
+</PHP>
 
 In this way, by receiving several option settings in the constructor, we eliminate the differences between calculations using operator overloads and methods as much as possible.
 
 More detailed examples are provided later in the RFC.
 
 ==== Poperties ====
-(03/26 updated) This class has properties "value", "scale", "maxExpansionScale" and "roundMode". These are read-only.
+This class has properties "value", "scale", "maxExpansionScale" and "roundMode".
 
-<code>
+<PHP>
 namespace BcMath;
 
-class Number
+final readonly class Number
 {
-    public readonly string $value;
-    public readonly int $scale;
-    public readonly int $maxExpansionScale;
-    public readonly int $roundMode;
+    public string $value;
+    public int $scale;
+    public int $maxExpansionScale;
+    public int $roundMode;
 }
-</code>
+</PHP>
 
 ==== Methods ====
-(updated 3/27)
-(updated 4/4)
+
 Only div, pow, and sqrt accept $maxExpansionScale as an option. This means the same thing as $maxExpansionScale in the constructor, and allows you to use any $maxExpansionScale when calculating rather than the one from the constructor. Also, comparison methods and `format` methods receive $scale as an argument. This is optional.
-
-Also, since it is not ideal for users to customize operator overloads, all computational methods should be final. Then, from a consistency perspective and because there is no common use case to override Number's methods to change their behavior, we make all methods final. In reality, operator overload calculations and method calculations follow different processing paths, so users cannot customize the behavior of operators via methods, but from the perspective of consistency of behavior, they should be final.
-
-The Number class itself should be extensible. By doing so, the user can use the NumberChild class by adding any method. This is a very common use case, as BCMath's main use case is money calculations.
 
 In addition to calculations using operators, Number also supports calculations using methods. 
 Basically, it corresponds to the bcXXX functions. See stub.
 
-<code>
+<PHP>
 namespace BCMath;
 
-class Number
+final readonly class Number
 {
     public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_TOWARD_ZERO) {}
 
-    final public function add(Number|string|int $num): Number {}
+    public function add(Number|string|int $num): Number {}
 
-    final public function sub(Number|string|int $num): Number {}
+    public function sub(Number|string|int $num): Number {}
 
-    final public function mul(Number|string|int $num): Number {}
+    public function mul(Number|string|int $num): Number {}
 
-    final public function div(Number|string|int $num, ?int $maxExpansionScale = null): Number {}
+    public function div(Number|string|int $num, ?int $maxExpansionScale = null): Number {}
 
-    final public function mod(Number|string|int $num): Number {}
+    public function mod(Number|string|int $num): Number {}
 
-    final public function powmod(Number|string|int $exponent, string $modulus): Number {}
+    public function powmod(Number|string|int $exponent, string $modulus): Number {}
 
-    final public function pow(Number|string|int $exponent, ?int $maxExpansionScale = null): Number {}
+    public function pow(Number|string|int $exponent, ?int $maxExpansionScale = null): Number {}
 
-    final public function sqrt(?int $maxExpansionScale = null): Number {}
+    public function sqrt(?int $maxExpansionScale = null): Number {}
 
-    final public function floor(): Number {}
+    public function floor(): Number {}
 
-    final public function ceil(): Number {}
+    public function ceil(): Number {}
 
-    final public function round(int $precision = 0, int $mode = PHP_ROUND_HALF_UP): Number {}
+    public function round(int $precision = 0, int $mode = PHP_ROUND_HALF_UP): Number {}
     
-    final public function comp(Number|string|int $num, ?int $scale = null): int {}
+    public function comp(Number|string|int $num, ?int $scale = null): int {}
 
-    final public function eq(Number|string|int $num, ?int $scale = null): bool {}
+    public function eq(Number|string|int $num, ?int $scale = null): bool {}
 
-    final public function gt(Number|string|int $num, ?int $scale = null): bool {}
+    public function gt(Number|string|int $num, ?int $scale = null): bool {}
 
-    final public function gte(Number|string|int $num, ?int $scale = null): bool {}
+    public function gte(Number|string|int $num, ?int $scale = null): bool {}
 
-    final public function lt(Number|string|int $num, ?int $scale = null): bool {}
+    public function lt(Number|string|int $num, ?int $scale = null): bool {}
 
-    final public function lte(Number|string|int $num, ?int $scale = null): bool {}
+    public function lte(Number|string|int $num, ?int $scale = null): bool {}
   
-    final puclic function format(?int $scale = null, string $decimalSeparator = '.', string $thousandsSeparator = ''): string {}
+    puclic function format(?int $scale = null, string $decimalSeparator = '.', string $thousandsSeparator = ''): string {}
 
-    final public function with(int $maxExpansionScale, int $roundMode): Number {}
+    public function with(int $maxExpansionScale, int $roundMode): Number {}
 
-    final public function withMaxExpansionScale(int $maxExpansionScale): Number {}
+    public function withMaxExpansionScale(int $maxExpansionScale): Number {}
     
-    final public function withRoundMode(int $roundMode): Number {}
+    public function withRoundMode(int $roundMode): Number {}
     
-    final public function __toString(): string {}
+    public function __toString(): string {}
 }
-</code>
+</PHP>
 
 The bcXXX functions accept numbers to calculate as string, while Number accepts Number instance, string, and int.
 
@@ -207,13 +211,13 @@ I think the differences in arguments are easy to understand, so I will omit them
 **The notable difference here is "handling of scale".**
 
 For example, the existing behavior of bcadd is:
-<code>
+<PHP>
 bcadd('1.23', '2.111'); // Global settings are used. If set to 0, '3' is returned.
 bcadd('1.23', '2.111', 1); // '3.3' is returned.
-</code>
+</PHP>
 
 With Number it works like this:
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
@@ -222,12 +226,12 @@ $num2 = new Number('2.111');
 // If scale is omitted, the larger scale of $num and $num2 is used.
 // In this example, the scale of $num2 is larger, so the calculation is done with scale = 3.
 $result = $num->add($num2); // A Number containing '3.341' will be returned.
-</code>
+</PHP>
 
 In this way, **when calculating Number, scale is automatically determined.**
 
 If $num2 is not Number, the following behavior:
-<code>
+<PHP>
 use BcMath\Number;
 
 // $num2 is int
@@ -235,11 +239,42 @@ $num->add(4); // Equivalent to "$num->add(new Number('4'));"
 
 // $num2 is string
 $num->add('2.3355'); // Equivalent to "$num->add(new Number('2.3355'));"
-</code>
+</PHP>
 
-(updated 3/27)
-(updated 4/4)
 When calculating, the value is always implicitly converted to the bc_num structure that Number has internally.
+
+=== When $maxExpansionScale and $roundMode are different between objects ===
+
+Number is immutable, so the result of the calculation is always a new object. This item clarifies the behavior when the two properties $maxExpansionScale and $roundMode, which are not automatically set from the calculation result, differ between objects during calculation.
+
+Assumption: The Number class supports operator overloading, so whenever possible, computations with methods and computations with operators should have the same behavior.
+
+See the following example:
+
+<PHP>
+$num = new Number('1.23', 5, PHP_ROUND_HALF_UP);
+$num2 = new Number('2.000000', 10, PHP_ROUND_HALF_DOWN);
+
+$result_me = $num->add($num2);
+$result_op = $num + $num2;
+
+$result_me2 = $num2->add($num);
+$result_op2 = $num2 + $num;
+</PHP>
+
+First, since addition is a computation that should be commutative, $result_op and $result_op2 must have the same result, including the property values.
+
+Next, the computational behavior of methods and operators should be the same whenever possible, so $result_me and $result_op should have the same result, and $result_me2 and $result_op2 should have the same result.
+
+Therefore, the results of the above example must all be the same value.
+
+Since it is not possible to automatically determine the value of a property from the result of a calculation, this RFC shall use the following rules:
+
+  * These rules apply only to calculations that must be commutative (add, sub, mul) and where both values used in the calculation are Number objects.
+  * $maxExpansionScale shall prioritize the larger value. The result object always reflects the larger value.
+  * $roundMode has a higher priority in the following order: PHP_ROUND_HALF_UP > HP_ROUND_HALF_DOWN > PHP_ROUND_HALF_EVEN > PHP_ROUND_HALF_ODD > PHP_ROUND_CEILING > PHP_ROUND_FLOOR > PHP_ROUND_TOWARD_ZERO > PHP_ROUND_AWAY_FROM_ZERO. If the values differ, the one with higher priority is always reflected in the result object.
+
+So in the example above, $maxExpansionScale would be 10 and $roundMode would be PHP_ROUND_HALF_UP.
 
 === Comparison method ===
 
@@ -255,10 +290,10 @@ These are equivalent to the following operators:
 However, if specify $scale as a method argument, the comparison will be performed using up to the specified scale, like the existing `bccomp`. When comparing using operator overloads, it is purely comparing values.
 
 === format ===
-(updated 4/4)
+
 This behaves similar to number_format. However, the arguments are slightly different. See code example:
 
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('123456.789'); // round mode is  PHP_ROUND_TOWARD_ZERO
@@ -273,19 +308,19 @@ $num2 = new Number('123456.789', 10, PHP_ROUND_HALF_UP);
 $num->format(); // '123456.789'
 $num->format(1); // '123456.8'
 $num->format(2, '.', ','); // '123,456.79'
-</code>
+</PHP>
 
 === with, withMaxExpansionScale, withRoundMode ===
-(updated 4/4)
+
 Each generates and returns a new instance with the constructor option values reset.
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23', 5, PHP_ROUND_HALF_UP);
 $newNum = $num->withMaxExpansionScale(2); // same as new Number('1.23', 2, PHP_ROUND_HALF_UP)
 $newNum = $num->withRoundMode(PHP_ROUND_HALF_EVEN); // same as new Number('1.23', 5, PHP_ROUND_HALF_EVEN)
 $newNum = $num->with(8, PHP_ROUND_HALF_ODD); // same as new Number('1.23', 8, PHP_ROUND_HALF_ODD)
-</code>
+</PHP>
 
 ==== Operator overload ====
 
@@ -306,8 +341,7 @@ Calculations with the operator behave as if the corresponding method's optional 
 
 Therefore, calculations such as the following are allowed:
 
-(updated 3/27)
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
@@ -319,13 +353,13 @@ $num = new Number('1.23');
 $result = $num + '1.23456';
 $result->value; // '2.46456'
 $result->scale; // 5
-</code>
+</PHP>
 
 === Increment and decrement ===
 
 Incrementing and decrementing Number behaves similarly to GMP objects.
 
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23', 2);
@@ -335,35 +369,35 @@ $num++; // Here, $num will change to a new object.
 
 $num->value; // '2.23'
 $numA->value; // '1.23'
-</code>
+</PHP>
 
 ==== Exception ====
 There are several times when you should throw an exception, such as division by 0. This is the same as the existing bcXXX functions. Therefore, we will not prepare a new exception class specifically for Number.
 
 ==== Detailed examples ====
-(updated 4/4)
+
 I mainly provide examples to help  understand how to determine scale.
 
 === add ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
 $num2 = new Number('2.000000');
 $result = $num + $num2; // value is '3.230000', The larger scale of the two values is applied. (2 < 6, so 6 is used)
-</code>
+</PHP>
 
 === sub ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
 $num2 = new Number('2.000000');
 $result = $num - $num2; // value is '-0.770000', The larger scale of the two values is applied. (2 < 6, so 6 is used)
-</code>
+</PHP>
 
 === mul ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
@@ -373,10 +407,10 @@ $result = $num * $num2; // value is '3.02088', The resulting scale is the sum of
 $num = new Number('1.25');
 $num2 = new Number('4.00');
 $result = $num * $num2; // value is '5.0000', The resulting scale is the sum of the scales of the two values. (2 + 2 = 4)
-</code>
+</PHP>
 
 === div ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23'); // $maxExpansionScale is 10
@@ -386,29 +420,29 @@ $result = $num / $num2; // value is '0.369036903690', The max scale is the sum o
 $num = new Number('1.25'); // $maxExpansionScale is 10
 $num2 = new Number('5.00');
 $result = $num / $num2; // value is '0.25', The result fits within the maximum scale, so an implicit scale of 2 is set.
-</code>
+</PHP>
 
 === mod ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('6.234');
 $num2 = new Number('1.23');
 $result = $num % $num2; // value is '0.084', Use the scale of the dividend as is. (3)
-</code>
+</PHP>
 
 === powmod ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('4');
 $exponent = new Number('5');
 $modulus = new Number('3');
 $result = $num->powmod($exponent, $modulus); // value is '1', The scale is always 0 because the result is always an integer.
-</code>
+</PHP>
 
 === pow ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
@@ -422,10 +456,10 @@ $result = $num ** $exponent; // Scale is always 0 because the 0th power is alway
 $num = new Number('1.23'); // $maxExpansionScale is 10
 $exponent = new Number('-3');
 $result = $num ** $exponent; // value is '0.537383918356', The maximum scale is the sum of the left operand's scale and $maxExpansionScale. (2 + 10 = 12)
-</code>
+</PHP>
 
 === sqrt ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23'); // $maxExpansionScale is 10
@@ -433,34 +467,34 @@ $result = $num->sqrt(); // value is '1.109053650640', The max scale is the sum o
 
 $num = new Number('16.00'); // $maxExpansionScale is 10
 $result = $num->sqrt(); // value is '4', The result fits within the maximum scale, so an implicit scale of 0 is set.
-</code>
+</PHP>
 
 === floor ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
 $result = $num->floor(); // value is '1', The scale is always 0 because the result is always an integer.
-</code>
+</PHP>
 
 === ceil ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
 $result = $num->ceil(); // value is '2', The scale is always 0 because the result is always an integer.
-</code>
+</PHP>
 
 === round ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
 $result = $num->round(1); // value is '1.2', Implicitly sets the scale from the rounded value.
-</code>
+</PHP>
 
 === comparison methods ===
-<code>
+<PHP>
 use BcMath\Number;
 
 $num = new Number('1.23');
@@ -483,7 +517,7 @@ $num->lt($num2, 2); // false, Same as '1.23' < '1.23'
 
 $num->lte($num2); // true, Same as '1.23' <= '1.23456'
 $num->lte($num2, 2); // true, Same as '1.23' <= '1.23'
-</code>
+</PHP>
 
 ===== Backward Incompatible Changes =====
 None.
