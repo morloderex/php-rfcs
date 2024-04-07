@@ -1,6 +1,6 @@
 ====== PHP RFC: new MyClass()->method() without parentheses ======
 
-  * Date: 2023-12-29
+  * Date: 2024-04-07
   * Author: Valentin Udaltsov <vudaltsov@php.net>
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/new_without_parentheses
@@ -27,42 +27,15 @@ class MyClass
 new MyClass()->method(); // PHP Parse error: syntax error, unexpected token "->"
 </code>
 
-The goal of this RFC is to enable the second sytax without parentheses to:
-  * make coding with PHP more convenient,
-  * lower the learning curve,
-  * decrease the visual debt,
-  * ease transition from other C-like languages that don't require parentheses ([[https://onecompiler.com/java/3zxuee3bm|Java]], [[https://onecompiler.com/csharp/3zxudhw4s|C#]], [[https://onecompiler.com/typescript/3zxudfpyy|TypeScript]]).
-
-===== Ambiguity? =====
-
-At first glance ''new MyClass()->method()'' expression might seem ambiguous. But according to the same logic
-''new MyClass()'' is also ambiguous: is it ''new (MyClass())'' or ''new MyClass''? However, such ambiguity
-does not exist: ''new MyClass()'' is interpreted as an instantiation of class ''MyClass'' with zero
-constructor arguments, not as instantiation of ''MyClass()'' function call result.
-
-Here's how it is solved at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
-The formula for the ''new'' expression is ''T_NEW class_name|new_variable|(expr) ctor_arguments'', where ''new_variable''
-is a variable expression without calls. Thus PHP offers 3 ways to provide a class:
-
-<code php>
-// class_name
-new MyClass();
-
-// new_variable
-new $class();
-
-// (expr)
-new (trim(' MyClass '))();
-</code>
-
-This guarantees that the ''new'' expression is unambiguous: once the parser encounters ''T_NEW'', it considers
-whatever comes next a class name. Hence it's safe and unambiguous to further use the ''new'' expression on its
-own without parentheses. It's like refactoring ''(MyClass::new())->method()'' to ''MyClass::new()->method()'',
-nobody will ever read it as ''MyClass::(new())->method()'' or ''MyClass::(new()->method())''.
+The goal of this RFC is to enable the second syntax to:
+  * make coding with PHP more convenient
+  * lower the learning curve
+  * decrease the visual debt
+  * ease switching between other C-like languages that don't require parentheses ([[https://onecompiler.com/java/3zxuee3bm|Java]], [[https://onecompiler.com/csharp/3zxudhw4s|C#]], [[https://onecompiler.com/typescript/3zxudfpyy|TypeScript]]).
 
 ===== Proposal =====
 
-This RFC allows to omit parentheses around ''new'' expressions **with** constructor arguments' parentheses:
+This RFC allows to omit parentheses around the ''new'' expression when constructor arguments' parentheses **are** present. Given class
 
 <code php>
 class MyClass
@@ -75,6 +48,8 @@ class MyClass
     public function __invoke(): string { return '__invoke'; }
 }
 </code>
+
+one will be able to write
 
 <code php>
 var_dump(
@@ -106,25 +81,21 @@ var_dump(
 );
 </code>
 
-This RFC preserves grammar for ''new'' expressions **without** constructor arguments' parentheses, because in some cases
-omitting parentheses around the ''new'' expression will result in a valid expression with different meaning:
+This RFC still does not allow to omit parentheses around the ''new'' expression **without** constructor arguments' parentheses, because in some cases
+this leads to an ambiguity:
 
 <code php>
-(new MyClass)::$staticProperty; // Access static property on MyClass instance
-new MyClass::$staticProperty;   // Instantiate class MyClass::$staticProperty
+// Access property on a new instance or instantiate the result of expression?
+new MyClass::$staticProperty;
+new $myClass::$staticProperty;
+new $myClass->property;
 
-(new $myClass)::$staticProperty; // Access static property on an instance of class $myClass
-new $myClass::$staticProperty;   // Instantiate class $myClass::$staticProperty
-
-(new $myClass)->property; // Access non-static property on an instance of class $myClass
-new $myClass->property;   // Instantiate class $myClass->property
-
-(new $myClass)->method(); // Call method on an instance of class $myClass
-new $myClass->method();   // Instantiate class $myClass->method
+// Access method on a new instance or instantiate the result of expression?
+new $myClass->method();
 </code>
 
-This RFC allows to omit parentheses around any ''new'' anonymous class expressions regardless of constructor arguments'
-parentheses:
+This RFC allows to omit parentheses around the ''new'' anonymous class expression regardless of whether constructor arguments'
+parentheses are present or not:
 
 <code php>
 var_dump(
@@ -142,6 +113,33 @@ var_dump(
     new class { public function __invoke() { return '__invoke'; } }(),
 );
 </code>
+
+===== Ambiguity? =====
+
+At first glance ''new MyClass()->method()'' expression might seem ambiguous. But according to the same logic
+''new MyClass()'' is also ambiguous: is it ''new (MyClass())'' or ''new MyClass''? However, such ambiguity
+does not exist: ''new MyClass()'' is interpreted as an instantiation of class ''MyClass'' with zero
+constructor arguments, not as instantiation of ''MyClass()'' function call result.
+
+Here's how it is solved at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
+The formula for the ''new'' expression is ''T_NEW class_name|new_variable|(expr) ctor_arguments'', where ''new_variable''
+is a variable expression without calls. Thus PHP offers 3 ways to provide a class:
+
+<code php>
+// class_name
+new MyClass();
+
+// new_variable
+new $class();
+
+// (expr)
+new (trim(' MyClass '))();
+</code>
+
+This guarantees that the ''new'' expression is unambiguous: once the parser encounters ''T_NEW'', it considers
+whatever comes next a class name. Hence it's safe and unambiguous to further use the ''new'' expression on its
+own without parentheses. It's like refactoring ''(MyClass::new())->method()'' to ''MyClass::new()->method()'',
+nobody will ever read it as ''MyClass::(new())->method()'' or ''MyClass::(new()->method())''.
 
 ===== Backward Incompatible Changes =====
 
