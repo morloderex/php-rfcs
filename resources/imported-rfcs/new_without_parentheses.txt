@@ -85,12 +85,12 @@ This RFC still does not allow to omit parentheses around the ''new'' expression 
 this leads to an ambiguity:
 
 <code php>
-// Access property on a new instance or instantiate the result of expression?
+// Instantiate and then access the instance or instantiate the result of the expression?
+new MyClass::CONSTANT;
 new MyClass::$staticProperty;
+new $myClass::CONSTANT;
 new $myClass::$staticProperty;
 new $myClass->property;
-
-// Access method on a new instance or instantiate the result of expression?
 new $myClass->method();
 </code>
 
@@ -114,32 +114,49 @@ var_dump(
 );
 </code>
 
-===== Ambiguity? =====
+===== Why the proposed syntax is unambiguous =====
 
-At first glance ''new MyClass()->method()'' expression might seem ambiguous. But according to the same logic
-''new MyClass()'' is also ambiguous: is it ''new (MyClass())'' or ''new MyClass''? However, such ambiguity
-does not exist: ''new MyClass()'' is interpreted as an instantiation of class ''MyClass'' with zero
-constructor arguments, not as instantiation of ''MyClass()'' function call result.
+At first glance ''new MyClass()->method()'' expression might seem ambiguous. But according to the same logic ''new MyClass()'' is also ambiguous:
+is it ''new (MyClass())'' or ''new MyClass''? However, ''new MyClass()'' is unambiguously interpreted as an instantiation
+of class ''MyClass'' with zero constructor arguments, not an instantiation of ''MyClass()'' function call result. This
+is because PHP interprets the first expression after ''new'' as a class name.
 
-Here's how it is solved at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
-The formula for the ''new'' expression is ''T_NEW class_name|new_variable|(expr) ctor_arguments'', where ''new_variable''
-is a variable expression without calls. Thus PHP offers 3 ways to provide a class:
+Consider also ''MyClass::new()->method()''. It is not interpreted as ''MyClass::(new()->method())'' or ''MyClass::(new())->method()''.
+It is interpreted as ''(MyClass::new())->method()''. It's natural to assume that ''MyClass::new()'' is the first expression to evaluate.
+The same is true for ''new MyClass()->method()'': expression ''new MyClass()'' is also the first to evaluate.
+
+Here's how it looks at the [[https://github.com/php/php-src/blob/948b2bc2110667cfe53cec253893a3b021f22449/Zend/zend_language_parser.y#L1126|grammar level]].
+The formula for the ''new'' expression with explicit constructor arguments' parentheses is ''T_NEW class_name|new_variable|(expr) ctor_arguments'',
+where ''new_variable'' is a variable expression without calls.
 
 <code php>
-// class_name
 new MyClass();
+^   ^      ^
+|   |      |
+|—T_NEW    |—ctor_arguments
+    |
+    |—class_name
 
-// new_variable
+
 new $class();
+^   ^     ^
+|   |     |
+|—T_NEW   |—ctor_arguments
+    |
+    |—new_variable (cannot have calls!)
 
-// (expr)
 new (trim(' MyClass '))();
+^   ^                  ^
+|   |                  |
+|—T_NEW                |—ctor_arguments
+    |
+    |—(expr)
 </code>
 
-This guarantees that the ''new'' expression is unambiguous: once the parser encounters ''T_NEW'', it considers
-whatever comes next a class name. Hence it's safe and unambiguous to further use the ''new'' expression on its
-own without parentheses. It's like refactoring ''(MyClass::new())->method()'' to ''MyClass::new()->method()'',
-nobody will ever read it as ''MyClass::(new())->method()'' or ''MyClass::(new()->method())''.
+Once the parser encounters ''T_NEW'', it considers whatever comes next a class name, not a part of another expression.
+This guarantees that the ''new'' expression with arguments' parentheses can be unambiguously used as a separate expression
+without any additional parentheses. It also becomes clear why ''new_variable'' cannot have calls and why arguments' parentheses
+are crucial for the proposed syntax: parentheses denote the end of the class name and the end of the new expression.
 
 ===== Backward Incompatible Changes =====
 
