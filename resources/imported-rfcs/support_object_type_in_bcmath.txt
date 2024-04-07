@@ -1,5 +1,5 @@
 ====== PHP RFC: Support object type in BCMath ======
-  * Version: 0.8
+  * Version: 0.9
   * Date: 2024-03-24
   * Author: Saki Takamachi, saki@php.net
   * Status: Discussion
@@ -84,7 +84,7 @@ var_dump((string) $num); // '1'
 
 The constructor signature is:
 <PHP>
-public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_TOWARD_ZERO) {}
+public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_HALF_UP) {}
 </PHP>
 
 Since there is no need to consider errors for integers in the range that can be represented by ints, it is reasonable to accept ints in the constructor.
@@ -97,7 +97,7 @@ In many cases, Number Class can automatically calculate the scale of the calcula
 
 Since sqrt doesn't involve operator overloading, you can also require scale in the method argument. However, from a consistency point of view, I will use the same specifications as div etc.
 
-In addition to these three cases, <php>$roundMode</php> is used when scale is specified in the <php>format()</php> method and comparison methods. Specifies how to round the value when the calculation is stopped midway due to the maximum scale. The default value is <php>PHP_ROUND_TOWARD_ZERO</php>, which has the same behavior as the BCMath function.
+In addition to these three cases, <php>$roundMode</php> is used when scale is specified in the <php>format()</php> method and comparison methods. Specifies how to round the value when the calculation is stopped midway due to the maximum scale. The default value is <php>PHP_ROUND_HALF_UP</php>, which has the same behavior as the BCMath function.
 
 powmod has some restrictions on the arguments, so it will not prevent from automatically calculating the scale.
 
@@ -106,13 +106,13 @@ See code example.
 use BCMath\Number;
 
 $num = new Number('2'); // value is '2'
-$num->div('3'); // value is '0.6666666666', max scale is 0 + 10 = 10
+$num->div('3'); // value is '0.6666666667', max scale is 0 + 10 = 10
 
 $num = new Number('1'); // value is '1'
 $num->div('2'); // value is '0.5', max scale is 0 + 10 = 10, but the result is less than the max scale, so it becomes 1
 
-$num = new Number('2', 5, PHP_ROUND_HALF_UP); // value is '2'
-$num->div('3'); // value is '0.66667', max scale is 0 + 5 = 5, round mode is PHP_ROUND_HALF_UP
+$num = new Number('2', 5, PHP_ROUND_TOWARD_ZERO); // value is '2'
+$num->div('3'); // value is '0.66666', max scale is 0 + 5 = 5, round mode is PHP_ROUND_TOWARD_ZERO
 
 $num = new Number('1.2345', 2); // value is '1.2345'
 $num / 7; // value is '0.176357', max scale is 4 + 2 = 6
@@ -149,7 +149,7 @@ namespace BCMath;
 
 final readonly class Number
 {
-    public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_TOWARD_ZERO) {}
+    public function __construct(string|int $num, int $maxExpansionScale = 10, int $roundMode = PHP_ROUND_HALF_UP) {}
 
     public function add(Number|string|int $num): Number {}
 
@@ -185,9 +185,7 @@ final readonly class Number
 
     public function lte(Number|string|int $num, ?int $scale = null): bool {}
   
-    puclic function format(?int $scale = null, string $decimalSeparator = '.', string $thousandsSeparator = ''): string {}
-
-    public function with(int $maxExpansionScale, int $roundMode): Number {}
+    public function format(?int $scale = null, string $decimalSeparator = '.', string $thousandsSeparator = ''): string {}
 
     public function withMaxExpansionScale(int $maxExpansionScale): Number {}
     
@@ -296,21 +294,21 @@ This behaves similar to <php>number_format()</php>. However, the arguments are s
 <PHP>
 use BCMath\Number;
 
-$num = new Number('123456.789'); // round mode is  PHP_ROUND_TOWARD_ZERO
+$num = new Number('123456.789'); // PHP_ROUND_HALF_UP
 
-$num->format(); // '123456.789'
-$num->format(1); // '123456.7'
-$num->format(1, '.', ','); // '123,456.7'
-
-$num->format(2, ',', ' '); // '123 456,78' french notation
-
-$num2 = new Number('123456.789', 10, PHP_ROUND_HALF_UP);
 $num->format(); // '123456.789'
 $num->format(1); // '123456.8'
-$num->format(2, '.', ','); // '123,456.79'
+$num->format(1, '.', ','); // '123,456.8'
+
+$num->format(2, ',', ' '); // '123 456,79' french notation
+
+$num2 = new Number('123456.789', 10, PHP_ROUND_TOWARD_ZERO);
+$num->format(); // '123456.789'
+$num->format(1); // '123456.7'
+$num->format(2, '.', ','); // '123,456.78'
 </PHP>
 
-=== with, withMaxExpansionScale, withRoundMode ===
+=== withMaxExpansionScale, withRoundMode ===
 
 Each generates and returns a new instance with the constructor option values reset.
 <PHP>
@@ -319,7 +317,6 @@ use BCMath\Number;
 $num = new Number('1.23', 5, PHP_ROUND_HALF_UP);
 $newNum = $num->withMaxExpansionScale(2); // same as new Number('1.23', 2, PHP_ROUND_HALF_UP)
 $newNum = $num->withRoundMode(PHP_ROUND_HALF_EVEN); // same as new Number('1.23', 5, PHP_ROUND_HALF_EVEN)
-$newNum = $num->with(8, PHP_ROUND_HALF_ODD); // same as new Number('1.23', 8, PHP_ROUND_HALF_ODD)
 </PHP>
 
 ==== Operator overload ====
@@ -463,7 +460,7 @@ $result = $num ** $exponent; // value is '0.537383918356', The maximum scale is 
 use BCMath\Number;
 
 $num = new Number('1.23'); // $maxExpansionScale is 10
-$result = $num->sqrt(); // value is '1.109053650640', The max scale is the sum of the $num scale and $maxExpansionScale. (2 + 10 = 12)
+$result = $num->sqrt(); // value is '1.109053650641', The max scale is the sum of the $num scale and $maxExpansionScale. (2 + 10 = 12)
 
 $num = new Number('16.00'); // $maxExpansionScale is 10
 $result = $num->sqrt(); // value is '4', The result fits within the maximum scale, so an implicit scale of 0 is set.
@@ -520,14 +517,14 @@ $num->lte($num2, 2); // true, Same as '1.23' <= '1.23'
 </PHP>
 
 ===== Backward Incompatible Changes =====
-None.
+The class BCMath\Number is no longer available in userland.
 
 ===== Proposed PHP Version(s) =====
 Next minor version (currently 8.4)
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-Add BCMath\Number to all environments.
+None.
 
 ==== To Existing Extensions ====
 Only BCMath is affected.
@@ -548,7 +545,7 @@ None.
 There is no effect on anything other than BCMath.
 
 ===== Future Scope =====
-None;
+None.
 
 ===== Proposed Voting Choices =====
 There is a yes/no choice whether to accept this RFC and requires a 2/3 majority vote to be accepted.
@@ -568,4 +565,4 @@ https://externals.io/message/122651 (Mailing list thread before creating RFC)
 https://externals.io/message/122735 (Mailing list thread RFC Discussion)
 
 ===== Rejected Features =====
-None;
+None.
