@@ -1,257 +1,277 @@
-Interface Default Methods
-=========================
+Rounding Integers As Int
+========================
 
 :PHP-RFC: 0855
-:Title: Interface Default Methods
-:Author: Levi Morrison <levim@php.net>
+:Title: Rounding Integers As Int
+:Author: Marc Bennewitz <php@mabe.berlin>
 :Status: Declined
 :Type: Unknown
-:Created: 2022-06-27
-:Version: 2.0
+:Created: 2023-09-26
+:Version: 0.2
 
 Introduction
 ------------
 
-Over time, authors sometimes want to add methods to an interface. Today,
-this causes large breakages to every implementor. This RFC proposes a
-way to reduce the scale of breakage.
+PHP contains several build-in rounding functions
+`round <https://www.php.net/round>`__,
+`ceil <https://www.php.net/ceil>`__,
+`floor <https://www.php.net/floor>`__ and
+`number_format <https://www.php.net/number_format>`__.
 
-Additionally, sometimes interfaces can implement some functionality of
-their interface in terms of other parts of their interface. For example,
-the interface ``Countable`` could implement ``function isEmpty(): bool``
-by using ``$this->count() == 0``. Today, traits are often used to
-accomplish this, but a default interface implementation could be used
-instead, and would be simpler. When interfaces are designed with this
-technique in mind, it can enable productivity of the interface over
-time.
+Except ``number_format`` all of these functions take a ``float|int``, do
+a cast to ``float``, process on floating point number only and finally
+return a '' float''.
 
-For example, see `Rust's Iterator
-trait <https://doc.rust-lang.org/std/iter/trait.Iterator.html>`__ which
-has more than 40 functions with default implementations and the
-implementor mostly needs to implement a single function,
-``next(): Option<T>``. These functions with default behaviors have been
-stabilized over time with little to no breakage in practice. For
-example, ``for_each`` was added in v1.21 and ``map_while`` was added in
-v1.57.
+As a result of ``round``, ``ceil`` and ``floor`` the resulting value
+will be a floating point number rounded to your needs.
+
+In most cases this is sufficient but in cases of handling integer values
+above 2^53 you start to end up with unexpected results due to floating
+point arithmetic and precision loss.
+
+``number_format`` on the other hand produces human readable numbers as
+``string`` and since PHP 8.3 it also performs rounding integers without
+casting it to floating point numbers to fix the above issue mentioned.
 
 Proposal
 --------
 
-Interface methods can now provide a method body. This implementation
-will be used if the implementer does not otherwise provide an
-implementation. Default implementations are available for both instance
-and static methods.
+This RFC proposes to perform rounding on given int and return a rounded
+int value if possible by default. In case of integer under-/overflow the
+value will be cast to a float (double) and rounded based on the floating
+point number as it's done currently.
+
+For ``ceil``, ``floor`` and ``round`` with ``precision >= 0`` this means
+a given int gets returned as is.
+
+--------------
+
+Rounding a given float will perform rounding on floating point number
+directly and return float as it's done currently. There will be no
+implicit cast to int because floats (double) can represent a much wider
+range of numbers than int (32 or 64 bit).
+
+Floating point numbers on the other hand gets imprecise on representing
+numbers > 2^53 but passing a float to be rounded such imprecision must
+be known in first place already.
+
+--------------
+
+An additional argument will be introduced ``bool force_float``. In PHP
+8.next this will default to ``force_float=true`` to keep current
+behavior but the new behavior can already be used by passing
+``force_float=false``. In PHP 9.0 the default will change to
+``force_float=false`` to get the new behavior by default but the
+previous behavior can be forced with ``force_float=true``.
+
+The behavior will be as follows:
+
+::
+
+   // No change, rounding floating point number will keep processing and returning float as it does now
+   ceil(float, force_float=false): float
+   ceil(float, force_float=true): float
+   floor(float, force_float=false): float
+   floor(float, force_float=true): float
+   round(float, force_float=false): float
+   round(float, force_float=true): float
+
+   // rounding integers with force_float=false will process and return int if possible
+   ceil(int, force_float=false): int
+   ceil(int, force_float=true): float
+   floor(int, force_float=false): int
+   floor(int, force_float=true): float
+   round(int, precision: >= 0, force_float=false): int
+   round(int, precision: < 0, force_float=false): int|float // implicit cast to float only in case of integer under-/overflow
+   round(int, force_float=true): float
+
+This will result in less implicit casts and more precise rounding of
+integers above 2^53.
+
+The ``int``-type is compatible to ``float``, returning an int instead of
+a float will still be a number accepted for type-hints of ``int``,
+``float``, ``int|float`` or ``mixed`` with strict_types enabled.
+
+As a result PHP will behave more precisely on rounding integer values.
+
+Examples
+--------
 
 .. code:: php
 
-   interface Example {
-     // Today, you cannot specify an implementation, only a
-     // signature.
-     function method1(): void;
+   function takeFloat(float $v) { return $v; }
+   function returnFloat($v): float { return $v; }
 
-     // With this RFC, you can provide an implementation:
-     function method2(): void {
-       echo __METHOD__, "\n";
-     } 
-   }
+   var_dump(round(1));
+   var_dump(round(1.0));
+   var_dump(round(987654321098765432, precision: -3));
+   var_dump(round(987654321098765432, precision: -4)); // integer overflow
+   var_dump(round(10000000000000055296)); // input is float
+   var_dump(takeFloat(round(987654321098765432, precision: -3)));
+   var_dump(returnFloat(round(987654321098765432, precision: -3)));
 
-Interface methods can also now be ``private`` if they a have method
-body. The purpose here is to allow helper routines if the default
-implementations of the ``public`` methods need them.
+   echo "\n#########################\n";
 
-The methods with default implementations are inherited similarly to
-abstract base classes, as opposed to how traits behave. For instance, a
-private method on the interface is not accessible to the class which
-implements the interface; with a trait it would be.
+   var_dump(round(1, force_float=true));
+   var_dump(round(1.0, force_float=true));
+   var_dump(round(987654321098765432, precision: -3, force_float=true));
+   var_dump(round(987654321098765432, precision: -4, force_float=true)); // integer overflow
+   var_dump(round(10000000000000055296, force_float=true)); // input is float
+   var_dump(takeFloat(round(987654321098765432, precision: -3, force_float=true)));
+   var_dump(returnFloat(round(987654321098765432, precision: -3, force_float=true)));
 
-Default Method Resolution
-~~~~~~~~~~~~~~~~~~~~~~~~~
+   echo "\n#########################\n";
 
-Default methods for interfaces introduce a form of multiple inheritance.
-How is a method selected?
+   var_dump(round(1, force_float=false));
+   var_dump(round(1.0, force_float=false));
+   var_dump(round(987654321098765432, precision: -3, force_float=false));
+   var_dump(round(987654321098765432, precision: -4, force_float=false)); // integer overflow
+   var_dump(round(10000000000000055296, force_float=false)); // input is float
+   var_dump(takeFloat(round(987654321098765432, precision: -3, force_float=false)));
+   var_dump(returnFloat(round(987654321098765432, precision: -3, force_float=false)));
 
-Java's resolution algorithm looks like this:
+8.3 behavior (current):
 
-#. Class definitions always win. If a class, or a parent class, defines
-   a concrete method, then this will always win over all possible
-   default methods.
-#. More specific interfaces take priority over less specific ones. If
-   interfaces ``A`` and ``B`` exist and ``B`` extends ``A``, and both
-   have a default method for the same method, then when a class
-   implements B directly or indirectly the method from ``B`` will take
-   precedence over the method from ``A``.
-#. If the above rules fail, then the class needs to implement the method
-   itself, possibly delegating to one of the interfaces.
+::
 
-This RFC proposes the same. However, rule 2 is only partially
-implemented at this time.
+   float(1)
+   float(1)
+   float(9.87654321098766E+17)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
+   #########################
+   Unknown named parameter $force_float
 
-Here's an example of a class delegating to another method:
+8.4 behavior (no change by default but possible to opt-in to new
+behavior):
 
-.. code:: php
+::
 
-   interface Interface1 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
+   float(1)
+   float(1)
+   float(9.87654321098766E+17)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
+   #########################
+   float(1)
+   float(1)
+   float(9.87654321098766E+17)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
+   #########################
+   int(1)
+   float(1)
+   int(987654321098765000)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
 
-   interface Interface2 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
+9.0 behavior (Changed default behavior):
 
-   class Class1 implements Interface1, Interface2 {
-       function method1() {
-           Interface1::method1();
-       }
-   }
+::
 
-   (new Class1())->method1(); // Interface1::method1
-
-Parent Scoping
-~~~~~~~~~~~~~~
-
-In interface default methods, you cannot use the ``parent::`` scoping
-mechanism. The following does not work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1() { parent::method1(); }
-   }
-
-The reason is that interfaces can extend multiple other interfaces e.g.
-
-.. code:: php
-
-   interface Interface3 extends Interface1, Interface2 {}
-
-The name of the interface should be used instead:
-
-.. code:: php
-
-   interface Interface2 extends Interface1 {
-       function method1() { Interface1::method1(); }
-   }
-
-However, if a sub-class of the inheriting class calls
-``parent::method1()``, it will work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   class Class1 implements Interface1 {
-       // Inherits Interface1::method1() here.
-   }
-
-   class Class2 extends Class1 {
-       function method1() { parent::method1(); }
-   }
-
-   (new Class2())->method1);
-   // output:
-   // Interface1::method1
-
-Cancelling Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If an interface method extends a parent interface method which has a
-default, this prevents using the default method for classes which
-implement the child interface but do not directly implement the parent
-one:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, "\n"; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1();
-   }
-
-   /* Would be an error because method1 has not been implemented.
-   class Class1 implements Interface2 {
-       // error: method1 has not been implemented.
-   }
-    */
-
-   // This is subtly different, but valid:
-   class Class1 implements Interface1, Interface2 {}
-
-The behavior could go either way. I picked this behavior because if it's
-wrong, it's easier to correct than the other way around.
+   int(1)
+   float(1)
+   int(987654321098765000)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
+   #########################
+   float(1)
+   float(1)
+   float(9.87654321098766E+17)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
+   #########################
+   int(1)
+   float(1)
+   int(987654321098765000)
+   float(9.8765432109877E+17)
+   float(1.0000000000000055E+19)
+   float(9.87654321098766E+17)
+   float(9.87654321098766E+17)
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as long as you do not use the feature.
+A BC break happens on type reporting functions like ``is_float``,
+``get_debug_type``, ``gettype`` and strict comparison ``===`` will now
+report an int on rounding integers by default.
 
-If you do use the feature:
-
--  Adding a default implementation to an existing interface method will
-   not break existing code, because every existing usage has a higher
-   priority than the default.
--  If you add a new method to an interface, there is a compatibility
-   break. The impact of the break is limited to places where the
-   implementor/inheritor of the interface has a method of the same name.
+The old behavior can be forced by explicitly passing
+\`force_float=true\` argument or by explicitly casting the result back
+to float ``(float)round($num)``.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3.
+-  Introduce new argument ``force_float=true`` in PHP 8.next
+-  Change default to ``force_float=false`` as described in PHP 9.
 
 RFC Impact
 ----------
 
-To Extensions
-~~~~~~~~~~~~~
+To SAPIs
+~~~~~~~~
 
-Modules can specify an interface implementation as well. These internal
-default methods should not be marked with ``ZEND_ACC_ABSTRACT`` and
-should be instead marked with ``ZEND_ACC_DEFAULT_METHOD``.
+none
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+none
 
 To Opcache
 ~~~~~~~~~~
 
-Opcache should also work with this feature. The proof of concept
-implementation has not triggered any issues so far in CI.
+none
 
-To the Ecosystem
+New Constants
+~~~~~~~~~~~~~
+
+none
+
+php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-Previously, interface methods were not allowed to have method bodies.
-These tools such as parsers, code analyzers, etc will need to be
-updated.
+none
 
 Open Issues
 -----------
 
 Make sure there are no open issues when the vote starts!
 
+Unaffected PHP Functionality
+----------------------------
+
+Rounding floating point numbers will not be affected in any way.
+
 Future Scope
 ------------
 
-This feature may be used to enhance existing interfaces in PHP.
+After PHP 9 it can be considered to deprecate and remove the
+``force_float`` argument again but due to very long future this is not
+part of this RFC.
 
--  ``Countable`` could add
-   ``function isEmpty(): bool { return $this->count() == 0; }``.
--  ``Iterator`` could add methods like ``map``, ``filter``, and
-   ``reduce`` which behave similarly to ``array_map``, ``array_filter``,
-   and ``array_reduce``.
+Proposed Voting Choices
+-----------------------
 
-Voting
-------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted. Voting started on 2024-03-17 and will end
+on 2024-04-02 00:00 GMT.
 
-The vote will be a simple yes/no vote on whether to include the feature.
-
-Question: Interface Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Rounding Integers as int
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -262,8 +282,8 @@ Voting Choices
 Patches and Tests
 -----------------
 
-Here is a work-in-progress pull request:
-https://github.com/php/php-src/pull/11467.
+-  Branch: https://github.com/marc-mabe/php-src/tree/integer_rounding
+-  PR: https://github.com/php/php-src/pull/12301
 
 Implementation
 --------------
@@ -278,16 +298,24 @@ After the project is implemented, this section should contain
 References
 ----------
 
-Links to external references, discussions or RFCs
+-  https://externals.io/message/120373
+-  https://externals.io/message/121147 (RFC discussion)
 
 Rejected Features
 -----------------
 
-Keep this updated with features that were discussed on the mail lists.
+Add new functions
+^^^^^^^^^^^^^^^^^
+
+PHP is a loosely typed langue and as such it's extremely uncommon to
+have to call different rounding functions for rounding ``int`` vs.
+``float``. Also the normal ``round`` already does the trick and mostly
+you won't know better until you get bitten by floating point.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Levi Morrison, levim@php.net
-:Slug: interface-default-methods
-:Wiki URL: https://wiki.php.net/rfc/interface-default-methods
+:First Published At: https://wiki.php.net/RFC/integer-rounding
+:Original Authors: Marc Bennewitz, php@mabe.berlin
+:Slug: integer-rounding
+:Wiki URL: https://wiki.php.net/rfc/integer-rounding
