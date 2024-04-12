@@ -1,21 +1,31 @@
 ====== PHP RFC: PDO Driver specific SQL parser ======
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2024-04-11
   * Author: Matteo Beccati, mbeccati@php.net
   * Status: Draft 
   * First Published at: http://wiki.php.net/rfc/pdo_driver_specific_parsers
 
 ===== Introduction =====
-The PDO extension contains a SQL parser that is used to find positional and named parameter placeholders and subsequently transform the SQL in a format that is accepted by the database is use.
+The PDO extension contains a SQL parser, whose main purpose is to recognise parameter placeholders inside queries (i.e. ''"?"'' and ''"::paramName"''), so that it knows how many and what parameters to expect for a query, and pass the information to the PDO driver in use.
 
-This parser had historically being modelled to work with was the de-facto SQL standard in the PHP ecosystem at that time: MySQL. However, the SQL dialect used by MySQL is different when handling string literals from standard SQL, followed by other database vendors, such as PostgreSQL and SQLite.
+This parser had historically being modelled to work with what was the de-facto SQL standard in the PHP ecosystem at that time: MySQL. However, the SQL dialect used by MySQL is different when handling string literals from standard SQL, followed by other database vendors, such as PostgreSQL and SQLite.
 
 Specifically, MySQL treats the backslash character as escape character: <code php>'This \'word\' is a single quoted'</code>
-Whereas standard SQL uses double single quotes: <code sql>'This ''word'' is a single quoted'</code>
+Whereas the SQL standard uses double single quotes: <code sql>'This ''word'' is a single quoted'</code>
 
-That means that PDO could not be able to find placeholders in queries when string literals contain backslashes, e.g. the following bugs [[https://bugs.php.net/bug.php?id=78534|[1]]], [[https://bugs.php.net/bug.php?id=79276|[2]]], [[https://bugs.php.net/bug.php?id=80340|[3]]], and possibly other duplicates.
+When using databases other than MySQL with PDO, valid queries having string literals ending with a backslash character are throwing off the parser and causing apparently inexplicable bugs.
 
-Similarly, in order to support the PostgreSQL-only "?" operator, the (global) PDO SQL parser had to be modified in a [[rfc:pdo_escape_placeholders|previous RFC]][4].
+For example:
+
+<code sql>
+SELECT 'foo\' AS a, '?' AS b
+</code>
+
+will make PDO consider ''"'foo\' AS a, '"'' to be a string literal and will parse the following "?" as a positional parameter placeholder. In fact, if you pay close attention, even the DocuWiki SQL code formatter is thrown off by this very example.
+
+We have several reports of similar bugs [[https://bugs.php.net/bug.php?id=78534|[1]]], [[https://bugs.php.net/bug.php?id=79276|[2]]], [[https://bugs.php.net/bug.php?id=80340|[3]]], and possibly other duplicates.
+
+Likewise, having a global SQL parser in PDO for all the drivers meant that with my previous [[rfc:pdo_escape_placeholders|RFC to support the PostgreSQL-only "?" operator]][4], the only possible way was to modify the PDO SQL parser, luckily without any known side-effects for other databases.
 
 ===== Proposal =====
 The proposal is to:
