@@ -220,9 +220,7 @@ Properties with hooks may not be used in multi-property declarations.  Doing so 
 
 The ''get'' and ''set'' hooks override the PHP default read and write behavior.  They may be implemented individually or together.
 
-When a hook is called, inside that hook or any subsequent method calls it makes <php>$this->[propertyName]</php> will refer to the "unfiltered" value of the property.  When accessed from anywhere else, <php>$this->[propertyName]</php> calls will go through the relevant hook.  This is true for all hooks on the same property.  This includes, for example, writing to a property from the ''get'' hook; that will write to the backing property, bypassing the ''set'' hook.
-
-This is enforced at runtime based on the call stack so if a ''get'' hook for property <php>$foo</php> calls method <php>bar()</php>, then inside that method <php>$this->foo</php> will refer to the raw property, both read and write.  If <php>bar()</php> is called from somewhere other than the hook, reading from <php>$this->foo</php> will trigger the ''get'' hook.  This behavior is identical to that already used by <php>__get</php> and <php>__set</php> today.
+When a hook is called, inside that hook <php>$this->[propertyName]</php> will refer to the "unfiltered" value of the property, called the "backing value."  When accessed from anywhere else, <php>$this->[propertyName]</php> calls will go through the relevant hook.  This is true for all hooks on the same property.  This includes, for example, writing to a property from the ''get'' hook; that will write to the backing value, bypassing the ''set'' hook.
 
 A normal property has a stored "backing value" that is part of the object, and part of the memory layout of the class.  However, if a property has at least one hook, and none of them make use of <php>$this->[propertyName]</php>, then no backing value will be created and there will be no data stored in the object automatically (just as if there were no property, just methods).  Such properties are known as "virtual properties," as they have no materialized stored value.
 
@@ -483,6 +481,8 @@ class Person {
     }
 }
 </PHP>
+
+If a hook calls a method that in turn tries to read or write from the property again, that would normally result in an infinite loop.  To prevent that, accessing the backing value of a property from a method called from a hook on that property will throw an Error.  That is somewhat different than the existing behavior of <php>__get</php> and <php>__set</php>, where such sub-called methods would bypass the magic methods.  However, as valid use cases for such circular logic are difficult to identify and there is added risk of confusion with dynamic properties, we have elected to simply block that access entirely.
 
 ==== References ====
 
