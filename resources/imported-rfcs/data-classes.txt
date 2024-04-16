@@ -1,0 +1,175 @@
+====== PHP RFC: Data classes ======
+
+  * Date: 2024-04-16
+  * Author: Ilija Tovilo, tovilo.ilija@gmail.com
+  * Status: Draft
+  * Target Version: PHP 8.x
+  * Implementation: https://github.com/php/php-src/pull/13800
+
+===== Proposal =====
+
+This RFC proposes to add data classes, which are classes with [[https://en.wikipedia.org/wiki/Value_semantics|value semantics]].
+
+<code php>
+data class Vector2 {
+    public function __construct(
+        public $x,
+        public $y,
+    ) {}
+}
+
+$v1 = new Vector2(1, 2);
+$v2 = $v1;
+$v2->x++;
+
+var_dump($v1 === $v2); // false
+
+$v2->x--;
+var_dump($v1 === $v2); // true
+</code>
+
+===== The problem =====
+
+Classes are commonly used to model data in PHP. Such classes have many names (plain old php objects, data transfer objects, structs, etc). This allows the developer to describe the shape of the data, thus documenting it and improving developer experience in IDEs.
+
+Using classes for data comes with one significant downside: Objects are passed by reference, rather than by value. When dealing with mutable data, this makes it very easy to shoot yourself in the foot by exposing mutations to places that don't expect to see them.
+
+Consider the following example:
+
+<code php>
+class Vector2 {
+    public function __construct(
+        public $x,
+        public $y,
+    ) {}
+}
+
+function createShapes() {
+    // Use same position for both shapes
+    $vec = new Vector2(10, 20);
+    $circle = new Circle(position: $vec, radius: 10);
+    $square = new Square(position: $vec, side: 20);
+    return [$circle, $square];
+}
+
+$shapes = createShapes();
+
+function applyGravity() {
+    foreach ($shapes as $shape) {
+        /* We're not physicists. :P */
+        $shape->position->y--;
+    }
+}
+
+applyGravity($shape);
+
+foreach ($shapes as $shape) {
+    var_dump($shape->position);
+}
+// Vector2(10, 18), Vector2(10, 18)??
+</code>
+
+Since both shapes are created with the same position, ''createShapes()'' tries to be resourceful and uses the same ''Vector2'' instance for both shapes. Unfortunately, ''applyGravity()'' is not aware of this optimization and applies its change to the same object twice.
+
+What's the solution? ''position'' needs to be copied, but where? We can either copy it in ''createShapes()'' so that each shape has its own distinct position, or we can copy it in ''applyGravity()'', assuming that ''position'' may be referenced from somewhere else. For the latter case, we may mark ''Vector2'' as ''readonly'' to get some guarantees that we get it right. Which of these two approaches is better depends on how many positions can be shared, and how often they change. Unfortunately, either can lead to useless copies.
+
+What we really want is to automatically copy ''position'' when it is changed //and// when it is referenced from somewhere else. This is precisely the problem data classes try to solve.
+
+===== The solution =====
+
+As hinted at previously, the solution this RFC proposes is to introduce data classes, which are classes with value semantics. Like arrays, strings and other value types, data classes are //conceptually// copied when assigned to a variable, or when passed to a function.
+
+With this description, let's reconsider ''createShapes()''.
+
+<code php>
+data class Vector2 { ...  }
+
+function createShapes() {
+    // Use same position for both shapes
+    $vec = new Vector2(10, 20);
+    $circle = new Circle(position: $vec, radius: 10);
+    $square = new Square(position: $vec, side: 20);
+    return [$circle, $square];
+}
+</code>
+
+//Conceptually//, ''$circle->position'' and ''$square->position'' are distinct objects at the end of this function. ''applyGravity()'' can no longer influence multiple references to ''position''. This completely avoids the "spooky action at a distance" problem.
+
+===== CoW 🐄 =====
+
+But wait, this sounds familiar.
+
+<blockquote>
+What's the solution? ''position'' needs to be copied, but where? We can either copy it in ''createShapes()'' so that each shape has its own distinct position ... Unfortunately, either can lead to useless copies.
+
+<cite>This RFC, seconds ago</cite>
+</blockquote>
+
+You may assume that data classes will be just as slow as creating a copy for each usage of a data class. However, data classes have a cool trick up their sleeves: Copy-on-write, or CoW for short. CoW is already used for both arrays and strings, so this is not a new concept to the PHP engine. PHP tracks the reference count for each allocation such as objects, arrays and strings. When value types are modified, PHP checks if the reference count is >1, and if so, it copies the element before performing a modification.
+
+<code php>
+function print($value) {
+    var_dump($value);
+}
+
+function appendAndPrint($value) {
+    $value[] = 'baz';
+    var_dump($value);
+}
+
+print(['foo', 'bar']);
+appendAndPrint(['foo', 'bar']);
+
+$array = ['foo', 'bar'];
+print($array);
+appendAndPrint($array);
+</code>
+
+//Note:// This code ignores the fact that array literals are constant, for simplicity.
+
+With the rules described above, the only line performing potential copies is ''$value[] = 'baz';'', since it performs a modification of the array. The copy is also avoided unless ''$value'' is referenced from somewhere else, which is only the case when passing the local variable ''$array'' to ''appendAndPrint()''.
+
+This is already how arrays work today. Data classes follow the exact same principle.
+
+<code php>
+function print($value) {
+    var_dump($value);
+}
+
+function modifyAndPrint($value) {
+    $value->x++;
+    var_dump($value);
+}
+
+print(new Vector2(1, 2));
+appendAndPrint(new Vector2(1, 2));
+
+$vec = new Vector2(1, 2);
+print($vec);
+appendAndPrint($vec);
+</code>
+
+Only one implicit copy happens, namely in ''modifyAndPrint()'' when ''$value'' is still referenced as ''$vec'' from the caller.
+
+===== Method calls =====
+
+TODO
+
+===== Reflection =====
+
+TODO
+
+===== Future scope =====
+
+  - Hashing for ''SplObjectStorage''.
+
+===== Vote =====
+
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
+
+As this is a language change, a 2/3 majority is required.
+
+<doodle title="Introduce data classes in PHP 8.x?" auth="ilutov" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
