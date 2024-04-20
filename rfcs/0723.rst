@@ -1,33 +1,28 @@
-#[Deprecated] Attribute
-=======================
+#[\Deprecated] Attribute
+========================
 
 :PHP-RFC: 0723
-:Title: #[Deprecated] Attribute
-:Author: Benjamin Ebelei
+:Title: #[\Deprecated] Attribute
+:Author: Benjamin Eberlei, Tim Düsterhus
 :Status: Draft
 :Type: Standards Track
-:Created: 2020-05-06
-:Version: 1.2
+:Created: 2024-04-15
+:Version: 1.3
 
 Introduction
 ------------
 
-With the Attributes RFC accepted for PHP 8, this is a proposal for an
-internal attribute hooking into the engine. It allows to mark functions
-and methods as deprecated with the same mechanism that the engine and
-extensions already support for internal functions and methods for many
-years.
+PHP’s internal functions can be marked as deprecated, making this
+information available to Reflection and emitting deprecation errors, but
+there is equivalent functionality for functions defined in userland.
 
-The benefit of using a declarative attribute to mark deprecations over
-either docblock, trigger_error or a combination of both is that it
-provides both a human and a machine readable note about deprecation.
-This allows human readers, static analysis tools, IDEs and the runtime
-of PHP to rely on a single bit of information instead of multiple
-different ones.
-
-It also serves as a good prototype and first step, as usually all
-languages with attributes also have a Deprecated attribute in their
-language core.
+While the functionality can be emulated using ``trigger_error()`` to
+emit a ``E_USER_DEPRECATED`` error when calling a method and either
+parsing a doc comment for the ``@deprecated`` annotation or attaching a
+custom-defined attribute and reading either one with Reflection, it
+requires special handling for internal and userland functions
+respectively: ``ReflectionFunctionAbstract::isDeprecated()`` always
+returns ``false`` for userland functions.
 
 Proposal
 --------
@@ -47,10 +42,13 @@ When this attribute is present, during the compile step the existing
 function), which will lead to a deprecation warning when the function is
 called at runtime, with only minimal changes in the VM.
 
-This functionality is present for internal functions already. The
-Deprecated attribute allows to expose this feature to userland
-functions/methods and closes a gap between internal and userland
-functions.
+The ZEND_ACC_DEPRECATED flag and behavior is present for internal
+functions already. The presence of a Deprecated attribute allows to
+expose this feature to userland functions/methods and closes a
+capability gap between internal and userland functions.
+
+For userland functions the E_USER_DEPRECATED level is used, instead of
+the E_DEPRECATED that is raised for internal functions.
 
 .. code:: php
 
@@ -75,7 +73,8 @@ functions.
 The deprecated class is final and cannot be extended. The reason for
 this is that the engine internally cannot autoload attributes, so
 checking for a subclass that extends the Deprecated class is not
-technically possible. Marking the class as final prevents this.
+technically possible. Marking the class as final prevents that users
+extend the class and expect their children exhibit the same behavior.
 
 Runtime Effects
 ~~~~~~~~~~~~~~~
@@ -102,13 +101,16 @@ RFC.
 Backward Incompatible Changes
 -----------------------------
 
-A class with the name "Deprecated" is introduced into the global
-namespace.
+``Deprecated`` can no longer be used as a class name in the global
+namespace. A GitHub search for
+``"class Override " language:php symbol:override`` revealed a total of
+318 matches in source code. Many of them appear within a comment. The
+actual class definition all appear to be defined within a namespace.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.1 for function/method deprecations
+Next minor (PHP 8.4).
 
 RFC Impact
 ----------
@@ -116,51 +118,79 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-None
+None.
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-None
+None.
 
 To Opcache
 ~~~~~~~~~~
 
-None
+None.
 
 New Constants
 ~~~~~~~~~~~~~
 
-None
+None.
 
 php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-None
+None.
 
 Open Issues
 -----------
 
-A few things tracked in https://github.com/php/php-src/pull/6521
+A few things tracked in https://github.com/php/php-src/pull/11293
+
+Future Scope
+------------
+
+-  Allowing #[\Deprecated] on classes or other targets of attributes
+-  Adding further metadata to the Deprecated attribute beyond a custom
+   message, such as hints for replacements that IDEs could use.
 
 Proposed Voting Choices
 -----------------------
 
-Accept #[Deprecated] attribute into core?
+Question: Accept the #[\Deprecated] attribute as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-https://github.com/php/php-src/pull/6521
+https://github.com/php/php-src/pull/11293
 
-No implementation for deprecated class constants, properties and
-parameters yet.
+Implementation
+--------------
+
+n/a
+
+References
+----------
+
+-  Implementation: https://github.com/php/php-src/pull/11293
+-  Early Mailing List Discussion:
+   https://externals.io/message/112554#112554
+
+Rejected Features
+-----------------
+
+n/a
 
 Additional Metadata
 -------------------
 
-:Original Authors: Benjamin Ebelei
+:Original Authors: Benjamin Eberlei, Tim Düsterhus
 :Original Status: Under Discussion
-:Original Version: 1.2-dev
+:Original Version: 1.3-dev
 :Slug: deprecated_attribute
 :Wiki URL: https://wiki.php.net/rfc/deprecated_attribute
