@@ -9,11 +9,30 @@
 
 The <php>XMLReader</php> and <php>XMLWriter</php> class are two classes that deal with XML in a stream-oriented manner. The former is an XML "pull parser". This means that instead of keeping the data in memory or building a document tree, the document is streamed and the developer can instruct <php>XMLReader</php> to parse chunks at the current cursor. The advantage is that you can process and filter large documents and it is used as a lower-level building block for more complex handling of large XML documents. Similarly, <php>XMLWriter</php> creates an XML document by using functions like <php>startElement</php> and <php>writeElement</php> that is written either to memory or to a stream.
 
-There is however a strange limitation to these classes: they cannot operate on an already-open stream! This is bizarre as the APIs (both internally and user-facing) are stream-oriented. This RFC aims to fix that problem and aims to fix some other inconsistency as well.
+There is however a strange limitation to these classes: they cannot operate on an already-open stream! This is bizarre as the APIs (both internally and user-facing) are stream-oriented. Streams that are already open are common when working with HTTP requests for example, data passed from a framework, or just XML data embedded in an existing stream. In short, the lack of an API that works with already-opened streams  causes developers to rely on workarounds, e.g. reading the stream entirely to memory and then using the <php>XML{Reader,Writer}</php> APIs. That's just wasteful and needlessly difficult. This RFC aims to fix that problem and aims to fix some other inconsistency as well.
 
 ===== Proposal =====
 
+I propose to add a new function called <php>openStream()</php> to both <php>XMLReader</php> and <php>XMLWriter</php>. Here is how they would look like:
 
+<PHP>
+class XMLReader {
+    /** @param resource $stream */
+    public static function openStream($stream, ?string $baseUri = null, ?string $encoding = null, int $flags = 0): XMLReader {}
+}
+
+class XMLWriter {
+    /** @param resource $stream */
+    public function openStream($stream): void {}
+}
+</PHP>
+
+The signature for <php>XMLReader::openStream()</php> is heavily inspired by the existing function <php>public static XMLReader::open(string $uri, ?string $encoding = null, int $flags = 0): bool|XMLReader</php> that operates on files.
+However, a major difference is that <php>XMLReader::openStream()</php> is static-only, whereas the other open functions of <php>XMLReader</php> can either be statically or non-statically called and change their return-value behaviour depending on that. As we seem to try to get away from such strange APIs, I decided to only make a static variation available. When you try to call this method non-statically, you'll get an Error to avoid confusion stating "XMLReader::openStream() can only be called statically".
+
+The signature for <php>XMLWriter::openStream()</php> should be self-explanatory. It is also modeled like the other open functions, but they are considerably simpler. You'll also notice the lack of an encoding argument, and that's because this is already handled by the <php>XMLWriter::startDocument()</php> function.
+
+While implementing this, I found some strange behaviour regarding the <php>?string $encoding</php> parameter of the existing functions <php>XMLReader::open()</php> and <php>XMLReader::XML()</php>. The first oddity is that they emit a warning instead of throwing a ValueError when the encoding contains NULL bytes. This is inconsistent with how other functions handle it. I propose to promote this warning to a ValueError instead. The second oddity is that invalid encoding names are ignored entirely. This means that it won't emit a warning or anything, but just silently not set the encoding. This can hide bugs. I propose to also throw a ValueError in this case stating "Argument #X ($encoding) must be a valid character encoding".
 
 ===== Backward Incompatible Changes =====
 
