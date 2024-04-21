@@ -1,0 +1,140 @@
+====== PHP RFC: Correctly name the rounding mode and make it an Enum ======
+  * Version: 0.0.1
+  * Date: 2024-04-21
+  * Author: Saki Takamachi, saki@php.net
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/correctly_name_the_rounding_mode_and_make_it_an_Enum
+
+===== Introduction =====
+There are eight rounding modes in the current master branch (8.4):
+<code>
+const PHP_ROUND_HALF_UP
+const PHP_ROUND_HALF_DOWN
+const PHP_ROUND_HALF_EVEN
+const PHP_ROUND_HALF_ODD
+const PHP_ROUND_CEILING
+const PHP_ROUND_FLOOR
+const PHP_ROUND_TOWARD_ZERO
+const PHP_ROUND_AWAY_FROM_ZERO
+</code>
+
+There are two problems with these. First, the value is just an int, so we need to verify that the value passed is a valid rounding mode. The second problem is that the naming of some modes does not match the actual situation.
+
+See an example regarding the second problem:
+<PHP>
+round(1.5, 0, PHP_ROUND_HALF_UP); // 2
+round(-1.5, 0, PHP_ROUND_HALF_UP); // -2
+
+round(1.5, 0, PHP_ROUND_HALF_DOWN); // 1
+round(-1.5, 0, PHP_ROUND_HALF_DOWN); // -1
+</PHP>
+
+When passed a negative value, HALF_UP and HALF_DOWN behave contrary to their names. This issue is mentioned by Gina on the internals mailinglist.
+https://externals.io/message/123126
+
+===== Proposal =====
+This RFC proposes creating a new enum for rounding modes and renaming each mode to be more appropriate.
+
+Would suggest an Enum like this: The names NegativeInfinity and PositiveInfinity are debatable. (Thanks to Tim for coming up with these names.)
+<PHP>
+enum RoundingMode
+{
+  case HalfAwayFromZero; // PHP_ROUND_HALF_UP
+  case HalfTowardsZero; // PHP_ROUND_HALF_DOWN
+  case HalfEven; // PHP_ROUND_HALF_EVEN
+  case HalfOdd; // PHP_ROUND_HALF_ODD
+  case TowardsZero; // PHP_ROUND_TOWARD_ZERO
+  case AwayFromZero; // PHP_ROUND_AWAY_FROM_ZERO
+  case NegativeInfinity; // or Floor; PHP_ROUND_FLOOR
+  case PositiveInfinity; // or Ceiling; PHP_ROUND_CEILING
+}
+</PHP>
+
+And change the existing constant like this:
+<PHP>
+const PHP_ROUND_HALF_UP = RoundingMode::HalfAwayFromZero;
+const PHP_ROUND_HALF_DOWN = RoundingMode::HalfTowardsZero;
+const PHP_ROUND_HALF_EVEN = RoundingMode::HalfEven;
+const PHP_ROUND_HALF_ODD = RoundingMode::HalfOdd;
+const PHP_ROUND_CEILING = RoundingMode:: TowardsZero;
+const PHP_ROUND_FLOOR = RoundingMode::AwayFromZero;
+const PHP_ROUND_TOWARD_ZERO = RoundingMode::NegativeInfinity;
+const PHP_ROUND_AWAY_FROM_ZERO = RoundingMode::PositiveInfinity;
+</PHP>
+
+BC Break can be avoided as much as possible by changing constants.
+
+And change the signature of round() to:
+<PHP>
+round(int|float $num, int $precision = 0, int|RoundingMode $mode = RoundingMode::HalfAwayFromZero): float
+</PHP>
+
+In code that directly specifies int instead of a constant as the rounding mode, a BC Break will occur even if the constant is changed. Therefore, int is still acceptable.
+
+Also, bcround() will be added from the next minor version (8.4) due to the passing of the following RFC.
+https://wiki.php.net/rfc/adding_bcround_bcfloor_bcceil_to_bcmath
+
+If this RFC is passed, the rounding mode specified for bcround() will be changed to use RoundingMode instead of int. As for bcround(), it doesn't accept int like round(). This is because it is a feature that has not been released yet and BC Break will not occur.
+
+Similarly, if the next RFC to support objects in BCMath is passed, and this RFC is subsequently passed, all rounding modes will be appropriately replaced by RoundingMode.
+https://wiki.php.net/rfc/support_object_type_in_bcmath
+
+To summarize, existing features will be changed to a union type of int and RoundingMode, and unreleased features will only accept RoundingMode as the rounding mode argument.
+
+===== Backward Incompatible Changes =====
+If something like a wrapper function for round() is defined in userland and its argument requires an int type, passing a constant to that function will cause a BC Break. This is because the constant value has changed from an int to the RoundingMode value.
+
+e.g.
+<PHP>
+function roundWrapper(int|float $val, int $mode): float
+{
+  return round($val, 0, $mode);
+}
+
+roundWrapper(1.1, PHP_ROUND_HALF_UP);
+</PHP>
+
+===== Proposed PHP Version(s) =====
+Next minor release (8.4).
+
+===== RFC Impact =====
+==== To SAPIs ====
+None.
+
+==== To Existing Extensions ====
+Standard and BCMath. However, the only released feature is Standard.
+
+==== To Opcache ====
+None.
+
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+None.
+
+===== Open Issues =====
+None.
+
+===== Unaffected PHP Functionality =====
+Only Standard and BCMath are unaffected.
+
+===== Future Scope =====
+Although not included in this RFC, it would be reasonable to deprecate existing rounding mode constants in the future. Also, in the future round() should no longer accept int as the rounding mode argument type.
+
+===== Proposed Voting Choices =====
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted. 
+
+===== Patches and Tests =====
+Yet.
+
+===== Implementation =====
+Yet.
+
+===== References =====
+https://externals.io/message/122735#123020 (In a thread about BCMath, a suggestion was made to make the rounding mode Enum)
+
+https://externals.io/message/123126 (It was mentioned that the name of the current rounding mode is a misnomer)
+
+===== Rejected Features =====
+None.
