@@ -1,0 +1,188 @@
+Add OpenStream() To XML{Reader,Writer}
+======================================
+
+:PHP-RFC: 0905
+:Title: Add OpenStream() To XML{Reader,Writer}
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Draft
+:Type: Unknown
+:Created: 2024-04-21
+:Version: 0.9
+
+Introduction
+------------
+
+The ``XMLReader`` and ``XMLWriter`` classes deal with XML in a
+stream-oriented manner. The former implements an XML "pull parser". This
+means that instead of keeping the data in memory or building a document
+tree, the document is streamed and the developer can instruct
+``XMLReader`` to parse chunks at the current cursor and either process
+or skip the data. The advantage is that developers can process and
+filter large documents while requiring few resources. It is most often
+used as a lower-level building block for more complex handling of large
+XML documents. Similarly, ``XMLWriter`` writes an XML document to a
+stream or memory by using functions like ``startElement`` and
+``writeElement``.
+
+There is however a strange limitation to these classes: they cannot
+operate on an already-open stream! This is bizarre as the APIs (both
+internally and user-facing) are stream-oriented. Streams that are
+already open are common when working, for example, with HTTP requests,
+data passed from a framework, or just XML data embedded in an existing
+stream. The lack of an API that works with already-opened streams causes
+developers to rely on workarounds, e.g. reading the stream entirely to
+memory and then using the ``XMLReader`` APIs, or writing an XML file
+using ``XMLWriter`` and then having to pass that into an already-open
+stream. That's just wasteful and needlessly difficult. This RFC aims to
+fix that problem and aims to fix some other inconsistency as well.
+
+Proposal
+--------
+
+I propose to add a new function called ``openStream()`` to both
+``XMLReader`` and ``XMLWriter``. Here is how they would look like:
+
+.. code:: php
+
+   class XMLReader {
+       /** @param resource $stream */
+       public static function openStream($stream, ?string $encoding = null, int $flags = 0, ?string $documentUri = null): XMLReader {}
+   }
+
+   class XMLWriter {
+       /** @param resource $stream */
+       public function openStream($stream): void {}
+   }
+
+The signature for ``XMLReader::openStream()`` is heavily inspired by the
+existing function
+``public static XMLReader::open(string $uri, ?string $encoding = null, int $flags = 0): bool|XMLReader``
+that operates on files. However, a major difference is that
+``XMLReader::openStream()`` is static-only, whereas the other open
+functions of ``XMLReader`` can either be statically or non-statically
+called and change their return-value behaviour depending on that. As we
+seem to try to get away from such strange APIs, I decided to only make a
+static variation available. When you try to call this method
+non-statically, you'll get an Error to avoid confusion stating
+"XMLReader::openStream() can only be called statically".
+
+The ``$documentUri`` parameter is used mostly for when libxml outputs
+error messages that you can put an origin name in there.
+
+The signature for ``XMLWriter::openStream()`` should be
+self-explanatory. It is also modeled like the other open functions, but
+they are considerably simpler. You'll also notice the lack of an
+encoding argument, and that's because this is already handled by the
+``XMLWriter::startDocument()`` function.
+
+While implementing this, I found some strange behaviour regarding the
+``?string $encoding`` parameter of the existing functions
+``XMLReader::open()`` and ``XMLReader::XML()``. The first oddity is that
+they emit a warning instead of throwing a ValueError when the encoding
+contains NULL bytes. This is inconsistent with how other functions
+handle it. I propose to promote this warning to a ValueError instead.
+The second oddity is that invalid encoding names are ignored entirely.
+This means that it won't emit a warning or anything, but just silently
+not set the encoding. This can hide bugs. I propose to also throw a
+ValueError in this case stating "Argument #X ($encoding) must be a valid
+character encoding".
+
+Backward Incompatible Changes
+-----------------------------
+
+There are three minor BC breaks.
+
+The first one is the fact that we're adding the ``openStream()`` method.
+If a user extends the ``XMLReader`` or ``XMLWriter`` class, and their
+class implements a method with the same name but an incompatible
+signature, a compile error will occur. I analyzed the top 2500 Composer
+packages, and only found one package that contains the method name
+openStream and it wasn't in a class that extends either classes. This
+means that the top 2500 packages don't suffer a BC break because of
+this. That doesn't mean there will be none, but it gives a good
+indication.
+
+The second BC break is caused by throwing a ``ValueError`` on invalid
+encodings instead of silently ignoring invalid encodings. If we don't
+signal the invalid encoding in any way to the user, this can subtly hide
+bugs. For example, this could hide typos or silently pass invalid user
+input to the respective functions. Forcing developers to handle this
+error explicitly will result in more robust code in the end.
+
+The third BC break is the promotion of the NULL-byte warning to a
+``ValueError``. This makes the ``XMLReader`` and ``XMLWriter`` class
+more consistent with other extensions that throw instead of issuing a
+warning. The migration for developers should be quite simple: instead of
+silencing the warning and/or checking the return value of the function,
+they should use a try-catch construct to handle the error.
+
+Proposed PHP Version(s)
+-----------------------
+
+Next PHP 8.x, this is PHP 8.4 at the time of writing.
+
+RFC Impact
+----------
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Only ext/xmlreader and ext/xmlwriter are affected.
+
+Open Issues
+-----------
+
+None yet.
+
+Unaffected PHP Functionality
+----------------------------
+
+Everything else, why do we have this section?
+
+Future Scope
+------------
+
+None yet.
+
+Proposed Voting Choices
+-----------------------
+
+One primary vote requiring 2/3rd majority to accept the RFC as a whole.
+
+Patches and Tests
+-----------------
+
+Implementation PR: https://github.com/php/php-src/pull/14030
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+References
+----------
+
+#. https://bugs.php.net/bug.php?id=63506
+#. https://bugs.php.net/bug.php?id=46146
+
+Rejected Features
+-----------------
+
+None yet.
+
+Changelog
+---------
+
+#. 0.9: Initial version under discussion
+
+Additional Metadata
+-------------------
+
+:Original Authors: Niels Dossche nielsdos@php.net
+:Slug: xmlreader_writer_streams
+:Wiki URL: https://wiki.php.net/rfc/xmlreader_writer_streams
