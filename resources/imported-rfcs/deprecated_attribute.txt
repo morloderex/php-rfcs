@@ -14,52 +14,8 @@ While the functionality can be //emulated// using <php>trigger_error()</php> to 
 
 ===== Proposal =====
 
-<nowiki>Developers can put an attribute #[Deprecated] on the following elements (targets):</nowiki>
+A new attribute <php>#[\Deprecated]</php> shall be added:
 
-  * Functions
-  * Methods
-
-For now is not possible to target classes, constants, properties or arguments with this attribute, and it is left for future RFC(s) to address this.
-
-When this attribute is present, during the compile step the existing "ZEND_ACC_DEPERACTED" function flag is added to the op_array (userland function), which will lead to a deprecation warning when the function is called at runtime, with only minimal changes in the VM.
-
-The ZEND_ACC_DEPRECATED flag and behavior is present for internal functions already. The presence of a Deprecated attribute allows to expose this feature to userland functions/methods and closes a capability gap between internal and userland functions.
-
-For userland functions the E_USER_DEPRECATED level is used, instead of the E_DEPRECATED that is raised for internal functions.
-
-<code php>
-<?php
-
-use Deprecated;
-
-#[Deprecated]
-function test() {}
-// Deprecated: Function test() is deprecated
-
-#[Deprecated("use test3() instead")]
-function test2() {}
-// Deprecated: Function test2() is deprecated, use test3() instead
-
-class Foo {
-    #[Deprecated]
-    public function test() {}
-    // Deprecated: Method Foo::test() is deprecated in %s
-}
-</code>
-
-The deprecated class is final and cannot be extended. The reason for this is that the engine internally cannot autoload attributes, so checking for a subclass that extends the Deprecated class is not technically possible. Marking the class as final prevents that users extend the class and expect their children exhibit the same behavior.
-
-==== Runtime Effects ====
-
-Using the deprecated attribute on a function or method behaves the same as putting a call to trigger_error using E_DEPRECATED level as the first line of the same function/method. 
-
-While other languages have deprecation attributes, they usually generate compile time warnings instead of runtime warnings. However as PHP's current deprecation model is based on runtime warnings, the Deprecation attribute builds on that existing model. The benefit of a declarative approach with an attribute over the current approach with a function call to trigger_error is that is that it abstracts the implementation details of how deprecations work, with the potential for better integration with future changes to the runtime warning stack of PHP.
-
-This feature adds a small bitmask check in the VM for every function call.
-
-Changes to the runtime warning stack of PHP are out of the scope of this RFC.
-
-==== Stub ====
 
 <PHP>
 /**
@@ -72,6 +28,49 @@ final class Deprecated
 
     public function __construct(?string $message = null) {}
 }
+</PHP>
+
+Applying this attribute to a userland function or method will add the internal ''ZEND_ACC_DEPRECATED'' flag to the function, resulting in a behavior that is consistent with the existing deprecation functionality for internal functions. This means:
+
+  * <php>ReflectionFunctionAbstract::isDeprecated()</php> will return <php>true</php>.
+  * Calling the function will emit a <php>E_USER_DEPRECATED</php> error (internal functions emit <php>E_DEPRECATED</php>, but this error code is reserved for internal functions).
+
+The <php>$message</php> given within the attribute definition will be included in the error message when calling the function. It goes without saying that it will also be available to static analysis tools, just like any other attribute’s parameters.
+
+==== Examples ====
+
+<PHP>
+<?php
+
+#[\Deprecated]
+function test() {
+}
+
+#[\Deprecated("use test() instead")]
+function test2() {
+}
+
+class Clazz {
+    #[\Deprecated]
+    function test() {
+    }
+
+    #[\Deprecated("use test() instead")]
+    function test2() {
+    }
+}
+
+test(); // Deprecated: Function test() is deprecated in test.php on line 21
+test2(); // Deprecated: Function test2() is deprecated, use test() instead in test.php on line 22
+call_user_func("test"); // Deprecated: Function test() is deprecated in test.php on line 23
+
+$cls = new Clazz();
+$cls->test(); // Deprecated: Method Clazz::test() is deprecated in test.php on line 26
+$cls->test2(); // Deprecated: Method Clazz::test2() is deprecated, use test() instead in test.php on line 27
+
+call_user_func([$cls, "test"]); // Deprecated: Method Clazz::test() is deprecated in test.php on line 29
+
+?>
 </PHP>
 
 ===== Backward Incompatible Changes =====
@@ -135,4 +134,5 @@ n/a
 
 ===== Rejected Features =====
 
-n/a
+  * Changes to the runtime behavior of deprecated functions are out of scope of this RFC (i.e. not emitting the <php>E_DEPRECATED</php> error or internal functions).
+  * Making the <php>Deprecated</php> attribute class non-final: Child classes of attributes are not understood by the engine for technical reasons and the semantics of a child class would be less clear for static analysis tools.
