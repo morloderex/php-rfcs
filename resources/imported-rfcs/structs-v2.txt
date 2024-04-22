@@ -1,0 +1,262 @@
+====== PHP RFC: Structs ======
+
+  * Date: 2024-04-16
+  * Author: Ilija Tovilo, tovilo.ilija@gmail.com
+  * Status: Draft
+  * Target Version: PHP 8.x
+  * Implementation: https://github.com/php/php-src/pull/13800
+
+===== Proposal =====
+
+This RFC proposes to add structs to PHP, which are classes with [[https://en.wikipedia.org/wiki/Value_semantics|value semantics]].
+
+<code php>
+struct Position {
+    public function __construct(
+        public $x,
+        public $y,
+    ) {}
+}
+
+$p1 = new Position(1, 2);
+$p2 = $p1;
+$p2->x++;
+
+var_dump($p1 === $p2); // false
+
+$p2->x--;
+var_dump($p1 === $p2); // true
+</code>
+
+====== Data transfer objects ======
+
+===== The problem =====
+
+Classes are commonly used to model data in PHP. Such classes have many names (data transfer objects, plain old php objects, structs, etc.). This allows the developer to describe the shape of the data, thus documenting it and improving developer experience in IDEs.
+
+Using classes for data comes with one significant downside: Objects are passed by reference, rather than by value. When dealing with mutable data, this makes it very easy to shoot yourself in the foot by exposing mutations to places that don't expect to see them.
+
+Consider the following example:
+
+<code php>
+class Position {
+    public function __construct(
+        public $x,
+        public $y,
+    ) {}
+}
+
+function createShapes() {
+    // Use same position for both shapes
+    $pos = new Position(10, 20);
+    $circle = new Circle(position: $pos, radius: 10);
+    $square = new Square(position: $pos, side: 20);
+    return [$circle, $square];
+}
+
+$shapes = createShapes();
+
+function applyGravity() {
+    foreach ($shapes as $shape) {
+        /* We're not physicists. :P */
+        $shape->position->y--;
+    }
+}
+
+applyGravity($shape);
+
+foreach ($shapes as $shape) {
+    var_dump($shape->position);
+}
+// Position(10, 18), Position(10, 18)??
+</code>
+
+Since both shapes are created with the same position, ''createShapes()'' tries to be resourceful and uses the same ''Position'' instance for both shapes. Unfortunately, ''applyGravity()'' is not aware of this optimization and applies its change to the same object twice.
+
+What's the solution? ''position'' needs to be copied, but where? We can either copy it in ''createShapes()'' so that each shape has its own distinct position, or we can copy it in ''applyGravity()'', assuming that ''position'' may be referenced from somewhere else. For the latter case, we may mark ''Position'' as ''readonly'' to get some guarantees that we get it right. Which of these two approaches is better depends on how many positions can be shared, and how often they change. Unfortunately, either can lead to useless copies.
+
+===== The solution =====
+
+Like arrays, strings and other value types, structs are //conceptually// copied when assigned to a variable, or when passed to a function.
+
+With this description, let's reconsider the ''createShapes()'' from above.
+
+<code php>
+struct Position { ...  }
+
+function createShapes() {
+    // Use same position for both shapes
+    $pos = new Position(10, 20);
+    $circle = new Circle(position: $pos, radius: 10);
+    $square = new Square(position: $pos, side: 20);
+    return [$circle, $square];
+}
+</code>
+
+//Conceptually//, ''$circle->position'' and ''$square->position'' are distinct objects at the end of this function. ''applyGravity()'' can no longer influence multiple references to ''position''. This completely avoids the "spooky action at a distance" problem.
+
+====== Growable data structures ======
+
+===== The problem =====
+
+The same problem exists, and is in fact greatly exacerbated, for internal, growable data structures such as lists, stacks, queues, etc. that desire to provide APIs immune to action at a distance.
+
+<code php>
+// Pseudo-code for an internal class
+class List {
+    public $storage = <malloced>;
+
+    public function append($element) {
+        $clone = clone $this; // including storage
+        $clone->storage->append($element);
+        return $clone;
+    }
+}
+
+// Userland
+$list = new List();
+for ($i = 0; $i < 1000; $i++) {
+    $list = $list->append($i);
+}
+</code>
+
+Not only will this loop create a copy for each list object on each iteration, but it will also copy its entire storage. With this approach, time complexity of a single insert becomes O(n). For m inserts, it becomes O(m*n), which is catastrophic. Looking at the code above, it becomes evident that ''$list'' is not referenced from anywhere else. It is thus completely unnecessary to copy it.
+
+And when it is shared, we only need a single copy, rather than a copy for each insertion.
+
+<code php>
+function appendAndPrint($list) {
+    $list = $list->append(2); // This copy may be necessary, because $list may still be referenced in the caller.
+    $list = $list->append(3); // This copy is always unnecessary.
+    var_dump($list); // [1, 2, 3]
+}
+
+$list = new List();
+$list = $list->append(1); // This copy is also unnecessary.
+appendAndPrint($list);
+var_dump($list); // [1]
+</code>
+
+===== The solution =====
+
+As a reminder, structs are //conceptually// copied when assigned to a variable, or when passed to a function. When ''appendAndPrint()'' is called, ''$list'' is effectively already copied. Just like with arrays, the user doesn't need to think about creating explicit copies. The engine does it for you.
+
+<code php>
+function appendAndPrint($list) {
+    $list->append!(2);
+    $list->append!(3);
+    var_dump($list); // [1, 2, 3]
+}
+
+$list = new List();
+$list->append!(1);
+appendAndPrint($list);
+var_dump($list); // [1]
+</code>
+
+Mind the ''!'' in ''append!()''. It denotes that the method call will mutate the struct, which makes every modification very explicit. It also has some technical benefits, which will be explained later.
+
+One of the primary motivators of this RFC is to enable the possibility of introducing internal data structures, such as lists (e.g. Vector from php-ds) as a faster and stricter alternative to arrays, without introducing many of the pitfalls some other languages suffer from by making them reference types.
+
+===== CoW 🐄 =====
+
+But wait, this sounds familiar.
+
+<blockquote>
+What's the solution? ''position'' needs to be copied, but where? We can either copy it in ''createShapes()'' so that each shape has its own distinct position ... Unfortunately, either can lead to useless copies.
+
+<cite>This RFC, minutes ago</cite>
+</blockquote>
+
+You may assume that structs come with the same slowdown as creating a copy for each assignment of an object. However, structs have a cool trick up their sleeves: Copy-on-write, or CoW for short. CoW is already used for both arrays and strings, so this is not a new concept to the PHP engine. PHP tracks the reference count for each allocation such as objects, arrays and strings. When value types are modified, PHP checks if the reference count is >1, and if so, it copies the element before performing a modification.
+
+<code php>
+function print($value) {
+    var_dump($value);
+}
+
+function appendAndPrint($value) {
+    $value[] = 'baz';
+    var_dump($value);
+}
+
+print(['foo', 'bar']);
+appendAndPrint(['foo', 'bar']);
+
+$array = ['foo', 'bar'];
+print($array);
+appendAndPrint($array);
+</code>
+
+//Note:// This code ignores the fact that array literals are constant, for simplicity.
+
+With the rules described above, the only line performing potential copies is ''$value[] = 'baz';'', since it performs a modification of the array. The copy is also avoided unless ''$value'' is referenced from somewhere else, which is only the case when passing the local variable ''$array'' to ''appendAndPrint()''.
+
+This is already how arrays work today. Structs follow the exact same principle.
+
+<code php>
+function print($value) {
+    var_dump($value);
+}
+
+function modifyAndPrint($value) {
+    $value->x++;
+    var_dump($value);
+}
+
+print(new Position(1, 2));
+appendAndPrint(new Position(1, 2));
+
+$pos = new Position(1, 2);
+print($pos);
+appendAndPrint($pos);
+</code>
+
+Only one implicit copy happens, namely in ''modifyAndPrint()'' when ''$value'' is still referenced as ''$pos'' from the caller.
+
+===== Equality/Identity =====
+
+TODO
+
+===== Method calls =====
+
+TODO
+
+===== Inheritance =====
+
+TODO
+
+===== References =====
+
+TODO
+
+===== Reflection =====
+
+TODO
+
+===== Readonly =====
+
+TODO
+
+===== Performance =====
+
+TODO
+
+===== Backwards incompatible changes =====
+
+TODO
+
+===== Future scope =====
+
+  - Hashing for ''SplObjectStorage''.
+
+===== Vote =====
+
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
+
+As this is a language change, a 2/3 majority is required.
+
+<doodle title="Introduce structs in PHP 8.x?" auth="ilutov" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
