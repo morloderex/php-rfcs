@@ -1,99 +1,373 @@
-Structural Typing For Closures
-==============================
+Structs
+=======
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
+:Title: Structs
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
+:Type: Standards Track
+:Created: 2024-04-16
+:PHP-Version: 8
 :Version: 1.0
-
-Introduction
-------------
-
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
-
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
-
-Example
-~~~~~~~
+This RFC proposes to add structs to PHP, which are classes with `value
+semantics <https://en.wikipedia.org/wiki/Value_semantics>`__.
 
 .. code:: php
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
+   struct Position {
+       public function __construct(
+           public $x,
+           public $y,
+       ) {}
    }
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
+   $p1 = new Position(1, 2);
+   $p2 = $p1;
+   $p2->x++;
+
+   var_dump($p1 === $p2); // false
+
+   $p2->x--;
+   var_dump($p1 === $p2); // true
+
+Data transfer objects
+=====================
+
+The problem
+-----------
+
+Classes are commonly used to model data in PHP. Such classes have many
+names (data transfer objects, plain old php objects, records, etc.).
+This allows the developer to describe the shape of the data, thus
+documenting it and improving developer experience in IDEs.
+
+Using classes for data comes with one significant downside: Objects are
+passed by reference, rather than by value. When dealing with mutable
+data, this makes it very easy to shoot yourself in the foot by exposing
+mutations to places that don't expect to see them.
+
+Consider the following example:
+
+.. code:: php
+
+   class Position {
+       public function __construct(
+           public $x,
+           public $y,
+       ) {}
    }
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+   function createShapes() {
+       // Use same position for both shapes
+       $pos = new Position(10, 20);
+       $circle = new Circle(position: $pos, radius: 10);
+       $square = new Square(position: $pos, side: 20);
+       return [$circle, $square];
+   }
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+   $shapes = createShapes();
 
-Backward Incompatible Changes
------------------------------
+   function applyGravity() {
+       foreach ($shapes as $shape) {
+           /* We're not physicists. :P */
+           $shape->position->y--;
+       }
+   }
 
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
+   applyGravity($shape);
 
-Open Questions
---------------
+   foreach ($shapes as $shape) {
+       var_dump($shape->position);
+   }
+   // Position(10, 18), Position(10, 18)??
 
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
+Since both shapes are created with the same position, ``createShapes()``
+tries to be resourceful and uses the same ``Position`` instance for both
+shapes. Unfortunately, ``applyGravity()`` is not aware of this
+optimization and applies its change to the same object twice.
 
-Future Scope
+What's the solution? ``position`` needs to be copied, but where? We can
+either copy it in ``createShapes()`` so that each shape has its own
+distinct position, or we can copy it in ``applyGravity()``, assuming
+that ``position`` may be referenced from somewhere else. For the latter
+case, we may mark ``Position`` as ``readonly`` to get some guarantees
+that we get it right. Which of these two approaches is better depends on
+how many positions can be shared, and how often they change.
+Unfortunately, either can lead to useless copies.
+
+The solution
 ------------
 
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+Like arrays, strings and other value types, structs are *conceptually*
+copied when assigned to a variable, or when passed to a function.
 
-Proposed Voting Choices
------------------------
+With this description, let's reconsider the ``createShapes()`` from
+above.
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+.. code:: php
+
+   struct Position { ...  }
+
+   function createShapes() {
+       // Use same position for both shapes
+       $pos = new Position(10, 20);
+       $circle = new Circle(position: $pos, radius: 10);
+       $square = new Square(position: $pos, side: 20);
+       return [$circle, $square];
+   }
+
+*Conceptually*, ``$circle->position`` and ``$square->position`` are
+distinct objects at the end of this function. ``applyGravity()`` can no
+longer influence multiple references to ``position``. This completely
+avoids the "spooky action at a distance" problem.
+
+Growable data structures
+========================
+
+.. _the-problem-1:
+
+The problem
+-----------
+
+The same problem exists, and is in fact greatly exacerbated, for
+internal, growable data structures such as lists, stacks, queues, etc.
+that desire to provide APIs immune to action at a distance.
+
+.. code:: php
+
+   // Pseudo-code for an internal class
+   class List {
+       public $storage = <malloced>;
+
+       public function append($element) {
+           $clone = clone $this; // including storage
+           $clone->storage->append($element);
+           return $clone;
+       }
+   }
+
+   // Userland
+   $list = new List();
+   for ($i = 0; $i < 1000; $i++) {
+       $list = $list->append($i);
+   }
+
+Not only will this loop create a copy for each list object on each
+iteration, but it will also copy its entire storage. With this approach,
+time complexity of a single insert becomes O(n). For m inserts, it
+becomes O(m*n), which is catastrophic. Looking at the code above, it
+becomes evident that ``$list`` is not referenced from anywhere else. It
+is thus completely unnecessary to copy it.
+
+And when it is shared, we only need a single copy, rather than a copy
+for each insertion.
+
+.. code:: php
+
+   function appendAndPrint($list) {
+       $list = $list->append(2); // This copy may be necessary, because $list may still be referenced in the caller.
+       $list = $list->append(3); // This copy is always unnecessary.
+       var_dump($list); // [1, 2, 3]
+   }
+
+   $list = new List();
+   $list = $list->append(1); // This copy is also unnecessary.
+   appendAndPrint($list);
+   var_dump($list); // [1]
+
+.. _the-solution-1:
+
+The solution
+------------
+
+As a reminder, structs are *conceptually* copied when assigned to a
+variable, or when passed to a function. When ``appendAndPrint()`` is
+called, ``$list`` is effectively already copied. Just like with arrays,
+the user doesn't need to think about creating explicit copies. The
+engine does it for you.
+
+.. code:: php
+
+   function appendAndPrint($list) {
+       $list->append!(2);
+       $list->append!(3);
+       var_dump($list); // [1, 2, 3]
+   }
+
+   $list = new List();
+   $list->append!(1);
+   appendAndPrint($list);
+   var_dump($list); // [1]
+
+Mind the ``!`` in ``append!()``. It denotes that the method call will
+mutate the struct, which makes every modification very explicit. It also
+has some technical benefits, which will be explained later.
+
+One of the primary motivators of this RFC is to enable the possibility
+of introducing internal data structures, such as lists (e.g. Vector from
+php-ds) as a faster and stricter alternative to arrays, without
+introducing many of the pitfalls some other languages suffer from by
+making them reference types.
+
+CoW 🐄
+-----
+
+But wait, this sounds familiar.
+
+    What's the solution? ``position`` needs to be copied, but where? We
+    can either copy it in ``createShapes()`` so that each shape has its
+    own distinct position ... Unfortunately, either can lead to useless
+    copies.
+
+    <cite>This RFC, minutes ago</cite>
+
+You may assume that structs come with the same slowdown as creating a
+copy for each assignment of an object. However, structs have a cool
+trick up their sleeves: Copy-on-write, or CoW for short. CoW is already
+used for both arrays and strings, so this is not a new concept to the
+PHP engine. PHP tracks the reference count for each allocation such as
+objects, arrays and strings. When value types are modified, PHP checks
+if the reference count is >1, and if so, it copies the element before
+performing a modification.
+
+.. code:: php
+
+   function print($value) {
+       var_dump($value);
+   }
+
+   function appendAndPrint($value) {
+       $value[] = 'baz';
+       var_dump($value);
+   }
+
+   print(['foo', 'bar']);
+   appendAndPrint(['foo', 'bar']);
+
+   $array = ['foo', 'bar'];
+   print($array);
+   appendAndPrint($array);
+
+*Note:* This code ignores the fact that array literals are constant, for
+simplicity.
+
+With the rules described above, the only line performing potential
+copies is ``$value[] = 'baz';``, since it performs a modification of the
+array. The copy is also avoided unless ``$value`` is referenced from
+somewhere else, which is only the case when passing the local variable
+``$array`` to ``appendAndPrint()``.
+
+This is already how arrays work today. Structs follow the exact same
+principle.
+
+.. code:: php
+
+   function print($value) {
+       var_dump($value);
+   }
+
+   function modifyAndPrint($value) {
+       $value->x++;
+       var_dump($value);
+   }
+
+   print(new Position(1, 2));
+   appendAndPrint(new Position(1, 2));
+
+   $pos = new Position(1, 2);
+   print($pos);
+   appendAndPrint($pos);
+
+Only one implicit copy happens, namely in ``modifyAndPrint()`` when
+``$value`` is still referenced as ``$pos`` from the caller.
+
+Equality/Identity
+-----------------
+
+The structs identity is dictated not by their "pointer" or object ID, as
+with normal objects. Instead, value types are considered identical if
+they contain the same data. As such, the identity operator ``===`` is
+adjusted for structs so that two structs are identical if:
+
+-  The objects are instances of the same struct.
+-  All of their properties are identical (``===``).
+-  If the objects contain dynamic properties, the dynamic properties
+   must have the same order.
+
+This adjustment pertains not only to the ``===`` operator itself, but
+also to language features that use it. For example, ``match`` will
+compare the expression and match arms using ``===`` semantics.
+
+The semantics for equality (``==``) for structs remain the same as for
+normal classes. That is, the objects must be of the same struct, and all
+properties must be equal (``==``), including dynamic properties.
+However, the order of dynamic properties is irrelevant.
+
+Method calls
+------------
+
+TODO
+
+Inheritance
+-----------
+
+TODO
+
+References
+----------
+
+TODO
+
+Reflection
+----------
+
+TODO
+
+Readonly
+--------
+
+TODO
+
+Performance
+-----------
+
+TODO
+
+Backwards incompatible changes
+------------------------------
+
+TODO
+
+Future scope
+------------
+
+#. Hashing for ``SplObjectStorage``.
+
+Vote
+----
+
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
+
+As this is a language change, a 2/3 majority is required.
+
+Question: Introduce structs in PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Implementation: https://github.com/php/php-src/pull/13800
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: structs-v2
+:Wiki URL: https://wiki.php.net/rfc/structs-v2
