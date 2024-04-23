@@ -89,6 +89,8 @@ function createShapes() {
 
 //Conceptually//, ''$circle->position'' and ''$square->position'' are distinct objects at the end of this function. ''applyGravity()'' can no longer influence multiple references to ''position''. This completely avoids the "spooky action at a distance" problem.
 
+At first glance, it doesn't seem like that would avoid useless copies. In reality, it works somewhat differently, but the details are not too important for now. It will be explained in more detailed in the CoW chapter.
+
 ====== Growable data structures ======
 
 ===== The problem =====
@@ -360,6 +362,39 @@ Inheritance is currently not allowed for structs. Structs are mainly targeted at
 ===== Hashing =====
 
 ''SplObjectStorage'' allows using objects as keys. For structs, these semantics are not too useful, because the object id changes unpredictably. Instead, the lookup should be based on the objects property. However, as hashing is a complicated topic, this will be postponed to a separate RFC. For now, using struct objects is not allowed for  ''SplObjectStorage'' or ''WeakMap''.
+
+===== Move semantics =====
+
+There are still some cases where useless copies occur.
+
+<code php>
+function doubled($bigNum) {
+    $bigNum->value *= 2;
+    return $bigNum;
+}
+
+$bigNum = 1;
+$bigNum = doubled($bigNum);
+</code>
+
+In this case, copying ''$bigNum'' before passing it to ''doubled'' is actually unnecessary, as it is immediately overwritten anyway. The ownership of ''$bigNum'' could thus be "moved" to ''doubled()''. Knowing when exactly this is safe is tough, because it depends on whether ''doubled()'' can throw exceptions, and whether ''$bigNum'' is the sole reference to the struct object before the function call.
+
+One could implement such move semantics by hand.
+
+<code php>
+function move(&$value) {
+    $moved = $value;
+    $value = null;
+    return $value;
+}
+
+$bigNum = 1;
+$bigNum = doubled(move($bigNum));
+</code>
+
+Essentially, this code sets ''$bigNum'' to ''null'' before passing the value to ''doubled()'', making ''doubled()'' the sole owner of the value. However, if ''doubled()'' fails for one reason or another, the value of ''$bigNum'' is lost.
+
+There were some attempts to implement implicit move semantics, namely https://github.com/php/php-src/pull/11166. We may try to pursue this further.
 
 ===== Performance =====
 
