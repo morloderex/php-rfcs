@@ -99,11 +99,11 @@ function createShapes() {
 
 ===== The problem =====
 
-The same problem exists, and is in fact greatly exacerbated, for internal, growable data structures such as lists, stacks, queues, etc. that desire to provide APIs immune to action at a distance.
+The same problem exists, and is in fact greatly exacerbated, for internal, growable data structures such as vectors, stacks, queues, etc. that desire to provide APIs immune to action at a distance.
 
 <code php>
 // Pseudo-code for an internal class
-class List {
+class Vector {
     public $storage = <malloced>;
 
     public function append($element) {
@@ -114,44 +114,44 @@ class List {
 }
 
 // Userland
-$list = new List();
+$vector = new Vector();
 for ($i = 0; $i < 1000; $i++) {
-    $list = $list->append($i);
+    $vector = $vector->append($i);
 }
 </code>
 
-Not only will this loop create a copy for each list object on each iteration, but it will also copy its entire storage. With this approach, time complexity of a single insert becomes O(n). For m inserts, it becomes O(m*n), which is catastrophic. Looking at the code above, it becomes evident that ''$list'' is not referenced from anywhere else. It is thus completely unnecessary to copy it.
+Not only will this loop create a copy for each list object on each iteration, but it will also copy its entire storage. With this approach, time complexity of a single insert becomes O(n). For m inserts, it becomes O(m*n), which is catastrophic. Looking at the code above, it becomes evident that ''$vector'' is not referenced from anywhere else. It is thus completely unnecessary to copy it.
 
 And when it is shared, we only need a single copy, rather than a copy for each insertion.
 
 <code php>
-function appendAndPrint($list) {
-    $list = $list->append(2); // This copy may be necessary, because $list may still be referenced in the caller.
-    $list = $list->append(3); // This copy is always unnecessary.
-    var_dump($list); // [1, 2, 3]
+function appendAndPrint($vector) {
+    $vector = $vector->append(2); // This copy may be necessary, because $vector may still be referenced in the caller.
+    $vector = $vector->append(3); // This copy is always unnecessary.
+    var_dump($vector); // [1, 2, 3]
 }
 
-$list = new List();
-$list = $list->append(1); // This copy is also unnecessary.
-appendAndPrint($list);
-var_dump($list); // [1]
+$vector = new Vector();
+$vector = $vector->append(1); // This copy is also unnecessary.
+appendAndPrint($vector);
+var_dump($vector); // [1]
 </code>
 
 ===== The solution =====
 
-As a reminder, structs are //conceptually// copied when assigned to a variable, or when passed to a function. When ''appendAndPrint()'' is called, ''$list'' is effectively already copied. Just like with arrays, the user doesn't need to think about creating explicit copies. The engine does it for you.
+As a reminder, structs are //conceptually// copied when assigned to a variable, or when passed to a function. When ''appendAndPrint()'' is called, ''$vector'' is effectively already copied. Just like with arrays, the user doesn't need to think about creating explicit copies. The engine does it for you.
 
 <code php>
-function appendAndPrint($list) {
-    $list->append!(2);
-    $list->append!(3);
-    var_dump($list); // [1, 2, 3]
+function appendAndPrint($vector) {
+    $vector->append!(2);
+    $vector->append!(3);
+    var_dump($vector); // [1, 2, 3]
 }
 
-$list = new List();
-$list->append!(1);
-appendAndPrint($list);
-var_dump($list); // [1]
+$vector = new Vector();
+$vector->append!(1);
+appendAndPrint($vector);
+var_dump($vector); // [1]
 </code>
 
 Mind the ''!'' in ''append!()''. It denotes that the method call will mutate the struct, which makes every modification very explicit. It also has some technical benefits, which will be explained later.
@@ -242,12 +242,12 @@ struct BigNum {
     }
 }
 
-$n1 = new Number(1);
-$n2 = $n1;
-$n2->double();
+$bigNum1 = new BigNum(1);
+$bigNum2 = $bigNum1;
+$bigNum2->double();
 
-var_dump($n1); // 1
-var_dump($n2); // 2
+var_dump($bigNum1); // 1
+var_dump($bigNum2); // 2
 </code>
 
 To properly support this, we need both an indication on the caller and the callee, that the method will mutate the variable.
@@ -262,37 +262,106 @@ struct BigNum {
 }
 
 // ...
-$n2->double!();
+$bigNum2->double!();
 </code>
 
 The call-site notation is technically necessary, for reasons we'll not get into here. But it also has the nice side-effect of making it immediately clear that the method mutates the variable.
 
 <code php>
-// $list is modified, indicated by !.
-$list->sort!();
-// $list is not modified, indicated by the lack of !.
-$sortedList = $list->sorted();
+// $vector is modified, indicated by !.
+$vector->sort!();
+// $vector is not modified, indicated by the lack of !.
+$sortedVector = $vector->sorted();
 </code>
 
 Only mutating methods can and must be called using the ''!()'' syntax. Calling mutating methods with ''()'', or non-mutating methods with ''!()'' results in a runtime error.
 
 TOOD: Check if we can enforce ''mutating'' at compile-time, anytime ''$this'' is fetched with RW (assignments, calling of mutating methods, fetching references).
 
-===== Inheritance =====
-
-TODO
-
 ===== References =====
 
-TODO
+Value types are great, because they avoid surprising mutations from elsewhere. However, sometimes you really //do// want to modify a value from elsewhere. This can easily be done by passing the struct by-reference.
 
-===== Reflection =====
+<code php>
+function double(&$bigNum) {
+    $bigNum->value *= 2;
+}
 
-TODO
+$bigNum = new BigNum(1);
+double($bigNum);
+var_dump($bigNum); // 2
+
+// or just by using reference variables
+
+$bigNumRef = &$bigNum;
+$bigNumRef->value *= 2;
+var_dump($bigNum); // 4
+</code>
+
+This behavior is exactly equivalent to the one for arrays.
 
 ===== Readonly / interior mutability =====
 
-TODO
+''readonly'' prevents mutability for arrays. For example:
+
+<code php>
+class Vector {
+    public function __construct(
+        public readonly array $values,
+    ) {}
+}
+
+$vector = new Vector([[1], [2], [3]]);e
+$vector->values[0][0] *= 2;
+</code>
+
+While ''$vector->values[0][0] *= 2;'' does not write to the ''values'' property itself, the nested write is considered a mutation of ''values''. The same is not true for objects.
+
+<code php>
+class Vector {
+    public function __construct(
+        public readonly array $values,
+    ) {}
+}
+
+class BigNum {
+    public function __construct(
+        public int $value,
+    ) {}
+}
+
+$vector = new Vector([new BigNum(1)]);
+$vector->values[0]->value *= 2;
+</code>
+
+TODO: This is actually broken currently.
+
+This modification is //not// considered mutating, because the object may change from some other place anyway. Structs behave closer to objects, so interior mutation is not allowed.
+
+<code php>
+// This throws if BigNum is a struct.
+$vector->values[0]->value *= 2;
+</code>
+
+===== Reflection =====
+
+As described in the CoW section, two struct instances may be used across two separate variables. However, modifying one of them should not affect the other. ''ReflectionProperty::setValue()'' would break this promise.
+
+<code php>
+$bigNum1 = new BigNum(1);
+$bigNum2 = new BigNum(1);
+
+$reflection = new ReflectionProperty(BigNum::class, 'value');
+$reflection->setValue($bigNum, 2);
+</code>
+
+To work properly, ''ReflectionProperty::setValue()'' would need to accept a reference for the ''$objectOrValue'' property. This change would break existing cases where ''$objectOrValue'' is a temporary value (e.g. the result of a function call). There's also the special ''@prefer-ref'' annotation that is only available for internal functions. If the value can be passed by reference, it is. Otherwise, it is passed by value. This solution works well, but breaks userland overrides of ''ReflectionProperty::setValue()'' with no possibility of mitigation, because ''@prefer-ref'' is not available in userland.
+
+For this reason, I have opted to throw when passing a struct object to ''ReflectionProperty::setValue()'' for the time being.
+
+===== Inheritance =====
+
+Inheritance is currently not allowed for structs. Structs are mainly targeted at data modelling, which should prefer composition over inheritance. There are currently no known technical issues with inheritance for structs, but we may want to be cautious when introducing them, and carefully consider the plethora of subtle semantic nuances.
 
 ===== Performance =====
 
