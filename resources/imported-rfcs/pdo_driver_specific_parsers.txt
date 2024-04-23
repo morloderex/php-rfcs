@@ -1,10 +1,11 @@
 ====== PHP RFC: PDO Driver specific SQL parsers ======
-  * Version: 0.3
+  * Version: 0.4
   * Date: 2024-04-11
   * Author: Matteo Beccati, mbeccati@php.net
   * Status: Under Discussion
-  * Discussion: https://externals.io/message/123141
-  * First Published at: http://wiki.php.net/rfc/pdo_driver_specific_parsers
+  * Discussion: [[https://externals.io/message/123141]]
+  * First Published at: [[https://wiki.php.net/rfc/pdo_driver_specific_parsers]]
+  * Implementation: [[https://github.com/php/php-src/pull/14035]]
 
 ===== Introduction =====
 The PDO extension contains a SQL parser, whose main purpose is to recognise parameter placeholders inside queries (i.e. ''"?"'' and ''":paramName"''), so that it knows how many and what parameters to expect for a query, and pass the information to the PDO driver in use.
@@ -32,12 +33,28 @@ In a nutshell, the PDO SQL scanner function doesn't need to completely parse the
 The limitation of a global SQL parser in PDO meant that my previous [[rfc:pdo_escape_placeholders|RFC to support the PostgreSQL-only "?" operator]][4] had to apply the parser change to all database types. The change had no known side-effects, but I feel this RFC could improve by keeping this peculiarity inside the pdo_pgsql scanner only.
 
 ===== Proposal =====
-The proposal is to:
+Following a detailed research (see below) for each of the databases currently supported by PDO in core, the proposal is to:
 
-  - change the [[https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42|default PDO scanner]] to expect standard SQL only;
+  - change the [[https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42|default PDO scanner]] to expect standard SQL only:
+    - single and double quoted literals, with doubling as escaping mechanism
+    - two-dashes and C-style comments (non-nested, as that seems to be the most common format, already implemented in PDO)
   - allow drivers to optionally provide a custom scanner function to handle their specific SQL dialect;
-  - re-use the current version of the scanner in pdo_mysql, cleaning it up of the PostgreSQL-specific handling of the "?" operator;
-  - add a pdo_pgsql specific scanner, derived from the new default scanner, but capable of dealing with the "?" operator.
+  - Add a MySQL specific scanner function:
+    - single and double quoted literals with both doubling and backslash as escaping mechanisms (MySQL default)
+    - backtick literals with doubling as escaping mechanism (I also tested and it seems MySQL doesn't accept backslashes as escapes)
+    - two-dashes, C-style comments, and Hash-comments, albeit I couldn't force the requirement of a space after "--" (I tried, but failed)
+    - Tests, as necessary
+  - Add a PgSQL specific scanner function:
+    - single and double quoted literals, with doubling as escaping mechanism
+    - two-dashes and C-style comments (non-nested, as nesting would require unwanted changes to the common parser functionality)
+    - Support for "??" as escape sequence for the "?" operator
+    - Tests, as necessary
+  - Add a SqLite specific scanner function:
+    - single, double quoted, and backtick literals, with doubling as escaping mechanism
+    - two-dashes and C-style comments (non-nested)
+    - Tests, as necessary
+
+In order to keep the change as simple as possible, the proposal tries to cover the default SQL syntax for each database as closely as possible, trying to modifying the common parser code.
 
 One important thing to mention is that the proposed changes are only targeting the part of PDO that scans the SQL query for parameter placeholders. Quoting literals or using parameters in queries is **not going to be affected**.
 
@@ -56,6 +73,8 @@ struct pdo_dbh_methods {
 </code>
 
 Each PDO driver defines already [[https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code|their own struct]]. Leaving the new member to NULL will make the driver use the default PDO scanner function. Otherwise a pointer to a custom scanner function will override the default when parsing queries. It's really as simple as that.
+
+The rest of the implementation is the actual re2c scanner code, config.*, Makefile changes, etc. required to incorporate the driver specific scanner into the build.
 
 ===== Research on String Literals, Identifiers, and Comments ===== 
 
@@ -160,15 +179,22 @@ No open issues ATM.
 ===== Unaffected PHP Functionality =====
 Anything not related to PDO scanning the SQL query for parameter placeholders.
 
+===== Out Of Scope =====
+
+==== Dynamic changes to the scanner ====
+The scanners are generated when PHP is compiled and, currently, cannot be modified at runtime. However, some databases allow configuration directives or ''SET'' queries to change the accepted syntax for literals, identifiers, etc.
+
+Being able to understand all possible combinations would require tracking what directives are different from the expected default and having a number of scanners inside each driver for each possible permutation of such configuration directives.
+
 ===== Future Scope =====
-If necessary, support "exotic" syntaxes in custom scanners for other database drivers.
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or add other custom scanner functionality.
 
 ===== Proposed Voting Choices =====
 As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted. 
 
 ===== Patches and Tests =====
 
-[[https://github.com/php/php-src/pull/6852|PoC pull request]]. Once discussed, I will start with the actual implementation of the proposal.
+[[https://github.com/php/php-src/pull/14035|Draft Pull Request]]
 
 ===== References =====
 
