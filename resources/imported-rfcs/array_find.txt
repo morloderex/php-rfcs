@@ -13,22 +13,14 @@ There are currently lots of functions in PHP for modifying or filtering arrays. 
 
 ===== Proposal =====
 
-This RFC proposes to add two new function, <php>array_find</php> and <php>array_find_key</php> and a new enum <php>ArrayCallableParameter</php> which is used, to determine which parameters are passed to the given callback. 
+This RFC proposes to add two new function, <php>array_find</php> and <php>array_find_key</php>.
 
 ==== array_find ====
-<PHP>
 
-function array_find(array $array, callable $callback, ArrayCallableParameter $callableParameter = ArrayCallableParameter::UseValue): mixed {
+<PHP>
+function array_find(array $array, callable $callback): mixed {
     foreach ($array as $key => $value) {
-        $parameters = [$value];
-        
-        if ($callableParameter === ArrayCallableParameter::UseBoth) {
-            $parameters[] = $key;
-        } else if ($callableParameter === ArrayCallableParameter::UseKey) {
-            $parameters = [$key];
-        }
-        
-        if ($callback(...$parameters)) {
+        if ($callback($value, $key)) {
             return $value;
         }
     }
@@ -45,15 +37,11 @@ The array that should be searched.
 
 <php>callable $callback</php>
 
-The callback function to call to check each element. Which parameter are given to the callback is specified by the third parameter of this function. If this function returns true, the value is returned from <php>array_find</php> and the callback will not be called for further elements.
-
-<php>ArrayCallableParameter $callableParameter</php>
-
-This parameters defines, which parameters are given to the callback. 
+The callback function to call to check each element. The first parameter contains the value, the second parameter contains the corresponding key. If this function returns true, the value is returned from <php>array_find</php> and the callback will not be called for further elements.
 
 === Return Value ===
 
-The function returns the first array value for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>
+The function returns the first array value for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>.
 
 === Examples ===
 
@@ -80,28 +68,20 @@ var_dump(array_find($array, function (string $value) {
 // Find the first animal where the array key is the first symbol of the animal.
 var_dump(array_find($array, function (string $value, $key) {
    return $value[0] === $key;
-}, ArrayCallableParameter::UseBoth)); // string(3) "cow"
+})); // string(3) "cow"
 
 // Find the first animal where the array key matching a RegEx.
-var_dump(array_find($array, function ($key) {
+var_dump(array_find($array, function ($value, $key) {
    return preg_match('/^([a-f])$/', $key);
-}, ArrayCallableParameter::UseKey)); // string(3) "dog"
+})); // string(3) "dog"
 </PHP>
 
 ==== array_find_key ====
 
 <PHP>
-function array_find_key(array $array, callable $callback, ArrayCallableParameter $callableParameter = ArrayCallableParameter::UseValue): mixed {
+function array_find_key(array $array, callable $callback): mixed {
     foreach ($array as $key => $value) {
-        $parameters = [$value];
-        
-        if ($callableParameter === ArrayCallableParameter::UseBoth) {
-            $parameters[] = $key;
-        } else if ($callableParameter === ArrayCallableParameter::UseKey) {
-            $parameters = [$key];
-        }
-        
-        if ($callback(...$parameters)) {
+        if ($callback($value, $key)) {
             return $key;
         }
     }
@@ -118,15 +98,11 @@ The array that should be searched.
 
 <php>callable $callback</php>
 
-The callback function to call to check each element. Which parameter are given to the callback is specified by the third parameter of this function. If this function returns true, the key is returned from <php>array_find_key</php> and the callback will not be called for further elements.
-
-<php>ArrayCallableParameter $callableParameter</php>
-
-This parameters defines, which parameters are given to the callback. 
+The callback function to call to check each element. The first parameter contains the value, the second parameter contains the corresponding key. If this function returns true, the key is returned from <php>array_find_key</php> and the callback will not be called for further elements.
 
 === Return Value ===
 
-The function returns the first array key for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>
+The function returns the first array key for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>.
 
 === Examples ===
 
@@ -153,33 +129,17 @@ var_dump(array_find_key($array, function (string $value) {
 // Find the first animal where the array key is the first symbol of the animal.
 var_dump(array_find_key($array, function (string $value, $key) {
    return $value[0] === $key;
-}, ArrayCallableParameter::UseBoth)); // string(1) "c"
+})); // string(1) "c"
 
 // Find the first animal where the array key matching a RegEx.
-var_dump(array_find_key($array, function ($key) {
+var_dump(array_find_key($array, function (string $value, $key) {
    return preg_match('/^([a-f])$/', $key);
-}, ArrayCallableParameter::UseKey)); // string(1) "a"
-</PHP>
-
-==== ArrayCallableParameter ====
-
-Add a new enum <php>ArrayCallableParameter</php> to define which parameter the callable for the new array_* functions should receive. The enum has three values: 
-
-    * <php>UseValue</php> to pass only the value of the array to the given callback
-    * <php>UseKey</php> to pass only the key of the array to the given callback
-    * <php>UseBoth</php> to pass the value as first parameter and the key as a second parameter to the given callback
-
-<PHP>
-enum ArrayCallableParameter {
-    case UseValue;
-    case UseKey;
-    case UseBoth;
-}
+})); // string(1) "a"
 </PHP>
 
 ===== Backward Incompatible Changes =====
 
-Functions created by the user and named <php>array_find</php> or <php>array_find_key</php> lead to a PHP error with the new version. A quick GitHub search shows, that there a [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] defining the symbol <php>array_find</php> for the language PHP. Looking at the search results I estimate about 30% of these results are functions that are not located in a namespace and are not part of a class. <php>array_find_key</php> is defined [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find_key&type=code|28 times]] on GitHub. The enum <php>ArrayCallableParameter</php> [[https://github.com/search?q=language%3Aphp+symbol%3AArrayCallableParameter&type=code|is never defined on GitHub]].
+Functions created by the user and named <php>array_find</php> or <php>array_find_key</php> lead to a PHP error with the new version. A quick GitHub search shows, that there a [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] defining the symbol <php>array_find</php> for the language PHP. Looking at the search results I estimate about 30% of these results are functions that are not located in a namespace and are not part of a class. <php>array_find_key</php> is defined [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find_key&type=code|28 times]] on GitHub.
 
 ===== Proposed PHP Version(s) =====
 
