@@ -8,9 +8,9 @@
 
 ===== Introduction =====
 
-PHP’s internal functions can be marked as deprecated, making this information available to Reflection and emitting deprecation errors (<php>E_DEPRECATED</php>), but there is no //equivalent// functionality for functions defined in userland.
+PHP’s internal functions and (class-)constants can be marked as deprecated, making this information available to Reflection and emitting deprecation errors (<php>E_DEPRECATED</php>), but there is no //equivalent// functionality for functions defined in userland.
 
-While the functionality can be //emulated// using <php>trigger_error()</php> to emit a <php>E_USER_DEPRECATED</php> error when calling a deprecated function, combined with either parsing a doc comment for the <php>/** @deprecated */</php> annotation or attaching a custom-defined attribute and reading it with Reflection, it requires special handling depending on whether the function in question is an internal or a userland function. <php>ReflectionFunctionAbstract::isDeprecated()</php> always returns <php>false</php> for userland functions - and doc comments / custom attributes are unavailable for internal functions.
+While the functionality can be //emulated// using <php>trigger_error()</php> to emit a <php>E_USER_DEPRECATED</php> error when calling a deprecated function, combined with either parsing a doc comment for the <php>/** @deprecated */</php> annotation or attaching a custom-defined attribute and reading it with Reflection, it requires special handling depending on whether the function in question is an internal or a userland function. For class constants the deprecation behavior cannot be emulated. <php>ReflectionFunctionAbstract::isDeprecated()</php> always returns <php>false</php> for userland functions - and doc comments / custom attributes are unavailable for internal functions.
 
 ===== Proposal =====
 
@@ -18,7 +18,7 @@ A new attribute <php>#[\Deprecated]</php> shall be added:
 
 
 <PHP>
-#[Attribute(Attribute::TARGET_METHOD|Attribute::TARGET_FUNCTION)]
+#[Attribute(Attribute::TARGET_METHOD|Attribute::TARGET_FUNCTION|Attribute::TARGET_CLASS_CONSTANT)]
 final class Deprecated
 {
     public readonly ?string $message;
@@ -27,12 +27,14 @@ final class Deprecated
 }
 </PHP>
 
-Applying this attribute to a userland function or method will add the internal ''ZEND_ACC_DEPRECATED'' flag to the function, resulting in a behavior that is consistent with the existing deprecation functionality for internal functions. This means:
+Applying this attribute to a userland function, method or class constant will add the internal ''ZEND_ACC_DEPRECATED'' flag to the element, resulting in a behavior that is consistent with the existing deprecation functionality for internal functions and class constants. This means:
 
   * <php>ReflectionFunctionAbstract::isDeprecated()</php> will return <php>true</php>.
   * Calling the function will emit a <php>E_USER_DEPRECATED</php> error (internal functions emit <php>E_DEPRECATED</php>, but this error code is reserved for internal functions).
 
 The <php>$message</php> given within the attribute definition will be included in the error message when calling the function. It goes without saying that it will also be available to static analysis tools, just like the parameters of any other attribute.
+
+While internal, non-class constants can also be marked as deprecated, there is no support for attributes on them yet, and ReflectionConstant has just been added. Adding attributes support for constants is out of scope of this PR.
 
 ==== Examples ====
 
@@ -49,6 +51,9 @@ function test2() {
 
 class Clazz {
     #[\Deprecated]
+    public const OLD_WAY = 'foo';
+    
+    #[\Deprecated]
     function test() {
     }
 
@@ -64,6 +69,7 @@ call_user_func("test"); // Deprecated: Function test() is deprecated in test.php
 $cls = new Clazz();
 $cls->test(); // Deprecated: Method Clazz::test() is deprecated in test.php on line 26
 $cls->test2(); // Deprecated: Method Clazz::test2() is deprecated, use test() instead in test.php on line 27
+echo Clazz::OLD_WAY; // Deprecated: Constant Clazz::OLD_WAY is deprecated in test.php on line ..
 
 call_user_func([$cls, "test"]); // Deprecated: Method Clazz::test() is deprecated in test.php on line 29
 
@@ -169,7 +175,7 @@ A few things tracked in https://github.com/php/php-src/pull/11293
 
 ===== Future Scope =====
 
-  * Supporting <php>#[\Deprecated]</php> on classes or other targets of attributes.
+  * Supporting <php>#[\Deprecated]</php> on other targets of attributes.
   * Adding further metadata to the <php>#[\Deprecated]</php> attribute beyond a custom message (e.g. hints for replacements that IDEs could use).
 
 ===== Proposed Voting Choices =====
