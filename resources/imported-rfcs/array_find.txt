@@ -1,5 +1,5 @@
 ====== PHP RFC: array_find ======
-  * Version: 1.0.0
+  * Version: 1.2.0
   * Date: 2024-04-07
   * Author: Joshua Rüsweg, josh@php.net
   * Status: Under Discussion
@@ -7,15 +7,17 @@
 
 ===== Introduction =====
 
-This RFC proposes the addition of two new functions <php>array_find</php> and <php>array_find_key</php>, which return the first element for which a predicate callback returns <php>true</php>.
+This RFC proposes the addition of new array functions: <php>array_find</php>, <php>array_find_key</php>, <php>array_any</php> and <php>array_all</php>, which are helper functions for common patterns of checking an array for the existence of elements matching a specific condition.
 
-There are currently lots of functions in PHP for modifying or filtering arrays. However, there is no simple function to search an array with a callback and return the first result. Implementing this in userland is relatively simple (either via a loop or via array_filter combined with reset), but the function is often required, so this type of function is often built [1]. Therefore there is a reason to include this function as standard with the next PHP version. In addition, the implementation of the function is similar to <php>array_filter</php> and relatively trivial to implement, so the maintenance effort should be low. 
+There are currently several processing arrays using a callback. However still missing are functions to find a single element matching a condition and the closely related functions of checking whether or not there are elements matching a condition. Implementing these functions in userland is relatively simple, but these functions are often required, leading to the wheel being reinvented over and over. Furthermore these type of functions are implemented in other programming languages like Rust, JavaScript or C++, too. Therefore there is a reason to include these functions as standard with the next PHP version. In addition, the implementation of these functions is quite similar to <php>array_filter</php> and relatively trivial to implement, so the maintenance effort should be low.
 
 ===== Proposal =====
 
-This RFC proposes to add two new function, <php>array_find</php> and <php>array_find_key</php>.
+This RFC proposes to add four new function, <php>array_find</php>, <php>array_find_key</php>, <php>array_any</php> and <php>array_all</php>.
 
 ==== array_find ====
+
+<php>array_find</php> returns the value of the first element for which the <php>$callback</php> returns <php>true</php>. If no matching element is found the function returns <php>NULL</php>.
 
 <PHP>
 function array_find(array $array, callable $callback): mixed {
@@ -24,7 +26,7 @@ function array_find(array $array, callable $callback): mixed {
             return $value;
         }
     }
-    
+
     return null;
 }
 </PHP>
@@ -41,7 +43,7 @@ The callback function to call to check each element. The first parameter contain
 
 === Return Value ===
 
-The function returns the first array value for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>.
+The function returns the value of the first element for which the <php>$callback</php> returns <php>true</php>. If no matching element is found the function returns <php>NULL</php>.
 
 === Examples ===
 
@@ -60,9 +62,9 @@ var_dump(array_find($array, function (string $value) {
     return strlen($value) > 4;
 })); // string(5) "goose"
 
-// Find the first animal whose name begins with f. 
+// Find the first animal whose name begins with f.
 var_dump(array_find($array, function (string $value) {
-    return str_starts_with($value, 'f'); 
+    return str_starts_with($value, 'f');
 })); // NULL
 
 // Find the first animal where the array key is the first symbol of the animal.
@@ -77,6 +79,7 @@ var_dump(array_find($array, function ($value, $key) {
 </PHP>
 
 ==== array_find_key ====
+<php>array_find_key</php> returns the key of the first element for which the <php>$callback</php> returns <php>true</php>. If no matching element is found the function returns <php>NULL</php>.
 
 <PHP>
 function array_find_key(array $array, callable $callback): mixed {
@@ -85,7 +88,7 @@ function array_find_key(array $array, callable $callback): mixed {
             return $key;
         }
     }
-    
+
     return null;
 }
 </PHP>
@@ -101,8 +104,7 @@ The array that should be searched.
 The callback function to call to check each element. The first parameter contains the value, the second parameter contains the corresponding key. If this function returns true, the key is returned from <php>array_find_key</php> and the callback will not be called for further elements.
 
 === Return Value ===
-
-The function returns the first array key for which the <php>$callback</php> returns <php>true</php>. If no matching entry is found, the function returns <php>NULL</php>.
+The function returns the key of the first element for which the <php>$callback</php> returns <php>true</php>. If no matching element is found the function returns <php>NULL</php>.
 
 === Examples ===
 
@@ -121,9 +123,9 @@ var_dump(array_find_key($array, function (string $value) {
     return strlen($value) > 4;
 })); // string(1) "e"
 
-// Find the first animal whose name begins with f. 
+// Find the first animal whose name begins with f.
 var_dump(array_find_key($array, function (string $value) {
-    return str_starts_with($value, 'f'); 
+    return str_starts_with($value, 'f');
 })); // NULL
 
 // Find the first animal where the array key is the first symbol of the animal.
@@ -137,9 +139,127 @@ var_dump(array_find_key($array, function (string $value, $key) {
 })); // string(1) "a"
 </PHP>
 
+==== array_any ====
+
+<php>array_any</php> returns <php>true</php>, if <php>$callback</php> returns <php>true</php> for any element. Otherwise the function returns <php>false</php>.
+
+<PHP>
+function array_any(array $array, callable $callback): bool {
+    foreach ($array as $key => $value) {
+        if ($callback($value, $key)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+</PHP>
+
+=== Parameters ===
+
+<php>array $array</php>
+
+The array that should be searched.
+
+<php>callable $callback</php>
+
+The callback function to call to check each element. The first parameter contains the value, the second parameter contains the corresponding key. If this function returns true, true is returned from <php>array_any</php> and the callback will not be called for further elements.
+
+=== Return Value ===
+
+The function returns true, if there is at least one element for which <php>$callback</php> returns <php>true</php>. Otherwise the function returns <php>false</php>.
+
+=== Examples ===
+
+<PHP>
+$array = [
+    'a' => 'dog',
+    'b' => 'cat',
+    'c' => 'cow',
+    'd' => 'duck',
+    'e' => 'goose',
+    'f' => 'elephant'
+];
+
+// Check, if any animal name is longer than 5 letters.
+var_dump(array_any($array, function (string $value) {
+    return strlen($value) > 5;
+})); // bool(true)
+
+// Check, if any animal name is shorter than 3 letters.
+var_dump(array_any($array, function (string $value) {
+    return strlen($value) < 3;
+})); // bool(false)
+
+// Check, if any array key is not a string.
+var_dump(array_any($array, function (string $value, $key) {
+   return !is_string($key);
+})); // bool(false)
+</PHP>
+
+==== array_all ====
+
+<php>array_all</php> returns <php>true</php>, if <php>$callback</php> returns <php>true</php> for all elements. Otherwise the function returns <php>false</php>.
+
+<PHP>
+function array_all(array $array, callable $callback): bool {
+    foreach ($array as $key => $value) {
+        if (!$callback($value, $key)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+</PHP>
+
+=== Parameters ===
+
+<php>array $array</php>
+
+The array that should be searched.
+
+<php>callable $callback</php>
+
+The callback function to call to check each element. The first parameter contains the value, the second parameter contains the corresponding key. If this function returns <php>false</php> on any element, the entire function returns <php>false</php> and the callback will not be called for further elements.
+
+=== Return Value ===
+
+The function returns true, if <php>$callback</php> returns for every entry <php>true</php>. Otherwise the function returns <php>false</php>.
+
+=== Examples ===
+
+<PHP>
+$array = [
+    'a' => 'dog',
+    'b' => 'cat',
+    'c' => 'cow',
+    'd' => 'duck',
+    'e' => 'goose',
+    'f' => 'elephant'
+];
+
+// Check, if all animal names are shorter than 12 letters.
+var_dump(array_all($array, function (string $value) {
+    return strlen($value) < 12;
+})); // bool(true)
+
+// Check, if all animal names are longer than 5 letters.
+var_dump(array_all($array, function (string $value) {
+    return strlen($value) > 5;
+})); // bool(false)
+
+// Check, if all array keys are strings.
+var_dump(array_all($array, function (string $value, $key) {
+   return is_string($key);
+})); // bool(true)
+</PHP>
+
 ===== Backward Incompatible Changes =====
 
-Functions created by the user and named <php>array_find</php> or <php>array_find_key</php> lead to a PHP error with the new version. A quick GitHub search shows, that there a [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] defining the symbol <php>array_find</php> for the language PHP. Looking at the search results I estimate about 30% of these results are functions that are not located in a namespace and are not part of a class. <php>array_find_key</php> is defined [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find_key&type=code|28 times]] on GitHub.
+Functions created by the user and named <php>array_find</php>, <php>array_find_key</php>, <php>array_any</php> or <php>array_all</php> lead to a PHP error with the new version. A quick GitHub search shows, that there a [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] defining the symbol <php>array_find</php>, [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find_key&type=code|28 results]] defining the symbol <php>array_find_key</php>, [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_any&type=code|127 results]] defining the symbol <php>array_any</php> and [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_all&type=code|284 results]] defining the symbol <php>array_all</php> for the language PHP.
+
+Looking at the search results I estimate about 30% of these results are functions that are not located in a namespace, are not part of a class and are not false-positvies (e.g. the symbol is <php>db_array_all</php> instead of <php>array_all</php>).
 
 ===== Proposed PHP Version(s) =====
 
@@ -168,11 +288,30 @@ None.
 
 ===== Open Issues =====
 
-None. 
+This function behaves differently to <php>array_filter</php>, because it always passes the value and the key to the callback. <php>array_filter</php> has a parameter for this to set which parameters are to be passed to the callback. <php>array_map</php> does not support the pass of the key at all, but support using more than one array, to pass a various number of parameters to the callback. With closures, omitting a parameter is now possible without any problems, therefore, there is no reason to determine the choice of parameters for the callback.
 
 ===== Unaffected PHP Functionality =====
 
-This RFC only adds two new functions to PHP and only affects previously defined functions which are named as the proposed functions. 
+This RFC only adds two new functions to PHP and only affects previously defined functions which are named as the proposed functions.
+
+===== Proposed Voting Choices =====
+
+Each vote requires a 2/3 majority.
+
+==== array_find()/array_find_key() ====
+
+<doodle title="Add array_find() and array_find_key()?" auth="josh" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+
+==== array_any()/array_all() ====
+
+<doodle title="Add array_any() and array_all()?" auth="josh" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 
 ===== Implementation =====
@@ -182,7 +321,12 @@ https://github.com/joshuaruesweg/php-src/commit/9f3fc252b92f534d498e5f1e6a463e15
 
 ===== References =====
 
-  * [1] GitHub currently has [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] for array_find and Laravel implements this feature by default with [[https://laravel.com/docs/5.2/helpers#method-array-first|array_first]]. 
+  * GitHub currently has [[https://github.com/search?q=language%3Aphp%20symbol%3Aarray_find&type=code|656 results]] for <php>array_find</php> and Laravel implements this feature by default with [[https://github.com/laravel/framework/blob/08acc925f1ec8e1c41a54774a36720f506c5b5a8/src/Illuminate/Collections/Arr.php#L193|Arr:first]].
   * https://en.cppreference.com/w/cpp/algorithm/find
+  * https://en.cppreference.com/w/cpp/algorithm/all_any_none_of
   * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/find
+  * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/every
+  * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/some
   * https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.find
+  * https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.all
+  * https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.any
