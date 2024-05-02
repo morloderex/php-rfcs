@@ -1,5 +1,5 @@
 ====== PHP RFC: PDO Driver specific SQL parsers ======
-  * Version: 0.4
+  * Version: 0.5
   * Date: 2024-04-11
   * Author: Matteo Beccati, mbeccati@php.net
   * Status: Under Discussion
@@ -33,19 +33,20 @@ In a nutshell, the PDO SQL scanner function doesn't need to completely parse the
 The limitation of a global SQL parser in PDO meant that my previous [[rfc:pdo_escape_placeholders|RFC to support the PostgreSQL-only "?" operator]][4] had to apply the parser change to all database types. The change had no known side-effects, but I feel this RFC could improve by keeping this peculiarity inside the pdo_pgsql scanner only.
 
 ===== Proposal =====
-Following a detailed research (see below) for each of the databases currently supported by PDO in core, the proposal is to:
+Following a detailed research (see below) for each of the databases currently supported by PDO in core, the proposal is to allow drivers to optionally provide a custom scanner function to handle their specific SQL dialect and:
 
-  - change the [[https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42|default PDO scanner]] to expect standard SQL only:
+  - Change the [[https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42|default PDO scanner]] to expect standard SQL only:
     - single and double quoted literals, with doubling as escaping mechanism
     - two-dashes and C-style comments (non-nested, as that seems to be the most common format, already implemented in PDO)
-  - allow drivers to optionally provide a custom scanner function to handle their specific SQL dialect;
   - Add a MySQL specific scanner function:
     - single and double quoted literals with both doubling and backslash as escaping mechanisms (MySQL default)
     - backtick literals with doubling as escaping mechanism (I also tested and it seems MySQL doesn't accept backslashes as escapes)
-    - two-dashes, C-style comments, and Hash-comments, albeit I couldn't force the requirement of a space after "--" (I tried, but failed)
+    - two-dashes, C-style comments, and Hash-comments, albeit I couldn't force the requirement of a space after "--"
     - Tests, as necessary
   - Add a PgSQL specific scanner function:
     - single and double quoted literals, with doubling as escaping mechanism
+    - C-style "escape" string literals
+    - Dollar-quoted string literals
     - two-dashes and C-style comments (non-nested, as nesting would require unwanted changes to the common parser functionality)
     - Support for "??" as escape sequence for the "?" operator
     - Tests, as necessary
@@ -54,7 +55,7 @@ Following a detailed research (see below) for each of the databases currently su
     - two-dashes and C-style comments (non-nested)
     - Tests, as necessary
 
-In order to keep the change as simple as possible, the proposal tries to cover the default SQL syntax for each database as closely as possible, trying to modifying the common parser code.
+In order to keep the change as simple as possible, the proposal tries to cover the default SQL syntax for each database as closely as possible, without heavy changes to the common parser code.
 
 One important thing to mention is that the proposed changes are only targeting the part of PDO that scans the SQL query for parameter placeholders. Quoting literals or using parameters in queries is **not going to be affected**.
 
@@ -76,6 +77,8 @@ Each PDO driver defines already [[https://github.com/search?q=repo%3Aphp/php-src
 
 The rest of the implementation is the actual re2c scanner code, config.*, Makefile changes, etc. required to incorporate the driver specific scanner into the build.
 
+In order to support dollar-quoted strings on Postgres, the functionality of custom quoting has been added to the common PDO parser function. The change has no side effects for other database drivers.
+
 ===== Research on String Literals, Identifiers, and Comments ===== 
 
 ==== MySQL ====
@@ -87,23 +90,25 @@ The [[https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes|
 
 Several [[https://dev.mysql.com/doc/refman/8.0/en/comments.html|comment types]] supported: ''-- '', ''#'', and ''/* */'' (not nested).
 
+The RFC aims to support all the above kinds of string literals with string-affecting configuration variables set to their defaults. All comment types will be supported, however "--" is recognised as comment start following the SQL standard, even if MySQL requires a space character after it.
+
 ==== PostgreSQL ====
 
 Escaping has evolved during the years. Historically accepted "\'", but started gradually transitioning to the SQL standard around 2005, going from memory. Since 9.1 (2011+) it accepts only single quoted string literals by default according to the SQL standard. See [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS|the documentation]].
 
-It also accepts [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE|escape string literals]], e.g.
+Postgres also supports [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE|String Constants with Unicode Escapes ]], which follow the same conventions as standard strings and are parsed by PDO as regular strings.
+
+It also accepts [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE|“escape” string constants]], e.g.
 
 <code php>E'This \'word\' is a single quoted'</code>
 
-I had seen them being used when PostgreSQL started emitting warnings about backslashes in string literals, during the transition phase when ''magic_quotes_qpc'' was a thing, but I really see no place for this syntax in modern PHP. In fact this is the only syntax that is compatible with the current PDO SQL scanner, although I wouldn't recommend anybody to change their SQL string literals to this variant.
+Lastly, [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING|Dollar-Quoted String Constants]] are very common, especially when defining functions.
 
 The behaviour of strings can also be manipulated in multiple ways through configuration variables, such as: [[https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS|standard_conforming_strings]], [[https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE|backslash_quote]], and [[https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING|escape_string_warning]].
 
-The RFC will ensure regular SQL standard string literals are supported on a Postgres instance with default configuration, while the rarer escape string literals will not be supported.
-
-Support for escape string literal is out of scope of this RFC and should be documented as incompatible in the UPGRADING file, as weirdly enough it previously was the only fully-compatible format.
-
 About [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS|comments]], it follows the standard with ''--'' and ''/* */'' (w/ nested comments allowed)
+
+The RFC aims to support all the above kinds of string literals with string-affecting configuration variables set to their defaults. Dollar-quoting support requires minimal changes to the common PDO parser function. All comment types are already supported, albeit support for nested comments will not be introduced.
 
 ==== SQLite ====
 
@@ -115,14 +120,7 @@ Double quoted identifiers, but also [[https://sqlite.org/lang_keywords.html|back
 
 Almost SQL standard [[https://www.sqlite.org/lang_comment.html|comments]]: ''--'' and ''/* */'' (not nested).
 
-==== Oracle ====
-
-SQL standard string literals, according to the [[https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html|documentation]].
-It also supports alternative quoting, e.g. q'<literal>' and many other variants, which is out of scope for this RFC.
-
-[[https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA|Double quoted identifiers]].
-
-Almost SQL standard [[https://www.sqlite.org/lang_comment.html|comments]]: ''--'' and ''/* */'' (not nested).
+The RFC aims to support single-quoted, double-quoted, and backtick literals. All comment types are already supported. 
 
 ==== SQL Server ====
 
@@ -132,6 +130,8 @@ Depending on the QUOTED_IDENTIFIER setting, double quotes are either used for st
 
 Almost SQL standard [[https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16|comments]]: ''--'' and ''/* */'' (non nested).
 
+No custom parser is planned in this RFC: the default scanner will be used by default, bringing compatibility for SQL standard string literals, identifiers, and comments.
+
 ==== Firebird ====
 SQL standard string literals, according to the [[https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants|documentation]]. It also support hexadecimal (binary) strings, e.g. ''x'50444F''', and, similarly to Oracle, quoted strings (out of scope).
 
@@ -139,9 +139,23 @@ The documentation mentions "Double quotes are NOT VALID for quoting strings. The
 
 Almost SQL standard [[https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html|comments]]: ''--'' and ''/* */'' (non nested).
 
+No custom parser is planned in this RFC: the default scanner will be used by default, bringing compatibility for SQL standard string literals, identifiers, and comments.
+
+
 ==== ODBC ====
 
 Since ODBC can connect to various types of databases, the SQL standard parser hopefully will suffice.
+
+==== Oracle ====
+
+SQL standard string literals, according to the [[https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html|documentation]].
+It also supports alternative quoting, e.g. q'<literal>' and many other variants, which is out of scope for this RFC.
+
+[[https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA|Double quoted identifiers]].
+
+Almost SQL standard [[https://www.sqlite.org/lang_comment.html|comments]]: ''--'' and ''/* */'' (not nested).
+
+The OCI driver lives in PECL: the default scanner will be used by default, bringing compatibility for SQL standard string literals, identifiers, and comments.
 
 
 ===== Historical Background =====
