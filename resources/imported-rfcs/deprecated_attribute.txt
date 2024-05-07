@@ -23,6 +23,8 @@ final class Deprecated
 {
     public readonly ?string $message;
 
+    public readonly ?string $since;
+
     public function __construct(?string $message = null, ?string $since = null) {}
 }
 </PHP>
@@ -36,7 +38,7 @@ Applying this attribute to a userland function, method, or class constant will a
 
 The <php>$message</php> given within the attribute definition will be included in the error message when calling the function or accessing the class constant. It goes without saying that it will also be available to static analysis tools, just like the parameters of any other attribute.
 
-The optional <php>$since</php> argument is appended to the error message. It signals the version since the function/method is deprecated. This is included because due its pre-existing use in internals, php-doc, Symfony and others. 
+Likewise the <php>$since</php> value is also included within the error message, intended to indicate since when the element having the attribute is deprecated. It is included for easier programmatic access, due to its pre-existing use within the PHP documentation and also userland libraries and frameworks. The contents of <php>$since</php> may be a free-form string that is not validated. The semantics of the property is left to the library applying the <php>#[\Deprecated]</php> attribute. It may contain a version number, a date, or anything else the library in question considers appropriate.
 
 While internal, non-class constants can also be marked as deprecated, there is no support for attributes on them yet, and <php>ReflectionConstant</php> has just been added in PHP 8.4. Adding attribute support for non-class constants is out of scope of this RFC/PR for now.
 
@@ -59,6 +61,10 @@ function test2() {
 function test3() {
 }
 
+#[\Deprecated(since: "2024-05-07")]
+function test4() {
+}
+
 class Clazz {
     #[\Deprecated]
     public const OLD_WAY = 'foo';
@@ -77,19 +83,20 @@ enum MyEnum {
     case OldCase;
 }
 
-test(); // Deprecated: Function test() is deprecated in test.php on line 29
-test2(); // Deprecated: Function test2() is deprecated, use test() instead in test.php on line 30
-test3(); // Deprecated: Function test2() is deprecated since 2.4, use test() instead in test.php on line 30
-call_user_func("test"); // Deprecated: Function test() is deprecated in test.php on line 31
+test(); // Deprecated: Function test() is deprecated in test.php on line 37
+test2(); // Deprecated: Function test2() is deprecated, use test() instead in test.php on line 38
+test3(); // Deprecated: Function test2() is deprecated since 2.4, use test() instead in test.php on line 39
+test4(); // Deprecated: Function test4() is deprecated since 2024-05-07 in test.php on line 40
+call_user_func("test"); // Deprecated: Function test() is deprecated in test.php on line 41
 
 $cls = new Clazz();
-$cls->test(); // Deprecated: Method Clazz::test() is deprecated in test.php on line 34
-$cls->test2(); // Deprecated: Method Clazz::test2() is deprecated, use test() instead in test.php on line 35
-Clazz::OLD_WAY; // Deprecated: Constant Clazz::OLD_WAY is deprecated in test.php on line 36
+$cls->test(); // Deprecated: Method Clazz::test() is deprecated in test.php on line 44
+$cls->test2(); // Deprecated: Method Clazz::test2() is deprecated, use test() instead in test.php on line 45
+Clazz::OLD_WAY; // Deprecated: Constant Clazz::OLD_WAY is deprecated in test.php on line 46
 
-MyEnum::OldCase; // Deprecated: Enum case MyEnum::OldCase is deprecated in test.php on line 38
+MyEnum::OldCase; // Deprecated: Enum case MyEnum::OldCase is deprecated in test.php on line 48
 
-call_user_func([$cls, "test"]); // Deprecated: Method Clazz::test() is deprecated in test.php on line 40
+call_user_func([$cls, "test"]); // Deprecated: Method Clazz::test() is deprecated in test.php on line 50
 
 ?>
 </PHP>
@@ -138,11 +145,21 @@ function test2() {
 function test3() {
 }
 
+#[\Deprecated("use test() instead", since: "2.4")]
+function test4() {
+}
+
+#[\Deprecated(since: "2024-05-07")]
+function test5() {
+}
+
 $reflection = new ReflectionFunction('test1');
 var_dump($reflection->getAttributes()[0]->newInstance());
 /*
-object(Deprecated)#3 (1) {
+object(Deprecated)#3 (2) {
   ["message"]=>
+  NULL
+  ["since"]=>
   NULL
 }
 */
@@ -150,8 +167,10 @@ object(Deprecated)#3 (1) {
 $reflection = new ReflectionFunction('test2');
 var_dump($reflection->getAttributes()[0]->newInstance());
 /*
-object(Deprecated)#2 (1) {
+object(Deprecated)#2 (2) {
   ["message"]=>
+  NULL
+  ["since"]=>
   NULL
 }
 */
@@ -159,9 +178,33 @@ object(Deprecated)#2 (1) {
 $reflection = new ReflectionFunction('test3');
 var_dump($reflection->getAttributes()[0]->newInstance());
 /*
-object(Deprecated)#1 (1) {
+object(Deprecated)#1 (2) {
   ["message"]=>
   string(18) "use test() instead"
+  ["since"]=>
+  NULL
+}
+*/
+
+$reflection = new ReflectionFunction('test4');
+var_dump($reflection->getAttributes()[0]->newInstance());
+/*
+object(Deprecated)#3 (2) {
+  ["message"]=>
+  string(18) "use test() instead"
+  ["since"]=>
+  string(3) "2.4"
+}
+*/
+
+$reflection = new ReflectionFunction('test5');
+var_dump($reflection->getAttributes()[0]->newInstance());
+/*
+object(Deprecated)#2 (2) {
+  ["message"]=>
+  NULL
+  ["since"]=>
+  string(10) "2024-05-07"
 }
 */
 
