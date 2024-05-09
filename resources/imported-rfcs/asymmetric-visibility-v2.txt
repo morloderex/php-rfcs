@@ -311,6 +311,137 @@ Additionally, the two constants <php>ReflectionProperty::IS_PROTECTED_SET</php> 
 
 Modifying asymmetric properties via <php>ReflectionProperty::setValue()</php> is allowed, just as it is for <php>protected</php> or <php>private</php> properties, even outside of the classes scope.
 
+===== Use cases and examples =====
+
+Between ''readonly'' and property hooks, PHP already has a number of ways to do "advanced things" with properties.  However, there are still gaps in capability, which this RFC aims to fill.
+
+==== Readonly is incompatible with inheritance ====
+
+The ''readonly'' flag is, on its own, two flags in one: write-once and ''private(set)''.  While both have their use cases, there are ample times where only one or the other is desired.  For instance, the following code from Crell/Serde (slightly simplified for this example) wants to use ''readonly'', but because of the implied ''private(set)'' it causes issues:
+
+<code php>
+abstract class Serde
+{
+    // ...
+    protected readonly TypeMapper $typeMapper;
+
+    protected readonly ClassAnalyzer $analyzer;
+}
+
+class SerdeCommon extends Serde
+{
+    // This must be redefined here so that it can be set from the constructor.
+    protected readonly TypeMapper $typeMapper;
+
+    public function __construct(
+        // Normally repeating a property as a promoted argument is an error,
+        // BUT because the property is in the parent, this overrides it with a
+        // new property definition that is now local to this class.
+        protected readonly ClassAnalyzer $analyzer = new MemoryCacheAnalyzer(new Analyzer()),
+        array $handlers = [],
+        array $formatters = [],
+        array $typeMaps = [],
+    ) {
+        // We just want to do this...
+        $this->typeMapper = new TypeMapper($typeMaps, $this->analyzer);
+        
+        // ...
+    }
+}
+</code>
+
+With asymmetric visibility, the ''readonly'' usage here can be replaced with ''public protected(set)'' or ''readonly public protected(set)'', avoiding the need to double-declare properties.
+
+==== Readonly is limited ====
+
+''readonly'' offered the potential to have public properties that are guaranteed to not change unexpectedly.  This has been a major benefit, and allowed the removal of a lot of needless boilerplate code.  However, it also somewhat over-shoots: It prevents a property from changing //at all//, rather than just "unexpectedly."  While fully immutable objects have their place, they are not always the answer.  It is still often desireable to have a public property (for ease of read) without making it write-once.
+
+For example:
+
+<code php>
+class Record
+{
+    private bool $dirty = false;
+    
+    private array $data = [];
+    
+    public set($key, $val): void
+    {
+        $this->data[$key] = $val;
+        $this->dirty = true;
+    }
+    
+    public isDirty(): bool
+    {
+        return $this->dirty;
+    }
+    
+    public save(): void
+    {
+        if ($this->dirty) {
+            // Do something to save the object.
+            $this->dirty = false;
+        }
+    }
+}
+</code>
+
+It's very tempting to make ''$dirty'' a public property, as the dirty status of the object is a "property" of it.  Especially with hooks, such a desire will become more common.  However, that cannot be done with ''public'' or ''readonly''.  Making the property ''public'' would open it up to modification from anyone at any time, whereas making it ''readonly'' would make it impossible to unset in ''save()'', and require using "uninitialized or true" as a quasi-boolean state.  Both options are bad.
+
+With asymmetric visibility, it can be easily simplified to:
+
+<code php>
+class Record
+{
+    public private(set) bool $dirty = false;
+    
+    private array $data = [];
+    
+    public set($key, $val): void
+    {
+        $this->data[$key] = $val;
+        $this->dirty = true;
+    }
+    
+    public save(): void
+    {
+        if ($this->dirty) {
+            // Do something to save the object.
+            $this->dirty = false;
+        }
+    }
+}
+</code>
+
+Which now offers a publicly-readable marker, internally modifiable, with no opportunity for it to change in an uncontrolled way, without any need for odd code contortions.
+
+==== Hooks can be verbose ====
+
+While every effort has been made to make hooks as compact as reasonable, there are some use cases that are still more clumsy than they need to be.  For example, asymmetric visibility can be emulated with hooks like so:
+
+<code php>
+class NamedThing
+{
+    private string $_name;
+    
+    public string $name { get => $this->_name; }
+
+    public function __construct(string $name)
+    {
+        $this->name = $_name;
+    }
+}
+</code>
+
+But that's a lot of non-obvious work, and does have a small performance impact.  It is much more straightforward to do this:
+
+<code php>
+class NamedThing
+{
+    public function __construct(public private(set) string $name) {}
+}
+</code>
+
 ===== Backward Incompatible Changes =====
 
 None.  This syntax would have been a parse error before.
