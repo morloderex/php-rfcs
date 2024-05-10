@@ -1,5 +1,5 @@
 ====== PHP RFC: Add openStream() to XML{Reader,Writer} ======
-  * Version: 0.9.1
+  * Version: 0.9.2
   * Date: 2024-04-21
   * Author: Niels Dossche <nielsdos@php.net>
   * Status: Under Discussion
@@ -45,6 +45,49 @@ The first one is the fact that we're adding the <php>openStream()</php> method. 
 The second BC break is caused by throwing a <php>ValueError</php> on invalid encodings instead of silently ignoring invalid encodings. If we don't signal the invalid encoding in any way to the user, this can subtly hide bugs. For example, this could hide typos or silently pass invalid user input to the respective functions. Forcing developers to handle this error explicitly will result in more robust code in the end.
 
 The third BC break is the promotion of the NULL-byte warning to a <php>ValueError</php>. This makes the <php>XMLReader</php> and <php>XMLWriter</php> class more consistent with other extensions that throw instead of issuing a warning. The migration for developers should be quite simple: instead of silencing the warning and/or checking the return value of the function, they should use a try-catch construct to handle the error.
+
+===== Example usages =====
+
+==== Minimal XMLReader example ====
+
+<PHP>
+// Could be any stream, but this is for simplicity sake
+$h = fopen("php://memory", "w+");
+fwrite($h, "<root><!--my comment--><child/></root>");
+fseek($h, 0);
+
+$reader = new XMLReader;
+$reader->openStream($h);
+
+while ($reader->read()) {
+    switch ($reader->nodeType) {
+        case XMLReader::ELEMENT:
+            echo "Element: ", $reader->name, "\n";
+            break;
+        case XMLReader::COMMENT:
+            echo "Comment: ", $reader->value, "\n";
+            break;
+    }
+}
+</PHP>
+
+==== Minimal XMLWriter example ====
+
+<PHP>
+// Could be any stream, but this is for simplicity sake
+$h = fopen("php://output", "w");
+
+$writer = new XMLWriter;
+$writer->openStream($h);
+
+$writer->startElement("root");
+$writer->writeAttribute("align", "left");
+$writer->writeComment("hello");
+$writer->endElement();
+$amount = $writer->flush();
+echo "\nAmount of bytes written: ";
+var_dump($amount);
+</PHP>
 
 ===== Proposed PHP Version(s) =====
 
@@ -94,5 +137,6 @@ None yet.
 
 ===== Changelog =====
 
+  - 0.9.2: Add example usages of the new APIs.
   - 0.9.1: Made XMLReader::openStream() non-static instead such that it works with overridden classes.
   - 0.9: Initial version under discussion
