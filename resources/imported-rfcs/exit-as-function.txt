@@ -46,16 +46,16 @@ function exit(string|int $status = 0): never {}
 And to make <php>die()</php> an alias of <php>exit()</php>, transform "constant" usages of <php>exit</php>/<php>die</php> to function calls at compile time.
 
 It will continue to be impossible to declare <php>exit</php> or <php>die</php> functions in namespaces,
-or disable/remove them via the <php>disable_functions</php> INI directive. 
+or disable/remove them via the <php>disable_functions</php> INI directive.
+
+Moreover, as <php>exit</php> and <php>die</php> will no longer be keywords, it will be possible to use them as <php>goto</php> labels.
+
+Another slight improvement is that the AST printing (seen via <php>assert()</php>)
+now reflects what has actually been written in the source code rather than always using <php>exit</php>. 
 
 ===== Backward Incompatible Changes =====
 
 The impact of this RFC is deemed to be low.
-
-Various types would now throw a <php>TypeError</php> instead of being cast to a string:
-  * passing <php>resource</php>s to <php>exit()</php> will now throw a <php>TypeError</php>
-  * passing <php>array</php>s to <php>exit()</php> will now throw a <php>TypeError</php>
-
 
 The <php>T_EXIT</php> token will be removed because <php>exit</php> will no longer need to be parsed specially by the lexer.
 As most PHP libraries that deal on an AST level use Nikita Popov's <php>php-parser</php> which creates its own AST,
@@ -63,12 +63,28 @@ this should have minimal impact on userland tooling.
 
 Projects that directly use the tokenizer extensions, like Exakat, will need some straight-forward adaptation.
 
+And the behaviour of value of different types passed to <php>exit()</php> will be altered to match the usual type juggling semantics:
+
+^ Argument passed       ^ Current behaviour ^ New behaviour ^ Consequences                                                                                                                         |
+| int                   | int               | int           | No change, interpreted as exit code                                                                                                  |
+| string                | string            | string        | No change, interpreted as status message                                                                                             |
+| bool                  | string            | int           | Was status message, now exit code                                                                                                    |
+| float                 | string            | int           | Was status message, now exit code, with a possible <php>"Implicit conversion from float to int loses precision"</php> deprecation notice        |
+| null                  | string            | int           | Was status message, now exit code, with <php>"Passing null to parameter #1 ($status) of type string|int is deprecated"</php> deprecation notice |
+| stringable object     | string            | string        | No change, interpreted as status message                                                                                             |
+| non-stringable object | TypeError         | TypeError     | None                                                                                                                                 |
+| array                 | string            | TypeError     | Was status message with warning, now TypeError                                                                                       |
+| resource              | string            | TypeError     | Was status message with warning, now TypeError                                                                                       |
+
+
 ===== Future scope =====
 
 These are ideas for future proposals that are //not// part of this RFC:
 
   * Deprecate using <php>exit</php> as a "constant"
-  * Execute <php>finally</php> blocks for <php>exit</php>s  
+  * Execute <php>finally</php> blocks for <php>exit</php>s
+  * Allow disabling <php>exit()</php>/<php>die()</php> functions via the <php>disable_functions</php> INI directive, similarly to how it is possible to disable <php>assert()</php>
+
 
 ===== Version =====
 
