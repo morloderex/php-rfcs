@@ -311,6 +311,164 @@ Additionally, the two constants <php>ReflectionProperty::IS_PROTECTED_SET</php> 
 
 Modifying asymmetric properties via <php>ReflectionProperty::setValue()</php> is allowed, just as it is for <php>protected</php> or <php>private</php> properties, even outside of the classes scope.
 
+===== Syntax discussion =====
+
+Asymmetric visibility exists as a feature in several languages, most notably Swift, C#, and Kotlin.  The syntactic structure varies, however.  Translated to PHP, the two models would look like:
+
+<code PHP>
+// Option 1:
+class A
+{
+    public private(set) string $name;
+}
+
+// Option 2:
+class A
+{
+    public string $name { private set; }
+}
+</code>
+
+In option 1, the visibility is an aspect of the property itself.  In option 2, the visibility is an aspect of the property's <php>set</php> hook.  We believe that, for PHP, Option 1 (presented here) is the superior approach, for a number of reasons.
+
+==== Option 1 is logically consistent ====
+
+As noted above in "Interaction with hooks", visibility controls exist independently hooks.  In fact, as implemented they do not interact at all.  Using hook syntax for visibility controls, therefore, is surprising and confusing.
+
+==== Option 2 is not necessary from the implementation ====
+
+There is an important difference between PHP's hooks and accessors as implemented in C# or Kotlin.  In those languages, properties effectively always have accessors, and sometimes have a backing value.  If the hook is the trivial implementation (implied if not specified), it is compiled away ahead of time.  That is, the "logical property" (that code would see) and the "physical property" (the actual storage) are already separate from the start.
+
+In PHP, by contrast, there is no distinction between the logical and physical property... //unless// a hook is defined.  Hooks are rarely a factor, whereas accessors are always a factor in C# or Kotlin.
+
+This is an extension of the previous point.  Bringing hook implementations into the picture when they would not otherwise exists complicates both the logic for the reader and for the engine.
+
+==== Option 1 is more visually scannable ====
+
+With Option 1 (proposed), reading a property definition from left to right, one is presented with all visibility options together.  By the time the user has reached the ''$'', they know all visibility information.  With Option 2, set visibility may or may not be known.  It would appear at the end of the line, whereas get visibility is at the start of the line.
+
+Worse, if there are actual hook implementations, the set visibility may be several lines later!
+
+<code php>
+class Option1
+{
+    // All visibility is together in one obvious place.
+    public private(set) string $phone {
+        get {
+            if (!$this->phone) {
+                return '';
+            }
+            if ($this->phone[0] === 1) {
+                return 'US ' . $this->phone;
+            }
+            return 'Intl +' . $this->phone;
+        }
+
+       set {
+            implode('', array_filter(fn($c) => is_numeric($c), explode($value)))
+        }
+    }
+}
+
+class Option2
+{
+    public string $phone {
+        get {
+            if (!$this->phone) {
+                return '';
+            }
+            if ($this->phone[0] === 1) {
+                return 'US ' . $this->phone;
+            }
+            return 'Intl +' . $this->phone;
+        }
+      
+        // The set visibility is 10 lines away from the get visibility!
+        private set {
+            implode('', array_filter(fn($c) => is_numeric($c), explode($value)))
+        }
+    }
+}
+</code>
+
+==== It's non-obvious in Option 2 what hook behavior should be implied ====
+
+One of the caveats of hooks is that, sometimes, references on properties must be prevented.  (The reasons for that are explained at length in the hooks RFC.)  For example, this would be illegal:
+
+<code php>
+class A
+{
+    public array $arr {
+        set {
+          if (array_filter(is_int(...), $value) === $value) {
+            $this->arr = $value;
+          }
+          throw new \Exception();
+        }
+    }
+}
+
+$a = new A();
+
+// This is illegal, as it would bypass the set hook.
+$a->arr[] = 5;
+</code>
+
+So "arrays with hooks can do less" is already an established fact of the language.  However, if the hook-style syntax is used for visibility:
+
+<code php>
+class A
+{
+    public array $arr { private set; }
+}
+
+$a = new A();
+
+// Should this be legal?
+$a->arr[] = 5;
+</code>
+
+The syntax suggests that there is a set hook, and thus the assignment should not be allowed.  However, there isn't really a set hook, and thus assignment should be allowed.  Or maybe it shouldn't be, because there is a hook defined, even if it's the default.
+
+It is not at all obvious which interpretation of the syntax should be correct, and either one will result in unexpected behavior for someone.  With the separated syntax (as proposed), this problem does not exist.
+
+==== Option 2 is more complex to implement ====
+
+Building on the previous point, it would probably make more sense to interpret that syntax to not mean a hook is defined, so the assignment would work.  However, that would increase the implementation complexity as the engine could no longer assume that the presence of ''{ }'' meant there were hooks.  It would have to inspect more deeply and determine if it's a for-reals set hook, or a pseudo-hook that should be skipped.
+
+The same challenge would exist for user-space static analysis tools, which would need more complex logic to determine if a given usage is legal or not.  While it's natural for static analysis tools to need to change any time PHP's syntax changes, we should not make those changes harder than they need to be.
+
+==== Option 2 is less extensible ====
+
+As noted in the future-scope below, this syntax allows for the operations that can be visibility-controlled to grow in the future, should a use case be found.  Similarly, hooks were designed such that additional hooks could be defined in the future, should a use case be found.  Both being extensible lists is a good thing.
+
+However, there's no reason why those lists need to extend at the same time.  Using the C#-style syntax would imply that some hooks have a possible visibility modifier and some do not, and that some visibility modifiers, which would be defined within the hook block, do not actually have a hook at all, despite being in the hook block.  As a pathological example:
+
+<code php>
+class A
+{
+    public string $name {
+      // No modifier allowed.
+      get => ucfirst($this->name);
+
+      // Modifier optional.
+      private set => strtolower($value);
+
+      // Modifier, but no hook? How do I know that?
+      protected init => ...;
+
+      // How do I even know if this thing takes visibility?
+      isset => ...;
+    }
+}
+</code>
+
+In fairness, it is unlikely that either list will be appreciably extended in the near future.  However, if we can avoid a potential landmine now by keeping separate concepts separate, we should.
+
+==== Summary ====
+
+For all of the above reasons, we firmly believe that the proposed syntax is the objectively better approach for PHP.  Trying to use the C# syntax would result in a more complex implementation that is harder to read and harder for static analyzers to handle.
+
 ===== Use cases and examples =====
 
 Between ''readonly'' and property hooks, PHP already has a number of ways to do "advanced things" with properties.  However, there are still gaps in capability, which this RFC aims to fill.
