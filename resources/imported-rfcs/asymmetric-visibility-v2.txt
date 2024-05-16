@@ -97,7 +97,7 @@ $bar = &$foo->bar;
 
 ==== Object properties ===
 
-If the property is an object, the restricted visibility applies only to changing the object referenced by the property.  It does not impact the object itself.  That is consistent with the behavior of the ''readonly'' property.
+If the property is an object, the restricted visibility applies only to changing the object referenced by the property.  It does not impact the object itself.  That is consistent with the behavior of the ''readonly'' marker.
 
 Example:
 
@@ -215,7 +215,7 @@ class ExampleD
 
 In each case, ''ExampleX::$name'' can be read from public scope, so the interface is satisfied.
 
-If a property on an interface requires public ''set'', however, then specifying asymmetric visibility is not permitted.  (Hooks, of course, are.)
+If a property on an interface requires public ''set'', however, then specifying asymmetric visibility is not permitted, except in the special case of ''readonly'' (below).  (Hooks, of course, are.)
 
 ==== Interaction with __set and __unset ====
 
@@ -275,9 +275,39 @@ The logic for calling ''unset()'' externally (and thus triggering <php>__unset()
 
 ==== Relationship with readonly ====
 
-The ''readonly'' flag, introduced in PHP 8.1, has an implicit ''private(set)'' behavior.  While there are ways to recast the meaning of ''readonly'' such that it will combine with asymmetric visibility cleanly, there's no clear consensus on which of those ways is best, nor some of the edge cases they introduce.  Therefore, for the time being, mixing ''readonly'' with explicit asymmetric visibility is not allowed.
+The ''readonly'' flag, introduced in PHP 8.1, is, really two flags in one: write-once and ''private(set)''.  While that is sometimes sufficient, there are cases where protected-set is desired, and while few, there are use cases for public-set-once.  
 
-This restriction can and should be relaxed in a later, dedicated RFC where those details can be hashed out more explicitly.
+To address these use cases, we have decided to treat ''readonly'' exactly as described: Two flags in one, with one being overridable.  That is, specifying a set-visibility on a ''readonly'' property is legal, and will override the implicit ''private(set)'' of ''readonly''.  If no set-visibility is specified, then ''readonly'''s implicit ''private(set)'' remains the same.
+
+This will naturally lead to some cases where the get and set visibility will be necessarily the same.  Therefore, the prohibition against matching visibilities is lifted for ''readonly'' properties, even if they would otherwise be redundant or unnecessary.  Specifying a wider set-visibility than get is still disallowed.
+
+In code:
+
+<code php>
+// These two are identical. The second is redundant, but legal.
+public readonly string $foo;
+public private(set) readonly string $foo;
+
+// This creates a public-read, protected-write, write-once property.
+// This was previously impossible.
+public protected(set) readonly string $foo;
+
+// This creates a protected-read, protected-write, write-once property.
+// The double-protected is allowed, to override the implicit private(set)
+protected protected(set) readonly string $foo;
+
+
+// This creates a public-read, public-write, write-once property.
+// While use cases for this configuration are likely few, 
+// there's no intrinsic reason it should be forbidden.
+public public(set) readonly string $foo;
+
+
+// This is illegal - set cannot be wider than get.
+protected public(set) readonly string $foo;
+</code>
+
+If a class is marked ''readonly'', then by design its impact is identical to if every property was individually marked ''readonly''.  There is no special logic there.
 
 ==== Typed properties ====
 
@@ -475,7 +505,7 @@ Between ''readonly'' and property hooks, PHP already has a number of ways to do 
 
 ==== Readonly is incompatible with inheritance ====
 
-The ''readonly'' flag is, on its own, two flags in one: write-once and ''private(set)''.  While both have their use cases, there are ample times where only one or the other is desired.  For instance, the following code from Crell/Serde (slightly simplified for this example) wants to use ''readonly'', but because of the implied ''private(set)'' it causes issues:
+As noted previously, the ''readonly'' flag is, on its own, two flags in one: write-once and ''private(set)''.  While both have their use cases, there are ample times where only one or the other is desired.  For instance, the following code from Crell/Serde (slightly simplified for this example) wants to use ''readonly'', but because of the implied ''private(set)'' it causes issues:
 
 <code php>
 abstract class Serde
