@@ -422,7 +422,7 @@ As noted above in "Interaction with hooks", visibility controls exist independen
 
 ==== Option 2 is not necessary from the implementation ====
 
-There is an important difference between PHP's hooks and accessors as implemented in C# or Kotlin.  In those languages, properties effectively always have accessors, and sometimes have a backing value.  If the hook is the trivial implementation (implied if not specified), it is compiled away ahead of time.  That is, the "logical property" (that code would see) and the "physical property" (the actual storage) are already separate from the start.
+There is an important difference between PHP's hooks and accessors as implemented in C# or Kotlin.  In those languages, properties effectively always have accessors, and sometimes have a backing value.  If the accessor is the trivial implementation (implied if not specified), it can be well-optimized optimized by the compiler and/or runtime.  (The specific details are not relevant at the moment.)  That is, the "logical property" (that code would see) and the "physical property" (the actual storage) are already separate from the start.
 
 In PHP, by contrast, there is no distinction between the logical and physical property... //unless// a hook is defined.  Hooks are rarely a factor, whereas accessors are always a factor in C# or Kotlin.
 
@@ -430,9 +430,9 @@ This is an extension of the previous point.  Bringing hook implementations into 
 
 ==== Option 1 is more visually scannable ====
 
-With Option 1 (proposed), reading a property definition from left to right, one is presented with all visibility options together.  By the time the user has reached the ''$'', they know all visibility information.  With Option 2, set visibility may or may not be known.  It would appear at the end of the line, whereas get visibility is at the start of the line.
+With Option 1 (proposed), reading a property definition from left to right, one is presented with all visibility options together.  By the time the user has reached the ''$'', they know all visibility information.  With Option 2, ''set'' visibility may or may not be known.  It would appear at the end of the line, whereas ''get'' visibility is at the start of the line.
 
-Worse, if there are actual hook implementations, the set visibility may be several lines later!
+Worse, if there are actual hook implementations, the ''set'' visibility may be several lines later!
 
 <code php>
 class Option1
@@ -504,22 +504,48 @@ So "arrays with hooks can do less" is already an established fact of the languag
 <code php>
 class A
 {
-    public array $arr { private set; }
+    public array $arr { protected set; }
 }
 
-$a = new A();
+class B extends A
+{
+    public function add(int $val)
+    {
+        // Should this be legal?
+        $this->arr[] = $val;
+    }
+}
 
-// Should this be legal?
-$a->arr[] = 5;
+$b = new B();
+
+$b->add(5);
 </code>
 
 The syntax suggests that there is a set hook, and thus the assignment should not be allowed.  However, there isn't really a set hook, and thus assignment should be allowed.  Or maybe it shouldn't be, because there is a hook defined, even if it's the default.
 
 It is not at all obvious which interpretation of the syntax should be correct, and either one will result in unexpected behavior for someone.  With the separated syntax (as proposed), this problem does not exist.
 
-==== Option 2 is more complex to implement ====
+==== Option 2 has more edge cases ====
 
-Building on the previous point, it would probably make more sense to interpret that syntax to not mean a hook is defined, so the assignment would work.  However, that would increase the implementation complexity as the engine could no longer assume that the presence of ''{ }'' meant there were hooks.  It would have to inspect more deeply and determine if it's a for-reals set hook, or a pseudo-hook that should be skipped.
+With "main" visibility on the property and ''set'' visibility on the hook, it means the parser needs to be mindful that some hooks support modifiers and some do not.  That is, it's not immediately obvious that the following wouldn't be legal:
+
+<code php>
+class A
+{
+    public string $name { public get; private set; }
+}
+</code>
+
+This would be an extra edge case for the parser to handle.  Unless we decided to move //both// visibilities onto hooks:
+
+<code php>
+class A
+{
+    var string $name { public get; private set; }
+}
+</code>
+
+(''var'' is still a legal keyword, even if it's almost never used today.)  Which would be yet another syntax edge case to handle.
 
 The same challenge would exist for user-space static analysis tools, which would need more complex logic to determine if a given usage is legal or not.  While it's natural for static analysis tools to need to change any time PHP's syntax changes, we should not make those changes harder than they need to be.
 
