@@ -1,5 +1,5 @@
-====== PHP RFC: Add openStream() to XML{Reader,Writer} ======
-  * Version: 0.9.2
+====== PHP RFC: Add stream open functions to XML{Reader,Writer} ======
+  * Version: 0.10.0
   * Date: 2024-04-21
   * Author: Niels Dossche <nielsdos@php.net>
   * Status: Under Discussion
@@ -13,34 +13,36 @@ There is however a strange limitation to these classes: they cannot operate on a
 
 ===== Proposal =====
 
-I propose to add a new function called <php>openStream()</php> to both <php>XMLReader</php> and <php>XMLWriter</php>. Here is how they would look like:
+I propose to add 2 new functions, one to <php>XMLReader</php> and one to <php>XMLWriter</php>, to create an instance from a stream. Here is how they would look like:
 
 <PHP>
 class XMLReader {
     /** @param resource $stream */
-    public function openStream($stream, ?string $encoding = null, int $flags = 0, ?string $documentUri = null): void {}
+    public static function fromStream($stream, ?string $encoding = null, int $flags = 0, ?string $documentUri = null): static {}
 }
 
 class XMLWriter {
     /** @param resource $stream */
-    public function openStream($stream): void {}
+    public static function toStream($stream): static {}
 }
 </PHP>
 
-The signature for <php>XMLReader::openStream()</php> is heavily inspired by the existing function <php>public static XMLReader::open(string $uri, ?string $encoding = null, int $flags = 0): bool|XMLReader</php> that operates on files.
-However, a major difference is that <php>XMLReader::openStream()</php> is instance-method-only, whereas the other open functions of <php>XMLReader</php> can either be statically or non-statically called and change their return-value behaviour depending on that. The disadvantage of the (existing) static methods is that they can only return an instance of <php>XMLReader</php>, therefore when <php>XMLReader</php> is inherited by a user subclass we run into the problem that it doesn't return an object of the right type. Furthermore, as we seem to try to get away from such strange APIs, I decided to only make an instance method variation available.
+The signatures are heavily inspired by the existing function <php>public static XMLReader::open(string $uri, ?string $encoding = null, int $flags = 0): bool|XMLReader</php> that operate on files.
+However, a major difference is that <php>XMLReader::fromStream()</php> is static-only, whereas the other open functions of <php>XMLReader</php> can either be statically or non-statically called and change their return-value behaviour depending on that. The disadvantage of the existing static methods is that they can only return an instance of <php>XMLReader</php>, therefore when <php>XMLReader</php> is inherited by a user subclass we run into the problem that it doesn't return an object of the right type. We solve this by choosing <php>static</php> as return-type, and letting the method internally call the constructor of the static type (with no arguments). As we seem to move away from overloaded functions, I decided to only make a static method variation available.
 
-The <php>$documentUri</php> parameter is used mostly for when libxml outputs error messages that you can put an origin name in there.
+The <php>$documentUri</php> parameter is used mostly for when libxml outputs error messages, such that you can put an origin name in there.
 
-The signature for <php>XMLWriter::openStream()</php> should be self-explanatory. It is also modeled like the other open functions, but they are considerably simpler. You'll also notice the lack of an encoding argument, and that's because this is already handled by the <php>XMLWriter::startDocument()</php> function.
+The signature for <php>XMLWriter::toStream()</php> should be self-explanatory. It is also modeled like the other open functions, but they are considerably simpler. You'll also notice the lack of an encoding argument, and that's because this is already handled by the <php>XMLWriter::startDocument()</php> function.
 
 While implementing this, I found some strange behaviour regarding the <php>?string $encoding</php> parameter of the existing functions <php>XMLReader::open()</php> and <php>XMLReader::XML()</php>. The first oddity is that they emit a warning instead of throwing a ValueError when the encoding contains NULL bytes. This is inconsistent with how other functions handle it. I propose to promote this warning to a ValueError instead. The second oddity is that invalid encoding names are ignored entirely. This means that it won't emit a warning or anything, but just silently not set the encoding. This can hide bugs. I propose to also throw a ValueError in this case stating "Argument #X ($encoding) must be a valid character encoding".
+
+An earlier version of this RFC proposed adding <php>openStream()</php> methods to both classes, but the naming was not ideal and the behaviour of being an instance method was not liked. Therefore, this was changed to static-only methods that return an instance of the respective class.
 
 ===== Backward Incompatible Changes =====
 
 There are three minor BC breaks.
 
-The first one is the fact that we're adding the <php>openStream()</php> method. If a user extends the <php>XMLReader</php> or <php>XMLWriter</php> class, and their class implements a method with the same name but an incompatible signature, a compile error will occur. I analyzed the top 2500 Composer packages, and only found one package that contains the method name openStream and it wasn't in a class that extends either classes. This means that the top 2500 packages don't suffer a BC break because of this. That doesn't mean there will be none, but it gives a good indication.
+The first one is the fact that we're adding the <php>fromStream()</php> or <php>toStream</php> method. If a user extends the <php>XMLReader</php> or <php>XMLWriter</php> class, and their class implements a method with the same name but an incompatible signature, a compile error will occur. I analyzed the top 2500 Composer packages, and none used the toStream or fromStream names in subclasses of the XML classes.. This means that the top 2500 packages don't suffer a BC break because of this. That doesn't mean there will be none, but it gives a good indication.
 
 The second BC break is caused by throwing a <php>ValueError</php> on invalid encodings instead of silently ignoring invalid encodings. If we don't signal the invalid encoding in any way to the user, this can subtly hide bugs. For example, this could hide typos or silently pass invalid user input to the respective functions. Forcing developers to handle this error explicitly will result in more robust code in the end.
 
@@ -56,8 +58,7 @@ $h = fopen("php://memory", "w+");
 fwrite($h, "<root><!--my comment--><child/></root>");
 fseek($h, 0);
 
-$reader = new XMLReader;
-$reader->openStream($h);
+$reader = XMLReader::fromStream($h);
 
 while ($reader->read()) {
     switch ($reader->nodeType) {
@@ -77,8 +78,7 @@ while ($reader->read()) {
 // Could be any stream, but this is for simplicity sake
 $h = fopen("php://output", "w");
 
-$writer = new XMLWriter;
-$writer->openStream($h);
+$writer = XMLWriter::toStream($h);
 
 $writer->startElement("root");
 $writer->writeAttribute("align", "left");
@@ -137,6 +137,7 @@ None yet.
 
 ===== Changelog =====
 
+  - 0.10.0: Static again
   - 0.9.2: Add example usages of the new APIs.
   - 0.9.1: Made XMLReader::openStream() non-static instead such that it works with overridden classes.
   - 0.9: Initial version under discussion
