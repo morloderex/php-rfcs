@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 
-The PHP 8.4 development cycle has seen two major improvements to the ext-dom extension already: [[rfc::domdocument_html5_parser|HTML 5 support]], and [[rfc:opt_in_dom_spec_compliance|opt-in spec compliance]]. This RFC is the final improvement to ext-dom for PHP 8.4: it proposes to add new features to the extension. In particular, we'll be focussing on CSS selector support, filling in missing features, and adding new properties.
+The PHP 8.4 development cycle has seen two major improvements to the ext-dom extension already: [[rfc::domdocument_html5_parser|HTML 5 support]], and [[rfc:opt_in_dom_spec_compliance|opt-in spec compliance]]. This RFC is (probably) the final improvement to ext-dom for PHP 8.4: it proposes to add new features to the extension. In particular, we'll be focussing on CSS selector support, filling in missing features, and adding new properties.
 
 ===== Proposal =====
 
@@ -152,7 +152,7 @@ namespace Dom {
   }
   
   class Attr {
-    public function rename(?string $namespaceURI, string $qualifiedName): void {}
+    public function rename(?string $namespace, string $qualifiedName): void {}
   }
   
   class Element {
@@ -164,7 +164,7 @@ namespace Dom {
     /** @return list<NamespaceInfo> */
     public function getDescendantNamespaces(): array {}
 
-    public function rename(?string $namespaceURI, string $qualifiedName): void {}
+    public function rename(?string $namespace, string $qualifiedName): void {}
   }
 }
 </PHP>
@@ -199,9 +199,24 @@ In "old DOM", the <php>$nodeValue</php> property performed entity substitution, 
 
 === rename method ===
 
-This is only partially PHP-specific. This method did kind of exist in [[https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/|DOM Core Level 3]], but was never implemented in PHP.
+This is only partially PHP-specific. This method did kind of exist in [[https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/|DOM Core Level 3]], but was never implemented in PHP. We propose something very similar to what once existed in spec, but slightly improved.
 
-**TODO TODO TODO**
+Sometimes it's necessary to either change a namespace prefix for an element/attribute, change an element/attribute's name, or change its namespace URI. You can //kinda// do this today by recreating the entire subtree under an element with the new name, prefix, and namespace; but this is extremely annoying and difficult to get right. This approach also won't work if you have references to the same Element instance as now one piece of code is working on a new node while other pieces of code work on the old node.
+This use-case occurs when combining different documents, or fixing up documents, like for example with userland SOAP implementations.
+
+It turns out that changing these properties is actually super easy to do internally, so it makes sense to just expose this functionality to the user.
+
+You'll see that the rename method follows the same signature as the <php>createElementNS</php> method, and it also performs the same namespace-related sanity checks. These sanity checks ensure that the namespace-related rules are satisfied, and if they're not, the method will throw a ''NAMESPACE_ERR'' (or ''INVALID_CHARACTER_ERR'') type of <php>DOMException</php>.
+
+<PHP>
+public function createElementNS(?string $namespace, string $qualifiedName): Element {}
+public function rename(?string $namespace, string $qualifiedName): void {}
+</PHP>
+
+The first argument of the rename method allows you to change the namespace URI of the element/attribute, while the second one allows you to change the qualified name. The qualified name is the combination of the prefix and local name; or just the local name if there is no prefix.
+You may be wondering: "why not split this method up into multiple different methods?". The answer is that it's not possible to do: the namespace you choose has implications on what kind of qualified name are allowed. Therefore, in most cases you //have// to change these two at the same time. It is of course possible to just change one of the two while keeping the other intact, but that must happen in accordance to the namespace-related rules.
+
+TODO: restriction HTMLElement???
 
 ==== Allowing PHP-specific developer experience improvements ====
 
