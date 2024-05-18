@@ -169,6 +169,24 @@ namespace Dom {
 }
 </PHP>
 
+Let's go over them one by one.
+
+=== NamespaceInfo ===
+
+This class is the modern replacement of the <php>DOMNamespaceNode</php> class. <php>DOMNamespaceNode</php> is misdesigned in that it tries to be a Node, but it actually isn't a node because it's not in the tree. For example, in "old DOM", when using <php>getAttributeNode("xmlns")</php> it may return a <php>DOMNamespaceNode</php> for the namespace declaration even though there's not necessarily such an attribute. The other way you could obtain a <php>DOMNamespaceNode</php> is via XPath: you can use the ''namespace::*'' axis to obtain such an instance.
+
+In "new DOM", the ''namespace::*'' axis doesn't work because it's not implementable. This is because of some peculiar rules laid out by https://www.w3.org/TR/1999/REC-xpath-19991116/#namespace-nodes.
+In particular, the namespace axis needs to return all in-scope namespaces for an element. However that spec link states:
+    Elements never share namespace nodes: if one element node is not the same node as another element node, then none of the namespace nodes of the one element node will be the same node as the namespace nodes of another element node.
+
+So we can't return the <php>DOM\Attr</php> corresponding to the namespace declaration (if there even is one) because we'd have to return the //same// attribute node for //different// elements.
+
+
+
+
+
+To identify a namespace we only need to know the prefix, the uri, and the element it is scoped upon. Therefore, it has these three fields. It can only be constructed by the DOM extension, not by users.
+
 ==== Allowing PHP-specific developer experience improvements ====
 
 DOM functions like <php>Element::insertAdjacentElement(string $where, Element $element)</php> and <php>Element::insertAdjacentText(string $where, string $data)</php> have a first "where" argument. There are only four valid values for "where": "beforebegin", "afterbegin", "beforeend", "afterend". So that's actually an enum in disguise. I propose to make use of the PHP enum feature. This would prevent programming mistakes and make IDE hints much nicer, contributing to a better developer experience. Strictly speaking, this deviates from the DOM spec, but we already model the DOM classes in a way that fits PHP's OOP model. In fact, I'd propose to allow the use of enums where it makes sense in the extension for new APIs. Since the Element class didn't exist prior to the opt-in spec compliance RFC, we can change the signature without affecting users as no releases of PHP 8.4 have been made so far.
