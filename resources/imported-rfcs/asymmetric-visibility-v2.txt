@@ -652,6 +652,32 @@ class Record
 
 Which now offers a publicly-readable marker, internally modifiable, with no opportunity for it to change in an uncontrolled way, without any need for odd code contortions.
 
+==== Readonly cannot use a custom sentinel ====
+
+A common technique in many languages is to have sentinel values to indicate that a value is unset, invalid, or otherwise not a real value.  Using a value within the scope of the property's type (eg, 0, empty string, etc.) has a host of issues, discussed elsewhere.  ''null'' has historically been used for that in PHP, although that has its share of problems, as discussed in [[https://peakd.com/hive-168588/@crell/much-ado-about-null|Much Ado about Null]].  More recently, it has become increasingly popular to use a custom single-value enum as a sentinel value instead, to provide more contextual information.
+
+<code php>
+public ?int $val = null;
+
+enum Missing
+{
+    case Missing;
+}
+
+public int|Missing $val = Missing::Missing;
+</code>
+
+However, neither of those techniques is usable on a ''readonly'' property.  Rather, ''readonly'' relies on the implicit and rather weird "uninitialized" state, available only to typed properties, to indicate that it is not yet populated with a valid value.  Assigning either null or a custom sentinel to a ''readonly'' property would disallow it from being correctly set in the future.  However, as of PHP 8.3, ''readonly'' is the only way to have a public-read, private-write property.  That means either relying on uninitialized as a sentinel (the tooling support for which is quite lacking) or foregoing a public-read property just to be able to assign and re-assign a sentinel value.
+
+Asymmetric visibility completely solves that issue, as properties can then be defaulted to a sentinel value (''null'' or custom) while allowing only the object itself to fully-initialize the value later.
+
+<code php>
+class A
+{
+    public private(set) int|Missing $value = Missing::Missing;
+}
+</code>
+
 ==== Readonly is incompatible with inheritance ====
 
 As noted previously, the ''readonly'' flag is, on its own, two flags in one: write-once and ''private(set)''.  While both have their use cases, there are ample times where only one or the other is desired.  For instance, the following code from Crell/Serde (slightly simplified for this example) wants to use ''readonly'', but because of the implied ''private(set)'' it causes issues:
