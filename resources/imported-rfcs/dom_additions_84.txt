@@ -173,19 +173,25 @@ Let's go over them one by one.
 
 === NamespaceInfo ===
 
-This class is the modern replacement of the <php>DOMNamespaceNode</php> class. <php>DOMNamespaceNode</php> is misdesigned in that it tries to be a Node, but it actually isn't a node because it's not in the tree. For example, in "old DOM", when using <php>getAttributeNode("xmlns")</php> it may return a <php>DOMNamespaceNode</php> for the namespace declaration even though there's not necessarily such an attribute. The other way you could obtain a <php>DOMNamespaceNode</php> is via XPath: you can use the ''namespace::*'' axis to obtain such an instance.
+This class is the modern replacement of the <php>DOMNamespaceNode</php> class. <php>DOMNamespaceNode</php> is misdesigned in that it tries to be a Node, but it actually isn't a node because it's not in the tree. For example, in "old DOM", when using <php>getAttributeNode("xmlns")</php> it may return a <php>DOMNamespaceNode</php> for the namespace declaration even though there's not necessarily such an attribute. The other way you could obtain a <php>DOMNamespaceNode</php> instance is via XPath by using the ''namespace::*'' axis.
 
-In "new DOM", the ''namespace::*'' axis doesn't work because it's not implementable. This is because of some peculiar rules laid out by https://www.w3.org/TR/1999/REC-xpath-19991116/#namespace-nodes.
-In particular, the namespace axis needs to return all in-scope namespaces for an element. However that spec link states:
-    Elements never share namespace nodes: if one element node is not the same node as another element node, then none of the namespace nodes of the one element node will be the same node as the namespace nodes of another element node.
+The reason we have the <php>DOMNamespaceNode</php> instance returned for XPath is because of some peculiar rules laid out by https://www.w3.org/TR/1999/REC-xpath-19991116/#namespace-nodes.
+In particular, the namespace axis needs to return all in-scope namespaces for an element. However that spec link //also// states:
 
-So we can't return the <php>DOM\Attr</php> corresponding to the namespace declaration (if there even is one) because we'd have to return the //same// attribute node for //different// elements.
+<blockquote>Elements never share namespace nodes: if one element node is not the same node as another element node, then none of the namespace nodes of the one element node will be the same node as the namespace nodes of another element node.</blockquote>
 
+So we can't return the attribute node corresponding to the namespace declaration (if there even is one) because we'd have to return the //same// attribute node for //different// elements. Hence, the <php>DOMNamespaceNode</php> is returned in "old DOM". However, implementing this in "new DOM" is a problem because we'd be returning something from an XPath query that //isn't// a node. This is confusing for users and also for static analysis tools.
 
+Because these APIs are also implemented by browsers, it's worth looking at how they solve this problem and what the spec says. Turns out this is all undocumented in the spec, and browsers don't implement the namespace axis at all.
 
+I propose to add two methods that replace the namespace axis functionality: <php>getInScopeNamespaces</php> that replaces ''./namespace::*'' and <php>getDescendantNamespaces</php> that replaces ''.//namespace::*''. When users would try to query namespace nodes from the namespace axis in XPath, we'll throw a DOM_NOT_SUPPORTED_ERR DOMException, redirecting users to use one of these two methods.
 
+To identify a namespace we only need to know the prefix, the uri, and the element it is scoped upon. Therefore, it has these three fields. It can only be constructed by the DOM extension, not by users. No node-specific properties will be implemented in <php>NamespaceInfo</php>.
 
-To identify a namespace we only need to know the prefix, the uri, and the element it is scoped upon. Therefore, it has these three fields. It can only be constructed by the DOM extension, not by users.
+The main advantages are:
+  * The guarantee that XPath queries for nodes will always return nodes
+  * Better static analysis results
+  * Less confusion for users
 
 ==== Allowing PHP-specific developer experience improvements ====
 
