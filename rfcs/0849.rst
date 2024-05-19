@@ -1,257 +1,184 @@
-Gd Imageexportpixels() And Imageimportpixels()
-==============================================
+Final Anonymous Classes
+=======================
 
 :PHP-RFC: 0849
-:Title: Gd Imageexportpixels() And Imageimportpixels()
-:Author: Thomas Hruska <cubic@php.net>
-:Status: Draft
+:Title: Final Anonymous Classes
+:Author: Daniil Gentili <daniil@daniil.it>
+:Status: Declined
 :Type: Unknown
-:Created: 2023-01-21
-:Version: 1
+:Created: 2023-11-15
+:Version: 1.0
 
 Introduction
 ------------
 
-When working with larger images in gd, exporting and importing pixels
-one pixel/color at a time with imagecolorat() and imagesetpixel()
-creates a lot of function call overhead just to manipulate an image one
-pixel at a time. A lot of phone cameras produce images in excess of
-3,000 pixel rows and columns. This RFC adds two functions to gd to
-export pixels to and import pixels from a 2D array.
-
-An additional advantage of being able to export multiple pixels in a
-single call is the ability to perform more complex operations such as
-custom sub image detection and convolution algorithms more quickly when
-done in userland. The result is far fewer calls to imagecolorat() and
-imagesetpixel() that only operate on single pixels.
+This RFC proposes to add support for final anonymous classes.
 
 Proposal
 --------
 
-Two new functions for PHP gd: imageexportpixels() and
-imageimportpixels().
+This RFC proposes to add support for final anonymous classes.
 
-Working implementations of the functions being proposed can be found at:
+This should also allow some additional opcache optimizations, such as
+any JIT logic gated behind a check on ZEND_ACC_FINAL, i.e.
+https://github.com/php/php-src/blob/master/ext/opcache/jit/zend_jit_trace.c#L4507.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-imageexportpixels()
-~~~~~~~~~~~~~~~~~~~
-
-array imageexportpixels(resource im, int x, int y, int width, int
-height)
-
-Export the colors/color indexes of a range of pixels as an array.
-
--  $im - A resource/instance of GdImage (depending on PHP version).
--  $x - The upper left corner x-coordinate to start from.
--  $y - The upper left corner y-coordinate to start from.
--  $width - A positive integer width.
--  $height - A positive integer height.
-
-Returns: A 2D array containing the exported pixel colors on success,
-emits a notice and returns a boolean of false on error.
-
-This function improves performance when working with gd images at the
-pixel level. Calling \`imagecolorat()\` in a loop is slow. For example,
-when processing a 3000x5000 pixel image, that's 15 million function
-calls to \`imagecolorat()\` to access every pixel of the image. This
-function can rapidly export any portion of the image as a userland 2D
-array of integers. Instead of 15 million PHP function calls, even one
-call per row would be a mere 5,000 function calls.
-
-Target audience: All users who use gd to do image processing.
-
-Why it should be added to PHP: Improved performance. Also, PECL
-ImageMagick has a similar but more advanced function
-(Imagick::exportImagePixels()).
-
-imageimportpixels()
-~~~~~~~~~~~~~~~~~~~
-
-bool imageimportpixels(resource im, int x, int y, array colors)
-
-Sets pixels to the specified colors in the 2D array.
-
--  $im - A resource/instance of GdImage (depending on PHP version).
--  $x - The upper left corner x-coordinate to start from.
--  $y - The upper left corner y-coordinate to start from.
--  $colors - A 2D array of integers representing pixel colors.
-
-Returns: A boolean indicating whether or not the operation was
-successful.
-
-This function improves performance when working with gd images at the
-pixel level. Calling \`imagesetpixel()\` in a loop is slow. For example,
-when processing a 3000x5000 pixel image, that's 15 million function
-calls to \`imagesetpixel()\` to modify every pixel of the image. This
-function can rapidly import any portion of the image from a userland 2D
-array of integers. Instead of 15 million PHP function calls, even one
-call per row would be a mere 5,000 function calls.
-
-Target audience: All users who use gd to do image manipulation.
-
-Why it should be added to PHP: Improved performance. Also, PECL
-ImageMagick has a similar but more advanced function
-(Imagick::importImagePixels()).
-
-Benchmark
----------
-
-Traditional imagecolorat()/imagesetpixel() style code that retrieves a
-pixel, manipulates it, and then sets the new color.
+Example syntax:
 
 .. code:: php
 
-   for ($y = 0; $y < 5000; $y++)
-   {
-       for ($x = 0; $x < 3000; $x++)
-       {
-           $color = imagecolorat($img, $x, $y);
+   $x = new final class {};
 
-           // Do some work here.
-           $color = ($color + 1) & 0x7FFFFFFF;
-
-           imagesetpixel($img, $x, $y, $color);
-       }
-   }
-
-::
-
-   C:\php-sdk\phpdev\vs16\x64\php-8.2.1
-   $ x64\Release_TS\php.exe test3.php
-   1.2038149833679 sec
-
-Performing the same amount of work using
-imageexportpixels()/imageimportpixels():
+Extending a final anonymous class throws an error:
 
 .. code:: php
 
-   for ($y = 0; $y < 5000; $y++)
-   {
-       $pixels = imageexportpixels($img, 0, $y, 3000, 1);
+   $x = new final class {};
+   class_alias($x::class, 'alias');
+   class aliasExtends extends alias {}
 
-       foreach ($pixels[0] as &$color)
-       {
-           // Do some work here.
-           $color = ($color + 1) & 0x7FFFFFFF;
-       }
-
-       imageimportpixels($img, 0, $y, $pixels);
-   }
-
-   unset($color);
-
-::
-
-   0.63053297996521 sec
-
-Up to 1.9 times faster. Not as big of an improvement as I was hoping for
-but the time taken is cut almost in half on the test hardware.
+``Fatal error: Class aliasExtends cannot extend final class class@anonymous in %s on line %d``
 
 Backward Incompatible Changes
 -----------------------------
 
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
-
-imageexportpixels() and imageimportpixels() will no longer be available
-as global function names. May break existing userland software that
-defines global functions with these names. Searching GitHub for those
-two function names turns up the following results:
-
--  imageexportpixels() - 2 results. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
--  imageimportpixels() - 1 result. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
+None.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.
+Next PHP 8.4
 
 RFC Impact
 ----------
 
--  To SAPIs: Will be applied to all PHP environments.
--  To Existing Extensions: Additions made to ext/gd in the existing gd.c
-   file.
--  To Opcache: None.
--  New Constants: No new constants introduced.
--  php.ini Defaults: No changes to php.ini introduced.
-
-Open Issues
------------
-
-Issue 1 - Should a gd_image_ce export function be added to the gd
-extension as part of this RFC? When PHP switched from using resources to
-gdImage, phpi_get_le_gd() was dropped but no replacement function was
-put in place. As such, getting the gd_image_ce zend_class_entry to be
-able to use Z_PARAM_OBJECT_OF_CLASS(IM, gd_image_ce) is impossible
-without modifying the gd extension. As a result, compiling the test code
-for these functions was far more difficult than it probably should have
-been.
-
-Issue 2 - Should imageexportpixels() $width and $height be nullable?
-
-Issue 3 - Should these functions also support color conversion to/from
-HSB/HSV/HSL/CMYK/etc. or this idea/issue moved to the Future Scope
-section of the RFC? Color and LUT handling is a big can of worms (e.g.
-"How 'bright' is that color?" is fairly subjective), which appears to be
-largely outside the scope of what gd does. Implementing this would
-notably increase each function's complexity while the rest of the gd
-extension seems to be mostly aimed at being as simple as possible.
-
-Future Scope
-------------
-
-TBD.
+See Backward Incompatible Changes.
 
 Proposed Voting Choices
 -----------------------
 
-The vote will require 2/3 majority.
+2/3 required to accept. Voting started on 2023-12-03 and will end on
+2023-12-18 00:00 GMT.
+
+Question: Add support for final anonymous classes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-Working implementations of all the items being proposed can currently be
-found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point, so
-turning the extension into a normal pull request should be reasonably
-straightforward.
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+Final anonymous classes implementation:
+https://github.com/php/php-src/pull/11126
 
 References
 ----------
 
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
+-  Pull request discussion: https://github.com/php/php-src/pull/11126
+-  Internals discussion: https://externals.io/message/121356,
+   https://externals.io/message/121685
 
 Rejected Features
 -----------------
 
-None at this time.
+After feedback received from Nikolas Grekas in the last [RFC] discussion
+thread (https://externals.io/message/121685), I moved here a large chunk
+of the rationale and removed basically all the alternative polls I had
+initially planned to propose:
+
+    Hi Daniil,
+
+    ::
+
+    >> While I'm open to Proposal 1, which introduces final anonymous
+    classes      >> without breaking BC, Proposals 2 and 3 are a
+    different story.      >> In summary, I advocate for the RFC to focus
+    on the non-BC-breaking option.      >> Let's maintain our commitment
+    to stability and gradual evolution in PHP.      >> Cheers,      >>
+    Nicolas
+
+    ::
+
+    > Agree with your points, just adding final anonymous classes seems
+    the best solution to me, but given the interest in alternative
+    solutions both in the pull request discussion, and in the previous
+    mailing list thread, I think I'll leave the other options in the
+    RFC, to see how the votes will go (I'm actually curious myself :).  
+       > Regards,      > Daniil Gentili
+
+    I think this is a dangerous game. Breaking BC shouldn't be proposed
+    unless absolutely needed IMHO.
+
+    Nicolas
+
+To be entirely honest, I'm a bit on the fence: on one hand, looking at
+code like ``new class {}``, you would assume that since the class
+apparently has no name, it should not be impossible to extend it, but on
+the other hand, there are valid usecases for extending even anonymous
+classes (comments in the PR (https://github.com/php/php-src/pull/11126)
+referenced proxying, I can think of phpunit mocking to a much, much
+lesser extent given that you should realistically (hopefully) never have
+to mock an anonymous class that does not already implement an
+interface), and completely precluding the possibility of extending a
+class that
+
+#. Has a name (even if it's not immediately obvious)
+#. Can be referenced to using its name (``class_exists``,
+   ``new ReflectionClass``, ``new $clazz``, and yes, even
+   ``class_alias``)
+
+seems a tad bit too restrictive...
+
+On the other hand, I also really don't like non-final classes, in all of
+my projects, I use CS rules that force all classes to either be abstract
+or final, because unfortunately, I've had to work with a lot of code
+that very frequently violates encapsulation by using inheritance.
+
+Still, there are some useful patterns, mainly regarding testing and
+mocking, for example I use https://github.com/dg/bypass-finals as a dev
+dependency to make all final classes non-final at runtime to allow
+mocking in phpunit, but it works by installing a custom default stream
+contexts that intercepts requires, tokenizes files and removes final
+keywords from classes; this approach would break for anonymous classes
+if they were rendered final by default without an option to make them
+non-final.
+
+This is why I remain ambivalent about the options, as seen both in my
+emails and in the original text of the RFC:
+
+Personally, I would have instead preferred the much cleaner approach of
+making all anonymous classes final by default, (preferrably) without
+offering the option to make them non-final.
+
+However, I understand that this might be a little bit too restrictive
+for something that may have some valid usecases, even if extending
+anonymous classes currently requires some hack-ish workarounds with
+class_alias.
+
+Thus, this RFC initially included three mutually exclusive proposals:
+
+#. Add support for final anonymous classes (``new final class {}``
+   syntax, no breaking changes)
+#. *OR* Make all anonymous classes final by default, without the option
+   to make them final (breaking change)
+#. *OR* Make all anonymous classes final by default, provide an optional
+   ``open`` keyword to make them non-final (like in Kotlin,
+   ``new open class {}``, breaking changes).
+
+As an extra proposal related to the last two options, possibly requiring
+a separate RFC, in the last two cases, it might be a good idea to also
+disallow the use of ``class_alias`` altogether for final anonymous
+classes (suggested by nikolas-grekas in
+https://github.com/php/php-src/pull/11126#issuecomment-1522042841).
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: gd_image_export_import_pixels
-:Wiki URL: https://wiki.php.net/rfc/gd_image_export_import_pixels
+:Original Authors: Daniil Gentili daniil@daniil.it
+:Original Status: Voting
+:Slug: final_anonymous_classes
+:Wiki URL: https://wiki.php.net/rfc/final_anonymous_classes

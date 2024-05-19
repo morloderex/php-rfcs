@@ -1,226 +1,440 @@
-Include Cleanup
-===============
+Improve Callbacks In Ext/dom And Ext/xsl
+========================================
 
 :PHP-RFC: 0854
-:Title: Include Cleanup
-:Author: Max Kellermann <max.kellermann@ionos.com>
-:Status: Declined
-:Type: Unknown
-:Created: 2023-01-18
-:Version: 0.1
+:Title: Improve Callbacks In Ext/dom And Ext/xsl
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-11-05
+:PHP-Version: 8.4
+:Version: 0.3
 
 Introduction
 ------------
 
-The PHP code base has grown over more than 2 decades, which leaves some
-room for code cleanups. While attempting to fix several crash bugs in
-the JIT, I found that PHP's C headers (*.h) and the existing #include
-directives are inconsistent, incomplete and bloated; many things just
-worked by chance, not by design, because there were a few headers which
-just included everything.
+The ``DOMXPath`` class allows developers to run XPath expression queries
+on HTML/XML documents. The ``XSLTProcessor`` class allows developers to
+perform XSL transformations on HTML/XML documents. Both of these
+internally use XPath expressions, and they support calling PHP functions
+inside those XPath expressions. However, there is an unfortunate
+limitation in that only callable strings are supported. This means that
+closures, first-class callables, and instance methods cannot be used.
+This proposal aims to improve the callback support such that any
+callable can be used.
 
--  there are lots of undocumented headers without clear scope; what is
-   the purpose/scope of zend.h and zend_API.h? What types should
-   zend_types.h make available? Which types are supposed to live in
-   zend_types.h and which ones are supposed to live in a type-specific
-   header? What is zend_portability.h and what does ZEND_ASSERT have to
-   do with portability? All those headers seemed confusing to me.
--  many source files check for build option macros (e.g ZEND_DEBUG) but
-   do not ensure that \`php_config.h\` or \`zend_config.w32.h\` is
-   included; it is not documented what needs to be done to make those
-   macros available; that can easily lead to silent corruption of the
-   PHP executable if a header or include ordering gets changed
--  reordering of #include lines must never cause C compiler failures,
-   but that is a very common problem in the PHP code base
--  there is a lot of code duplication for macro definitions, e.g.
-   MAXPATHLEN is defined in 5 different headers in 3 different ways;
-   PHPAPI is defined in 2 headers in different ways; this is yet another
-   way to produce corrupt PHP executables by reordering #include lines
--  it is all but obvious which header should be included to make certain
-   symbols available
--  e.g. if I want to work with zend_string instances, I expect to just
-   include zend_string.h, but that header doesn't contain the
-   definition, nor all necessary functions/macros; those are in
-   zend_types.h, and so nobody includes zend_string.h; but anyway
-   including zend_string.h would pull in everything else via zend.h
--  ... and so on
+To better understand the proposal, I'll first give some background to
+demo the usage as it is today. Then I'll introduce the proposal itself.
 
-I wanted to help clean up this mess that had accumulated over two
-decades. After four PRs doing exactly that were widely welcomed and
-accepted, there was resistance from two individuals who demanded my
-changes to be reverted. This resistance surprised me, because I
-previously thought those code cleanups were common sense, and just
-nobody had so far taken the time to do it.
+Background
+----------
+
+**Important:** in all examples in this RFC, I will use the following
+sample document to work with. I will not repeat this code snippet.
+
+.. code:: php
+
+   // Set up a sample document with links to cats and dogs
+   $doc = new DOMDocument;
+   $doc->loadXML(<<<XML
+   <animals>
+       <a box_preference="small" href="cat/jill">Jill</a>
+       <a box_preference="medium" href="cat/kes">Kes</a>
+       <a box_preference="medium" href="cat/minou">Minou</a>
+       <a box_preference="large" href="cat/tessa">Tessa</a>
+       <a href="dog/jack">Jack</a>
+   </animals>
+   XML);
+
+Let's take a look at how to use a callback with ``DOMXPath``. We have to
+use ``DOMXPath::registerPhpFunctions(string|array|null $restrict=null)``
+to register callbacks. Only thereafter we can use it in the evaluation.
+
+.. code:: php
+
+   function my_callback(string $href): bool {
+       return preg_match("/cat/", $href);
+   }
+
+   $xpath = new DOMXPath($doc);
+   // This is necessary to resolve the php name in the php:function expression down below.
+   $xpath->registerNamespace("php", "http://php.net/xpath");
+   // This registers the function "my_callback" with the XPath evaluator, such that my_callback can be called.
+   $xpath->registerPhpFunctions("my_callback");
+   // This selects all <a> tags where my_callback(their href attribute content) returns true.
+   $results = $xpath->evaluate("//a[php:function('my_callback', string(@href))]");
+   foreach ($results as $result) {
+       echo "Found ", $result->textContent, "\n";
+   }
+
+   /* This script outputs:
+   Found Jill
+   Found Kes
+   Found Minou
+   Found Tessa
+   */
+
+Note that this is only the simplest example. You can do much more
+complex actions with it, even with side-effects. Furthermore, I only
+showcased a single callback. It's possible to chain multiple callbacks.
+
+Registering multiple callbacks at once is possible too, in that case you
+have to pass an array to ``registerPhpFunctions``:
+
+.. code:: php
+
+   // Now my_first_callback and my_second_callback can be used within XPath
+   $xpath->registerPhpFunctions(["my_first_callback", "my_second_callback"]);
+
+   // registerPhpFunctions() is additive, so calling it again will make even more functions callable:
+   // now strtoupper() will also be callable.
+   $xpath->registerPhpFunctions("strtoupper");
+
+Finally, if the ``$restrict`` argument is null, then all global
+functions and static class methods will be callable.
+
+I won't repeat this for ``XSLTProcessor``, but it works the same way:
+``XSLTProcessor`` also has a ``registerPhpFunctions`` method that works
+exactly the same.
 
 Proposal
 --------
 
-I propose an addition to PHP's coding standard describing how C headers
-and #includes should be managed:
+Right now, it is impossible to call instance methods or closures. Based
+on feature request https://bugs.php.net/bug.php?id=38595, I propose the
+following API changes. These changes apply to *both* ``DOMXPath`` and
+``XSLTProcessor``.
 
-#. Include only the headers (`*.h`) that are really needed.
-#. Use struct/union forward declarations to eliminate \`#include\`
-   directives if possible.
-#. If some headers are needed only in some build configurations, enclose
-   them in the same \`#if\` that also guards the use of its definitions.
-#. Each source file (`*.c`) should include its own header file first to
-   ensure that the header's \`#includes\` are complete.
-#. Header inclusions are ordered this way: its own header first, then
-   PHP headers, then third-party library headers, then system headers
-   (e.g. libc, POSIX).
+Extending the array abilities of registerPhpFunctions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-(GitHub PR with the same contents:
-https://github.com/php/php-src/pull/10338)
+If you pass an array, entries of the form ``$key => $value`` will be
+interpreted as "associate the callable $value with name $key". The key
+must be a string. Example:
 
-Then, the reverted cleanups should be reconsidered:
+.. code:: php
 
--  https://github.com/php/php-src/pull/10216
--  https://github.com/php/php-src/pull/10220
--  https://github.com/php/php-src/pull/10279
--  https://github.com/php/php-src/pull/10300
+   $xpath->registerPhpFunctions(["function_name" => $callable]);
+   // Now you can use "php:function('function_name', ...)" in XPath expressions to call $callable.
 
-I have already posted a new draft PR which contains all these, plus some
-more: https://github.com/php/php-src/pull/10345
+``$callable`` can be any kind of callable, examples:
+``"MyClass::staticFunc"``, ``[$this, "instanceFunc"]``,
+``$object->foo(...)``,
+``fn ($argument1, $argument2, etc...) => whatever``, etc.
 
-Advantages of this proposal:
+The behaviour of passing only a string value without a key will remain
+the same as before. And you can mix them with ``$key => $value``
+entries:
 
--  more correct code
--  cleaner and more readable code (less obscurity in huge amounts of
-   undocumented/unnecessary #includes)
--  less fragile code (build fails early if you forget an #include;
-   currently, removing one unnecessary #include in one header may break
-   dozens of sources)
--  reduced compile times (because the compiler processes less code)
+.. code:: php
 
-Disadvantages of this proposal:
+   $xpath->registerPhpFunctions([
+     "function_name" => $callable,
+     "var_dump"
+   ]);
+   // Now $callable can be called using "php:function('function_name', ...)"
+   // and var_dump using "php:function('var_dump', ...)".
 
--  like every time code gets refactored, there may be regressions in
-   build configurations not tested by the CI, like the DTrace build
-   failure that was introduced by my work (which was trivial to fix)
+Whether the value is callable will now be checked during registration
+instead of during execution.
 
-Criticism issued on this proposal:
+Method signature
+~~~~~~~~~~~~~~~~
 
--  Dmitry Stogov disliked that I documented many #include directives
-   ("good for review only") but did not object to cleaning up #include
-   directives
-   (https://github.com/php/php-src/pull/10216#issuecomment-1375140255)
--  later Dmitry Stogov changed his mind, saying "This is just a useless
-   permutation. [...] How is this clearly?"
-   https://github.com/php/php-src/pull/10220#issuecomment-1383739816
-   which Derick Rethans agreed with ("It adds nothing but clutter."
-   https://github.com/php/php-src/pull/10220#issuecomment-1383784480)
--  Dmitry Stogov rejected the idea of forward declarations because
-   "Functions may change their prototypes, unions may be turned into
-   structures, etc"
-   (https://github.com/php/php-src/pull/10338#discussion_r1071169392)
--  Derick Rethans believes that "comments that go out of date as to why
-   a header is included is also clutter" (though this can be said about
-   all documentation/code comments, and the argument can thus be used to
-   reject all code comments)
--  Dmitry Stogov and Derick Rethans worried that these changes would
-   make merging branches harder, due to possible merge conflicts or
-   build failures because the source branch does not have correct
-   #includes and now uses a new symbol from a header which was not
-   included (though the same can be said about all code changes, and
-   changing #includes is not very intrusive, because these rarely ever
-   change in stable branches, and there's never a semantic change)
--  There was some opposition against struct forward declarations; they
-   allegedly "decrease code readability".
+The method signature of ``registerPhpFunctions`` will remain the same,
+i.e. ``registerPhpFunctions(string|array|null $restrict=null)``. You
+might be wondering why I don't change the string type in that union to
+callable. There are two reasons:
+
+#. callable|array is ambiguous: what does ``["foo", "bar"]`` mean? Does
+   this mean: register both "foo" and "bar" as functions? Or does this
+   mean: register foo::bar ?
+#. XPath expressions are written as strings, so we have to give a string
+   name to the callable.
+
+Additional registerPhpFunctionNS API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This section is based on the feature request:
+https://bugs.php.net/bug.php?id=49567.
+
+We can go even further and *additionally* add an extra API:
+registerPhpFunctionNS.
+
+.. code:: php
+
+   // Associate the prefix "example" with namespace URI "http://example.com"
+   $xpath->registerNamespace("example", "http://example.com");
+   // Register some functions with the "http://example.com" namespace.
+   $xpath->registerPhpFunctionNS("http://example.com", "first_function", $callable);
+   $xpath->registerPhpFunctionNS("http://example.com", "second_function", $another_callable);
+   // Now $callable can be called using "example:first_function(...)"
+   // and $another_callable using "example:second_function(...)".
+
+As you can see in the example, this offers a namespace-aware API and a
+nicer syntax. The fact that the function names are now fully-qualified
+avoids naming clashes when multiple independent libraries or API users
+register callbacks.
+
+The signature of this function is:
+
+.. code:: php
+
+   function registerPhpFunctionNS(string $namespaceURI, string $name, callable $callable): void;
+
+Notice how the function name is in singular (function vs the plural
+functions). Unlike the ``registerPhpFunctions`` method, we don't allow
+``null`` or arrays. Passing ``null`` to ``registerPhpFunctions`` makes
+it possible to call all global functions, which I find dubious for a
+namespace-aware API. Furthermore, in that case it *cannot* determine at
+registration time whether the global function is callable (because we
+don't know yet what function will be called). I find this a footgun that
+I'd rather avoid for a new API.
+
+Similarly, the array support for ``registerPhpFunctions`` is mostly a
+legacy relic from the past and gives conflicts with array-like
+callables. That is the reason that for ``registerPhpFunctions`` only
+string-like callables can be passed, and you have to wrap array-like
+callables. To avoid this mess, the new ``registerPhpFunctionNs`` API
+does not accept an array and consequently supports all kinds of
+callables directly without caveats.
+
+Error conditions
+~~~~~~~~~~~~~~~~
+
+There will be new error conditions added to ``registerPhpFunctions`` as
+part of this RFC.
+
+In case the argument is a string:
+
+#. If the string is not a callable: argument type error
+
+In case the argument is an array:
+
+#. If the value of an array entry is not a callable: argument type error
+#. If there is no string key, and the value cannot be converted to a
+   string: whatever error ``zval_try_get_string`` gives. Example: if you
+   do ``registerPhpFunctions([ function() {...} ])``: this will throw a
+   "Object of class Closure could not be converted to string" error.
+#. If there is a string key that's empty: argument ``ValueError``
+#. If there are NUL bytes in the string: argument ``ValueError``
+
+For ``registerPhpFunctionNS`` there are other error conditions. This
+list is shorter because the function is much simpler (i.e. no array
+handling):
+
+#. The predefined php namespace for XPath is "http://php.net/xpath", and
+   for XSL it is "http://php.net/xsl". It will *not* be possible to
+   register functions under those namespaces respectively for XPath and
+   XSL. It will throw an argument ``ValueError``.
+#. Some characters for callbacks are invalid (e.g. you cannot use a
+   colon in the function name because a colon is used to separate
+   prefixes from names). It will throw an argument ``ValueError``.
+
+Exceptions vs warnings during execution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Prior to PHP 8.0, the ``DOMXPath`` class threw warnings when invoking a
+"php:function(...)" in the following error conditions:
+
+#. The handler name is not a string
+#. The function callback could not be called because it isn't callable
+#. The function callback wasn't registered
+#. When trying to return an object from a callback to an XPath
+   expression that is not a DOM object. You can only return DOM objects
+   because they must have an XML representation.
+
+In PHP 8.0, these were changed to throw exceptions instead of warnings
+(https://github.com/php/php-src/pull/5418). ``XSLTProcessor`` has the
+same error conditions, but still uses warnings to this day. As part of
+this proposal, the implementations will be unified and will therefore
+use exceptions instead of warnings.
+
+Finally, both for ``DOMXPath`` and ``XSLTProcessor``, if you never
+called ``registerPhpFunctions`` it will throw a warning instead of
+throwing an exception. This is inconsistent because if you *did* call
+the function but did not register a function that you're trying to call
+you get an exception instead. I propose to make this an exception too
+such that it is consistent with the other error conditions.
+
+Usage examples of the API improvement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Here are some simple, but somewhat realistic examples of how this API
+improvement can be used.
+
+Here's an example of ``DOMXPath`` with the new API:
+
+.. code:: php
+
+   class Collector {
+       function __construct(private string $regex, private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xpath = new DOMXPath($doc);
+           $xpath->registerNamespace("php", "http://php.net/xpath");
+
+           // This registers the callbacks
+           $xpath->registerPhpFunctions([
+               "filter" => $this->filter(...),
+               "check_box_preference" => fn (string $box) => in_array($box, $this->available_boxes),
+           ]);
+
+           $results = $xpath->evaluate(<<<X
+           //a
+           [php:function('filter', string(@href))]
+           [php:function('check_box_preference', string(@box_preference))]
+           X);
+           foreach ($results as $result) {
+               echo "Found ", $result->textContent, "\n";
+           }
+       }
+
+       function filter(string $href): bool {
+           return preg_match($this->regex, $href);
+       }
+   }
+
+   (new Collector("/cat/", ["medium", "large"]))->process($doc);
+
+As you can see, this allows the use of instance methods when you have to
+carry around state. It also allows the use of closures.
+
+And here's an example of using ``XSLTProcessor`` with the improved API:
+
+.. code:: php
+
+   <?php
+   class BoxCounter {
+       function __construct(private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xsl = new DOMDocument;
+           $xsl->loadXML(<<<XML
+           <?xml version="1.0" encoding="iso-8859-1"?>
+           <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+               xmlns:php="http://php.net/xsl">
+               <xsl:template match="//a">
+                   <xsl:if test="php:function('filter', string(@box_preference))">
+                       <xsl:value-of select="."/>
+                   </xsl:if>
+               </xsl:template>
+           </xsl:stylesheet>
+           XML);
+
+           $proc = new XSLTProcessor;
+           $proc->registerPHPFunctions(["filter" => $this->assignBox(...)]);
+           $proc->importStyleSheet($xsl);
+           echo $proc->transformToXML($doc);
+       }
+
+       function assignBox($size) {
+           if (!@$this->available_boxes[$size]) return false;
+           $this->available_boxes[$size]--;
+           return true;
+       }
+   }
+
+   (new BoxCounter(["medium" => 1, "large" => 3]))->process($doc);
+
+This is again an example of instance methods in use, but for XSL
+transformations this time, with a stateful function.
+
+Special cases
+~~~~~~~~~~~~~
+
+This section clarifies the behaviour of some special cases. These behave
+the same as in current PHP stable versions. These also apply to
+``registerPhpFunctionNS``.
+
+Duplicate registrations
+^^^^^^^^^^^^^^^^^^^^^^^
+
+When registering a callback with the same name twice, the last
+registration wins. This allows for overwriting registrations. For
+example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable1,
+   ]);
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable2,
+   ]);
+
+If you were to call foo, it will call $callable2 in this example.
+
+Empty array argument
+^^^^^^^^^^^^^^^^^^^^
+
+For example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([]);
+
+In this case, no functions are registered.
 
 Backward Incompatible Changes
 -----------------------------
 
-This proposal has no runtime effect. The PHP language is not affected,
-and the PHP executable will not change.
+Strictly speaking, as the callable validity is checked earlier (i.e.
+when calling ``registerPhpFunctions``), this has a subtle break. If the
+function is not declared yet at the time of calling
+``registerPhpFunctions``, then this will throw an error. Previously this
+was accepted as long as the function was declared by the time the
+callback was executed. I think however that this situation is
+sufficiently rare and easily avoidable.
 
-At the C source code level, reducing #includes may break the build of
-third-party extensions which forgot to include a header that was
-previously implied by PHP, e.g. "errno.h" is included for no reason, and
-extensions may rely on that.
-
-If staying compatible with defective extensions is deemed important,
-these includes may be re-added to a header such as "php_compat.h",
-possibly with a way to opt-out. That way, broken extensions still build,
-but PHP itself still benefits from a smaller and more correct set of
-#includes.
+If the part of the proposal to *also* add ``registerPhpFunctionNS`` is
+accepted, then this could also be a BC break *if* user subclasses
+already define a ``registerPhpFunctionNS`` function with a different
+signature. GitHub search revealed no such cases however, and I also
+think that this method name is rare.
 
 Proposed PHP Version(s)
 -----------------------
 
-"master" branch (which may eventually become 8.3 or 9.0?).
+Next PHP 8.x, that is 8.4 at the time of writing.
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-No runtime impact.
-
-The build of out-of-tree SAPIs may break for the same reasons as
-described above.
-
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-No runtime impact.
-
-The build of out-of-tree extensiosn may break for the same reasons as
-described above.
-
-To Opcache
-~~~~~~~~~~
-
-No impact.
-
-Being an in-tree extension, opcache benefits from those code cleanups.
-My PR contains cleanup commits for opcache.
-
-New Constants
-~~~~~~~~~~~~~
-
-Not applicable.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-Not applicable.
+This affects both the ext/dom and ext/xsl extension.
+Implementation-wise, the ext/dom extension will gain the shared code to
+deal with XPath callables because the result set handling (and therefore
+ext/xsl) already depends on DOM classes anyway.
 
 Open Issues
 -----------
 
+None.
+
 Unaffected PHP Functionality
 ----------------------------
 
-The PHP language is completely unaffected.
+Everything else.
 
 Future Scope
 ------------
 
-Not applicable. This is an incremental improvement to PHP's source code.
+None right now.
 
 Proposed Voting Choices
 -----------------------
 
--  Clean up #include directives? (Yes/No)
--  Is it allowed to document an #include line with a code comment?
-   (Yes/No)
--  Is it allowed to forward-declare structs/unions/typedefs? (Yes/No)
--  Is it allowed to split a large header, e.g. move zend_result to a
-   separate header, to reduce dependencies on catch-all headers such as
-   zend_types.h? (Yes/No)
+Two primary votes each requiring 2/3rd majority.
 
-Vote
-----
+Accept the proposed changes to registerPhpFunctions in ext/dom and
+ext/xsl?
 
-Voting started on 2023-02-01 (two weeks after the RFC was posted to
-php-internals) and will end on 2023-02-15 at 15:00 UTC (another two
-weeks).
-
-Primary vote:
-
-Question: Should #include directives be cleaned up?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept the proposed changes to registerPhpFunctions in ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -228,34 +442,14 @@ Voting Choices
 -  Yes
 -  No
 
-Secondary (clarifications on how to clean up):
+--------------
 
-Question: Is it allowed to document an #include line with a code comment?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Add registerPhpFunctionNS to ext/dom and ext/xsl?
+
+Question: Add registerPhpFunctionNS to ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Question: Is it allowed to forward-declare structs/unions/typedefs?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Question: Is it allowed to split a large header to reduce dependencies?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-3:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -266,43 +460,41 @@ Voting Choices
 Patches and Tests
 -----------------
 
+https://github.com/php/php-src/pull/12627
+
 Implementation
 --------------
 
-https://github.com/php/php-src/pull/10338 tracks the specification.
-https://github.com/php/php-src/pull/10345 tracks my proposed
-implementation.
+Merged into PHP 8.4 in
+https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a.
 
-https://github.com/php/php-src/pull/10410 is a PR splitted from
-https://github.com/php/php-src/pull/10345 with some minimal cleanup, as
-suggested on php-internals by Jakub Zelenka; it contains compatibility
-tweaks so (bad) third-party extensions do not break, such as always
-including errno.h from php.h
-
-https://github.com/php/php-src/pull/10404 is a PR that adds a few
-third-party extensions to the CI; more extensions could easily be added.
-This is slighly out of this RFC's scope, but may help those who worry
-about extension breakages.
-
-If voters decide that #include directives should not have code comments,
-then existing comments should be removed to reduce "clutter"; see
-https://github.com/php/php-src/pull/10472
+Manual entry TBD
 
 References
 ----------
 
--  https://github.com/php/php-src/pull/10216
--  https://github.com/php/php-src/pull/10220
--  https://github.com/php/php-src/pull/10279
--  https://github.com/php/php-src/pull/10300
--  https://github.com/php/php-src/pull/10338
--  https://github.com/php/php-src/pull/10345
--  https://marc.info/?l=php-internals&m=167387060703714&w=2
+#. Pre-RFC pitch: https://externals.io/message/121286
+#. Feature request: https://bugs.php.net/bug.php?id=38595
+#. Feature request: https://bugs.php.net/bug.php?id=49567
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
+
+Changelog
+---------
+
+-  0.3: Changed registerPhpFunctionsNS -> registerPhpFunctionNS
+-  0.2: Added registerPhpFunctionsNS
+-  0.1.1: Clarify special cases (which are identical to how they are in
+   current PHP versions)
+-  0.1: Initial version under discussion
 
 Additional Metadata
 -------------------
 
-:First Published At: https://github.com/php/php-src/pull/10216
-:Original Authors: Max Kellermann, max.kellermann@ionos.com
-:Slug: include_cleanup
-:Wiki URL: https://wiki.php.net/rfc/include_cleanup
+:Implementation: https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a
+:Original Authors: Niels Dossche, nielsdos@php.net
+:Slug: improve_callbacks_dom_and_xsl
+:Wiki URL: https://wiki.php.net/rfc/improve_callbacks_dom_and_xsl
