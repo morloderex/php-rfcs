@@ -114,7 +114,7 @@ namespace Dom {
 
 Reading from this field will get the serialization of the inner content of the element, writing to it will parse a string into a subtree and replace the contents of the element with the new subtree. If the document is an HTML document, the HTML parser / serializer will be used. If the document is an XML document, the XML parser / serializer will be used. Yes, that means that inner**HTML** can set **XML** content, and this is as defined by spec. This naming oopsie is legacy baggage from the spec that stems from the fact that the Element class is shared between XML and HTML documents for interopability.
 
-If the serialization is not well-formed for XML, then a DOMException with $code DOM_SYNTAX_ERR will be thrown, as defined by the spec.
+If the serialization is not well-formed for XML, then a DOMException with <php>$code</php> DOM_SYNTAX_ERR will be thrown, as defined by the spec.
 
 Parsing documents (or fragments) can cause hard/soft errors. The soft errors are reported via warnings, or if the internal error handling mechanism is used then the errors are stored inside an array. Unless LIBXML_NOERROR is provided, in which case those soft errors are silenced. Note that we don't have a way to provide a parsing option to the innerHTML property, and so we cannot provide a way to silence the errors cleanly.
 I asked about this on the mailing list (https://externals.io/message/123224) but got no response. This probably means that people are uncertain or don't care, and so I choose to not implement the error reporting because it's easier to omit something and add it later than it is to remove something later.
@@ -260,7 +260,7 @@ So we can't return the attribute node corresponding to the namespace declaration
 
 Because these APIs are also implemented by browsers, it's worth looking at how they solve this problem and what the spec says. Turns out this is all undocumented in the spec, and browsers don't implement the namespace axis at all.
 
-I propose to add two methods to "new DOM" that replace the namespace axis functionality: <php>getInScopeNamespaces</php> that replaces ''./namespace::*'' and <php>getDescendantNamespaces</php> that replaces ''./​/namespace::*''. When users would try to query namespace nodes from the namespace axis in <php>Dom\XPath</php>, we'll throw a DOMException with $code DOM_NOT_SUPPORTED_ERR, redirecting users to use one of these two methods.
+I propose to add two methods to "new DOM" that replace the namespace axis functionality: <php>getInScopeNamespaces</php> that replaces ''./namespace::*'' and <php>getDescendantNamespaces</php> that replaces ''./​/namespace::*''. When users would try to query namespace nodes from the namespace axis in <php>Dom\XPath</php>, we'll throw a DOMException with <php>$code</php> DOM_NOT_SUPPORTED_ERR, redirecting users to use one of these two methods.
 
 To identify a namespace we only need to know the prefix, the uri, and the element it is scoped upon. Therefore, it has these three fields. It can only be constructed by the DOM extension, not by users. No node-specific properties will be implemented in <php>NamespaceInfo</php>.
 
@@ -408,7 +408,7 @@ public function rename(?string $namespace, string $qualifiedName): void {} // In
 The first argument of the rename method allows you to change the namespace URI of the element/attribute, while the second one allows you to change the qualified name. The qualified name is the combination of the prefix and local name; or just the local name if there is no prefix.
 You may be wondering: "why not split this method up into multiple different methods?". The answer is that it's not possible to do: the namespace you choose has implications on what qualified names are allowed. Therefore, in some cases you have to change these two at the //same time//. It is of course possible to just change one of the two while keeping the other intact, but that must happen in accordance to the namespace-related rules.
 
-We have previously seen how elements in the HTML namespace will create an instance of ''HTMLElement'' instead of ''Element''. This imposes a restriction on the rename API because otherwise it becomes possible to create Elements in the HTML namespace or HTMLElements not in the HTML namespace. Therefore, if the element is in the HTML namespace, it must remain in that namespace; and if it's not in the HTML namespace, it may not enter the HTML namespace. If you try to do this, a DOMException with $code DOM_INVALID_MODIFICATION_ERR will be thrown.
+We have previously seen how elements in the HTML namespace will create an instance of ''HTMLElement'' instead of ''Element''. This imposes a restriction on the rename API because otherwise it becomes possible to create Elements in the HTML namespace or HTMLElements not in the HTML namespace. Therefore, if the element is in the HTML namespace, it must remain in that namespace; and if it's not in the HTML namespace, it may not enter the HTML namespace. If you try to do this, a DOMException with <php>$code</php> DOM_INVALID_MODIFICATION_ERR will be thrown.
 
 == Examples ==
 
@@ -488,7 +488,16 @@ The <php>AdjacentPosition</php> enum is backed such that the literal values from
 
 Initially, the [[rfc:opt_in_dom_spec_compliance|DOM spec-compliance RFC]] copied the existing APIs from the old DOM classes without a deviation for most APIs. Someone reported that the <php>(DOM)Document::xinclude()</php> has weird return value behaviour. In particular, quoting from the documentation:
 <blockquote>Returns the number of XIncludes in the document, -1 if some processing failed, or false if there were no substitutions. </blockquote>
-This seems to be caused by an implementation mistake. The more sensical behaviour would be to return false on failure, and the number of substitutions on success. If there were no substitutions the number 0 should be returned. I propose to make this change to the new classes.
+This seems to be caused by an implementation mistake. The more sensical behaviour would be to throw on failure (to avoid 0/false confusion), and return the number of substitutions on success. If there were no substitutions the number 0 should be returned.
+
+The new signature of this function would look like this:
+<PHP>
+final class XMLDocument extends Document {
+  public function xinclude(int $options = 0): int {}
+}
+</PHP>
+
+The exception thrown will be DOMException with <php>$code</php> set to INVALID_MODIFICATION_ERR.
 
 ===== Backward Incompatible Changes =====
 
