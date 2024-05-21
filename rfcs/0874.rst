@@ -1,302 +1,335 @@
-PDO Driver Specific Sub-classes
+PDO Driver Specific SQL Parsers
 ===============================
 
 :PHP-RFC: 0874
-:Title: PDO Driver Specific Sub-classes
-:Author: Danack
-:Status: Accepted
+:Title: PDO Driver Specific SQL Parsers
+:Author: Matteo Beccati <mbeccati@php.net>
+:Status: Draft
 :Type: Unknown
-:Created: 2022-06-20
-:Version: 1.0
+:Created: 2024-04-11
+:Version: 0.6
 
 Introduction
 ------------
 
-PDO is a generic database class. Some of the databases it supports have
-functionality that is specific to that database. For example, when
-connected to an SQLite database, the sqlite specific function
-PDO::sqliteCreateFunction is available.
+The PDO extension contains a SQL parser, whose main purpose is to
+recognise parameter placeholders inside queries (i.e. ``"?"`` and
+``":paramName"``), so that it knows how many and what parameters to
+expect for a query, and pass the information to the PDO driver in use.
 
-Having methods exist on a class depending on how the program was
-compiled and/or what database it is connecting to is quite surprising.
-It would make the code be easier to reason about if there were
-subclasses of the PDO class, specific to each database that has specific
-functionality available.
+This parser had historically been modelled to work with what was the
+de-facto SQL standard in the PHP ecosystem at that time: MySQL. However,
+the SQL dialect used by MySQL is different when handling string literals
+from standard SQL, followed by other database vendors, such as
+PostgreSQL and SQLite.
+
+Specifically, MySQL treats the backslash character as an escape
+character: ``'This \'word\' is a single quoted'`` Whereas the SQL
+standard uses double single quotes:
+``'This ''word'' is a single quoted'``
+
+When using databases other than MySQL with PDO, valid queries having
+string literals ending with a backslash character are throwing off the
+parser and causing apparently inexplicable bugs.
+
+For example:
+
+.. code:: sql
+
+   SELECT 'foo\' AS a, '?' AS b
+
+will make PDO consider ``"'foo\' AS a, '"`` to be a string literal and
+will parse the following "?" as a positional parameter placeholder. In
+fact, if you pay close attention, even the DocuWiki SQL code formatter
+is thrown off by this very example.
+
+We have several reports of similar bugs
+`[1 <https://bugs.php.net/bug.php?id=78534>`__],
+`[2 <https://bugs.php.net/bug.php?id=79276>`__],
+`[3 <https://bugs.php.net/bug.php?id=80340>`__], and possibly other
+duplicates[7].
+
+In a nutshell, the PDO SQL scanner function doesn't need to completely
+parse the SQL dialect in use. **It is sufficient to properly recognise
+quoted string literals, quoted identifier literals, and comments to skip
+placeholder detection inside them**.
+
+Bonus improvement
+~~~~~~~~~~~~~~~~~
+
+The limitation of a global SQL parser in PDO meant that my previous `RFC
+to support the PostgreSQL-only "?"
+operator </rfc/pdo_escape_placeholders>`__\ [4] had to apply the parser
+change to all database types. The change had no known side-effects, but
+I feel this RFC could improve by keeping this peculiarity inside the
+pdo_pgsql scanner only.
 
 Proposal
 --------
 
-The proposal has two parts:
+Following a detailed research (see below) for each of the databases
+currently supported by PDO in core, the proposal is to allow drivers to
+optionally provide a custom scanner function to handle their specific
+SQL dialect and:
 
--  Add new subclasses of PDO with driver specific methods.
--  Add PDO::connect to be able to create the specific subclasses.
+#. Change the `default PDO
+   scanner <https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42>`__
+   to expect standard SQL only:
 
-Add new subclasses of PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. two-dashes and C-style comments (non-nested, as that seems to be
+      the most common format, already implemented in PDO)
 
-All of the PDO extensions that are part of the PHP src repository will
-have subclasses created for them.
+#. Add a MySQL specific scanner function:
 
-Some of these subclasses will expose functionality that exists that is
-peculiar to that DB, and not present in the generic PDO class. e.g.
-PdoSqlite::createFunction() should be there rather than on the generic
-PDO class PDO::sqliteCreateFunction.
+   #. single and double quoted literals with both doubling and backslash
+      as escaping mechanisms (MySQL default)
+   #. backtick literals with doubling as escaping mechanism (I also
+      tested and it seems MySQL doesn't accept backslashes as escapes)
+   #. two-dashes (if followed by 1 whitespace), C-style comments, and
+      Hash-comments
+   #. Tests, as necessary
 
-.. code:: php
+#. Add a PgSQL specific scanner function:
 
-   class PdoDblib extends PDO
-   {
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. C-style "escape" string literals
+   #. Dollar-quoted string literals
+   #. two-dashes and C-style comments (non-nested, as nesting would
+      require unwanted changes to the common parser functionality)
+   #. Support for "??" as escape sequence for the "?" operator
+   #. Tests, as necessary
 
-   }
+#. Add a SqLite specific scanner function:
 
-.. code:: php
+   #. single, double quoted, and backtick literals, with doubling as
+      escaping mechanism
+   #. square brackets quoting for identifiers
+   #. two-dashes and C-style comments (non-nested)
+   #. Tests, as necessary
 
-   class PdoFirebird extends PDO
-   {
-    
-   }
+In order to keep the change as simple as possible, the proposal tries to
+cover the default SQL syntax for each database as closely as possible,
+without heavy changes to the common parser code.
 
-.. code:: php
+One important thing to mention is that the proposed changes are only
+targeting the part of PDO that scans the SQL query for parameter
+placeholders. Quoting literals or using parameters in queries is **not
+going to be affected**.
 
-   class PdoMySql extends PDO
-   {
-       public function getWarningCount(): int {}
-   }
+Detailed Proposal
+-----------------
 
-.. code:: php
-
-   class PdoOci extends PDO
-   {
-     
-   }
-
-.. code:: php
-
-   class PdoOdbc extends PDO
-   {
-
-   }
-
-.. code:: php
-
-   class PdoPgsql extends PDO
-   {
-       /**
-        * @var int
-        * @cname PDO_PGSQL_ATTR_DISABLE_PREPARES
-        */
-       public const ATTR_DISABLE_PREPARES = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_IDLE
-        */
-       public const TRANSACTION_IDLE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_ACTIVE
-        */
-       public const TRANSACTION_ACTIVE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INTRANS
-        */
-       public const TRANSACTION_INTRANS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INERROR
-        */
-       public const TRANSACTION_INERROR = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_UNKNOWN
-        */
-       public const TRANSACTION_UNKNOWN = UNKNOWN;
-
-       public function escapeIdentifier(string $input): string {}
-
-       public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): array|false {}
-
-       public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function lobCreate(): string|false {}
-
-       // Opens an existing large object stream.  Must be called inside a transaction.
-       /** @return resource|false */
-       public function lobOpen(string $oid, string $mode = "rb"){}
-
-       public function lobUnlink(string $oid): bool {}
-
-       public function getNotify(int $fetchMode = PDO::FETCH_USE_DEFAULT, int $timeoutMilliseconds = 0): array|false {}
-
-       public function getPid(): int {}
-   }
-
-.. code:: php
-
-   class PdoSqlite extends PDO
-   {
-       /**
-        * @var int
-        * @cname SQLITE_DETERMINISTIC
-        */
-       public const DETERMINISTIC = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_OPEN_FLAGS
-        */
-       public const ATTR_OPEN_FLAGS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READONLY
-        */
-       public const OPEN_READONLY = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READWRITE
-        */
-       public const OPEN_READWRITE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_CREATE
-        */
-       public const OPEN_CREATE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_READONLY_STATEMENT
-        */
-       public const ATTR_READONLY_STATEMENT = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname
-        */
-       public const ATTR_EXTENDED_RESULT_CODES = UNKNOWN;
-
-       // Registers an aggregating User Defined Function for use in SQL statements
-       public function createAggregate(
-           string $name,
-           callable $step,
-           callable $finalize,
-           int $numArgs = -1
-       ): bool {}
-
-       // Registers a User Defined Function for use as a collating function in SQL statements
-       public function createCollation(string $name, callable $callback): bool {}
-
-       public function createFunction(
-           string $function_name,
-           callable $callback,
-           int $num_args = -1,
-           int $flags = 0
-       ): bool {}
-
-   // Whether SQLITE_OMIT_LOAD_EXTENSION is defined or not depends on how
-   // SQLite was compiled: https://www.sqlite.org/compile.html
-   #ifndef SQLITE_OMIT_LOAD_EXTENSION
-       public function loadExtension(string $name): bool {}
-   #endif
-
-       public function openBlob(
-           string $table,
-           string $column,
-           int $rowid,
-           ?string $dbname = "main", //null,
-           int $flags = PdoSqlite::OPEN_READONLY
-       ): mixed /* resource|false */ {}
-   }
-
-Although there may be DB specific functionality that could be exposed
-for the other database types that PDO supports, this RFC does not intend
-to expose them.
-
-Add a way of creating them through PDO static factory method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Add a static factory method to PDO called connect. During the connect
-process, the exact type of database being connected to will be checked,
-and if it is a DB that has a specific sub-class (i.e. all of those
-extension that ship with PHP core), return that sub-class instead of a
-generic PDO object
-
-.. code:: php
-
-   class PDO
-   {
-       public static function connect(string $dsn [, string $username [, string $password [, array $options ]]]) {
-
-           if (connecting to SQLite DB) {
-               return new PdoSqlite(...);
-           }
-
-
-           return new PDO(...);
-       }
-   }
-
-PDO::connect will return the appropriate sub-class when connecting to
-specific type of DB.
-
-Users will also be able to create the DB specific classes directly,
-through the appropriate constructor e.g.
-
-.. code:: php
-
-   $db = new PdoSqlite($dsn, $username, $password, $options);
-
-The code will throw an exception if the type of database being connected
-to isn't of the correct type for the class.
-
-Sqlite Extension directory ini setting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The Sqlite3 extension requires users to set an ini setting to allow
-SQLite extensions to be loaded, presumably from a desire to keep things
-'secure'. However, as this appears to only be a vulnerability if someone
-is able to upload and execute PHP code on a server, in which case the
-box is completely compromised any way, it doesn't seem to be necessary.
-
-Additionally, in the proposed PdoSqlite class this code:
+In order to execute the plan, a new member will be appended to:
 
 .. code:: c
 
-   sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1);
+   struct pdo_dbh_methods {
+       pdo_dbh_close_func      closer;
+       pdo_dbh_prepare_func        preparer;
+       pdo_dbh_do_func         doer;
+       pdo_dbh_quote_func      quoter;
+       // ...
+       pdo_dbh_sql_scanner     scanner;
+   }
 
-is used to temporarily enable extension loading, before loading the
-extension, which only enables it through the C api, whereas the Sqlite3
-extension uses the code:
+Each PDO driver defines already `their own
+struct <https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code>`__.
+Leaving the new member to NULL will make the driver use the default PDO
+scanner function. Otherwise a pointer to a custom scanner function will
+override the default when parsing queries. It's really as simple as
+that.
 
-.. code:: c
+The rest of the implementation is the actual re2c scanner code,
+config.*, Makefile changes, etc. required to incorporate the driver
+specific scanner into the build.
 
-   sqlite3_enable_load_extension(sqlite_handle, 1);
+In order to support dollar-quoted strings on Postgres, the functionality
+of custom quoting has been added to the common PDO parser function. The
+change has no side effects for other database drivers.
 
-which affects both the C api and loading extensions through SQL code.
+Research on String Literals, Identifiers, and Comments
+------------------------------------------------------
+
+MySQL
+~~~~~
+
+MySQL by default accepts both backslash escaped quotes and SQL standard.
+String literals can use single or double quotes. See `the
+documentation <https://dev.mysql.com/doc/refman/8.0/en/string-literals.html>`__
+(8.0 current is linked here, but 5.7 and 8.3 bahave the same).
+
+The
+`NO_BACKSLASH_ESCAPE <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>`__
+SQL mode will disable recognition of the backslash as escape character.
+If set it will break SQL scanning regardless of this RFC.
+
+The
+`ANSI_QUOTES <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes>`__
+SQL mode switches from backtick to SQL standard double quotes for
+identifier literals.
+
+Several `comment
+types <https://dev.mysql.com/doc/refman/8.0/en/comments.html>`__
+supported: ''-- '', ``#``, and ``/* */`` (not nested).
+
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults. All
+comment types will be supported.
+
+PostgreSQL
+~~~~~~~~~~
+
+Escaping has evolved during the years. Historically accepted "\'", but
+started gradually transitioning to the SQL standard around 2005, going
+from memory. Since 9.1 (2011+) it accepts only single quoted string
+literals by default according to the SQL standard. See `the
+documentation <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS>`__.
+
+Postgres also supports `String Constants with Unicode
+Escapes <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE>`__,
+which follow the same conventions as standard strings and are parsed by
+PDO as regular strings.
+
+It also accepts `“escape” string
+constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE>`__,
+e.g.
+
+.. code:: php
+
+   E'This \'word\' is a single quoted'
+
+Lastly, `Dollar-Quoted String
+Constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING>`__
+are very common, especially when defining functions.
+
+The behaviour of strings can also be manipulated in multiple ways
+through configuration variables, such as:
+`standard_conforming_strings <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>`__,
+`backslash_quote <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE>`__,
+and
+`escape_string_warning <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING>`__.
+
+About
+`comments <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS>`__,
+it follows the standard with ``--`` and ``/* */`` (w/ nested comments
+allowed)
+
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults.
+Dollar-quoting support requires minimal changes to the common PDO parser
+function. All comment types are already supported, albeit support for
+nested comments will not be introduced.
+
+SQLite
+~~~~~~
+
+Follows the SQL standard, and requires double single quotes to represent
+the single quote in a string literal. See
+`documentation <https://www.sqlite.org/lang_expr.html#literal_values_constants_>`__.
+
+It will however accept double quoted strings as string literals under
+`some
+circumstances <https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted>`__.
+
+Double quoted identifiers, but also `backticks and square
+brackets <https://sqlite.org/lang_keywords.html>`__.
+
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
+
+The RFC aims to support single-quoted, double-quoted, backtick, and
+square-bracketed literals. All comment types are already supported.
+
+SQL Server
+~~~~~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql?view=sql-server-ver16#character-string-constants>`__.
+
+Depending on the QUOTED_IDENTIFIER setting, double quotes are either
+used for strings or identifiers.
+
+Almost SQL standard
+`comments <https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+Firebird
+~~~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants>`__.
+It also support hexadecimal (binary) strings, e.g. ``x'50444F``', and,
+similarly to Oracle, quoted strings (out of scope).
+
+The documentation mentions "Double quotes are NOT VALID for quoting
+strings. The SQL standard reserves double quotes for a different
+purpose: quoting identifiers."
+
+Almost SQL standard
+`comments <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+ODBC
+~~~~
+
+Since ODBC can connect to various types of databases, the SQL standard
+parser hopefully will suffice.
+
+Oracle
+~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html>`__.
+It also supports alternative quoting, e.g. q'<literal>' and many other
+variants, which is out of scope for this RFC.
+
+`Double quoted
+identifiers <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA>`__.
+
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
+
+The OCI driver lives in PECL: the default scanner will be used by
+default, bringing compatibility for SQL standard string literals,
+identifiers, and comments.
+
+Historical Background
+---------------------
+
+A few years back I attempted to fix a bug and came up with with a `pull
+request <https://github.com/php/php-src/pull/6852>`__ that could be
+considered a proof of concept for this RFC. The same topic was also
+brought up `by others on
+internals <https://externals.io/message/114016>`__, but no one had time
+to follow up with a proper RFC.
 
 Backward Incompatible Changes
 -----------------------------
 
-None known. It might be inconvenient for people who are extending PDO
-class directly, and would like to extend the specific types. They would
-need to write their own connect functions, that wrap and proxy those
-specific types.
+No expected BC breaks.
+
+Users having applications that can work with multiple database engines
+should still be very careful and write portable queries, possibly using
+the ``PDO::quote()`` method when necessary instead of hardcoding strings
+containing escape characters.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3
+Next PHP 8.x, hopefully 8.4.
 
 RFC Impact
 ----------
@@ -304,131 +337,100 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-Describe the impact to CLI, Development web server, embedded PHP etc.
+No impact
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Drivers outside of php-src might have to be modified if they make
+assumptions about the structure of enum pdo_param_type. They would have
+to be rebuilt since the PDO_DRIVER_API macro would be updated.
+
+That has historically been allowed/expected in minor versions. The last
+time it happened was for PHP 7.2 with `PHP RFC: Extended String Types
+For PDO </rfc/extended-string-types-for-pdo>`__.
+
+To Opcache
+~~~~~~~~~~
+
+No impact to opcache.
+
+New Constants
+~~~~~~~~~~~~~
+
+No new constant.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No php.ini changes
 
 Open Issues
 -----------
 
-These are the known current issues.
+No open issues ATM.
 
 Unaffected PHP Functionality
 ----------------------------
 
-Everything not PDO
+Anything not related to PDO scanning the SQL query for parameter
+placeholders.
 
-Frequently asked questions
---------------------------
+Out Of Scope
+------------
 
-if someone does 'new PDO(...)' will they now get back 'PdoPgsql'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Dynamic changes to the scanner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-No.
+The scanners are generated when PHP is compiled and, currently, cannot
+be modified at runtime. However, some databases allow configuration
+directives or ``SET`` queries to change the accepted syntax for
+literals, identifiers, etc.
+
+Being able to understand all possible combinations would require
+tracking what directives are different from the expected default and
+having a number of scanners inside each driver for each possible
+permutation of such configuration directives.
 
 Future Scope
 ------------
 
-When to deprecate old function on PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The method PDO::sqliteCreateFunction and other driver specific methods
-should probably be deprecated and removed at 'some point'. Although this
-cleanup should happen, the position of this RFC is that it's very low
-priority, as that code has sat there for years not requiring much
-maintainance.
-
-Removing the methods that magically exist or not depending on the
-specific driver created would save some complication in the PDO code. So
-although there's no benefit in userland for deprecating the existing
-magic methods, there may be a complexity saving in maintenance.
-
-Choosing the version for them to be deprecated in can be left until the
-future.
-
-Quoting identifiers
-~~~~~~~~~~~~~~~~~~~
-
-During the discussion, a point was raised that currently there is no
-"escape identifier" method on the base PDO class. Postgres at least has
-a specific method for escaping identifiers as the rules for escaping
-those are different from escaping values. It sounds valuable to add an
-escape method to the base PDO class, but that needs to be done by
-someone familiar with all of the database drivers.
-
-SQLite constants
-~~~~~~~~~~~~~~~~
-
-There are SQLite constants that are not currently exposed in the SQLite3
-extension including:
-
--  SQLITE_DIRECTONLY
--  SQLITE_INNOCUOUS
--  SQLITE_SUBTYPE
-
-I don't intend to add these as I don't understand them.
-
-PdoSqlite aggregations, collations and functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The code for these functions has been copied from the Sqlite3 extension.
-Although SQLite allows creating these with different flags to indicate
-what character set data should be in, the implementation is hard-coded
-to use the SQLITE_UTF8 flag.
-
-It would be possible to expose, and allow users to set, the flags of
-SQLITE_UTF16, SQLITE_UTF16BE, SQLITE_UTF16LE, SQLITE_UTF16_ALIGNED, and
-SQLITE_UTF8, however what the API should look like for that is 'not
-obvious', aka I have no idea what it should be like, despite having
-thought about it for a few hours. So, I'm planning to leave it out of
-this RFC.
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or
+add other custom scanner functionality.
 
 Proposed Voting Choices
 -----------------------
 
-Accept the RFC or not.
-
-Question: PDO driver specific subclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Voting closes at 2023-07-17T17:00:00Z
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
 Patches and Tests
 -----------------
 
-WIP code https://github.com/php/php-src/pull/8707
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+`Implementation Pull
+Request <https://github.com/php/php-src/pull/14035>`__
 
 References
 ----------
 
-A proposal to add `sqlite openblob
-functionality </rfc/implement_sqlite_openblob_in_pdo>`__ previously
-failed to pass. The discussion gave the impression that the sub-classing
-`approach would be more
-acceptable <https://externals.io/message/100773#100813>`__.
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
+-  [1] `https:bugs.php.net/bug.php?id=78534]] \* [2]
+   [[https:\ bugs.php.net/bug.php?id=79276|https:bugs.php.net/bug.php?id=79276]]
+   \* [3]
+   [[https:\ bugs.php.net/bug.php?id=80340|https:bugs.php.net/bug.php?id=80340]]
+   \* [4] [[rfc:pdo_escape_placeholders|PHP RFC: Escape PDO "?"
+   parameter placeholder]] \* [5]
+   [[https:\ github.com/php/php-src/pull/6852|PoC implementation of a
+   custom pdo_pgsql scanner <https://bugs.php.net/bug.php?id=78534>`__
+-  [6] `Previous discussion of the topic on
+   internals <https://externals.io/message/114016>`__
+-  [7] `More recent bug <https://github.com/php/php-src/issues/13958>`__
 
 Additional Metadata
 -------------------
 
-:Original Authors: Danack
-:Slug: pdo_driver_specific_subclasses
-:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_subclasses
+:Discussion: https://externals.io/message/123141
+:Implementation: https://github.com/php/php-src/pull/14035
+:Original Authors: Matteo Beccati, mbeccati@php.net
+:Original Status: Under Discussion
+:Slug: pdo_driver_specific_parsers
+:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_parsers
