@@ -1,5 +1,5 @@
 ====== PHP RFC: Add stream open functions to XML{Reader,Writer} ======
-  * Version: 0.10.1
+  * Version: 0.11.0
   * Date: 2024-04-21
   * Author: Niels Dossche <nielsdos@php.net>
   * Status: Under Discussion
@@ -12,6 +12,8 @@ The <php>XMLReader</php> and <php>XMLWriter</php> classes deal with XML in a str
 There is however a strange limitation to these classes: they cannot operate on an already-open stream! This is bizarre as the APIs (both internally and user-facing) are stream-oriented. Streams that are already open are common when working, for example, with HTTP requests, data passed from a framework, or just XML data embedded in an existing stream. The lack of an API that works with already-opened streams causes developers to rely on workarounds, e.g. reading the stream entirely to memory and then using the <php>XMLReader</php> APIs, or writing an XML file using <php>XMLWriter</php> and then having to pass that into an already-open stream. That's just wasteful and needlessly difficult. This RFC aims to fix that problem and aims to fix some other inconsistency as well.
 
 ===== Proposal =====
+
+==== Main Proposal ====
 
 I propose to add 2 new functions, one to <php>XMLReader</php> and one to <php>XMLWriter</php>, to create an instance from a stream. Here is how they would look like:
 
@@ -38,11 +40,25 @@ While implementing this, I found some strange behaviour regarding the <php>?stri
 
 An earlier version of this RFC proposed adding <php>openStream()</php> methods to both classes, but the naming was not ideal and the behaviour of being an instance method was not liked. Therefore, this was changed to static-only methods that return an instance of the respective class.
 
+==== Consistency ====
+
+We're adding new static named constructors to the <php>XMLWriter</php> and <php>XMLReader</php> classes. However, <php>XMLWriter</php> doesn't have static constructors yet and <php>XMLReader</php> has this hybrid static methods/instance methods we talked about earlier that can't be used in subclasses.
+
+The idea is to add the following methods for consistency with the newly proposed methods, with the same arguments as their existing counterpart:
+  - <php>XMLReader::fromUrl(string $url, ?string $encoding = null, int $flags = 0): void</php> as a new version of <php>XMLReader::open(...)</php>
+  - <php>XMLReader::fromString(string $source, ?string $encoding = null, int $flags = 0): void</php> as a new version of <php>XMLReader::XML(...)</php>
+  - <php>XMLWriter::toMemory(): void</php> as a new version of <php>XMLWriter::openMemory(...)</php>
+  - <php>XMLWriter::toUrl(string $url): void</php> as a new version of <php>XMLWriter::openUri(...)</php>
+
+Note I used Url here instead of Uri because that's the more accurate term: it actually locates the resource instead of just identifying it.
+
+This does not deprecate any existing methods, but merely updates the documentation to point users towards the new constructors.
+
 ===== Backward Incompatible Changes =====
 
 There are three minor BC breaks.
 
-The first one is the fact that we're adding the <php>fromStream()</php> or <php>toStream()</php> method. If a user extends the <php>XMLReader</php> or <php>XMLWriter</php> class, and their class implements a method with the same name but an incompatible signature, a compile error will occur. I analyzed the top 2500 Composer packages, and none used the toStream or fromStream names in subclasses of the XML classes.. This means that the top 2500 packages don't suffer a BC break because of this. That doesn't mean there will be none, but it gives a good indication.
+The first one is the fact that we're adding new methods. If a user extends the <php>XMLReader</php> or <php>XMLWriter</php> class, and their class implements a method with the same name but an incompatible signature, a compile error will occur. I analyzed the top 2500 Composer packages, and none used any of the proposed function names in subclasses of the XML classes. This means that the top 2500 packages don't suffer a BC break because of this. That doesn't mean there will be none, but it gives a good indication.
 
 The second BC break is caused by throwing a <php>ValueError</php> on invalid encodings instead of silently ignoring invalid encodings. If we don't signal the invalid encoding in any way to the user, this can subtly hide bugs. For example, this could hide typos or silently pass invalid user input to the respective functions. Forcing developers to handle this error explicitly will result in more robust code in the end.
 
@@ -113,7 +129,7 @@ None yet.
 
 ===== Proposed Voting Choices =====
 
-One primary vote requiring 2/3rd majority to accept the RFC as a whole.
+Two primary votes each requiring 2/3rd majority: one for the main proposal and one for the consistency proposal.
 
 ===== Patches and Tests =====
 
@@ -137,6 +153,7 @@ None yet.
 
 ===== Changelog =====
 
+  - 0.11.0: Incorporate feedback about static methods
   - 0.10.1: Language fixes
   - 0.10.0: Static again
   - 0.9.2: Add example usages of the new APIs.
