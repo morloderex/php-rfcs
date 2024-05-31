@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 There are eight rounding modes in the current master branch (8.4):
-<code>
+<PHP>
 const PHP_ROUND_HALF_UP
 const PHP_ROUND_HALF_DOWN
 const PHP_ROUND_HALF_EVEN
@@ -16,11 +16,14 @@ const PHP_ROUND_CEILING
 const PHP_ROUND_FLOOR
 const PHP_ROUND_TOWARD_ZERO
 const PHP_ROUND_AWAY_FROM_ZERO
-</code>
+</PHP>
 
-There are two problems with these. First, the value is just an int, so we need to verify that the value passed is a valid rounding mode. The second problem is that the behavior of the “up” and “down” modes does not match the mathematical definition. Especially for non-native speakers, the different rounding modes might also be more easily confused, compared to a naming that uses less abstract terms.
+There are two problems with these:
+  - First, the value is just an int, so we need to verify that the value passed is a valid rounding mode.
+  - The second problem is that the behavior of the “up” and “down” modes does not match the mathematical definition. Especially for non-native speakers, the different rounding modes might also be more easily confused, compared to a naming that uses less abstract terms.
 
 See an example regarding the second problem:
+
 <PHP>
 round(1.5, 0, PHP_ROUND_HALF_UP); // 2
 round(-1.5, 0, PHP_ROUND_HALF_UP); // -2
@@ -29,7 +32,7 @@ round(1.5, 0, PHP_ROUND_HALF_DOWN); // 1
 round(-1.5, 0, PHP_ROUND_HALF_DOWN); // -1
 </PHP>
 
-When passed a negative value, HALF_UP and HALF_DOWN behave contrary to their names. This issue is mentioned by Gina on the internals mailinglist.
+When passed a negative value, <php>PHP_ROUND_HALF_UP</php> and <php>PHP_ROUND_HALF_DOWN</php> behave contrary to their names. This issue is mentioned by Gina on the internals mailinglist.
 https://externals.io/message/123126
 
 ===== Proposal =====
@@ -50,27 +53,27 @@ enum RoundingMode
 }
 </PHP>
 
-And change the signature of round() to:
+And then changing the signature of <php>round()</php> to:
 <PHP>
-round(int|float $num, int $precision = 0, int|RoundingMode $mode = RoundingMode::HalfAwayFromZero): float
+round(int|float $num, int $precision = 0, int|\RoundingMode $mode = \RoundingMode::HalfAwayFromZero): float
 </PHP>
 
-To avoid BC Break as much as possible, you can still use int type arguments. However, this should be deprecated in the future (not included in this RFC).
+To avoid BC Break as much as possible, you can still use <php>int</php> type arguments. However, this should be deprecated in the future (not included in this RFC).
 
-Also, bcround() will be added from the next minor version (8.4) due to the passing of the following RFC.
+Also, <php>bcround()</php> will be added from the next minor version (8.4) due to the passing of the following RFC.
 https://wiki.php.net/rfc/adding_bcround_bcfloor_bcceil_to_bcmath
 
-If this RFC is passed, the rounding mode specified for bcround() will be changed to use RoundingMode instead of int. As for bcround(), it doesn't accept int like round(). This is because it is a feature that has not been released yet and BC Break will not occur.
+If this RFC is passed, the rounding mode specified for <php>bcround()</php> will be changed to use <php>\RoundingMode</php> instead of <php>int</php>. As for <php>bcround()</php>, it doesn't accept int like <php>round()</php>. This is because it is a feature that has not been released yet and BC Break will not occur.
 
-The same goes for the following RFC that support BCMath objects: All rounding modes are replaced appropriately by RoundingMode. https://wiki.php.net/rfc/support_object_type_in_bcmath
+The same goes for the following RFC that support BCMath objects: All rounding modes are replaced appropriately by <php>\RoundingMode</php>. https://wiki.php.net/rfc/support_object_type_in_bcmath
 
-To summarize, existing features will be changed to a union type of int and RoundingMode, and unreleased features will only accept RoundingMode as the rounding mode argument.
+To summarize, existing features will be changed to a union type of <php>int|\RoundingMode</php>, and unreleased features will only accept <php>\RoundingMode</php> as the rounding mode argument.
 
 ==== Intl rounding mode ====
 
-Intl also has a rounding mode, but unlike the <php>round()</php>, it maps directly to the ICU library. Due to their slightly different nature, they are not included in the scope of this RFC.
+Intl also has a rounding mode, but unlike the <php>round()</php>, it maps directly to the ICU library. Due to their slightly different nature, they are //not// included in the scope of this RFC.
 
-Especially since <php>NumberFormatter::setAttribute()</php> currently only accepts int|float. Widening such a generic function feels wrong.
+Especially since <php>NumberFormatter::setAttribute()</php> currently only accepts <php>int|float</php>. Widening such a generic function feels wrong.
 
 ===== Backward Incompatible Changes =====
 The <php>\RoundingMode</php> class name will no longer be available to userland code. A GitHub search for ''symbol:RoundingMode "class RoundingMode" language:php'' reveals 58 results. They all appear to be namespaced.
@@ -102,18 +105,18 @@ Only Standard and BCMath are affected.
 
 ===== Future Scope =====
 
-Although not included in this RFC, it would be reasonable to deprecate existing rounding mode constants in the future. Also, in the future round() should no longer accept int as the rounding mode argument type.
+Although not included in this RFC, it would be reasonable to deprecate existing rounding mode constants in the future. Also, in the future <php>round()</php> should no longer accept int as the rounding mode argument type.
 
-However, before deprecating the existing constant, can change the constant's value from an int to a RoundingMode value to make the transition smoother:
+However, before deprecating the existing constant, can change the constant's value from an <php>int</php> to a <php>\RoundingMode</php> value to make the transition smoother:
 <PHP>
-const PHP_ROUND_HALF_UP = RoundingMode::HalfAwayFromZero;
-const PHP_ROUND_HALF_DOWN = RoundingMode::HalfTowardsZero;
-const PHP_ROUND_HALF_EVEN = RoundingMode::HalfEven;
-const PHP_ROUND_HALF_ODD = RoundingMode::HalfOdd;
-const PHP_ROUND_CEILING = RoundingMode:: TowardsZero;
-const PHP_ROUND_FLOOR = RoundingMode::AwayFromZero;
-const PHP_ROUND_TOWARD_ZERO = RoundingMode::NegativeInfinity;
-const PHP_ROUND_AWAY_FROM_ZERO = RoundingMode::PositiveInfinity;
+const PHP_ROUND_HALF_UP = \RoundingMode::HalfAwayFromZero;
+const PHP_ROUND_HALF_DOWN = \RoundingMode::HalfTowardsZero;
+const PHP_ROUND_HALF_EVEN = \RoundingMode::HalfEven;
+const PHP_ROUND_HALF_ODD = \RoundingMode::HalfOdd;
+const PHP_ROUND_CEILING = \RoundingMode:: TowardsZero;
+const PHP_ROUND_FLOOR = \RoundingMode::AwayFromZero;
+const PHP_ROUND_TOWARD_ZERO = \RoundingMode::NegativeInfinity;
+const PHP_ROUND_AWAY_FROM_ZERO = \RoundingMode::PositiveInfinity;
 </PHP>
 
 ===== Proposed Voting Choices =====
