@@ -307,6 +307,44 @@ There are a few reasons for that:
   - They are also the ones that benefit the most from being in the engine: the userland implementation relies on complex magic accessors, is hard to maintain as new versions of PHP are shipped, and is way slower than what can be achieve with the help of the engine.
   - It's not sure that the engine would really be of significant help for virtual inheritance-proxies: implementing or generating code to decorate methods is way simpler.
 
+Actually, <php>ReflectionLazyObject::initialize()</php> returns the backing object in order to help with implementing virtual inheritance-proxies in userland. Indeed, the previous description was simplified: virtual inheritance-proxies should also proxy public property accesses in addition to method calls.
+
+Here is how one can implement a (non-optimized) lazy-loading virtual inheritance-proxy with the help of this RFC:
+
+<PHP>
+class Connection
+{
+    public float $ttl = 1.0;
+
+    public function send(string $data): void
+    {
+        // do something, this is the real implementation we want to make lazy
+    }
+}
+
+class LazyConnection extends Connection
+{
+    public function __construct()
+    {
+        ReflectionLazyObject::makeLazy($this, $this->initialize(...), ReflectionLazyObject::STRATEGY_VIRTUAL);
+    }
+ 
+    public function send(string $data): void
+    {
+        ReflectionLazyObject::fromInstance($this)->initialize()->send($data);
+    }
+    
+    private function initialize(): parent
+    {
+        return new parent(); // or any heavier initialization logic
+    }
+}
+
+$connection = new LazyConnection();
+
+echo $connection->ttl; // echoes 1.1
+</PHP>
+
 ===== Backward Incompatible Changes =====
 
 None - all existing semantics are preserved.
