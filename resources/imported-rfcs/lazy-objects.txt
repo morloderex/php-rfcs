@@ -1,10 +1,10 @@
 ====== PHP RFC: Lazy Objects ======
+
   * Version: 1.0
   * Date: 2024-06-03
   * Author: Arnaud Le Blanc <arnaud.lb@gmail.com>, Nicolas Grekas <nicolasgrekas@php.net>
   * Status: Draft
   * First Published at: https://wiki.php.net/rfc/lazy-objects
-
 
 ===== Introduction =====
 
@@ -16,11 +16,11 @@ In both strategies, we start with empty objects typically created with <php>Refl
 
 Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
 
-Implementing virtual proxies and ghost objects in userland is non-trivial. This has been explored in the [[https://packagist.org/packages/ocramius/proxy-manager|ocramius/proxy-manager]] library and later in the [[https://packagist.org/packages/symfony/var-exporter|symfony/var-exporter]]. Current implementations have several limitations, including incompatibility with final and internal classes, and performance overhead due to magic methods. This RFC proposes to implement ghost objects and virtual state-proxies natively in the engine to address these issues.
+Implementing virtual proxies and ghost objects in userland is non-trivial. This has been explored in the [[https://packagist.org/packages/ocramius/proxy-manager|ocramius/proxy-manager]] library and later in the [[https://packagist.org/packages/symfony/var-exporter|symfony/var-exporter]]. Current implementations have several limitations, including incompatibility with final, and performance overhead due to magic methods. This RFC proposes to implement ghost objects and virtual state-proxies natively in the engine to address these issues.
 
 ===== Implementation =====
 
-Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed. This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
+Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed. This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. No performance overhead is thus added to non-lazy use cases. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
 
 A lazy object can be created via the Reflection API, with the user specifying an initializer function that is called when initialization is required.
 
@@ -31,7 +31,7 @@ There are two kinds of lazy objects:
 
 Internal objects are not supported because their state is usually not managed via regular properties.
 
-It should be noted that the proposed Reflection API has been tested successfully on the Doctrine and on the Symfony projects.
+It should be noted that the proposed Reflection API has been tested successfully on the Doctrine and on the Symfony projects, allowing to remove a bunch of hard-to-maintain code while improving transparency of lazy objects and keeping the test suite green with the same public API.
 
 ===== Proposal =====
 
@@ -115,7 +115,7 @@ $initializer = static function (MyClass $ghost): void {
     $ghost->__construct(123);
 };
 
-$object = (new ReflectionClass(MyClass::class))->newInstanceWithoutConstructor();
+$object = new ReflectionClass(MyClass::class)->newInstanceWithoutConstructor();
 $lazyReflector = ReflectionLazyObject::makeLazy($object, $initializer);
 
 // At this point, $object is a lazy ghost object.
@@ -128,7 +128,7 @@ $initializer = static function (MyClass $proxy): MyClass {
     return new MyClass(123);
 };
 
-$object = (new ReflectionClass(MyClass::class))->newInstanceWithoutConstructor();
+$object = new ReflectionClass(MyClass::class)->newInstanceWithoutConstructor();
 $lazyReflector = ReflectionLazyObject::makeLazy($object, $initializer, ReflectionLazyObject::STRATEGY_VIRTUAL);
 </PHP>
 
