@@ -250,6 +250,63 @@ After initialization, property accesses are proxied to the actual instance.
 
 The destructor of lazy non-initialized objects is not called.
 
+===== About Lazy-Loading Strategies =====
+
+This RFC proposes to add the ghost and virtual state-proxy strategies to the engine. One might wonder why two and not just one strategy is needed?
+
+The most transparent and thus the default strategy should be the ghost one. Ghost objects handle initialization in place, which means that once they are initialized, they are exactly like regular objects. But they have one limitation: they have to be created ahead of time and populated later on. This excludes using them when the initialization logic involves a factory that ends up creating circular references.
+
+Consider this:
+
+<PHP>
+class Manager
+{
+    private Dispatcher $dispatcher;
+
+    public function setDispatcher(Dispatcher $dispatcher)
+    {
+        $this->dispatcher = $dispatcher;
+    }
+
+    public static function createManager(): self
+    {
+        $manager = new self();
+        $manager->setDispatcher(new Dispatcher());
+        
+        return $manager;
+    }
+}
+
+class Dispatcher
+{
+    public function __construct(private Manager $manager)
+    {
+    }
+}
+</PHP>
+
+Using the <php>Manager::createManager()</php> factory is not compatible with ghost objects, because their initializer requires initializing the ghost object in place, while the factory method returns a separate instance. One could try to copy all properties of the factory instance onto the ghost object, but accounting for circular references would mean inspecting recursively all the dependencies of the factory instance to figure that the <php>$manager</php> property of the internal Dispatcher object should also be updated to point to the ghost object. Doing so is next to impossible, and certainly not performant.
+
+Because they return a separate instance, virtual state-proxies are compatible with such situations.
+
+But then, why do we need ghost objects? The reason is object identity. When using virtual proxies, there are two objects which are identical from a conceptual point of view, but are different from an identity point of view. In use cases of e.g. entity managers, where the identity of objects is used to manage them, having more that one concrete objects to represent the same logical object can lead to fragile code.
+
+===== About Virtual Proxies =====
+
+When thinking about virtual proxies, one might expect the implementation to rely on decorating every single methods of a target class (or interface). Let's call this kind of proxy a virtual inheritance-proxy.
+
+Virtual inheritance-proxies decorate every methods of a target class or interface in order to prepend the initialization logic to each of them. This initialization logic is in charge of creating another instance to which all method calls are then forwarded. The main benefits of this strategy are that it's compatible with internal classes and also with interfaces, so that final classes implementing some interface can be made lazy by this interface. But this strategy has a major drawback: it trivially breaks object identity. If a method returns <php>$this</php>, this <php>$this</php> is the decorated object and not the proxy one.
+
+That's where the virtual state-proxy strategy as proposed by this RFC shines: instead of proxying methods, it relies on proxying property accesses. Because the methods are then called on the state-proxy itself and not on the proxied instance, when such a method returns <php>$this</php>, the state-proxy object itself is returned. This makes it much harder to fall into issues with identity of objects.
+
+Because the state-proxy strategy requires accessing the properties of the decorated object, it's not compatible with internal classes nor with interfaces. For this reason, virtual inheritance-proxies still have a use case. Yet, this proposal is specifically about providing ghost objects and virtual state-proxies natively, not virtual inheritance-proxies.
+
+There are a few reasons for that:
+
+  - Ghost objects and virtual state-proxies hook in the same place in the engine. This makes the RFC and the corresponding patch simpler and consistent.
+  - They are also the ones that benefit the most from being in the engine: the userland implementation relies on complex magic accessors, is hard to maintain as new versions of PHP are shipped, and is way slower than what can be achieve with the help of the engine.
+  - It's not sure that the engine would really be of significant help for virtual inheritance-proxies: implementing or generating code to decorate methods is way simpler.
+
 ===== Backward Incompatible Changes =====
 
 None
