@@ -41,23 +41,22 @@ This RFC proposes adding the following Reflection class to the PHP engine:
 class ReflectionLazyObject extends ReflectionObject
 {
     public int const SKIP_INITIALIZATION_ON_SERIALIZE = 1;
-    public int const STRATEGY_GHOST = 2;
-    public int const STRATEGY_VIRTUAL = 4;
 
     /**
-     * Turns an object into a lazy object.
+     * Turns an object into a lazy ghost object.
      *
-     * When using the ghost strategy, the initializer is
-     * called with the ghost object to initialize as argument
-     * and it should initialize all its properties.
-     *
-     * When using the virtual strategy, the initializer is
-     * called with the virtual proxy as argument and it should
-     * return the backing instance to proxy.
-     *
-     * The ghost strategy is used by default.
+     * The initializer is called with the ghost object to initialize
+     * as argument and it should initialize all its properties.
      */
-    public static function makeLazy(object $instance, callable $initializer, int $strategy = 0): self;
+    public static function makeLazyGhost(object $instance, callable $initializer, int $options = 0): self;
+
+    /**
+     * Turns an object into a lazy virtual state-proxy object.
+     *
+     * The initializer is called with the virtual proxy as argument
+     * and it should return the backing instance to proxy.
+     */
+    public static function makeLazyProxy(object $instance, callable $initializer, int $options = 0): self;
 
     /**
      * Returns whether an object is a lazy object.
@@ -98,7 +97,7 @@ class ReflectionLazyObject extends ReflectionObject
 
 ==== Creating a Lazy Object ====
 
-The entry point to create a lazy object is the <php>ReflectionLazyObject::makeLazy()</php> static method.
+The entry points to create a lazy object are the <php>ReflectionLazyObject::makeLazyGhost()</php> and <php>makeLazyProxy()</php>static methods.
 
 <PHP>
 class MyClass
@@ -116,12 +115,12 @@ $initializer = static function (MyClass $ghost): void {
 };
 
 $object = new ReflectionClass(MyClass::class)->newInstanceWithoutConstructor();
-$lazyReflector = ReflectionLazyObject::makeLazy($object, $initializer);
+$lazyReflector = ReflectionLazyObject::makeLazyGhost($object, $initializer);
 
 // At this point, $object is a lazy ghost object.
 </PHP>
 
-Creating a lazy virtual state-proxy requires using the <php>$strategy</php> argument:
+Creating a lazy virtual state-proxy requires using the <php>makeLazyProxy</php> argument:
 
 <PHP>
 $initializer = static function (MyClass $proxy): MyClass {
@@ -129,34 +128,32 @@ $initializer = static function (MyClass $proxy): MyClass {
 };
 
 $object = new ReflectionClass(MyClass::class)->newInstanceWithoutConstructor();
-$lazyReflector = ReflectionLazyObject::makeLazy($object, $initializer, ReflectionLazyObject::STRATEGY_VIRTUAL);
+$lazyReflector = ReflectionLazyObject::makeLazyProxy($object, $initializer);
 </PHP>
 
-The <php>$strategy</php> argument is a bitfield that also accepts the <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag. By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
-
-Passing both ghost and virtual strategy flags triggers a <php>ReflectionException</php> with the message "Flags STRATEGY_GHOST and STRATEGY_VIRTUAL are mutually exclusive."
+The <php>$options</php> argument is a bitfield that accepts the <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag. By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
 
 If an object is already lazy, a <php>ReflectionException</php> is thrown with the message "Object is already lazy".
 
-By accepting an already created instance, the <php>makeLazy()</php> method also allows writing classes that manage their own laziness:
+By accepting an already created instance, the <php>makeLazy*()</php> methods also allows writing classes that manage their own laziness:
 
 <PHP>
 class MyLazyClass
 {
     public function __construct()
     {
-        ReflectionLazyObject::makeLazy($this, $this->initialize(...));
+        ReflectionLazyObject::makeLazyGhost($this, $this->initialize(...));
     }
 
     // ...
 }
 </PHP>
 
-An <php>Error</php> is raised if the class passed to the <php>makeLazy()</php> method is internal or extends an internal class:
+An <php>Error</php> is raised if the class passed to the <php>makeLazy*()</php> methods is internal or extends an internal class:
 
 <PHP>
 // Raises "Error: Cannot make instance of internal class lazy: ReflectionClass is internal"
-ReflectionLazyObject::makeLazy(new ReflectionClass(), $initializer);
+ReflectionLazyObject::makeLazyGhost(new ReflectionClass(), $initializer);
 </PHP>
 
 ==== Handling the State of Lazy Objects ====
@@ -174,7 +171,7 @@ class BlogPost
 $classReflector = new ReflectionClass(BlogPost::class);
 $post = $classReflector->newInstanceWithoutConstructor();
 $initializer = // Callable that retrieves the title and content from the database.
-$lazyReflector = ReflectionLazyObject::makeLazy($post, $initializer);
+$lazyReflector = ReflectionLazyObject::makeLazyGhost($post, $initializer);
 
 // Without this line, the following call to ReflectionProperty::setValue() would trigger initialization.
 $lazyReflector->skipProperty('id');
@@ -188,7 +185,7 @@ The <php>skipProperty()</php> / <php>set[Raw]Property()</php> methods provide wa
 
 ==== Lifecycle of Lazy Objects ====
 
-An object is considered lazy if any of its properties are still hooked to the initializer passed to <php>makeLazy()</php>.
+An object is considered lazy if any of its properties are still hooked to the initializer passed to the <php>makeLazy*()</php> that made it lazy.
 
 There are three ways to make a lazy object non-lazy:
 
@@ -326,7 +323,7 @@ class LazyConnection extends Connection
 {
     public function __construct()
     {
-        ReflectionLazyObject::makeLazy($this, $this->initialize(...), ReflectionLazyObject::STRATEGY_VIRTUAL);
+        ReflectionLazyObject::makeLazyProxy($this, $this->initialize(...));
     }
 
     public function send(string $data): void
