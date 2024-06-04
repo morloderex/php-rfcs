@@ -79,7 +79,8 @@ class ReflectionLazyObject extends ReflectionObject
     /**
      * Marks a property as *not* triggering initialization when being accessed.
      * 
-     * The property is set to its default value. This method is useful to bypass initialization when setting a property.
+     * The property is set to its default value if any.
+     * This method is useful to bypass initialization when setting a property.
      */
     public function skipProperty(string $name, string $class = null): void;
 
@@ -201,39 +202,49 @@ The <php>initialize()</php> method's <php>bool $skipInitializer</php> argument (
 
 If a <php>ReflectionLazyObject</php> is used after its corresponding lazy object has been initialized, the <php>initialize()</php> and <php>skipProperty()</php> methods do nothing, while the <php>set[Raw]Property()</php> methods set the corresponding property as expected.
 
-=== Initialization triggers ===
+==== Initialization Triggers ====
 
-Except for the special cases listed bellow, any attempt to observe the state of a lazy object will trigger its initialization, so that the result of the observation is the same as if the object was already initialized. This includes reading or writing a property, testing if a property is set, listing properties, <php>ReflectionProperty::getValue()</php>, <php>ReflectionObject::getProperties()</php>. This makes lazy objects fully transparent.
+Except for the special cases listed below, any attempt to observe the state of a lazy object will trigger its initialization. This ensures that the result of the observation is the same as if the object were already initialized, maintaining full transparency. These triggers include:
 
-The special cases that do not trigger initializations are:
+  * Reading or writing a property
+  * Testing if a property is set or unsetting it
+  * Calling <php>ReflectionProperty::getValue()</php> and <php>setValue()</php>
+  * Calling <php>ReflectionObject::getProperties()</php>
 
-  * Calls to <php>ReflectionLazyObject::skipProperty()</php>, <php>ReflectionLazyObject::setProperty()</php>, <php>ReflectionLazyObject::setRawProperty()</php>, or accesses to properties on which these methods were called
-  * Calls to <php>get_object_vars()</php>
-  * Calls to <php>serialize()</php> when <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> is set
-  * Calls to <php>ReflectionObject::__toString()</php>
+This behavior makes lazy objects fully transparent to their consumers.
 
-=== Initialization sequence ===
+The following special cases do not trigger initialization of a lazy object:
 
-== Ghost objects ==
+  * Calls to <php>ReflectionLazyObject::skipProperty()</php>, <php>setProperty()</php>, <php>setRawProperty()</php>, or accesses to properties on which these methods were called.
+  * Calls to <php>get_object_vars()</php>.
+  * Calls to <php>serialize()</php> when <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> is set, unless a property is accessed in ''%%__serialize()%%'' or ''%%__sleep()''%% methods.
+  * Calls to <php>ReflectionObject::__toString()</php>.
+  * Casting to arrayusing the <php>(array)</php> operator.
 
-  - Before calling the initializer, properties that were not initialized with <php>ReflectionLazyObject::skipProperty()</php>, <php>ReflectionLazyObject::setProperty()</php>, <php>ReflectionLazyObject::setRawProperty()</php> are initialized to their default value, in the same way as <php>new</php> or <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
-  - The initializer is called, with the object as first parameter.
-  - The object is marked as non lazy and the initializer is released.
+By excluding these cases from triggering initialization, developers can perform certain operations on lazy objects without causing them to initialize, providing finer control over the initialization process.
+
+==== Initialization Sequence ====
+
+=== Ghost Objects ===
+
+  - Before calling the initializer, properties that were not initialized with <php>ReflectionLazyObject::skipProperty()</php>, <php>ReflectionLazyObject::setProperty()</php>, <php>ReflectionLazyObject::setRawProperty()</php> are initialized to their default value, in the same way as using <php>new</php> or <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
+  - The initializer is called with the object as first parameter.
+  - The object is marked as non-lazy and the initializer is released.
 
 If an exception is thrown while calling the initializer, the object is reverted to its pre-initialization state and is still considered lazy.
 
 After initialization, properties are accessed directly.
 
-== Virtual objects ==
+=== Virtual Objects ===
 
-  - The initializer is called, with the object as first parameter.
+  - The initializer is called with the lazy proxy as first parameter.
   - The actual instance is set to the return value.
   - The object is marked as initialized.
   - Properties that were initialized with <php>ReflectionLazyObject::skipProperty()</php>, <php>ReflectionLazyObject::setProperty()</php>, <php>ReflectionLazyObject::setRawProperty()</php> as uninitialized.
 
 After initialization, property accesses are proxied to the actual instance.
 
-=== Destructors ===
+==== Destructors ====
 
 The destructor of lazy non-initialized objects is not called.
 
