@@ -1,435 +1,164 @@
-Improve Unserialize() Error Handling
-====================================
+Add Http_(get|clear)_last_response_headers() Function
+=====================================================
 
 :PHP-RFC: 0853
-:Title: Improve Unserialize() Error Handling
-:Author: Tim Düsterhus <timwolla@php.net>
-:Status: Implemented
+:Title: Add Http_(get|clear)_last_response_headers() Function
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
 :Type: Standards Track
-:Created: 2022-09-01
-:PHP-Version: 8.3
-:Version: 1.4
+:Created: 2024-01-03
+:PHP-Version: 8.4
+:Version: 0.2
 
 Introduction
 ------------
 
-PHP's current error reporting in ``unserialize()`` is very inconsistent,
-making it hard to reliably handle errors that occur during
-unserialization.
+The
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable is magically created in the local scope whenever an HTTP
+request is performed through PHP's stream layer, i.e. when using the
+`HTTP wrapper <https://www.php.net/manual/en/wrappers.http.php>`__. One
+such usage is using ``file_get_contents()`` to retrieve the content of a
+URL.
 
-Depending on how exactly the input string is malformed, PHP will emit an
-``E_NOTICE``, an ``E_WARNING``, or throw an arbitrary ``\Exception`` or
-``\Error`` (or even a combination of the 3 options):
+The
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable will contain all the HTTP headers that were encountered during
+the request performed via the HTTP wrapper.
 
-.. code:: php
+All other features using this operating principle, such as
+`$php_errormsg <https://www.php.net/manual/en/reserved.variables.phperrormsg.php>`__,
+have been removed because creating a variable in the local scope is a
+terrible way of returning additional information. This variable itself
+was initially slated `to be deprecated in PHP
+8.1 </rfc/deprecations_php_8_1#predefined_variable_http_response_header>`__,
+but due to a lack of convenient alternatives, it was removed from the
+proposal at that time.
 
-   <?php
+This variable is created and populated even if the HTTP request fails, a
+behaviour that requires dropping down to the stream layer, providing an
+additional stream context to ignore errors. Subsequently, the user can
+manually parse the response header and detect if the HTTP request failed
+or not. This is impractical and a better interface would be simply
+checking if the return value of the initial call was ``false``.
 
-   unserialize('foo'); // Notice: unserialize(): Error at offset 0 of 3 bytes in php-src/test.php on line 3
-   unserialize('i:12345678901234567890;'); // Warning: unserialize(): Numerical result out of range in php-src/test.php on line 4
-   unserialize('E:3:"foo";'); // Warning: unserialize(): Invalid enum name 'foo' (missing colon) in php-src/test.php on line 5
-                              // Notice: unserialize(): Error at offset 0 of 10 bytes in php-src/test.php on line 5
-   unserialize('E:3:"fo:";'); // Warning: unserialize(): Class 'fo' not found in php-src/test.php on line 7
-                              // Notice: unserialize(): Error at offset 0 of 10 bytes in php-src/test.php on line 7
+As a replacement, we propose adding functions similar to
+``error_get_last()``/``error_clear_last()`` which replaced
+`$php_errormsg <https://www.php.net/manual/en/reserved.variables.phperrormsg.php>`__.
 
-   try {
-       unserialize('O:19:"SplDoublyLinkedList":3:{i:0;i:0;i:1;N;i:2;a:0:{}}');
-   } catch (UnexpectedValueException $e) {
-       echo $e->getMessage(), PHP_EOL; // Incomplete or ill-typed serialization data
-   }
+Motivation
+----------
 
-   try {
-       unserialize(
-           'a:2:{i:12345678901234567890;O:19:"SplDoublyLinkedList":3:{i:0;i:0;i:1;N;i:2;a:0:{}}}'
-       ); // Warning: unserialize(): Numerical result out of range in /tmp/php-src/test.php on line 17
-          // Notice: unserialize(): Unexpected end of serialized data in /tmp/php-src/test.php on line 17
-          // Notice: unserialize(): Error at offset 83 of 84 bytes in /tmp/php-src/test.php on line 17
-   } catch (UnexpectedValueException $e) {
-       echo $e->getMessage(), PHP_EOL; // Incomplete or ill-typed serialization data
-   }
+The primary motivation for adding this function, is to be able to remove
+the
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable completely. To create this variable one needs to use the
+``zend_set_local_var_str()`` engine function. This is also the last
+usage of this engine function and its sibling function
+``zend_set_local_var()``.
 
-   ?>
+Moreover, this variable needs to be special cased in the optimizer/JIT
+(via the ``HTTP_RESPONSE_HEADER_ALIAS`` enum case of
+``zend_ssa_alias_kind``). Which means that any extension that would use
+this engine API would misbehave under opcache.
 
-To reliably handle these currently, the following code is required:
-
-.. code:: php
-
-   try {
-       set_error_handler(static function ($severity, $message, $file, $line) {
-           throw new \ErrorException($message, 0, $severity, $file, $line);
-       });
-       $result = unserialize($serialized);
-   } catch (\Throwable $e) {
-       // Unserialization failed. Catch block optional if the error should not be handled.
-   } finally {
-       restore_error_handler();
-   }
-
-   var_dump($result); // Do something with the $result. Must not appear
-                      // in the 'try' to not 'catch' unrelated errors.
-
-In fact adding a custom error handler before calling ``unserialize()``
-is the example used in the documentation page for
-``restore_error_handler()``
-(https://www.php.net/manual/en/function.restore-error-handler.php).
+See the `Backward Incompatible
+Changes </rfc/http-last-response-headers#backward_incompatible_changes>`__
+section for an impact analysis of the removal of this feature.
 
 Proposal
 --------
 
-The proposed solution to the described problem consists of two parts:
+Add the following two functions:
 
-Add wrapper Exception 'UnserializationFailedException'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-  ``function http_get_last_response_header(): ?array``
+-  ``function http_clear_last_response_header(): void``
 
-A new ``\UnserializationFailedException`` will be added. Whenever a
-``\Throwable`` is thrown during ``unserialize`` (e.g. within an
-``__unserialize()`` handler or because a throwing error handler converts
-``E_NOTICE``/``E_WARNING`` into an ``Exception``), this ``\Throwable``
-will be wrapped in a new instance of
-``\UnserializationFailedException``.
-
-This enables a developer to use a single
-``catch(\UnserializationFailedException $e)`` to:
-
-#. Catch all possible ``\Throwable``\ s happening during
-   unserialization, reliably handling all possible unserialization error
-   cases.
-#. Reliably include more than just the call ``unserialize()`` in the
-   ``try``, as unrelated ``\Throwable``\ s will not be caught. This can
-   improve readability, because the ``try``-``catch`` to handle
-   unserialization failures does not need to be mixed with the regular
-   “happy path” logic. It also allows to handle multiple calls to
-   ``unserialize()`` with a single ``try``-``catch``, without
-   accidentally suppressing ``\Throwable``\ s thrown by unrelated logic
-   in-between the calls to ``unserialize()``.
-
-The original ``\Throwable`` will be accessible through the ``$previous``
-property of ``\UnserializationFailedException``, allowing the developer
-to learn about the actual cause of the unserialization failure by
-inspecting ``->getPrevious()``.
-
-Translated into simplified PHP code, the ``unserialize()``
-implementation could look roughly like this with the proposal
-implemented:
-
-.. code:: php
-
-   function unserialize(string $data, array $options = []): mixed
-   {
-       try {
-           // The existing unserialization logic happens here.
-       } catch (\Throwable $e) {
-           throw new \UnserializationFailedException(previous: $e);
-       }
-   }
-
-The implementation of the ``\UnserializationFailedException`` looks like
-this:
-
-.. code:: php
-
-   /**
-    * @strict-properties
-    */
-   class UnserializationFailedException extends \Exception
-   {
-   }
-
-Increase the error reporting severity in the unserialize() parser
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Apart from unserialize handlers (e.g. ``__unserialize()``) throwing,
-unserialization can also fail because of a syntax error in the input
-string, out-of-range integers and similar issues.
-
-Currently these cases will not throw. Instead an ``E_NOTICE`` or an
-``E_WARNING`` (or both!) are emitted depending on the type of error.
-
-The severity of these should be unified, because the cases that emit an
-``E_NOTICE`` are not any more or less actionable by the developer than
-the cases that emit ``E_WARNING``.
-
-Specifically the severity should be increased, because unserialization
-failing outside of an object's unserialize handler commonly implies that
-an fundamentally unsafe operation is performed:
-
-#. Storing or transmitting the output of ``serialize()`` with a medium
-   that is not binary-safe and truncates at NUL bytes. This will break
-   the unserialization of payloads that include classes that contain
-   ``protected`` or ``private`` properties.
-#. Storing the output of ``serialize()`` in a storage that will
-   transcode between charsets (e.g. a MySQL TEXT column and setting
-   different connection charsets). This will break the unserialization
-   of payloads that include non-ASCII strings, because the byte length
-   might change.
-#. Passing an untrusted input string into ``unserialize()``. Apart from
-   allowing an attacker to emit arbitrary errors, this might also allow
-   for remote code execution unless ``allowed_classes`` is configured to
-   something safe.
-
-All of these cases have in common that the application will no longer be
-operating on the original data that itself serialized. In the best case
-unserialization will outright fail, thus returning ``false`` from
-``unserialize()``, in the worst case the information will be silently
-modified (e.g. when attempting to unserialize 64 Bit integers with a 32
-Bit binary).
-
-At the very least the ``E_NOTICE`` cases should be adjusted to emit an
-``E_WARNING`` to consistently emit an ``E_WARNING`` in all cases.
-
-However changing both the existing ``E_NOTICE`` and the existing
-``E_WARNING`` to throw the new ``\UnserializationFailedException`` might
-be a better solution. For applications that use a throwing error
-handler, the ``\Throwable`` thrown by the error handler for the
-``E_NOTICE`` or ``E_WARNING`` will be handled by the mechanisms
-described in the previous section and thus will be wrapped into
-``\UnserializationFailedException``.
-
-In other words: This would only affect applications that do not use a
-throwing error handler.
-
-For these applications without a throwing error handler throwing an
-``\UnserializationFailedException`` might be a steep increase in
-severity, however these applications already need to be prepared to
-handle ``\Throwable``\ s thrown from an unserialize handler. The facts
-that an unserialization failure commonly indicates something inherently
-unsafe and that ``unserialize()`` currently might return bogus data
-without completely failing (e.g. for out-of-range integers) also
-warrants that the operation fails “loudly”, instead of silently
-continuing. Furthermore consistently throwing the proposed
-``\UnserializationFailedException`` allows the developer to take
-advantage of the benefits of the unified error handling as described in
-the previous section, even when they are not yet ready to use a throwing
-error handler.
-
-Resulting code
-~~~~~~~~~~~~~~
-
-The example in the introduction can be simplified to:
-
-.. code:: php
-
-   try {
-       $result = unserialize($serialized);
-       var_dump($result); // Do something with the $result. Can appear in the 'try' right
-                          // beside the unserialize(), because the 'catch' block is specific
-                          // to unserialization and will not catch anything unrelated.
-   } catch (\UnserializationFailureException $e) {
-       // unserialization failed.
-   }
-
-… if both the ``\UnserializationFailureException`` is introduced and the
-severity is raised to ``\UnserializationFailureException`` from
-``E_WARNING``/``E_NOTICE``.
+``http_get_last_response_header()`` would provide the same information
+as
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+if a request via the HTTP wrapper is made, and also return the headers
+as an array even when the request fails. If no request via the HTTP
+wrapper is made, or the last headers have been cleared by calling
+``http_clear_last_response_header()``, then ``null`` is returned.
 
 Backward Incompatible Changes
 -----------------------------
 
-Addition of a new exception class
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+As this RFC does not yet propose deprecating
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+there are no backward incompatible changes.
 
-The UnserializationFailedException will no longer be available. The
-query ``symbol:UnserializationFailedException language:php`` in GitHub's
-Code Search did not return any non-namespaced results, making this a
-theoretical issue.
+Considering the possible simplification to the engine and the optimizer
+by removing this last usage of the capability to create a variable in
+this way, we have conducted a usage analysis of the feature. We found
+only 65 usages in 30 projects across a sample of over 900 projects
+(composer packages, standalone open source projects, and private
+codebases) which were analyzed with `Exakat <https://www.exakat.io>`__.
+[1] Most of those usages stem from packages like Guzzle or OAuth client
+libraries.
 
-Existing error handling for unserialize() might need to be updated
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+It is impossible to polyfill this feature, however it is possible to
+write cross version compatible code in the following way:
 
-This is not considered an issue, because due to the inconsistency in
-error handling, the only safe solution to handle all possible errors
-during ``unserialize()`` is to ``catch(\Throwable)``. This is documented
-in the `manual page for
-unserialize() <https://www.php.net/manual/en/function.unserialize.php>`__
-("Objects may throw ``Throwable``\ s in their unserialization handlers")
-and this continues to work as-is.
+.. code:: php
 
-Every other solution is already broken in the face of untrusted input
-data, because (internal) classes can and will throw various types of
-``Exception`` and ``Error``. Examples of unsafe code includes:
+   $content = file_get_contents('http://example.com/');
+   if (function_exists('http_get_last_response_headers')) {
+       $http_response_header = http_get_last_response_headers();
+   }
+   // Use $http_response_header as before
 
--  ``@unserialize()`` (will fail if a class throws).
--  ``catch(Exception)`` (will fail for ext/date which throws
-   ``Error``\ s, will fail for readonly classes that remove properties
-   in a later version).
--  ``catch(Error)`` (will fail for various extensions which throw
-   ``Exception`` or ``UnexpectedValueException``).
+Considering the sparse usage of this feature, the possibility to write
+cross version compatible code, and the possible engine and optimizer
+simplifications, it seems reasonable to slate this feature for removal
+even without a deprecation notice if the need arises.
 
-Nothing will change for unserializing trusted, well-formed input
-strings, because unserialization will not fail for them by definition.
-
-Proposed PHP Version(s)
------------------------
-
-Next PHP 8.x.
-
-RFC Impact
-----------
-
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-Existing extensions may update their error handling in the unserialize
-handlers to throw ``\Exception``\ s that best describe the type of error
-in the serialized data without needing to concern themselves with
-compatibility, because anything that is thrown will automatically be
-wrapped in the unified ``\UnserializationFailedException``.
-
-If an extension uses ``unserialize()`` internally then the same
-backwards compatibility concerns as with userland code applies.
-
-Extensions replacing the serializer by a custom serializer (e.g.
-igbinary) may need to be adjusted to ensure their behavior is consistent
-with the behavior of the default serializer.
-
-To Opcache
-~~~~~~~~~~
-
-None.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
-
-Open Issues
------------
-
-None.
-
-Unaffected PHP Functionality
-----------------------------
-
-Anything that does not interact with ``unserialize()``. Developers who
-interact with ``__unserialize()``, ``__wakeup()``, and
-``Serializable::unserialize()`` might be affected depending on what
-exactly they are doing with those.
-
-Future Scope
-------------
-
--  A new ``throw_for_unknown_classes`` option to throw instead of
-   unserializing to ``__PHP_Incomplete_Class``:
-   https://externals.io/message/118566#118613
--  A ``unserialize_callback_func`` option as replacement for the ini
-   setting with the same name:
-   https://externals.io/message/118566#118672
--  Make trailing data emit an error:
-   https://github.com/php/php-src/pull/9630
-
-Proposed Voting Choices
------------------------
-
-.. _add-wrapper-exception-unserializationfailedexception-1:
-
-Add wrapper Exception 'UnserializationFailedException'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-2/3 required to implement ``\UnserializationFailedException`` that wraps
-any other ``\Throwable``.
-
-Question: Add the \\UnserializationFailedException and wrap any Throwables in PHP 8.x?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-.. _increase-the-error-reporting-severity-in-the-unserialize-parser-1:
-
-Increase the error reporting severity in the unserialize() parser
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Increase E_NOTICE to E_WARNING
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-2/3 required to increase the severity of the emitted notices to warning.
-
-Question: Increase the severity of emitted E_NOTICE to E_WARNING in PHP 8.x?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Throw Exception instead of emitting warning / notice
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Independently of whether the E_NOTICE will be increased to E_WARNING
-(the previous vote), the following vote will decide whether
-``unserialize()`` will throw ``\UnserializationFailedException`` for all
-types of error/warning/notice in PHP 9.0. The vote will only be valid if
-the first vote ("Add the \\UnserializationFailedException") passes, as
-it depends on that.
-
-2/3 required to make E_\* an \\UnserializationFailedException in 9.0.
-
-Question: Throw \\UnserializationFailedException instead of emitting E_NOTICE/E_WARNING in PHP 9.0?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Patches and Tests
------------------
-
-PoC:
-
--  Wrap Exceptions: https://github.com/php/php-src/pull/9425
--  Notice to warning: https://github.com/php/php-src/pull/9629
-
-Implementation
+Rejected ideas
 --------------
 
-https://github.com/php/php-src/pull/9629
+One suggested idea was to provide those headers via a by-reference entry
+to the stream context. This idea was rejected by us, and other members
+of the PHP Foundation, as we wish to maintain stream contexts as a
+stateless configuration data structure passed to the stream.
+
+This one-to-one feature replacement does not prevent the introduction of
+a more generic solution for other stream wrappers. And this pair of new
+functions can always be slated for future deprecation and removal.
+
+Version
+-------
+
+Next minor version, PHP 8.4.
+
+Vote
+----
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2024-01-29 and will end on 2024-02-14.
+
+Question: Accept Add http_(get|clear)_last_response_headers() function RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 References
 ----------
 
--  https://externals.io/message/118311
--  Wrap Exceptions: https://github.com/php/php-src/pull/9425
--  Notice to warning: https://github.com/php/php-src/pull/9629
-
-Rejected Features
------------------
-
-n/a
-
-Changelog
----------
-
--  1.4: Drop secondary vote.
--  1.3: Ranked Choice Voting.
--  1.2: The third vote now is a three-way vote.
--  1.1: Add two options to "Future Scope".
+[1] https://gist.github.com/exakat/454e503458e231dc0695837ad2561540
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/9629
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Original PHP Version: PHP 8.3
-:Original Status: Implemented (Partly Accepted)
-:Slug: improve_unserialize_error_handling
-:Wiki URL: https://wiki.php.net/rfc/improve_unserialize_error_handling
+:Implementation: https://github.com/php/php-src/pull/12500
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: http-last-response-headers
+:Wiki URL: https://wiki.php.net/rfc/http-last-response-headers
