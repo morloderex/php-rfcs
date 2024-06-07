@@ -338,31 +338,39 @@ The logic for calling ''unset()'' externally (and thus triggering <php>__unset()
 
 ==== Relationship with readonly ====
 
-The ''readonly'' flag, introduced in PHP 8.1, is, really two flags in one: write-once and ''private(set)''.  While that is sometimes sufficient, there are cases where protected-set is desired, and while few, there are use cases for public-set-once.  
+The ''readonly'' flag, introduced in PHP 8.1, is, really two flags in one: write-once and ''private(set)''.  While that is sometimes sufficient, there are cases where protected-set is desired, and while few, there are use cases for public-set-once.  However, it also has special case handling to allow a ''readonly'' property to be overridden by a child class without creating an entirely new property.  This effectively sidesteps the whole point of private anyway.  It also would create an inconsistency with an explicit ''private(set)'', which as noted above is necessarily also ''final''.
 
-To address these use cases, we have decided to treat ''readonly'' exactly as described: Two flags in one, with one being overridable.  That is, specifying a set-visibility on a ''readonly'' property is legal, and will override the implicit ''private(set)'' of ''readonly''.  If no set-visibility is specified, then ''readonly'''s implicit ''private(set)'' remains the same.
+We have decided the best way forward is to change the behavior of ''readonly'' to imply ''protected(set)'', not ''private(set)''.  That eliminates the inconsistency in ''readonly'''s existing behavior, as well as eliminating an inconsistency with ''private(set)''.
+
+A ''readonly'' property may still be explicitly declared ''private(set)'', in which case it will also be implicitly ''final''.  That is closer to what the intended behavior would have been without the odd workaround.
+
+If a ''readonly'' property is declared ''private'' generally, with no qualifier, then it will also be ''private(set)'', and thus ''final''.  
 
 In code:
 
 <code php>
-// These two are identical. The second is redundant, but legal.
-public readonly string $foo;
-public private(set) readonly string $foo;
-
-// This creates a public-read, protected-write, write-once property.
-// This was previously impossible.
-// Both the full and abbreviated forms are shown.
+// These create a public-read, protected-write, write-once property.
 public protected(set) readonly string $foo;
-protected(set) readonly string $foo;
+public readonly string $foo;
+readonly string $foo;
 
-// This creates a protected-read, protected-write, write-once property.
-protected protected(set) readonly string $foo;
+// These creates a public-read, private-set, write-once, final property.
+public private(set) readonly string $foo;
+private(set) readonly string $foo;
 
-// This creates a public-read, public-write, write-once property.
+// These create a public-read, public-write, write-once property.
 // While use cases for this configuration are likely few, 
 // there's no intrinsic reason it should be forbidden.
 public public(set) readonly string $foo;
-public(set) readonly string $food
+public(set) readonly string $foo;
+
+// These create a private-read, private-write, write-once, final property.
+private private(set) readonly string $foo;
+private readonly string $foo;
+
+// These create a protected-read, protected-write, write-once property.
+protected protected(set) readonly string $foo;
+protected readonly string $foo;
 
 // This is illegal - set cannot be wider than get.
 protected public(set) readonly string $foo;
