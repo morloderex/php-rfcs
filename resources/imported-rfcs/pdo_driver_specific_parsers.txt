@@ -10,7 +10,7 @@
 ===== Introduction =====
 The PDO extension contains a SQL parser, whose main purpose is to recognise parameter placeholders inside queries (i.e. ''"?"'' and ''":paramName"''), so that it knows how many and what parameters to expect for a query, and pass the information to the PDO driver in use.
 
-This parser had historically been modelled to work with what was the de-facto SQL standard in the PHP ecosystem at that time: MySQL. However, the SQL dialect used by MySQL is different when handling string literals from standard SQL, followed by other database vendors, such as PostgreSQL and SQLite.
+This parser had historically been modelled to work with the de-facto SQL standard in the PHP ecosystem at that time: MySQL. However, the SQL dialect used by MySQL is different when handling string literals from standard SQL, followed by other database vendors, such as PostgreSQL and SQLite.
 
 Specifically, MySQL treats the backslash character as an escape character: <code php>'This \'word\' is a single quoted'</code>
 Whereas the SQL standard uses double single quotes: <code sql>'This ''word'' is a single quoted'</code>
@@ -30,7 +30,7 @@ We have several reports of similar bugs [[https://bugs.php.net/bug.php?id=78534|
 In a nutshell, the PDO SQL scanner function doesn't need to completely parse the SQL dialect in use. **It is sufficient to properly recognise quoted string literals, quoted identifier literals, and comments to skip placeholder detection inside them**.
 
 ==== Bonus improvement ====
-The limitation of a global SQL parser in PDO meant that my previous [[rfc:pdo_escape_placeholders|RFC to support the PostgreSQL-only "?" operator]][4] had to apply the parser change to all database types. The change had no known side-effects, but I feel this RFC could improve by keeping this peculiarity inside the pdo_pgsql scanner only.
+The limitation of a global SQL parser in PDO meant that my previous [[rfc:pdo_escape_placeholders|RFC to support the PostgreSQL-only "?" operator]][4] had to apply the parser change to all database types. The change had no known side effects, but I feel this RFC could improve by keeping this peculiarity inside the pdo_pgsql scanner only.
 
 ===== Proposal =====
 Following a detailed research (see below) for each of the databases currently supported by PDO in core, the proposal is to allow drivers to optionally provide a custom scanner function to handle their specific SQL dialect and:
@@ -38,30 +38,30 @@ Following a detailed research (see below) for each of the databases currently su
   - Change the [[https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42|default PDO scanner]] to expect standard SQL only:
     - single and double quoted literals, with doubling as escaping mechanism
     - two-dashes and C-style comments (non-nested, as that seems to be the most common format, already implemented in PDO)
-  - Add a MySQL specific scanner function:
+  - Add a MySQL-specific scanner function:
     - single and double quoted literals with both doubling and backslash as escaping mechanisms (MySQL default)
     - backtick literals with doubling as escaping mechanism (I also tested and it seems MySQL doesn't accept backslashes as escapes)
     - two-dashes (if followed by 1 whitespace), C-style comments, and Hash-comments
     - Tests, as necessary
-  - Add a PgSQL specific scanner function:
+  - Add a PgSQL-specific scanner function:
     - single and double quoted literals, with doubling as escaping mechanism
     - C-style "escape" string literals
     - Dollar-quoted string literals
     - two-dashes and C-style comments (non-nested, as nesting would require unwanted changes to the common parser functionality)
     - Support for "??" as escape sequence for the "?" operator
     - Tests, as necessary
-  - Add a SqLite specific scanner function:
+  - Add a SqLite-specific scanner function:
     - single, double quoted, and backtick literals, with doubling as escaping mechanism
     - square brackets quoting for identifiers
     - two-dashes and C-style comments (non-nested)
     - Tests, as necessary
 
-In order to keep the change as simple as possible, the proposal tries to cover the default SQL syntax for each database as closely as possible, without heavy changes to the common parser code.
+To keep the change as simple as possible, the proposal tries to cover the default SQL syntax for each database as closely as possible, without heavy changes to the common parser code.
 
 One important thing to mention is that the proposed changes are only targeting the part of PDO that scans the SQL query for parameter placeholders. Quoting literals or using parameters in queries is **not going to be affected**.
 
 ===== Detailed Proposal =====
-In order to execute the plan, a new member will be appended to:
+To execute the plan, a new member will be appended to:
 
 <code c>
 struct pdo_dbh_methods {
@@ -74,13 +74,13 @@ struct pdo_dbh_methods {
 }
 </code>
 
-Each PDO driver defines already [[https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code|their own struct]]. Leaving the new member to NULL will make the driver use the default PDO scanner function. Otherwise a pointer to a custom scanner function will override the default when parsing queries. It's really as simple as that.
+Each PDO driver defines already [[https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code|their own struct]]. Leaving the new member to NULL will make the driver use the default PDO scanner function. Otherwise, a pointer to a custom scanner function will override the default when parsing queries. It's really as simple as that.
 
-The rest of the implementation is the actual re2c scanner code, config.*, Makefile changes, etc. required to incorporate the driver specific scanner into the build.
+The rest of the implementation is the actual re2c scanner code, config.*, Makefile changes, etc. required to incorporate the driver-specific scanner into the build.
 
-In order to support dollar-quoted strings on Postgres, the functionality of custom quoting has been added to the common PDO parser function. The change has no side effects for other database drivers.
+To support dollar-quoted strings on Postgres, the functionality of custom quoting has been added to the common PDO parser function. The change has no side effects for other database drivers.
 
-One minor potential BC-break was reported while researching bug [[https://github.com/php/php-src/issues/14244|#14244]], which basically describes lack of support for dollar quoting in pdo_pgsql. One of the currently viable workarounds is to use escaped question marks inside dollar quoted strings to avoid unexpected placeholder detection. The last version of the implementation still allows that, while raising the following deprecation notice:
+One minor potential BC-break was reported while researching bug [[https://github.com/php/php-src/issues/14244|#14244]], which basically describes lack of support for dollar quoting in pdo_pgsql. One of the currently viable workarounds is to use escaped question marks inside dollar-quoted strings to avoid unexpected placeholder detection. The last version of the implementation still allows that, while raising the following deprecation notice:
 
 ''Escaping question marks inside dollar quoted strings is not required anymore and is deprecated''.
 
@@ -90,7 +90,7 @@ Such BC-compatibility can be removed in the next major version.
 ===== Research on String Literals, Identifiers, and Comments ===== 
 
 ==== MySQL ====
-MySQL by default accepts both backslash escaped quotes and SQL standard. String literals can use single or double quotes. See [[https://dev.mysql.com/doc/refman/8.0/en/string-literals.html|the documentation]] (8.0 current is linked here, but 5.7 and 8.3 bahave the same).
+MySQL by default accepts both backslash escaped quotes and SQL standard. String literals can use single or double quotes. See [[https://dev.mysql.com/doc/refman/8.0/en/string-literals.html|the documentation]] (8.0 current is linked here, but 5.7 and 8.3 behave the same).
 
 The [[https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes|NO_BACKSLASH_ESCAPE]] SQL mode will disable recognition of the backslash as escape character. If set it will break SQL scanning regardless of this RFC.
 
@@ -102,7 +102,7 @@ The RFC aims to support all the above kinds of string literals with string-affec
 
 ==== PostgreSQL ====
 
-Escaping has evolved during the years. Historically accepted "\'", but started gradually transitioning to the SQL standard around 2005, going from memory. Since 9.1 (2011+) it accepts only single quoted string literals by default according to the SQL standard. See [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS|the documentation]].
+Escaping has evolved over the years. Historically accepted "\'", but started gradually transitioning to the SQL standard around 2005, going from memory. Since 9.1 (2011+) it accepts only single-quoted string literals by default according to the SQL standard. See [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS|the documentation]].
 
 Postgres also supports [[https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE|String Constants with Unicode Escapes ]], which follow the same conventions as standard strings and are parsed by PDO as regular strings.
 
@@ -122,7 +122,7 @@ The RFC aims to support all the above kinds of string literals with string-affec
 
 Follows the SQL standard, and requires double single quotes to represent the single quote in a string literal. See [[https://www.sqlite.org/lang_expr.html#literal_values_constants_|documentation]].
 
-It will however accept double quoted strings as string literals under [[https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted|some circumstances]].
+It will however accept double-quoted strings as string literals under [[https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted|some circumstances]].
 
 Double quoted identifiers, but also [[https://sqlite.org/lang_keywords.html|backticks and square brackets]].
 
@@ -167,7 +167,7 @@ The OCI driver lives in PECL: the default scanner will be used by default, bring
 
 
 ===== Historical Background =====
-A few years back I attempted to fix a bug and came up with with a [[https://github.com/php/php-src/pull/6852|pull request]] that could be considered a  proof of concept for this RFC. The same topic was also brought up [[https://externals.io/message/114016|by others on internals]], but no one had time to follow up with a proper RFC.
+A few years back I attempted to fix a bug and came up with a [[https://github.com/php/php-src/pull/6852|pull request]] that could be considered a proof of concept for this RFC. The same topic was also brought up [[https://externals.io/message/114016|by others on internals]], but no one had time to follow up with a proper RFC.
 
 ===== Backward Incompatible Changes =====
 No BC breaks, but a deprecation notice will be raised when using the "escaped question marks inside dollar quoted string" workaround described before.
@@ -175,14 +175,14 @@ No BC breaks, but a deprecation notice will be raised when using the "escaped qu
 Users having applications that can work with multiple database engines should still be very careful and write portable queries, possibly using the ''PDO::quote()'' method when necessary instead of hardcoding strings containing escape characters.
 
 ===== Proposed PHP Version(s) =====
-Next PHP 8.x, hopefully 8.4.
+Next PHP 8.x, hopefully, 8.4.
 
 ===== RFC Impact =====
 ==== To SAPIs ====
 No impact
 
 ==== To Existing Extensions ====
-Drivers outside of php-src might have to be modified if they make assumptions about the structure of enum pdo_param_type. They would have to be rebuilt since the PDO_DRIVER_API macro would be updated. 
+Drivers outside of php-src might have to be modified if they make assumptions about the structure of the enum pdo_param_type. They would have to be rebuilt since the PDO_DRIVER_API macro would be updated. 
 
 That has historically been allowed/expected in minor versions. The last time it happened was for PHP 7.2 with [[rfc:extended-string-types-for-pdo|PHP RFC: Extended String Types For PDO]].
 
@@ -206,13 +206,13 @@ Anything not related to PDO scanning the SQL query for parameter placeholders.
 ==== Dynamic changes to the scanner ====
 The scanners are generated when PHP is compiled and, currently, cannot be modified at runtime. However, some databases allow configuration directives or ''SET'' queries to change the accepted syntax for literals, identifiers, etc.
 
-Being able to understand all possible combinations would require tracking what directives are different from the expected default and having a number of scanners inside each driver for each possible permutation of such configuration directives.
+Being able to understand all possible combinations would require tracking what directives are different from the expected default and having several scanners inside each driver for each possible permutation of such configuration directives.
 
 ===== Future Scope =====
 Evaluate supporting "exotic" syntaxes in the existing scanners and/or add other custom scanner functionality.
 
 ===== Voting =====
-Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As usual 2/3 majority is needed for this proposal to be accepted.
+Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As usual, 2/3 majority is needed for this proposal to be accepted.
 
 <doodle title="Implement PDO Driver specific SQL parsers?" auth="mbeccati" voteType="single" closed="false" closeon="2024-06-17T15:00:00Z">
    * Yes
