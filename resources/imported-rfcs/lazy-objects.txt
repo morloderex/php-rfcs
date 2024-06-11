@@ -109,17 +109,6 @@ $reflector = new ReflectionLazyObjectFactory(MyClass::class);
 $object = $reflector->newLazyProxyInstance($initializer, ReflectionLazyObject::SKIP_DESTRUCTOR);
 </PHP>
 
-The <php>$options</php> argument is a bitfield that accepts the <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag. By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
-
-The <php>$options</php> argument also accepts the <php>ReflectionLazyObject::SKIP_DESTRUCTOR</php> flag. By default, the <php>makeInstanceLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
-
-An <php>Error</php> is raised if the class passed to the <php>newLazy*Instance()</php> methods is internal or extends an internal class:
-
-<PHP>
-// Raises "Error: Cannot make instance of internal class lazy: ReflectionClass is internal"
-ReflectionLazyObject::makeLazyGhost(new ReflectionClass(), $initializer);
-</PHP>
-
 The <php>makeInstanceLazy*()</php> methods accept an already created instance. This allows writing classes that manage their own laziness:
 <PHP>
 class MyLazyClass
@@ -134,9 +123,7 @@ class MyLazyClass
 }
 </PHP>
 
-If an object is already lazy, a <php>ReflectionException</php> is thrown with the message "Object is already lazy".
-
-The effect of <php>makeInstanceLazy*()</php> on the object is described later.
+The behavior of these methods is described into more details later.
 
 ==== Handling the State of Lazy Objects ====
 
@@ -243,7 +230,7 @@ After a successful initialization, the initializer function is not retained anym
 
 If the initializer throws, the object properties are reverted to their pre-initialization state and the object is marked as lazy again. In other words, all effects on the object itself are reverted. Other side effects, such as side-effects on other objects, are not reverted. The goal is to not expose a half-initialized instance in case of failure.
 
-==== Detailed API behavior ====
+==== Detailed API Behavior ====
 
 === newLazyGhostInstance() ===
 
@@ -257,7 +244,13 @@ Properties are not initialized to their default value (they are initialized befo
 
 The <php>$options</php> argument is a bitfield that accepts the <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag. By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
 
-Using <php>newLazyGhostInstance()</php> with an internal class or a sub-class of an internal class is not supported, and will throw an exception.
+An <php>Error</php> is raised if the class is internal or extends an internal class:
+
+<PHP>
+$reflector = new ReflectionLazyObjectFactory(ReflectionClass::class);
+// Raises "Error: Cannot make instance of internal class lazy: ReflectionClass is internal"
+$reflector->newLazyGhostInstance($initializer);
+</PHP>
 
 The return value is the created object.
 
@@ -310,7 +303,7 @@ var_dump($id === spl_object_id($object)); // bool(true)
 var_dump($ref->get() === $object); // bool(true)
 </PHP>
 
-Calling <php>newLazyGhostInstance()</php> on an already lazy object results in an exception.
+If the object is already lazy, a <php>ReflectionException</php> is thrown with the message "Object is already lazy".
 
 After calling <php>newLazyGhostInstance()</php>, the behavior of the object is the same as an object created by <php>newLazyGhostInstance()</php>.
 
