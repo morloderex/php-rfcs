@@ -191,24 +191,10 @@ By excluding these cases from triggering initialization, developers can perform 
 === Ghost Objects ===
 
   - Before calling the initializer:
-    - Properties that were not initialized with <php>ReflectionLazyObjectFactory::skipInitializerForProperty()</php>, <php>ReflectionLazyObjectFactory::setRawPropertyValue()</php> are initialized to their default value if any, in the same way as using <php>new</php> or <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
+    - Properties that were not initialized with <php>ReflectionLazyObjectFactory::skipInitializerForProperty()</php> or <php>ReflectionLazyObjectFactory::setRawPropertyValue()</php> are initialized to their default value if any, in the same way as using <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
     - The object is marked as non-lazy.
   - During initialization, properties can be accessed directly without triggering recursive initialization. Accessing properties without a default value may throw an error, as usual.
   - The initializer must return <php>null</php> or no value
-
-The following example demonstrates the behavior of accessing properties during initialization:
-
-<PHP>
-class MyClass {
-    public $a = 1;
-    public int $b;
-}
-
-$object = new ReflectionLazyObjectFactory(MyClass::class)->newLazyGhostInstance(function ($object) {
-    var_dump($object->a); // int(1)
-    var_dump($object->b); // Error: Typed property MyClass::$b must not be accessed before initialization
-});
-</PHP>
 
 After initialization, the object is indistinguishable from an object that was never lazy.
 
@@ -216,7 +202,7 @@ After initialization, the object is indistinguishable from an object that was ne
 
   - Before calling the initializer, the object is marked as non-lazy.
   - The initializer is called with the lazy proxy as first parameter.
-  - The return value of the initializer has to be a non-lazy instance of a parent or a child class of the lazy-object and it must have the same properties. An TypeError is thrown if that's not the case. Returning an instance of a child or parent class with the same properties does not break LSP.
+  - The return value of the initializer has to be a non-lazy instance of a parent or a child class of the lazy-object and it must have the same properties. An Error is thrown if that's not the case. Returning an instance of a child or parent class with the same properties does not break LSP.
   - The actual instance is set to the return value.
   - Properties that were initialized with <php>ReflectionLazyObjectFactory::skipInitializerForProperty()</php>, <php>ReflectionLazyObjectFactory::setRawPropertyValue()</php> are uninitialized.
 
@@ -347,42 +333,26 @@ The <php>skipInitializerForProperty()</php> method marks a property as non lazy 
 
 <PHP>
 class MyClass {
-    public $a;
+    public $id;
     public $b;
 }
 
 $reflector = new ReflectionLazyObjectFactory(MyClass::class);
 $object = $reflector->newLazyGhostInstance(function () {});
 
-$reflector->skipInitializerForProperty($object, 'a');
+$reflector->skipInitializerForProperty($object, 'id');
 
-$object->a = 1;       // does not trigger initialization
-var_dump($object->a); // int(1) (does not trigger initialization)
+$object->id = 1;       // does not trigger initialization
+var_dump($object->id); // int(1) (does not trigger initialization)
 </PHP>
 
-Accessing the property after calling this method has the same behavior as accessing it after constructing the object with <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
-
-<PHP>
-class MyClass {
-    public $a = 1;
-    public int $b;
-    public $c;
-}
-
-$reflector = new ReflectionLazyObjectFactory(MyClass::class);
-$object = $reflector->newLazyGhostInstance(function () {});
-
-$reflector->skipInitializerForProperty($object, 'a');
-$reflector->skipInitializerForProperty($object, 'b');
-
-var_dump($object->a); // int(1) (does not trigger initialization)
-var_dump($object->b); // Error: Typed property MyClass::$b must not be accessed before initialization (does not trigger initialization)
-var_dump($object->c); // triggers initialization
-</PHP>
+Accessing the property after calling this method has the same behavior as accessing it after constructing the object with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, including throwing errors when accessing uninitialized properties.
 
 The <php>$class</php> argument allows targeting the declaring class of a private property in the parent chain.
 
 The property must be declared (can not be a dynamic property), non-static, and non-virtual.
+
+The primary use-case of <php>skipInitializerForProperty()</php> and <php>setRawPropertyValue</php> is to initialize an properties whose value is already known and whose access should not trigger initialization. For example, an ORM may initialize the properties representing the identity of an entity.
 
 === setRawPropertyValue ===
 
