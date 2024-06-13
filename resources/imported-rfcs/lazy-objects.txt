@@ -216,48 +216,48 @@ After a successful initialization, the initializer function is not retained anym
 
 If the initializer throws, the object properties are reverted to their pre-initialization state and the object is marked as lazy again. In other words, all effects on the object itself are reverted. Other side effects, such as side-effects on other objects, are not reverted. The goal is to not expose a half-initialized instance in case of failure.
 
-The following snippet demonstrates this behavior:
+The following example demonstrates what happens when nested initializations fail: 
 
 <PHP>
-
 class MyClass {
     public $propA;
     public $propB;
 }
 
-// Creating two lazy objects
+// Creating two lazy objects. The initializer of $object1 causes the initialization
+// of $object2, which fails.
 
 $reflector = new ReflectionLazyObjectFactory(MyClass::class);
 
-$object1 = $reflector->newLazyGhostInstance(function ($object1) {
-    $object1->propB = 'value';
-});
-$reflector->setRawPropertyValue($object1, 'propA', 'object-1');
-
-$object2 = $reflector->newLazyGhostInstance(function ($object2) use ($object1) {
-    $object2->propA = 'updated';
-    $object2->propB = $object1->propB; // Initializes $object1
+$object2 = $reflector->newLazyGhostInstance(function ($object2) {
+    $object2->propB = 'value';
     throw new \Exception('initializer exception');
 });
 $reflector->setRawPropertyValue($object2, 'propA', 'object-2');
 
-// Both are uninitialized at this point
+$object1 = $reflector->newLazyGhostInstance(function ($object1) use ($object2) {
+    $object1->propB = 'updated';
+    $object1->propB = $object2->propB;
+});
+$reflector->setRawPropertyValue($object1, 'propA', 'object-1');
 
-var_dump($object1); // Object(MyClass) { ["propA"] => string(8) "object-1" }
-var_dump($object2); // Object(MyClass) { ["propA"] => string(8) "object-2" }
+// Both objects are uninitalized at this point
+
+var_dump($object1); // Object(MyClass) { "propA" => "object-1" }
+var_dump($object2); // Object(MyClass) { "propA" => "object-2" }
 
 try {
-    var_dump($object2->propB); // Exception: initializer exception
+    var_dump($object1->propB); // Exception: initializer exeption
 } catch (Exception $e) {
     echo $e->getMessage(), "\n";
 }
 
-// $object1 was initialized successfully
-var_dump($object1); // Object(MyClass) { ["propA"] => string(8) "object-1", ["propB"] => string(5) "value" }
+// The state of both objects is unchanged 
 
-// The state of $object2 is unchanged
-var_dump($object2); // Object(MyClass) { ["propA"] => string(8) "object-2" }
+var_dump($object1);
+var_dump($object2);
 </PHP>
+
 
 ==== Detailed API Behavior ====
 
