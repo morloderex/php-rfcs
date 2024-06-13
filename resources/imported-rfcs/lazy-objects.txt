@@ -76,7 +76,7 @@ class ReflectionLazyObjectFactory extends ReflectionClass
 
 ==== Creating a Lazy Object ====
 
-The entry points to create a lazy object are the <php>ReflectionLazyObject::newLazyGhostInstance()</php> and <php>newLazyProxyInstance()</php> methods.
+The entry points to create a lazy object are the <php>ReflectionLazyObjectFactory::newLazyGhostInstance()</php> and <php>newLazyProxyInstance()</php> methods.
 
 <PHP>
 class MyClass
@@ -94,7 +94,7 @@ $initializer = static function (MyClass $ghost): void {
 };
 
 $reflector = new ReflectionLazyObjectFactory(MyClass::class);
-$object = $reflector->newLazyGhostInstance($initializer, ReflectionLazyObject::SKIP_DESTRUCTOR);
+$object = $reflector->newLazyGhostInstance($initializer, ReflectionLazyObjectFactory::SKIP_DESTRUCTOR);
 
 // At this point, $object is a lazy ghost object.
 </PHP>
@@ -106,7 +106,7 @@ $initializer = static function (MyClass $proxy): MyClass {
 };
 
 $reflector = new ReflectionLazyObjectFactory(MyClass::class);
-$object = $reflector->newLazyProxyInstance($initializer, ReflectionLazyObject::SKIP_DESTRUCTOR);
+$object = $reflector->newLazyProxyInstance($initializer, ReflectionLazyObjectFactory::SKIP_DESTRUCTOR);
 </PHP>
 
 The <php>makeInstanceLazy*()</php> methods accept an already created instance. This allows writing classes that manage their own laziness:
@@ -116,7 +116,7 @@ class MyLazyClass
     public function __construct()
     {
         $reflector = new ReflectionLazyObjectFactory(self::class);
-        $reflector->makeInstanceLazyGhost($this, $this->initialize(...), ReflectionLazyObject::SKIP_DESTRUCTOR);
+        $reflector->makeInstanceLazyGhost($this, $this->initialize(...), ReflectionLazyObjectFactory::SKIP_DESTRUCTOR);
     }
 
     // ...
@@ -139,7 +139,7 @@ class BlogPost
 
 $reflector = new ReflectionLazyObjectFactory(BlogPost::class);
 $initializer = // Callable that retrieves the title and content from the database.
-$post = $reflector->newLazyGhostInstance($initializer, ReflectionLazyObject::SKIP_DESTRUCTOR);
+$post = $reflector->newLazyGhostInstance($initializer, ReflectionLazyObjectFactory::SKIP_DESTRUCTOR);
 
 // Without this line, the following call to ReflectionProperty::setValue() would trigger initialization.
 $reflector->skipInitializerForProperty('id');
@@ -228,9 +228,9 @@ The <php>newLazyGhostInstance()</php> method instantiates an object without call
 
 Properties are not initialized to their default value (they are initialized before calling the initializer). This is only mentioned for completeness, as this is not observable currently. 
 
-The <php>$options</php> argument is a bitfield taking the following flags:
+The <php>$options</php> argument is a bitfield accepting the following flags:
 
-  * <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag: By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
+  * <php>ReflectionLazyObjectFactory::SKIP_INITIALIZATION_ON_SERIALIZE</php>: By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
 
 An <php>Error</php> is raised if the class is internal or extends an internal class:
 
@@ -250,7 +250,7 @@ The behavior of the returned object is described in the Initialization Triggers 
     public function newLazyProxyInstance(callable $initializer, int $options = 0): object;
 </PHP>
 
-The behavior of the <php>newLazyProxyInstance()</php> method is similar to <php>newLazyGhostInstance()</php>, with the difference that is uses the Proxy strategy.
+The behavior of the <php>newLazyProxyInstance()</php> method is the same as <php>newLazyGhostInstance()</php>, except that is uses the Proxy strategy.
 
 === makeInstanceLazyHost() === 
 
@@ -262,10 +262,10 @@ The <php>makeInstanceLazyGhost()</php> method makes an existing object lazy. The
 
 The <php>$options</php> argument accepts the same flag as <php>newLazyGhostInstance()</php> in addition to:
 
-  * <php>ReflectionLazyObject::SKIP_DESTRUCTOR</php>: By default, the <php>makeInstanceLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
-  * <php>ReflectionLazyObject::SKIP_INITIALIZED_READONLY</php>: By default, the <php>makeInstanceLazy*()</php> methods will throw an exception if a readonly property was initialized (on the object itself or on a proxy's actual instance) and the class is final. If this flag is given, these properties are skipped and no exception is thrown. The behavior around readonly properties is explained in more details later.
+  * <php>ReflectionLazyObjectFactory::SKIP_DESTRUCTOR</php>: By default, the <php>makeInstanceLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
+  * <php>ReflectionLazyObjectFactory::SKIP_INITIALIZED_READONLY</php>: By default, the <php>makeInstanceLazy*()</php> methods will throw an exception if a readonly property was initialized (on the object itself or on a proxy's actual instance) and the class is final. If this flag is set, these properties are skipped and no exception is thrown. The behavior around readonly properties is explained in more details later.
 
-When making an object lazy, the object destructor is called and the object is reset to a state equivalent to an instance created by <php>newLazyGhostInstance()</php>. In particular, all properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
+When making an object lazy, the object destructor is called and the object is reset to a state equivalent to an instance created by <php>newLazyGhostInstance()</php>. In particular, all non-static properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
 
 <PHP>
 (function () {
@@ -287,11 +287,11 @@ $id = spl_object_id($object);
 
 new ReflectionLazyObjectFactory(MyClass::class)->makeInstanceLazyGhost($object, function () {});
 var_dump($id === spl_object_id($object)); // bool(true)
-var_dump($ref->get() === $object); // bool(true)
+var_dump($ref->get() === $object);        // bool(true)
 
 ReflectionLazyObjectFactory::initialize($object);
 var_dump($id === spl_object_id($object)); // bool(true)
-var_dump($ref->get() === $object); // bool(true)
+var_dump($ref->get() === $object);        // bool(true)
 </PHP>
 
 If the object is already lazy, a <php>ReflectionException</php> is thrown with the message "Object is already lazy".
@@ -304,7 +304,7 @@ After calling <php>newLazyGhostInstance()</php>, the behavior of the object is t
     public function makeInstanceLazyProxy(object $object, callable $initializer, int $options = 0): void;
 </PHP>
 
-The behavior of the <php>makeInstanceLazyProxy()</php> method is similar to <php>makeInstanceLazyHost()</php>, except that is uses the Proxy strategy.
+The behavior of the <php>makeInstanceLazyProxy()</php> method is the same as <php>makeInstanceLazyHost()</php>, except that is uses the Proxy strategy.
 
 The object itself becomes the proxy. Similarly to <php>makeInstanceLazyGhost()</php>, the object is not replaced by an other one, and its identity does not change, even after initialization. The proxy and the actual instance are distinct objects, with distinct identities.
 
@@ -314,7 +314,7 @@ The object itself becomes the proxy. Similarly to <php>makeInstanceLazyGhost()</
     public static function isInitialized(object $object): bool;
 </PHP>
 
-The <php>isInitialized</php> returns <php>true</php> if the object was initialized. It also returns <php>true</php> if the object has never been lazy, since an initialized lazy ghost is indistinguishable from an object that was never lazy.
+The <php>isInitialized</php> method returns <php>true</php> if the object was initialized. It also returns <php>true</php> if the object has never been lazy, since an initialized lazy ghost is indistinguishable from an object that was never lazy.
 
 === initialize() ===
 
@@ -328,7 +328,7 @@ If <php>$skipInitializer</php> is <php>true</php>, the behavior is the one descr
 
 The return value is the object itself for ghost objects (or if <php>$skipInitializer</php> is <php>true</php>), or the actual instance for proxy objects.
 
-=== skipInitializerForProperty ===
+=== skipInitializerForProperty() ===
 
 <PHP>
     public function skipInitializerForProperty(object $object, string $name, string $class = null): void;
@@ -347,7 +347,7 @@ $object = $reflector->newLazyGhostInstance(function () {});
 
 $reflector->skipInitializerForProperty($object, 'id');
 
-$object->id = 1;       // does not trigger initialization
+$object->id = 1;        // does not trigger initialization
 var_dump($object->id); // int(1) (does not trigger initialization)
 </PHP>
 
@@ -359,7 +359,7 @@ The property must be declared (can not be a dynamic property), non-static, and n
 
 The primary use-case of <php>skipInitializerForProperty()</php> and <php>setRawPropertyValue</php> is to initialize properties whose value is already known and whose access should not trigger initialization. For example, an ORM may initialize the properties representing the identity of an entity.
 
-=== setRawPropertyValue ===
+=== setRawPropertyValue() ===
 
 <PHP>
     public function setRawPropertyValue(object $object, string $name, mixed $value, string $class = null): void;
@@ -371,15 +371,15 @@ The method does not call hooks, if any, when setting the property value.
 
 ==== Cloning ====
 
-The result of cloning an uninitialized lazy object is a new lazy object with the same initializer, and the same initialized properties (if <php>setRawPropertyValue</php> or <php>skipInitializerForProperty()</php> was used).
+The result of cloning an uninitialized lazy object is a new lazy object with the same initializer, and the same initialized properties (if <php>setRawPropertyValue()</php> or <php>skipInitializerForProperty()</php> were used).
 
-If the object implements the <php>__clone</php> magic method, the method may trigger initialization of the clone before it is returned by the `clone` operator.
+If the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
 
 Cloning an initialized lazy proxy returns a clone of the actual instance.
 
 ==== Readonly properties ====
 
-The proposed change preserves the semantics of readonly property. The <php>makeInstanceLazy*()</php> methods may change the value of a readonly property, but this is already a possibility.
+The proposed changes preserve the semantics of readonly properties. The <php>makeInstanceLazy*()</php> methods may change the value of a readonly property, but this is already a possibility.
 
 Currently, two consecutive observations of the value of a readonly property can yield different results in the following cases:
 
@@ -456,7 +456,7 @@ class Dispatcher
 }
 </PHP>
 
-Using the <php>Manager::createManager()</php> factory is not compatible with ghost objects because their initializer requires initializing the ghost object in place, while the factory method returns a separate instance. Attempting to copy all properties from the factory instance to the ghost object and handling circular references would be impractical and non-performant. Moreover, integrating <php>ReflectionLazyObject</php> into the factory is not an option when the method is not under our control.
+Using the <php>Manager::createManager()</php> factory is not compatible with ghost objects because their initializer requires initializing the ghost object in place, while the factory method returns a separate instance. Attempting to copy all properties from the factory instance to the ghost object and handling circular references would be impractical and non-performant. Moreover, integrating <php>ReflectionLazyObjectFactory</php> into the factory is not an option when the method is not under our control.
 
 Virtual state-proxies are compatible with such situations because they return a separate instance.
 
@@ -533,7 +533,7 @@ However, it is possible to introduce a higher-level syntax or class-centric cons
 
 ===== Backward Incompatible Changes =====
 
-Introduction of class `ReflectionLazyObjectFactory` in the global namespace may break applications declaring a class with this name.
+Introduction of class <php>ReflectionLazyObjectFactory</php> in the global namespace may break applications declaring a class with this name.
 
 ===== Proposed PHP Version(s) =====
 
