@@ -214,6 +214,31 @@ The actual instance is allowed to escape the proxy and to create direct referenc
 
 After a successful initialization, the initializer function is not retained anymore by this object, and may be released if it's not referenced anywhere else.
 
+The scope and <php>$this</php> of the initializer function is not changed, and usual visibility constraints apply. Visibility should not be a concern for the common use-case of calling the constructor in the initializer. However, for more complex use-cases where the initializer wishes to access non-public properties, it is required to bind the initializer function to the right scope, or to access properties with <php>ReflectionProperty</php>.
+
+<PHP>
+class MyClass {
+    private $prop;
+    public function __construct($prop) {
+        $this->prop = $prop;
+    }
+}
+
+$reflector = new ReflectionLazyObjectFactory(MyClass::class);
+
+// Common use-case
+$object = $reflector->newLazyGhostInstance(function ($object) {
+    $object->__construct('value'); // Ok
+});
+
+// Complex use-case
+$object = $reflector->newLazyGhostInstance(function ($object) {
+    $object->prop = 'value';                    // Error: Cannot access private property MyClass::$prop
+    $propReflector = $reflector->getProperty('prop');
+    $propReflector->setValue($object, 'value'); // Ok
+});
+</PHP>
+
 If the initializer throws, the object properties are reverted to their pre-initialization state and the object is marked as lazy again. In other words, all effects on the object itself are reverted. Other side effects, such as side-effects on other objects, are not reverted. The goal is to not expose a half-initialized instance in case of failure.
 
 The following example demonstrates what happens when nested initializations fail: 
