@@ -379,42 +379,39 @@ Cloning an initialized lazy proxy returns a clone of the actual instance.
 
 ==== Readonly properties ====
 
-The proposed changes do not break the semantics of readonly properties. 
+The proposed change preserves the semantics of readonly property. The <php>makeInstanceLazy*()</php> methods may change the value of a readonly property, but this is already a possibility.
 
 Currently, two consecutive observations of the value of a readonly property can yield different results in the following cases:
 
- - The property was not defined at the time of the first observation, and was defined at the time of the second
- - The property is not defined, and access is intercepted by a <php>__get</php> magic method
- - The property is overridden to non-readonly in a sub-class
+  * The property was not initialized at the time of the first observation, and was initialized at the time of the second one
+  * The property is unset, and access is intercepted by a <php>__get</php> magic method
 
-The last point implies that it is currently possible that two observations of an initialized readonly property yield two different results, unless the class is final.
-
-The following code demonstrates the _current_ behavior:
+The last point implies that it is possible to induce this behavior on an existing class by sub-classing it:
 
 <PHP>
 class A {
     public readonly int $prop;
 }
 class B extends A {
-    public int $prop;
-}
-class C extends A {
     public int $counter = 0;
-    public function __get() { return ++$this->counter; }
+    public function __construct() {
+        (function () {
+            unset($this->prop);
+        })->bindTo($this, A::class)();
+    }
+    public function __get($name) {
+        return ++$this->counter;
+    }
 }
 
 $b = new B();
-$b->prop = 1;
 var_dump($b->prop); // int(1)
-$b->prop = 2;
 var_dump($b->prop); // int(2)
-
-$c = new C();
-var_dump($c->prop); // int(1)
-var_dump($c->prop); // int(2)
 </PHP>
 
-We preserve these semantics by never changing or unsetting the value of a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the actual instance, for initialized proxies) and the class is final. Calling <php>makeInstanceLazy*()</php> on a class with such property will throw an Error. Using the <php>SKIP_INITIALIZED_READONLY</php> flag ignores these properties instead of throwing an Error.
+It follows that the observable value of a readonly property can change unless the class is final.
+
+We preserve these semantics by never changing or unsetting a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the actual instance, for initialized proxies) and the class is final. Calling <php>makeInstanceLazy*()</php> on a class with such property will throw an Error. Using the <php>SKIP_INITIALIZED_READONLY</php> flag ignores these properties instead of throwing an Error.
 
 ==== Destructors ====
 
