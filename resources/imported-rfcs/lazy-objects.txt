@@ -228,7 +228,9 @@ The <php>newLazyGhostInstance()</php> method instantiates an object without call
 
 Properties are not initialized to their default value (they are initialized before calling the initializer). This is only mentioned for completeness, as this is not observable currently. 
 
-The <php>$options</php> argument is a bitfield that accepts the <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag. By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
+The <php>$options</php> argument is a bitfield taking the following flags:
+
+  * <php>ReflectionLazyObject::SKIP_INITIALIZATION_ON_SERIALIZE</php> flag: By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
 
 An <php>Error</php> is raised if the class is internal or extends an internal class:
 
@@ -258,9 +260,12 @@ The behavior of the <php>newLazyProxyInstance()</php> method is similar to <php>
 
 The <php>makeInstanceLazyGhost()</php> method makes an existing object lazy. The indented use-case is for an object to manage its own lazyness by calling the method in its constructor.
 
-The <php>$options</php> argument accepts the <php>ReflectionLazyObject::SKIP_DESTRUCTOR</php> flag in addition to the flags accepted by <php>newLazyGhostInstance()</php>. By default, the <php>makeInstanceLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
+The <php>$options</php> argument accepts the same flag as <php>newLazyGhostInstance()</php> in addition to:
 
-When making an object lazy, the object destructor is called (unless the <php>ReflectionLazyObject::SKIP_DESTRUCTOR</php> is given), and the object is reset to a state equivalent to an instance created by <php>newLazyGhostInstance()</php>. In particular, all properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
+  * <php>ReflectionLazyObject::SKIP_DESTRUCTOR</php>: By default, the <php>makeInstanceLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
+  * <php>ReflectionLazyObject::SKIP_INITIALIZED_READONLY</php>: By default, the <php>makeInstanceLazy*()</php> methods will throw an exception if a readonly property was initialized (on the object itself or on a proxy's actual instance) and the class is final. If this flag is given, these properties are skipped and no exception is thrown. The behavior around readonly properties is explained in more details later.
+
+When making an object lazy, the object destructor is called and the object is reset to a state equivalent to an instance created by <php>newLazyGhostInstance()</php>. In particular, all properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
 
 <PHP>
 (function () {
@@ -271,7 +276,7 @@ When making an object lazy, the object destructor is called (unless the <php>Ref
 })->bindTo($object, $object);
 </PHP>
 
-This snippet omits details such as static, private, or virtual properties for brevity.
+This snippet omits details such as static, private, readonly, or virtual properties for brevity.
 
 The object is not replaced by an other one, and its identity does not change. Functionality such as <php>spl_object_id()</php>, <php>spl_object_hash()</php>, <php>SplObjectStorage</php>, <php>WeakMap</php>, <php>WeakReference</php>, or strict equality comparison are not affected by <php>makeInstanceLazy*()</php>.
 
@@ -371,6 +376,45 @@ The result of cloning an uninitialized lazy object is a new lazy object with the
 If the object implements the <php>__clone</php> magic method, the method may trigger initialization of the clone before it is returned by the `clone` operator.
 
 Cloning an initialized lazy proxy returns a clone of the actual instance.
+
+==== Readonly properties ====
+
+The proposed changes do not break the semantics of readonly properties. 
+
+Currently, two consecutive observations of the value of a readonly property can yield different results in the following cases:
+
+ - The property was not defined at the time of the first observation, and was defined at the time of the second
+ - The property is not defined, and access is intercepted by a <php>__get</php> magic method
+ - The property is overridden to non-readonly in a sub-class
+
+The last point implies that it is currently possible that two observations of an initialized readonly property yield two different results, unless the class is final.
+
+The following code demonstrates the _current_ behavior:
+
+<PHP>
+class A {
+    public readonly int $prop;
+}
+class B extends A {
+    public int $prop;
+}
+class C extends A {
+    public int $counter = 0;
+    public function __get() { return ++$this->counter; }
+}
+
+$b = new B();
+$b->prop = 1;
+var_dump($b->prop); // int(1)
+$b->prop = 2;
+var_dump($b->prop); // int(2)
+
+$c = new C();
+var_dump($c->prop); // int(1)
+var_dump($c->prop); // int(2)
+</PHP>
+
+We preserve these semantics by never changing or unsetting the value of a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the actual instance, for initialized proxies) and the class is final. Calling <php>makeInstanceLazy*()</php> on a class with such property will throw an Error. Using the <php>SKIP_INITIALIZED_READONLY</php> flag ignores these properties instead of throwing an Error.
 
 ==== Destructors ====
 
