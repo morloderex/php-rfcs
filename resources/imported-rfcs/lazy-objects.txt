@@ -12,7 +12,7 @@ Transparent lazy-initialization of objects is an important part of many PHP appl
 
 Martin Fowler identifies [[https://martinfowler.com/eaaCatalog/lazyLoad.html|four strategies]] to implement lazy loading using OOP: lazy initialization, value holders, virtual proxies, and ghost objects. This RFC focuses on virtual proxies and ghost objects, which provide transparent lazy-loading. Unlike lazy initialization and value holders, virtual proxies and ghost objects do not require a class to be written with the lazy-loading concept in mind. Instead, the lazy-loading behavior can be attached externally.
 
-In both strategies, we start with empty objects typically created with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, attaching an initializer that is called automatically when these objects are used. From an abstraction point of view, lazy objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy.
+In both strategies, we start with empty objects typically created with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, attaching an initializer that is called automatically when these objects are used. From an abstraction point of view, lazy objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy. This is a core design principle of this .
 
 Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
 
@@ -206,7 +206,7 @@ After initialization, the object is indistinguishable from an object that was ne
   - The actual instance is set to the return value.
   - Properties that were initialized with <php>ReflectionLazyObjectFactory::skipInitializerForProperty()</php>, <php>ReflectionLazyObjectFactory::setRawPropertyValue()</php> are uninitialized.
 
-The proxy object is _not_ replaced or substituted for the actual instance. After initialization, accesses properties on the proxy are forwarded to the actual instance. Observing properties of the proxy has the same result as observing properties of the actual instance.
+The proxy object is _not_ replaced or substituted for the actual instance. After initialization, property acceses on the proxy are forwarded to the actual instance. Observing properties of the proxy has the same result as observing properties of the actual instance.
 
 The actual instance is allowed to escape the proxy and to create direct references to itself. The proxy may be released independently of the actual instance when it's not referenced anymore. The proxy and actual instance have distinct identities.
 
@@ -232,7 +232,7 @@ $object = $reflector->newLazyGhostInstance(function ($object) {
 });
 
 // Complex use-case
-$object = $reflector->newLazyGhostInstance(function ($object) {
+$object = $reflector->newLazyGhostInstance(function ($object) use ($reflector) {
     $object->prop = 'value';                    // Error: Cannot access private property MyClass::$prop
     $propReflector = $reflector->getProperty('prop');
     $propReflector->setValue($object, 'value'); // Ok
@@ -241,7 +241,7 @@ $object = $reflector->newLazyGhostInstance(function ($object) {
 
 If the initializer throws, the object properties are reverted to their pre-initialization state and the object is marked as lazy again. In other words, all effects on the object itself are reverted. Other side effects, such as side-effects on other objects, are not reverted. The goal is to not expose a half-initialized instance in case of failure.
 
-The following example demonstrates what happens when nested initializations fail: 
+The following example demonstrates what happens when nested initialization fail: 
 
 <PHP>
 class MyClass {
@@ -318,7 +318,7 @@ The behavior of the returned object is described in the Initialization Triggers 
     public function newLazyProxyInstance(callable $initializer, int $options = 0): object;
 </PHP>
 
-The behavior of the <php>newLazyProxyInstance()</php> method is the same as <php>newLazyGhostInstance()</php>, except that is uses the Proxy strategy.
+The behavior of the <php>newLazyProxyInstance()</php> method is the same as <php>newLazyGhostInstance()</php>, except that it uses the Proxy strategy.
 
 === makeInstanceLazyHost() === 
 
@@ -372,7 +372,7 @@ After calling <php>newLazyGhostInstance()</php>, the behavior of the object is t
     public function makeInstanceLazyProxy(object $object, callable $initializer, int $options = 0): void;
 </PHP>
 
-The behavior of the <php>makeInstanceLazyProxy()</php> method is the same as <php>makeInstanceLazyHost()</php>, except that is uses the Proxy strategy.
+The behavior of the <php>makeInstanceLazyProxy()</php> method is the same as <php>makeInstanceLazyHost()</php>, except that it uses the Proxy strategy.
 
 The object itself becomes the proxy. Similarly to <php>makeInstanceLazyGhost()</php>, the object is not replaced by an other one, and its identity does not change, even after initialization. The proxy and the actual instance are distinct objects, with distinct identities.
 
@@ -433,7 +433,7 @@ The primary use-case of <php>skipInitializerForProperty()</php> and <php>setRawP
     public function setRawPropertyValue(object $object, string $name, mixed $value, string $class = null): void;
 </PHP>
 
-The <php>setRawPropertyValue</php> is similar to <php>skipInitializerForProperty()</php>, but it allows to specify a value. It is more convenient that the latter when using the <php>$class</php> argument.
+The <php>setRawPropertyValue</php> is similar to <php>skipInitializerForProperty()</php>, but it allows to specify a value. It is more convenient than the latter when using the <php>$class</php> argument.
 
 The method does not call hooks, if any, when setting the property value.
 
@@ -605,7 +605,7 @@ class LazyConnection extends Connection
 
     public function send(string $data): void
     {
-        ReflectionLazyObject::fromInstance($this)->initialize()->send($data);
+        new ReflectionLazyObjectFactory($this)->initialize($this)->send($data);
     }
 
     private function initialize(): parent
