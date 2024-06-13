@@ -425,42 +425,69 @@ When making an existing object lazy, the <php>makeInstanceLazy*()</php> methods 
 
 This RFC proposes adding the ghost and virtual state-proxy strategies to the engine. One might wonder why two strategies are needed instead of just one.
 
-The most transparent and thus default strategy should be the ghost one. Ghost objects handle initialization in place, meaning that once they are initialized, they are exactly like regular objects. However, they must be created ahead of time and populated later. This excludes their use when the initialization logic involves a factory that creates circular references.
+The most transparent and thus default strategy should be the ghost one. Ghost objects handle initialization in place, meaning that once they are initialized, they are exactly like regular objects.
 
-Consider this example:
+As an example, the Doctrine ORM implements lazy-loading of entities by employing a user-space implementation of ghost objects, in a similar fashion than illustrated by the following snippet: 
 
 <PHP>
-class Manager
+// User code
+
+class BlogPost
 {
-    private Dispatcher $dispatcher;
-
-    public function setDispatcher(Dispatcher $dispatcher)
-    {
-        $this->dispatcher = $dispatcher;
-    }
-
-    public static function createManager(): self
-    {
-        $manager = new self();
-        $manager->setDispatcher(new Dispatcher($manager));
-        
-        return $manager;
-    }
+    private int $id;
+    private string $name;
+    private string $email;
 }
 
-class Dispatcher
+// ORM code
+
+class EntityManager
 {
-    public function __construct(private Manager $manager)
+    public function getReference(string $class, int $id)
     {
+        // The reflector instances are cached in practice
+        $reflector = new ReflectionLazyObjectFactory($class);
+
+        $entity = $reflector->newLazyGhostInstance(function ($entity) use ($class, $id, $reflector) {
+            $data = $this->loadFromDatabase($class, $id);
+            $reflector->getProperty('name')->setValue($entity, $data['name']);
+            $reflector->getProperty('email')->setValue($entity, $data['email']);
+        });
+
+        // id is already known and can be accessed without triggering initialization
+        $reflector->setPropertyValue($entity, 'id', $id);
+
+        return $entity;
     }
 }
 </PHP>
 
-Using the <php>Manager::createManager()</php> factory is not compatible with ghost objects because their initializer requires initializing the ghost object in place, while the factory method returns a separate instance. Attempting to copy all properties from the factory instance to the ghost object and handling circular references would be impractical and non-performant. Moreover, integrating <php>ReflectionLazyObjectFactory</php> into the factory is not an option when the method is not under our control.
+This strategy is suitable when we control the instantiation and initialization of the object. This excludes its use when either of these is controlled by an other party.
 
-Virtual state-proxies are compatible with such situations because they return a separate instance.
+As an example, the Symfony Dependency Injection component allows to defer the initialization of some parts of the dependency graph by lazy-loading select dependencies. It employs the virtual state-proxy strategy when a dependency is to be instantiated and initialized by a user-provided factory.
 
-However, ghost objects are necessary due to object identity. When using virtual proxies, there are two objects: the proxy and the actual instance. This can lead to issues in use cases where object identity is crucial, such as entity managers. Having more than one concrete object representing the same logical object can lead to fragile code.
+<PHP>
+// User code
+
+class ClientFactory
+{
+    public function createClient() {
+        return new Client($this->hostname, $this->credentials);
+    }
+}
+
+class Client
+{
+}
+
+// Symfony code
+
+$reflector = new ReflectionLazyObjectFactory(Client::class);
+$client = $reflector->newLazyProxyInstance(function () use ($container) {
+    $clientFactory = $container->get('client_factory');
+    return $clientFactory->createClient();
+});
+</PHP>
 
 ===== About Virtual Proxies =====
 
