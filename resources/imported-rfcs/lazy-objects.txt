@@ -10,13 +10,15 @@
 
 Transparent lazy-initialization of objects is an important part of many PHP applications. However, achieving this kind of laziness in userland is complex, limited, and can have a significant performance impact. This proposal aims to bring lazy initialization to the PHP engine to mitigate these drawbacks.
 
-Martin Fowler identifies [[https://martinfowler.com/eaaCatalog/lazyLoad.html|four strategies]] to implement lazy loading using OOP: lazy initialization, value holders, virtual proxies, and ghost objects. This RFC focuses on virtual proxies and ghost objects, which provide transparent lazy-loading. Unlike lazy initialization and value holders, virtual proxies and ghost objects do not require a class to be written with the lazy-loading concept in mind. Instead, the lazy-loading behavior can be attached externally.
+Martin Fowler identifies [[https://martinfowler.com/eaaCatalog/lazyLoad.html|four strategies]] to implement lazy loading using OOP: lazy initialization, value holders, virtual proxies (hereafter referred to as just "proxies"), and ghost objects. This RFC focuses on proxies and ghost objects, which provide transparent lazy-loading. Unlike lazy initialization and value holders, proxies and ghost objects do not require a class to be written with the lazy-loading concept in mind. Instead, the lazy-loading behavior can be attached externally.
 
 In both strategies, we start with empty objects typically created with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, attaching an initializer that is called automatically when these objects are used. From an abstraction point of view, lazy objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy. This is a core design principle of this RFC.
 
 Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
 
-Implementing virtual proxies and ghost objects in userland is non-trivial. This has been explored in the [[https://packagist.org/packages/ocramius/proxy-manager|ocramius/proxy-manager]] library and later in the [[https://packagist.org/packages/symfony/var-exporter|symfony/var-exporter]] one. Current implementations have several limitations, including incompatibility with final classes, and performance overhead due to magic methods. This RFC proposes to implement ghost objects and virtual state-proxies natively in the engine to address these issues.
+Implementing proxies and ghost objects in userland is non-trivial. This has been explored in the [[https://packagist.org/packages/ocramius/proxy-manager|ocramius/proxy-manager]] library and later in the [[https://packagist.org/packages/symfony/var-exporter|symfony/var-exporter]] one. Current implementations have several limitations, including incompatibility with final classes, and performance overhead due to magic methods. This RFC proposes to implement ghost objects and state-proxies natively in the engine to address these issues.
+
+Unless specified otherwise, this RFC will refer to "virtual proxies" and "state-proxies" as just "proxies".
 
 ===== Implementation =====
 
@@ -27,7 +29,7 @@ A lazy object can be created via the Reflection API, with the user specifying an
 There are two kinds of lazy objects:
 
   * Ghost: These are initialized in-place by the initializer function.
-  * Virtual: The initializer returns a new instance, and interactions with the virtual object are proxied to this instance.
+  * Proxies: The initializer returns a new instance, and interactions with the proxy object are forwarded to this instance.
 
 Internal objects are not supported because their state is usually not managed via regular properties.
 
@@ -56,7 +58,7 @@ class ReflectionLazyObjectFactory extends ReflectionClass
     /**
      * Initializes a lazy object (no-op if the object is already initialized.)
      *
-     * The backing object is returned, which can be another instance than the lazy object when the virtual strategy is used.
+     * The backing object is returned, which can be another instance than the lazy object when the proxy strategy is used.
      */
     public static function initialize(object $object, bool $skipInitializer = false): object;
     
@@ -99,7 +101,7 @@ $object = $reflector->newLazyGhostInstance($initializer, ReflectionLazyObjectFac
 // At this point, $object is a lazy ghost object.
 </PHP>
 
-Creating a lazy virtual state-proxy requires using the <php>newLazyProxyInstance()</php> method:
+Creating a lazy proxy requires using the <php>newLazyProxyInstance()</php> method:
 <PHP>
 $initializer = static function (MyClass $proxy): MyClass {
     return new MyClass(123);
@@ -198,7 +200,7 @@ By excluding these cases from triggering initialization, developers can perform 
 
 After initialization, the object is indistinguishable from an object that was never lazy.
 
-=== Virtual Objects ===
+=== Proxy Objects ===
 
   - Before calling the initializer, the object is marked as non-lazy.
   - The initializer is called with the lazy proxy as first parameter.
@@ -208,7 +210,7 @@ After initialization, the object is indistinguishable from an object that was ne
 
 The proxy object is _not_ replaced or substituted for the actual instance. After initialization, property accesses on the proxy are forwarded to the actual instance. Observing properties of the proxy has the same result as observing properties of the actual instance.
 
-The actual instance is allowed to escape the proxy and to create direct references to itself. This is demonstrated in the section named "About Virtual Proxies". The proxy may be released independently of the actual instance when it's not referenced anymore. The proxy and actual instance have distinct identities. 
+The actual instance is allowed to escape the proxy and to create direct references to itself. This is demonstrated in the section named "About Proxies". The proxy may be released independently of the actual instance when it's not referenced anymore. The proxy and actual instance have distinct identities. 
 
 === Common Behavior ===
 
@@ -486,13 +488,13 @@ We preserve these semantics by never changing or unsetting a readonly property i
 
 The destructor of ghost objects is called if and only if the object has been initialized.
 
-The destructor of virtual state proxy objects is never called. We rely on the destructor of the proxied instance instead.
+The destructor of proxy objects is never called. We rely on the destructor of the proxied instance instead.
 
 When making an existing object lazy, the <php>makeInstanceLazy*()</php> methods call the destructor unless the <php>SKIP_DESTRUCTOR</php> flag is given.
 
 ===== About Lazy-Loading Strategies =====
 
-This RFC proposes adding the ghost and virtual state-proxy strategies to the engine. One might wonder why two strategies are needed instead of just one.
+This RFC proposes adding the ghost and proxy strategies to the engine. One might wonder why two strategies are needed instead of just one.
 
 The most transparent and thus default strategy should be the ghost one. Ghost objects handle initialization in place, meaning that once they are initialized, they are exactly like regular objects.
 
@@ -533,7 +535,7 @@ class EntityManager
 
 This strategy is suitable when we control the instantiation and initialization of the object. This excludes its use when either of these is controlled by an other party.
 
-As an example, the Symfony Dependency Injection component allows to defer the initialization of some parts of the dependency graph by lazy-loading select dependencies. It employs the virtual state-proxy strategy when a dependency is to be instantiated and initialized by a user-provided factory. The following snippet illustrates how it would use the proposed API:
+As an example, the Symfony Dependency Injection component allows to defer the initialization of some parts of the dependency graph by lazy-loading select dependencies. It employs the proxy strategy when a dependency is to be instantiated and initialized by a user-provided factory. The following snippet illustrates how it would use the proposed API:
 
 <PHP>
 // User code
@@ -566,13 +568,13 @@ class Container
     }
 </PHP>
 
-===== About Virtual Proxies =====
+===== About Proxies =====
 
-When considering virtual proxies, one might expect the implementation to rely on decorating every method of a target class (or interface). This type of proxy is called a virtual inheritance-proxy, not to be confused with state-proxies implemented by this RFC.
+When considering proxies, one might expect the implementation to rely on decorating every method of a target class (or interface). This type of proxy is called an inheritance-proxy, not to be confused with state-proxies implemented by this RFC.
 
-Lazy virtual inheritance-proxies decorate every method of a target class or interface to prepend the initialization logic. This logic creates another instance to which all method calls are forwarded. The benefits of this strategy are compatibility with internal classes and interfaces, allowing final classes implementing an interface to be made lazy. However, this strategy has a major drawback: it breaks object identity. If a method returns <php>$this</php>, it returns the decorated object, not the proxy.
+Inheritance-proxies decorate every method of a target class or interface to prepend the initialization logic. This logic creates another instance to which all method calls are forwarded. The benefits of this strategy are compatibility with internal classes and interfaces, allowing final classes implementing an interface to be made lazy. However, this strategy has a major drawback: it breaks object identity. If a method returns <php>$this</php>, it returns the decorated object, not the proxy.
 
-The virtual state-proxy strategy proposed by this RFC relies on proxying property accesses instead of methods. Methods are called on the state-proxy itself, so when a method returns <php>$this</php>, it returns the state-proxy object. This approach minimizes identity issues. Although minimal, there is still a chance that the actual instance escapes the proxy by creating references to itself during initialization. This is demonstrated by the following snippet:
+The state-proxy strategy proposed by this RFC relies on proxying property accesses instead of methods. Methods are called on the proxy itself, so when a method returns <php>$this</php>, it returns the proxy object. This approach minimizes identity issues. Although minimal, there is still a chance that the actual instance escapes the proxy by creating references to itself during initialization. This is demonstrated by the following snippet:
 
 <PHP>
 class Tree {
@@ -587,17 +589,17 @@ $reflector->newLazyProxyInstance(function () {
 });
 </PHP>
 
-Since the state-proxy strategy requires accessing the properties of the decorated object, it is not compatible with internal classes or interfaces. Therefore, virtual inheritance-proxies still have use cases. However, this proposal focuses on providing ghost objects and virtual state-proxies natively, not virtual inheritance-proxies.
+Since the state-proxy strategy requires accessing the properties of the decorated object, it is not compatible with internal classes or interfaces. Therefore, inheritance-proxies still have use cases. However, this proposal focuses on providing ghost objects and state-proxies natively, not inheritance-proxies.
 
 There are several reasons for that:
 
-  - Ghost objects and virtual state-proxies hook into the same place in the engine, simplifying the RFC and the corresponding patch.
+  - Ghost objects and state-proxies hook into the same place in the engine, simplifying the RFC and the corresponding patch.
   - These strategies benefit the most from being in the engine: userland implementation relies on complex magic accessors, is difficult to maintain as new PHP versions are released, and is slower than what can be achieved with engine support.
-  - It's unclear if the engine would significantly help with virtual inheritance-proxies: implementing or generating code to decorate methods is simpler.
+  - It's unclear if the engine would significantly help with inheritance-proxies: implementing or generating code to decorate methods is simpler.
 
-<php>ReflectionLazyObjectFactory::initialize()</php> returns the backing object to aid in implementing virtual inheritance-proxies in userland. The previous description was simplified: virtual inheritance-proxies should also proxy public property accesses in addition to method calls.
+<php>ReflectionLazyObjectFactory::initialize()</php> returns the backing object to aid in implementing inheritance-proxies in userland. The previous description was simplified: inheritance-proxies should also proxy public property accesses in addition to method calls.
 
-Here is an example of a (non-optimized) lazy-loading virtual inheritance-proxy using this RFC:
+Here is an example of a (non-optimized) lazy-loading inheritance-proxy using this RFC:
 
 <PHP>
 class Connection
