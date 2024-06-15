@@ -216,7 +216,7 @@ The actual instance is allowed to escape the proxy and to create direct referenc
 
 After a successful initialization, the initializer function is not retained anymore by this object, and may be released if it's not referenced anywhere else.
 
-The scope and <php>$this</php> of the initializer function is not changed, and usual visibility constraints apply. Visibility should not be a concern for the common use-case of calling the constructor in the initializer. However, for more complex use-cases where the initializer wishes to access non-public properties, it is required to bind the initializer function to the right scope, or to access properties with <php>ReflectionProperty</php>.
+The scope and <php>$this</php> of the initializer function is not changed, and usual visibility constraints apply. Visibility should not be a concern for the common use-case of calling the constructor or another public method in the initializer. However, for more complex use-cases where the initializer wishes to access non-public properties, it is required to bind the initializer function to the right scope (with <php>Closure::bind()</php>), or to access properties with <php>ReflectionProperty</php>.
 
 <PHP>
 class MyClass {
@@ -240,6 +240,8 @@ $object = $reflector->newLazyGhostInstance(function ($object) use ($reflector) {
     $propReflector->setValue($object, 'value'); // Ok
 });
 </PHP>
+
+More real-world examples can be seen in the "Lazy-Loading Strategies" section.
 
 If the initializer throws, the object properties are reverted to their pre-initialization state and the object is marked as lazy again. In other words, all effects on the object itself are reverted. Other side effects, such as side-effects on other objects, are not reverted. The goal is to not expose a half-initialized instance in case of failure.
 
@@ -367,7 +369,7 @@ If the object is already lazy, a <php>ReflectionException</php> is thrown with t
 
 Objects whose all properties were initialized are not lazy anymore, as specified in the "Lifecycle of Lazy Objects" section. It follows that calling this method on an object without properties does not make it lazy.
 
-After calling <php>newLazyGhostInstance()</php>, the behavior of the object is the same as an object created by <php>newLazyGhostInstance()</php>.
+After calling <php>makeInstanceLazyGhost()</php>, the behavior of the object is the same as an object created by <php>newLazyGhostInstance()</php>.
 
 === makeInstanceLazyProxy() ===
 
@@ -490,7 +492,25 @@ The destructor of ghost objects is called if and only if the object has been ini
 
 The destructor of proxy objects is never called. We rely on the destructor of the proxied instance instead.
 
-When making an existing object lazy, the <php>makeInstanceLazy*()</php> methods call the destructor unless the <php>SKIP_DESTRUCTOR</php> flag is given.
+When making an existing object lazy, the <php>makeInstanceLazy*()</php> methods call the destructor unless the <php>SKIP_DESTRUCTOR</php> flag is given. The rationale is that, unless specified otherwise, we should assume that the constructor was calls on this object, therefore the destructor must be called as well before resetting its state entirely.
+
+<PHP>
+class Connection {
+    public function __construct() {
+        $this->connect();
+    }
+    public function __destruct() {
+        $this->close();
+    }
+}
+
+$connection = new Connection();
+
+$reflector = new ReflectionLazyObjectFactory(Connection::class);
+$connection = $reflector->makeInstanceLazyGhost($connection); // Calls destructor
+
+$connection = null; // Does not call destructor (object is not initialized)
+</PHP>
 
 ===== About Lazy-Loading Strategies =====
 
