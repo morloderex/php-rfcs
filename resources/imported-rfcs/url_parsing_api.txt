@@ -37,7 +37,6 @@ enum UrlComponent: int
     case Fragment = 7;
 }
 
-/** @strict-properties */
 final readonly class Url implements \Stringable
 {
     public function __construct(
@@ -84,10 +83,6 @@ final readonly class Url implements \Stringable
     public function __toString(): string {}
 }
 
-/**
- * @strict-properties
- * @not-serializable
- */
 final readonly class UrlParser
 {
     public static function parseUrl(string $url): ?Url {}
@@ -97,8 +92,19 @@ final readonly class UrlParser
 
     public static function parseUrlComponent(string $url, UrlComponent $component): string|int|null {}
 }
-
 </code>
+
+===== Performance Considerations =====
+
+The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation and disregards some edge cases. A WHATWG compliant parser will always be slower than ''parse_url()'', because it has to execute much more code. According to the initial benchmarks, ''Url\UrlParser::parseUrl()'' is ~3.6x, while ''Url\UrlParser::parseUrlToArray()'' is ~3x slower than ''parse_url()''. The new functions still have some room for performance optimizations, but we shouldn't expect a significant performance improvement.
+
+===== Parser Library Choice =====
+
+Adding a WHATWG compliant URL parser to the PHP core [[https://github.com/php/php-src/pull/11315|was originally attempted in 2023]]. The implementation used [[https://www.ada-url.com|ADA URL parser]] as its parser backend which is known for its ultimate performance. At last, the proof of concept was abandoned due to some technical limitations that weren't possible to resolve.
+
+Specifically, ADA is written in C++, and requires a compiler supporting C++17 at least. Despite the fact that it has a C wrapper,   its tight compiler requirements would make it unprecedented, and practically impossible to add the ''URL'' extension to the PHP core as a required extension, as PHP never had a C++ compiler dependency for the always enabled extensions, only optional extensions (like ''Intl'') can be written in C++.
+
+The firm position of this RFC is that a WHATWG compliant URL parser extension should be always available, therefore a different parser backend written in pure C should be found. Fortunately, Niels Dossche proposed [[rfc:domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]] not long after the experiment with ADA, and his work required bundling the [[https://lexbor.com/|Lexbor]] browser engine. This library is written in C, and contains a WHATWG compliant URL parsing submodule, therefore it makes it suitable to be used as the library of choice.
 
 ===== Backward Incompatible Changes =====
 
@@ -109,9 +115,13 @@ None.
 Next minor version (either 8.5 or 9.0).
 
 ===== Future Scope =====
-Support for other parser backends may be added so that other libraries (like [[https://www.ada-url.com/|Ada URL]]) could be used instead of Lexbor.
+
+Support for other parser backends may be added so that other libraries (like [[https://www.ada-url.com/|Ada URL]]) could be also used in addition to Lexbor.
+
+The ''parse_url()'' function can be deprecated at some distant point of time.
 
 ===== References =====
+
 Discussion thread: 
 
 ===== Vote =====
