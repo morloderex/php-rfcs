@@ -12,29 +12,34 @@ Pattern Matching
 Introduction
 ------------
 
-This RFC introduces the beginning of a pattern matching syntax for PHP.
-It does not include complete matching of all possible pattern types in
-order to keep the initial implementation simple and reduce bikeshedding,
-but does lay out the mechanism by which pattern matching operates. The
-Future Scope section includes recommendations for continued improvement
-in future RFCs.
-
-`Pattern Matching <https://en.wikipedia.org/wiki/Pattern_matching>`__ as
-a language concept contains two parts: Matching a variable against a
+This RFC introduces pattern matching syntax for PHP. `Pattern
+Matching <https://en.wikipedia.org/wiki/Pattern_matching>`__ as a
+language concept contains two parts: Matching a variable against a
 potentially complex data structure pattern, and optionally extracting
 values out of that variable into their own variables. In a sense it
 serves a similar purpose for complex data structures as regular
 expressions do for strings. When properly applied, it can lead to very
 compact but still readable code, especially when combined with
-conditional structures such as ``match()``.
+conditional structures such as ``match()``. It does not, however, nor is
+it intended to, represent every possible type of comparison that could
+be imagined: Just the most common, in a more compact and readable form.
 
-Pattern matching is found in a number of languages, including Haskell,
-C#, ML, Rust, and Swift, among others. The syntax offered here is
-inspired primarily by C#, but is not intended as as direct port.
+Pattern matching is found in a number of languages, including Python,
+Haskell, C#, ML, Rust, and Swift, among others. The syntax offered here
+draws inspiration from several of them, but is not a direct port of any.
 
-This RFC is part of the `Enumerations
-Epic </rfc/enumerations_and_adts>`__. It is a stepping stone toward full
-Enumerations but stands on its own as useful functionality.
+This RFC is part of the `Algebraic Data Types Epic </rfc/adts>`__. It is
+a stepping stone toward full Algebraic Data Types (Enums with associated
+values) but stands on its own as useful functionality.
+
+There are many components of this RFC, and many of them can be delayed
+for future follow-ons with relative ease. However, some are also
+straightforward enough and useful enough that it seems wise to include
+them from the start, even if they logistically could be delayed. The
+different patterns below have been grouped by their significance. As of
+this time we're not yet sure which to include now and which to save for
+future scope, or to leave that to a secondary vote. Feedback on that
+question is welcome.
 
 Proposal
 --------
@@ -45,7 +50,7 @@ which its left hand side should be applied. The ``is`` operator is
 technically a comparison operator, and always returns a boolean ``true``
 or ``false``.
 
-::
+.. code:: php
 
    if($var is <pattern>) {
 
@@ -61,10 +66,58 @@ While patterns may resemble other language constructs, whatever follows
 
 ``is`` may be used in any context in which a boolean result is
 permissible. That includes variable assignment, ``if`` conditions,
-``while`` conditions, ``match()`` statements, etc.
+``while`` conditions, ``match()`` expressions, etc.
 
-Supported patterns
-~~~~~~~~~~~~~~~~~~
+Pattern structure
+~~~~~~~~~~~~~~~~~
+
+A pattern is a rule that a given value must conform to. That is fairly
+generic, by design. Each pattern below may be used stand-alone or
+combined into a compound pattern. The following are all examples of
+"core patterns," explained in the next section:
+
+.. code:: php
+
+   // Basic pattern
+   $foo is string;
+
+   // Compound patterns
+   $foo is int|null;              // Combines 2 type patterns.
+   $foo is 'a'|'b'|'c';           // Combines 3 literal patterns.
+   $foo is Account&Authenticated; // Combines 2 type patterns.
+   $foo is Point{x: 5, y: 3|4);   // An object pattern, with a compound sub pattern that combines two literal patterns.
+
+Core patterns
+~~~~~~~~~~~~~
+
+Core patterns are the patterns that are mandatory to include in this
+RFC. They are either core syntax (without which nothing else works), or
+"base cases" that are not super interesting on their own but matter a
+great deal when combined either with each other or the more interesting
+patterns later.
+
+Compound patterns
+^^^^^^^^^^^^^^^^^
+
+One or more patterns may be combined into a single pattern using ``|``
+and ``&`` conjunctions. Each of the subpatterns is itself a complete
+pattern, and may be any of the pattern types listed below (except where
+specifically noted). The combined pattern is also a pattern, and
+therefore may appear as a component of some other pattern. For instance
+
+.. code:: php
+
+   // Combines two type patterns.
+   $foo is int|string;
+
+   // Combines three type patterns, using DNF conjunctions.
+   $foo is User|(Account&Authenticated)
+
+If both ``|`` and ``&`` are used, patterns must be in Disjunctive Normal
+Form (And ORed list of ANDs), and each segment must be enclosed in
+parentheses. These are the same rules that apply to compound types
+already. The result is that any valid type syntax is also a valid
+pattern.
 
 Type pattern
 ^^^^^^^^^^^^
@@ -77,76 +130,111 @@ are all legal:
 .. code:: php
 
    $foo is string;    // Equivalent to is_string($foo)
-   $foo is (int|float); // Equivalent to is_int($foo) || is_float($foo)
    $foo is Request;   // Equivalent to $foo instanceof Request
-   $foo is (User|int);  // Equivalent to $foo instanceof User || is_int($foo)
    $foo is ?array;    // Equivalent to is_array($foo) || is_null($foo)
+   $foo is float;     // Equivalent to is_int($foo) || is_float($foo), for consistency with types.
 
-   // Equivalent to:
+   // These are compound patterns, consisting of two sub-patterns each.
+   $foo is int|float; // Equivalent to is_int($foo) || is_float($foo)
+   $foo is User|int;  // Equivalent to $foo instanceof User || is_int($foo)
+   $foo is string|Stringable; // Equivalent to is_string($foo) || $string instanceof Stringable
+
+   // This is also a compound pattern. It is equivalent to:
    // $foo instanceof User || ($foo instanceof Account && $foo instanceof Authenticated)
-   $foo is (User|(Account&Authenticated))
-
-A type match may be any syntax supported by a parameter type; in a
-sense, ``$foo is pattern`` is equivalent to "would $foo pass a type
-check if passed to a parameter with this type specification." As more
-complex type checks become allowed (such as intersection types, type
-aliases, etc.) they will become valid in a pattern as well.
+   $foo is User|(Account&Authenticated)
 
 Type patterns are always evaluated in strict mode, so as to be
 consistent with ``is_int()`` and its siblings.
 
-Compound type patterns require enclosing parenthesis to avoid ambiguity
-issues in the parser.
+A type match may be any syntax supported by a parameter type; in a
+sense, ``$foo is pattern`` is equivalent to "would $foo pass a type
+check if passed to a parameter with this type specification in strict
+mode." Should more complex type checks become allowed (such as type
+aliases, etc.) they will become valid in a pattern as well. Note that,
+as shown in the 4th example above, an integer will pass a pattern match
+for type ``float``. That is consistent with how strict type declarations
+work today.
 
 Literal pattern
 ^^^^^^^^^^^^^^^
 
-Any literal may be a pattern. This is a degenerate case and not
-generally useful, but is included for consistency when used with
+Any scalar may be a pattern. When used on its own it is not particularly
+useful (it's equivalent to ``===``), but can be used in a compound
+pattern to more complex effect. It is also valuable when used with
 ``match()`` (see below).
 
 .. code:: php
 
+   // Simple degenerate case patterns.
    $foo is 5;         // Equivalent to $foo === 5
    $foo is 'yay PHP'; // Equivalent to $foo === 'yay PHP'
 
-Global constants are NOT permitted in a pattern. They cannot be
-disambiguated from a class name, and are of minimal if any use in
-practice.
+   // More practical compound example
+   $foo is "beep"|"boop"; // Equivalent to $foo === "beep" || $foo === "boop"
 
-Object property pattern
-^^^^^^^^^^^^^^^^^^^^^^^
+Valid literals include:
 
-A pattern may also define an class and matches against scope-accessible
-properties of that object. Only a single class type may be used, but any
-number of properties may be matched. The properties must be accessible
-in the scope in which the pattern executes. That is, a pattern evaluated
-outside the class may only match against public properties; a pattern
-inside the class may match against public, private, or protected; a
-pattern in a child class may match against protected properties of its
-parent but not private; etc.
+-  Any int
+-  Any float
+-  Any string literal that does no string interpolation, denoted with
+   single quotes, double quotes, heredoc or nowdoc. (So ``"beep"`` is
+   fine, but ``"beep your $nose"`` is not.)
+
+Values that are dynamic at runtime (eg, an interpolated string with a
+variable in it) are not literal patterns. However, see below on "limited
+expression patterns."
+
+Built-in constants pattern
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+There are three constant values built-in that can be used directly:
+``true``, ``false``, and ``null``. They function essentially the same as
+a literal pattern as far as the user is concerned, but for
+implementation reasons are handled slightly differently internally. As
+with literal patterns, their use stand-alone is minimal but they are
+useful in compound patterns or ``match()`` expressions.
 
 .. code:: php
 
+   // Simple degenerate case patterns.
+   $foo is true;      // Equivalent to $foo === true
+   $foo is null;      // Equivalent to $foo === null
 
-   class Point {
-     public function __construct(public int $x, public int $y, public int $z) {}
-   }
+   // More practical compound examples
+   $foo is array|null; // Equivalent to is_array($foo) || $foo === null
+   $foo is "Aardvark"|"Bear"|null // Equivalent to $foo === "Aardvark" || $foo === "Bear" || $foo === null
 
-   $p = new Point(3, 4, 5);
+Class constant pattern
+^^^^^^^^^^^^^^^^^^^^^^
 
-   $p is Point {x: 3};
-   // Equivalent to:
-   $p instanceof Point && $p->x === 3;
+Class constants may also be used as a pattern:
 
-   $p is Point {y: 37, x: 2,};
-   // Equivalent to:
-   $p instanceof Point && $p->y === 37 && $p->x === 2;
+.. code:: php
 
-Properties may be listed in any order. A trailing comma is permitted.
+   $foo is 'spade'|'heart'|self::Wild;
+
+Global constants may not be used directly, as they cannot be
+differentiated from class names. However, they may be used in expression
+patterns (see next section).
+
+Enumeration cases are implemented as class constants, so are supported
+as well.
+
+Wildcard pattern
+^^^^^^^^^^^^^^^^
+
+The pattern ``_`` will match any defined, initialized value. As with
+many of the above patterns it's not particularly useful on its own, but
+wen combined with the compound patterns below offers a great deal more
+flexibility. See the "object property pattern" and "array pattern"
+sections below for more useful and real-world examples.
+
+.. code:: php
+
+   $foo is _;   // Trivially true.
 
 match() enhancement
-~~~~~~~~~~~~~~~~~~~
+^^^^^^^^^^^^^^^^^^^
 
 Pattern matching is frequently used in conjunction with branching
 structures, in particular with enumerations. To that end, this RFC also
@@ -174,46 +262,132 @@ is equivalent to the following:
        $somevar is Baz|Beep => 'baz',
    };
 
-Variable binding
-~~~~~~~~~~~~~~~~
+(See "Open Questions" below regarding the syntax for ``match()`` with
+patterns.)
 
-One of the prime uses of pattern matching is to extract a value from a
-larger structure, such as an object (or Enumeration/ADT, in the future).
-This RFC supports such variable binding. A variable that should be bound
-is denoted by a % and a variable. If the input variable matches the rest
-of the pattern, then the corresponding value will be extracted and
-assigned to a variable of that name in the current scope. It will remain
-in scope as long as normal variable rules say it should.
+Structure patterns
+~~~~~~~~~~~~~~~~~~
 
-In the currently supported patterns, it is only relevant for object
-pattern matching.
+These are where pattern matching really shines. They are more
+involved/complex, but have more "bang for the buck" than the basic
+patterns above. Technically, object property and array patterns could
+exist without variable binding, but they would be substantially less
+useful without it. As a practical matter, therefore, it should be
+treated as a prerequisite for the other two.
+
+It would be possible to implement only one of object properties or
+arrays, though both are highly useful so our recommendation is to
+include all three parts of this section.
+
+Object property pattern
+^^^^^^^^^^^^^^^^^^^^^^^
+
+A pattern may also define a class and matches against scope-accessible
+properties of that object. Only a single class type may be used, but any
+number of properties may be matched. The properties must be accessible
+in the scope in which the pattern executes. That is, a pattern evaluated
+outside the class may only match against public properties; a pattern
+inside the class may match against public, private, or protected; a
+pattern in a child class may match against protected properties of its
+parent but not private; etc.
+
+The "value" to match each property against is itself a pattern, so can
+leverage any of the above pattern combinations.
+
+Note that matching against a property's value implies reading that
+property's value. That has a few important implications:
+
+#. If a ``get`` hook is defined for that property, it will be called.
+#. If the property is uninitialized, an error will be thrown.
+#. If the property is undefined, an error will be thrown.
 
 .. code:: php
 
+
    class Point {
-     public function __construct(public int $x, public int $y, public int $z) {}
+       public function __construct(
+           public int $x, 
+           public int $y, 
+           public int $z,
+       ) {}
    }
 
    $p = new Point(3, 4, 5);
 
-   if ($p is Point {x: 3, y: %$y} ) {
-     print "x is 3 and y is $y.";
-   }
+   $p is Point {x: 3};
    // Equivalent to:
-   if ($p instanceof Point && $p->x === 3) {
-     $y = $p->y;
-     print "x is 3 and y is $y.";
+   $p instanceof Point && $p->x === 3;
+
+   $p is Point {y: 37, x: 2,};
+   // Equivalent to:
+   $p instanceof Point && $p->y === 37 && $p->x === 2;
+
+   // A multi-segment pattern that includes an object pattern.
+   $p is Point {x: 2}|null
+   // Equivalent to:
+   $p instanceof Point && $p->x === 2 || $p === null;
+
+   // The $x property is matched against an ORed pattern.
+   $p is Point { x: 2|3 }
+   // Equivalent to
+   $p instanceof Point && ($p->x === 2 || $p->x === 3)
+
+Properties may be listed in any order, but must be named. A trailing
+comma is permitted.
+
+Variable binding
+^^^^^^^^^^^^^^^^
+
+One of the prime uses of pattern matching is to extract a value from a
+larger structure, such as an object (or Enumeration/ADT, in the future).
+This RFC supports such variable binding by specifying the variable to
+populate. If the input variable matches the rest of the pattern, then
+the corresponding value will be extracted and assigned to a variable of
+that name in the current scope. It will remain in scope as long as
+normal variable rules say it should. Only local variables may be bound,
+that is, you cannot bind to a property of an object.
+
+The entire pattern either succeeds or fails. No variables will be bound
+unless the entire pattern matches.
+
+In the currently supported patterns, it is only relevant for object and
+array pattern matching. (See the next section for array examples.)
+
+.. code:: php
+
+   class Point {
+       public function __construct(
+           public int $x, 
+           public int $y, 
+           public int $z,
+       ) {}
    }
 
-   if ($p is Point {z: %$z, x: 3, y: %$y} ) {
+   $p = new Point(3, 4, 5);
+
+   if ($p is Point {x: 3, y: $y} ) {
+       print "x is 3 and y is $y.";
+   }
+   // Equivalent to:
+   if ($p instanceof Point && $p->x === 3) {
+       $y = $p->y;
+       print "x is 3 and y is $y.";
+   }
+
+   if ($p is Point {z: $z, x: 3, y: $y} ) {
      print "x is 3 and y is $y and z is $z.";
    }
    // Equivalent to:
    if ($p instanceof Point && $p->x === 3) {
-     $y = $p->y;
-     $z = $p->z;
-     print "x is 3 and y is $y and z is $z.";
+       $y = $p->y;
+       $z = $p->z;
+       print "x is 3 and y is $y and z is $z.";
    }
+
+Variable binding is not compatible with an ORed compound pattern, as
+depending on the segment that matches the variable may or may not end up
+defined, and there's no reliable way to determine that other than
+``isset()``. An ANDed compound pattern is permitted, however.
 
 If the variable name to extract to is the same as the name of the
 property, then the property name may be omitted. That is, the last
@@ -221,7 +395,7 @@ example can be abbreviated as:
 
 .. code:: php
 
-   if ($p is Point {%$z, x: 3, %$y} ) {
+   if ($p is Point {$z, x: 3, $y} ) {
      print "x is 3 and y is $y and z is $z.";
    }
 
@@ -233,29 +407,665 @@ functions.
 
    $result = match ($p) is {
      // These will match only some Point objects, depending on their property values.
-     Point{x: 3, y: 9, %$z} => "x is 3, y is 9, z is $z",
-     Point{%$z, %$x, y: 4} => "x is $x, y is 4, z is $z",
-     Point{x: 5, %$y} => "x is 5, y is $y, and z doesn't matter",
+     Point{x: 3, y: 9, $z} => "x is 3, y is 9, z is $z",
+     Point{$z, $x, y: 4} => "x is $x, y is 4, z is $z",
+     Point{x: 5, $y} => "x is 5, y is $y, and z doesn't matter",
      // This will match any Point object.
-     Point{%$x, %$y, %$z} => "x is $x, y is $y, z is $z",
+     Point{$x, $y, $z} => "x is $x, y is $y, z is $z",
    };
 
 Note that in this case, the variables ``$x``, ``$y``, and ``$z`` may or
 may not be defined after the ``match()`` statement executes depending on
 which pattern was matched.
 
+This last usage is especially important in the context of ADTs, where
+combining an ADT with a pattern-matching ``match()`` would allow for
+this:
+
+.. code:: php
+
+   // Example of what is possible with both pattern matching and ADTs,
+   // though they are separate RFCs so the exact syntax is subject to change.
+
+   enum Move {
+       case TurnLeft;
+       case TurnRight;
+       case Forward(int $amount);
+   }
+
+   match ($move) is {
+       Move::TurnLeft => $this->orientation--,
+       Move::TurnRight => $this->orientation++,
+       Move::Forward{$amount} => $this->distance += $amount,
+   };
+
+
+   enum Option {
+       case None;
+       case Some(mixed $val);
+   }
+
+   match ($maybe) is {
+       Option::Some {$val} => compute_something($val),
+       Option::None => 'default value',
+   }
+
+We view this RFC as a prerequisite for ADTs being useful in practice.
+
+Array structure pattern
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Array patterns match elements of an array individually against a
+collection of values. It has two variants, positional or associative.
+That is, the pattern MUST be entirely positional, or must specify a key
+for every position. (This is in contrast to array literals, which allow
+keys to be omitted at random to get an integer assigned.) If an
+associative pattern is used, the order of keys is explicitly irrelevant.
+
+By default, array matching is exhaustive. That is, the arity of the
+array and pattern must match. Alternatively, the pattern may include a
+``...`` sequence as its last item to disable that arity checking,
+rendering any unspecified array keys explicitly irrelevant.
+
+The value for each array element is itself a pattern. While the most
+common use case would normally be a literal match, it also supports a
+type match, ORed pattern, etc. This means that array patterns can
+function as "array shapes" if desired. This ability becomes more
+powerful as more of the optional patterns (listed later, such as range
+or regex) are adopted, as they would also be supported for each
+property.
+
+The wildcard pattern may be used to assert that a key is defined without
+constraining what its value may be, and without binding it to a
+variable.
+
+Sequential arrays:
+
+.. code:: php
+
+   // Given:
+   $list = [1, 3, 5, 7];
+
+   // Degenerate, not very useful case.
+   if ($list is [1, 3, 5, 7]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && count($list) === 4 
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3 
+       && array_key_exists(2, $list) && $list[2] === 5 
+       && array_key_exists(3, $list) && $list[3] === 7
+       ) {
+       print "Yes";
+   }
+
+
+   if ($list is [1, 3]) {
+     print "Yes";
+   }
+   // False.  Equivalent to:
+   if (is_array($list) 
+       && count($list) === 2
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       ) {
+       print "Yes";
+   }
+
+   if ($list is [1, 3, ...]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       ) {
+       print "Yes";
+   }
+
+   if ($list is [1, 3, _, 7]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && count($list) === 4
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       && array_key_exists(2, $list)
+       && array_key_exists(3, $list) && $list[3] === 7
+       ) {
+       print "Yes";
+   }
+
+   if ($list is [1, 3, $third, 7]) {
+     print "Yes: $third";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && count($list) === 4
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       && array_key_exists(2, $list) 
+       && array_key_exists(3, $list) && $list[3] === 7
+       ) {
+       $third = $list[2];
+       print "Yes: $third";
+   }
+
+   if ($list is [1, 3, $third, ...]) {
+     print "Yes: $third";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       && array_key_exists(2, $list) 
+       ) {
+       $third = $list[2];
+       print "Yes: $third";
+   }
+
+   if ($list is [1, 3, 5|6, ...]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && array_key_exists(0, $list) && $list[0] === 1 
+       && array_key_exists(1, $list) && $list[1] === 3
+       && array_key_exists(2, $list) && ($list[2] === 5 || $list[2] === 6)
+       ) {
+       print "Yes";
+   }
+
+   // A sequential "array shape".
+   if ($list is [int, int, int, _]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($list) 
+       && count($list) === 4
+       && array_key_exists(0, $list) && is_int($list[0])
+       && array_key_exists(1, $list) && is_int($list[1])
+       && array_key_exists(2, $list) && is_int($list[2])
+       ) {
+       print "Yes";
+   }
+
+Associative arrays:
+
+.. code:: php
+
+   // Given:
+   $assoc = ['a' => 'A', 'b' => 'B'];
+
+   // Degenerate, not very useful case.
+   if ($assoc is ['a' => 'A', 'b' => 'B']) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc) 
+       && count($assoc) === 2 
+       && array_key_exists('a', $assoc) && $assoc['a'] === 'A'
+       && array_key_exists('b', $assoc) && $assoc['b'] === 'B'
+       ) {
+       print "Yes";
+   }
+
+   if ($assoc is ['a' => 'A', 'b' => @($b)]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc) 
+       && count($assoc) === 2 
+       && array_key_exists('a', $assoc) && $assoc['a'] === 'A'
+       && array_key_exists('b', $assoc) && $assoc['b'] === $b
+       ) {
+       print "Yes";
+   }
+
+   if ($assoc is ['a' => 'A', 'b' => $b]) {
+     print "Yes: $b";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc) 
+       && count($assoc) === 2 
+       && array_key_exists('a', $assoc) && $assoc['a'] === 'A'
+       && array_key_exists('b', $assoc) 
+       ) {
+       $b = $assoc['b'];
+       print "Yes: $b";
+   }
+
+   if ($assoc is ['b' => 'B']) {
+     print "Yes";
+   }
+   // False.  Equivalent to:
+   if (is_array($assoc) 
+       && count($assoc) === 1 
+       && array_key_exists('b', $assoc)  && $assoc['b'] === 'B'
+       ) {
+       print "Yes";
+   }
+
+   if ($assoc is ['b' => 'B', ...]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc) && && array_key_exists('b', $assoc)  && $assoc['b'] === 'B') {
+       print "Yes";
+   }
+
+   if ($assoc is ['b' => _, ...]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc) && array_key_exists('b', $assoc) ) {
+       print "Yes";
+   }
+
+   // An "array shape" pattern.
+   if ($assoc is ['a' => 'A'|'a', 'b' => string]) {
+     print "Yes";
+   }
+   // True.  Equivalent to:
+   if (is_array($assoc)
+       && array_key_exists('a', $assoc) && ($assoc['a'] === 'A' || $assoc['a'] === 'a')
+       && array_key_exists('b', $assoc) && is_string($assoc['b'])
+      ) {
+       print "Yes";
+   }
+
+Of particular note, the pattern matching approach automatically handles
+``array_key_exists()`` checking. That means a missing array element will
+not trigger a warning, whereas with a traditional
+``if ($foo['bar'] === 'baz')`` approach missing values must be accounted
+for by the developer manually. That provides some benefit in even the
+degenerate case of just checking a selection of keys against literal
+values, as missing values are handled automatically.
+
+Recommended patterns
+~~~~~~~~~~~~~~~~~~~~
+
+The following patterns are nominally optional. The RFC would have
+significant benefit if it stopped here. However, all of the following
+features would significantly improve the experience and flexibility of
+patterns. Our recommendation is to include them.
+
+Limited expression pattern
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The use of variables directly in a pattern is not supported, as it would
+conflict with variable binding. However, they may be included by
+delineating them within ``@()``. This approach also works for global
+constants. As with literals, they are useful mainly in compound patterns
+and ``match()``. (NOTE: We hate the ``@()`` syntax, too. Alternative
+suggestions very welcome. Please just consider the feature itself for
+the moment.)
+
+.. code:: php
+
+   // Simple degenerate case patterns.
+   $foo is @($bar); // Equivalent to $foo === $bar
+   $foo is @(PHP_VERSION); // Equivalent to $foo === PHP_VERSION
+
+   // More practical compound expressions
+   $foo is @(Errors::$notFound)|@(Errors::$invalid); // Equivalent to $foo === Errors::$notFound || $foo === Errors::$invalid
+
+It would be possible to expand this pattern to support arbitrary
+expressions within the delimiters, including function calls. However,
+that has been omitted at this time in the interest of simplicity. If a
+good use case for it can be shown in the future, that can be added in a
+backward compatible way, however.
+
+Variable binding pattern matching
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When binding to a variable, the ``is`` keyword may be nested. In that
+case, the entire pattern must succeed or fail. Values will be bound if
+and only if all binding patterns match as well.
+
+For example:
+
+.. code:: php
+
+   if ($foo is Foo{a: @($someA), $b is Point(x: 5, y: @($someY)) }) {
+     print "x is 5, y is $someY, z is $b->z";
+   }
+   // Equivalent to:
+   if ($foo instanceof Foo
+       && $foo->a === $someA
+       && $bar instanceof Point
+       && $bar->y = $someY
+       ) {
+       $b = $foo->b;
+       print "x is 5, y is $someY, z is $b->z";
+   }
+
+.. code:: php
+
+   if ($params is ['user' => $user is AuthenticatedUser{role: 'admin'}, ...]) {
+       print "Congrats, $user->name, you can do admin things!"
+   }
+   // Equivalent to:
+   if (is_array($params)
+       && array_key_exists($params, 'user')
+       && $params['user'] instanceof AuthenticatedUser
+       && $params['user']->role === 'admin'
+       ) {
+       $user = $params['user'];
+       print "Congrats, $user->name, you can do admin things!"
+   }
+
+(Note: Some languages use a different syntax than above for this
+behavior. We are still investigating the ideal syntax to use. Rust, for
+instance, uses an ``@`` suffix on a pattern to indicate further
+restrictions to apply.)
+
+as keyword
+^^^^^^^^^^
+
+In some cases, the desired result is not a boolean but an error
+condition. One possible way to address that would be with a second
+keyword, ``as``, which behaves the same as ``is`` but returns the
+matched value or throws an Error rather than returning false.
+
+.. code:: php
+
+
+   // This either evaluates to true and assigns $username and $password to the matching properties of Foo, OR it evaluates to false.
+   $foo is Foo { $username, $password };
+
+   // This either evaluates to $foo and assigns $username and $password to the matching properties of Foo, OR it throws an Error.
+   $value = $foo as Foo { $username, $password };
+
+This pattern could potentially be combined with the "weak mode flag"
+(see below) to offer object validation with embedded coercion.
+
+Possible patterns
+~~~~~~~~~~~~~~~~~
+
+The following patterns are also reasonable to include, and offer notable
+benefits. However, they are not a prerequisite for this RFC to be
+useful. They may be included or not as the consensus dictates. However,
+their design has been considered as part of this RFC to ensure
+consistent behavior.
+
+Range pattern
+^^^^^^^^^^^^^
+
+Applicable to numeric variables, this pattern would validate that a
+value is within a given range. Verifying that the value is numeric is
+implicitly included.
+
+.. code:: php
+
+   $foo is 0..=10;
+
+   // Equivalent to:
+   $foo >=0 && $foo <= 10;
+
+   $foo is 0..<10;
+
+   // Equivalent to:
+   $foo >=0 && $foo < 10;
+
+   $foo is >10;
+
+   // Equivalent to:
+   $foo > 10;
+
+Regex pattern
+^^^^^^^^^^^^^
+
+Applicable only to ``string`` (and possible ``Stringable``?) values.
+This pattern validates that a value conforms to a provided regular
+expression, and potentially extracts values from it if appropriate.
+(Extracted values would only be assigned if the pattern matches.)
+
+.. code:: php
+
+   $foo is /^http:\/\/$domain/
+
+   // Equivalent to:
+   $matches = [];
+   preg_match('/^http:\/\/$domain/', $foo, $matches);
+   $domain == $matches[0];
+
+Array-application pattern
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+One possible extension of patterns is the built-in ability to apply a
+pattern across an array. While that could be done straightforwardly with
+a ``foreach`` loop over an array, it may be more performant if the
+entire logic could be pushed into engine-space. One possible approach
+would look like this:
+
+.. code:: php
+
+   $ints = [1, 2, 3, 4];
+   $someFloats = [1, 2, 3.14, 4];
+
+   $ints is array<int>; //True.  
+   $someFloats is array<int>; // False
+   $someFloats is array<int|float>; // True
+
+   // Equivalent to:
+   $result = true;
+   foreach ($ints as $v) {
+     if (!is_int($v)) {
+       $result = false;
+       break;
+     }
+   }
+
+It is not yet clear if it would indeed be more performant than the
+user-space alternative, or how common that usage would be. For that
+reason it has been left out of the RFC for now, but we mention it as a
+possible future extension.
+
+"weak mode" flag
+^^^^^^^^^^^^^^^^
+
+By default, pattern matching uses strict comparisons. However, there are
+use cases where a weak comparison is more appropriate. Setting a pattern
+or sub-pattern to weak-mode would permit standard PHP type coercion to
+determine if a value matches.
+
+For example:
+
+.. code:: php
+
+
+   $s = "5";
+
+   // Default, strict mode
+
+   $s is int; // False
+
+   // Opt-in weak mode
+
+   $s is ~int // True
+
+This would be particularly useful in combination with an array
+application pattern, to verify that, for instance, all elements in an
+array are numeric.
+
+.. code:: php
+
+   $a = [2, 4, "6", 8];
+
+   $a is array<int>; // False
+
+   $a is array<~int>; // True
+
+It is possible that we could extend the ``as`` keyword here as well to
+save the coercion. That is, if the value is weakly compatible, the
+``as`` keyword would convert it safely (or throw if it cannot be). That
+would allow validation across an object or array in a single operation.
+
+For example:
+
+.. code:: php
+
+   $a = [2, 4, "6", 8];
+
+   $intifiedA = $a as array<~int>;
+
+   // $initifiedA is now [2, 4, 6, 8]
+
+   $b = [2, 4, 'six', 8];
+
+   $intifiedB = $b as array<~int>; // Throws, because 'six' is not coerce-able to an integer.
+
+We have not yet investigated how feasible this sort of coercion would
+be, but it is a potentially valuable feature.
+
+Property guards
+^^^^^^^^^^^^^^^
+
+Something that became apparent during the development of property hooks
+is that a great many set hooks will be simple validation, often that a
+number is within a range or a string matches some criteria. At present,
+those use cases are achievable with hooks but can be somewhat verbose.
+Applying a pattern rule to a property would allow that rule to be
+applied on the set operation for that property, without having to
+implement it manually.
+
+.. code:: php
+
+   class Test
+   {
+       // These two properties have equivalent restrictions.
+
+       public string $name is /\w{3,}/;
+
+       public string $name { 
+           set {
+              if (!preg_match($value, '/\w{3,}/') {
+                  throw new \Exception();
+              }
+              $this->name = $value;
+           }
+       }
+   }
+
+This more compact syntax would be considerably easier to read and
+maintain when used within a promoted constructor parameter, too. Note
+that variable binding would not be supported in a property guard, as it
+makes little logical sense.
+
+Elevating such checks to a pattern would also make the pattern more
+readily available to static analysis tools (IDEs or otherwise), which
+would then be better able to validate if a value is about to be passed
+to a parameter that would not satisfy the pattern (eg, because the
+string is too short).
+
+(We're not sure if ``is`` or ``as`` would make more sense to use here.
+That's an implementation detail we don't need to worry about until this
+feature is actually getting implemented.)
+
+Parameter or return guards
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In concept, parameters and returns could have a similar guard syntax to
+properties. The use case is arguably smaller, but it might be possible
+to allow variable binding. (Unclear.)
+
+As an example, the following would be equivalent.
+
+.. code:: php
+
+   function test(string $name is /\w{3,}/): string is /\w{10,}/ {
+       return $name . ' (retired)';
+   }
+
+   function test(string $name): string is /\w{10,}/ {
+       $name as /\w{3,}/; // Throws if it doesn't match.
+
+       $return = $name . ' (retired)';
+       $return as /\w{10,}/; // Throws if it doesn't match.
+       return $return;
+   }
+
+Naturally type-only pattern checks are entirely redundant. It would be
+most useful with regex or range patterns. However, it would allow
+literal matches, which is a feature that has been requested in the past:
+
+.. code:: php
+
+   function query(array $args, string $sort is 'ASC'|'DESC') { ... }
+
+Optional array key marker
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+As described above, array patterns support "this key must be defined and
+match this pattern" or "I don't care if it's defined or not" (using the
+... suffix). However, there is no obvious way to indicate "this key is
+optional, but if it is defined it must match this pattern." Such a
+marker would be useful to include, although we have not yet explored a
+syntax for it. One possibility would be:
+
+.. code:: php
+
+   // $arr must have a string 'a' key, MAY have a string 'b' key but no other 'b',
+   // and any other keys are irrelevant.
+   $arr is ['a' => string, ?'b' => string, ...]
+
+Patterns as variables/types
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+With complex array or object patterns, especially if guards are adopted,
+it becomes natural to want to reuse the same pattern in multiple places.
+At this time we are not sure how to do so, although it is a space we are
+considering. Possibilities include (unvetted):
+
+.. code:: php
+
+   // Wrap the pattern into an object that can be referenced, possibly with some distinguishing marker.
+   $naturalNum = new Pattern(int&>0);
+   $foo is $naturalNum;    // Would need some way to disambiguate it from a binding variable.
+
+   // Put this in the "use" section of a file.
+   use pattern int&>0 as NaturalNum;
+   $foo is NaturalNum;
+
+   // Make this exposed to other files, like a constant would be.
+   pattern int&>0 as NaturalNum;
+   $foo is NaturalNum;
+
+This is an area that requires more exploration, but we mention it here
+for completeness.
+
+Interaction with magic methods
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When matching an object, it's possible to try to match against a
+property that is not defined, but the ``__isset()`` or ``__get`` magic
+methods are defined. In that case:
+
+-  If ``__isset()`` is triggered and returns false, it will never match
+   anything.
+-  If ``__isset()`` returns true or is not defined, then the return of
+   invoking ``__get()`` will be used. It will then be matched against
+   the pattern the same as if it were a defined property value.
+
 Backward Incompatible Changes
 -----------------------------
 
-A new keyword is added, ``is``. That conflicts with a global constant
-named ``is``.
+A new keyword is added, ``is``. That will conflict with any user-defined
+global constant named ``is``.
+
+If the ``as`` keyword is adopted as well, that will also be a new global
+keyword.
 
 No other BC breaks are expected.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.next (aka 8.1).
+PHP 8.next (aka 8.4).
 
 RFC Impact
 ----------
@@ -269,15 +1079,12 @@ Include other patterns in the initial RFC?
 Do any other patterns need to be included in the initial RFC? Are there
 any listed in Future Scope that are must-have for the initial release?
 
-.. _variable-binding-1:
+Expression pattern syntax
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Variable binding
-~~~~~~~~~~~~~~~~
-
-The % flag for binding is still an open question. It would be necessary
-if we want to allow variables to be used in the pattern, but so far we
-haven't decided if variables belong in the pattern. Open question for
-discussion.
+The @() syntax for expression patterns is still an open question. It
+needs some kind of delimeter to differentiate it from class names and
+binding variables, but the specific syntax we are flexible on.
 
 match() "is" placement
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -310,90 +1117,10 @@ possible. We are looking for feedback on this question.
 Future Scope
 ------------
 
-Numerous other, more robust (and complex) patterns can be supported in
-the future. This RFC keeps to the MVP implementation and most common
-cases. The following additional patterns are possible future additions
-for other RFCs. (Please don't bikeshed them here; they are shown as an
-example of where pattern matching can extend to in the future.)
-
-Array structure pattern
-~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: php
-
-   $arr is ['a' => 'A', 'b' => $b];
-
-   // Equivalent to:
-   is_array($arr) && $arr['a'] === 'A' && $arr['b'] === $b);
-
-Range pattern
-~~~~~~~~~~~~~
-
-.. code:: php
-
-   $foo is 0..=10;
-
-   // Equivalent to:
-   $foo >=0 && $anInt <= 10;
-
-   $foo is 0..<10;
-
-   // Equivalent to:
-   $foo >=0 && $anInt < 10;
-
-   $foo is >10;
-
-   // Equivalent to:
-   $foo > 10;
-
-Boolean pattern combination
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code:: php
-
-   $foo is 1 or 2;
-
-   // Equivalent to:
-   $foo === 1 || $foo === 2;
-
-   $foo is User or 1..=5;
-
-   // Equivalent to:
-   $foo instanceof User || ($foo >= 0 && $foo <= 5);
-
-Regex pattern
-~~~~~~~~~~~~~
-
-.. code:: php
-
-   $foo is /^http:\/\/%$domain/
-
-   // Equivalent to:
-   $matches = [];
-   preg_match('/^http:\/\/%$domain/', $foo, $matches);
-   $domain == $matches[0];
-
-Throwing alternative
-~~~~~~~~~~~~~~~~~~~~
-
-There may be cases where the desired result is not a boolean but an
-error condition. One possible way to address that would be with a second
-keyword, ``as``, which behaves the same as ``is`` but throws an Error
-rather than returning false.
-
-.. code:: php
-
-
-   // This either evaluates to true and assigns $username and $password to the matching properties of Foo, OR it evaluates to false.
-   $foo is Foo { $username, $password };
-
-   // This either evaluates to true and assigns $username and $password to the matching properties of Foo, OR it throws an Error.
-   $foo as Foo { $username, $password };
-
-Whither or not this alternative syntax would be useful in practice is
-unclear, so for now it is omitted. It would be a reasonably
-straightforward addition in the future, however, if practical experience
-suggested it was useful.
+Numerous other patterns can be supported in the future. The following
+additional patterns are possible future additions for other RFCs.
+(Please don't bikeshed them here; they are shown as an example of where
+pattern matching can extend to in the future.)
 
 Proposed Voting Choices
 -----------------------
