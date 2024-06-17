@@ -52,7 +52,7 @@ Core patterns are the patterns that are mandatory to include in this RFC.  They 
 
 === Compound patterns ===
 
-One or more patterns may be combined into a single pattern using <php>|</php> and <php>&</php> conjunctions.  Each of the subpatterns is itself a complete pattern, and may be any of the pattern types listed below (except where specifically noted).  The combined pattern is also a pattern, and therefore may appear as a component of some other pattern.  For instance
+One or more patterns may be combined into a single pattern using <php>|</php> and <php>&</php> conjunctions.  Each of the subpatterns is itself a complete pattern, and may be any of the pattern types listed below (except where specifically noted).  The compound pattern is also a pattern, and therefore may appear as a component of some other pattern.  For instance
 
 <code php>
 // Combines two type patterns.
@@ -62,8 +62,7 @@ $foo is int|string;
 $foo is User|(Account&Authenticated)
 </code>
 
-
-If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern.
+If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern.  To be consistent with type syntax, redundant parenthesis (eg, <php>(Foo|Bar)|Baz</php>) are not allowed.
 
 === Type pattern ===
 
@@ -85,7 +84,7 @@ $foo is string|Stringable; // Equivalent to is_string($foo) || $string instanceo
 $foo is User|(Account&Authenticated)
 
 // Iterable is a type, so this is also valid:
-$foo is interable;  // Equivalent of is_iterable().
+$foo is iterable;  // Equivalent of is_iterable().
 
 // true, false, and null are now types in their own right, so will also work:
 // Simple degenerate case patterns.
@@ -170,7 +169,7 @@ $result = match (true) {
 
 ==== Structure patterns ====
 
-These are where pattern matching really shines.  They are more involved/complex, but have more "bang for the buck" than the basic patterns above.  Technically, object property and array patterns could exist without variable binding, but they would be substantially less useful without it.  As a practical matter, therefore, it should be treated as a prerequisite for the other two.
+These are where pattern matching really shines.  They are more involved/complex, but have more "bang for the buck" than the basic patterns above.  Specifically, there are two kinds of structure patterns: Object property and array patterns.  Both can also leverage a third concept, variable binding.  Technically, object property and array patterns could exist without variable binding, but they would be substantially less useful without it.  As a practical matter, therefore, it should be treated as a prerequisite for the other two.
 
 It would be possible to implement only one of object properties or arrays, though both are highly useful so our recommendation is to include all three parts of this section.
 
@@ -180,7 +179,7 @@ A pattern may also define a class and matches against scope-accessible propertie
 
 The "value" to match each property against is itself a pattern, so can leverage any of the above pattern combinations.
 
-Note that matching against a property's value implies reading that property's value.  That has a few important implications:
+Note that matching against a property's value implies reading that property's value.  Therefore, a property match behaves as though the property were read into a temporary variable and then used.  That means, for example:
 
   - If a ''get'' hook is defined for that property, it will be called.
   - If the property is uninitialized, an error will be thrown.
@@ -386,7 +385,24 @@ if (is_array($assoc)
 }
 </code>
 
-Of particular note, the pattern matching approach automatically handles <php>array_key_exists()</php> checking.  That means a missing array element will not trigger a warning, whereas with a traditional <php>if ($foo['bar'] === 'baz')</php> approach missing values must be accounted for by the developer manually.  That provides some benefit in even the degenerate case of just checking a selection of keys against literal values, as missing values are handled automatically.
+Of particular note, the pattern matching approach automatically handles <php>array_key_exists()</php> checking.  That means a missing array element will not trigger a warning, whereas with a traditional <php>if ($foo['bar'] === 'baz')</php> approach missing values must be accounted for by the developer manually.  A associative array pattern match is also, as mentioned, explicitly unordered, whereas a ''=='' or ''==='' comparison also considers order.  That provides some benefit in even the degenerate case of just checking a selection of keys against literal values, as missing values are handled automatically.
+
+<code php>
+$foo = ['a' => 1, 'b' => 2];
+
+// True
+$foo is ['b' => 2, 'a' => 1];
+
+// False
+$foo === ['b' => 2, 'a' => 1];
+
+// False, but no error.
+$foo is ['a' => 1, 'c' = 3, ...];
+
+// Warning: $foo['c'] is not defined.
+if ($foo['a'] === 1, $foo['c'] === 3) { ... }
+</code>
+
 
 === Variable binding ===
 
