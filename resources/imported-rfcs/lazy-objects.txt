@@ -201,11 +201,22 @@ After initialization, the object is indistinguishable from an object that was ne
   - The initializer is called with the lazy proxy as first parameter.
   - The return value of the initializer has to be a non-lazy instance of a parent or a child class of the lazy-object and it must have the same properties. An Error is thrown if that's not the case. Returning an instance of a child or parent class with the same properties does not break LSP.
   - The actual instance is set to the return value.
-  - Properties that were initialized with <php>ReflectionProperty::skipInitialization()</php> or <php>setRawValueWithoutInitialization()</php> are uninitialized.
+  - Properties are uninitialized (including properties used with <php>ReflectionProperty::skipInitialization()</php> or <php>setRawValueWithoutInitialization()</php>).
 
 The proxy object is _not_ replaced or substituted for the actual instance. After initialization, property accesses on the proxy are forwarded to the actual instance. Observing properties of the proxy has the same result as observing properties of the actual instance.
 
 The actual instance is allowed to escape the proxy and to create direct references to itself. This is demonstrated in the section named "About Proxies". The proxy may be released independently of the actual instance when it's not referenced anymore. The proxy and actual instance have distinct identities. 
+
+Although the initializer receives the proxy object as first parameter, it is not expected to make changes to it (this is allowed, but any changes will be lost during the last step of the initialization). However, the proxy object can be used to make decisions based on the value of some initialized field, or on the class or the object, or on its identity. For example, we can use the object identity to detect clones:
+
+<PHP>
+$init = function ($object) use (&$originalObject) {
+    if ($object !== $originalObject) {
+        // we are initializing a clone
+    }
+};
+$originalObject = $reflector->newProxyInstance($init);
+</PHP>
 
 === Common Behavior ===
 
@@ -294,6 +305,14 @@ The <php>newLazyGhost()</php> method instantiates an object without calling the 
 
 Properties are not initialized to their default value (they are initialized before calling the initializer). This is only mentioned for completeness, as this is not observable currently. 
 
+The <php>$initializer</php> argument is a callable with the following signature:
+
+<PHP>
+function (object $object): null {}
+</PHP>
+
+When initialization is required, the <php>$initializer</php> is called with the object as first parameter. The initializer should initialize the object, and must return <php>null</php>. See the "Initialization Sequence" section.
+
 The <php>$options</php> argument is a bitfield accepting the following flags:
 
   * <php>ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE</php>: By default, serializing a lazy object triggers its initialization. This flag disables that behavior, allowing lazy objects to be serialized as empty objects. This is useful in scenarios like Doctrine entities, where cascading serialization could be problematic.
@@ -313,10 +332,18 @@ The behavior of the returned object is described in the Initialization Triggers 
 === ReflectionClass::newLazyProxy() ===
 
 <PHP>
-    public function newLazyProxy(callable $initializer, int $options = 0): object;
+    public function newLazyProxy(callable $factory, int $options = 0): object;
 </PHP>
 
 The behavior of the <php>newLazyProxy()</php> method is the same as <php>newLazyGhost()</php>, except that it uses the Proxy strategy.
+
+The <php>$factory</php> argument is a callable with the following signature:
+
+<PHP>
+function (object $proxy): object {}
+</PHP>
+
+When initialization is required, the <php>$factory</php> is called with the proxy as first parameter. The factory should return a new object: the actual instance. See the "Initialization Sequence" section.
 
 === ReflectionClass::resetAsLazyGhost() === 
 
