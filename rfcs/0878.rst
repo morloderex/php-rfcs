@@ -4,10 +4,10 @@ Property Hooks
 :PHP-RFC: 0878
 :Title: Property Hooks
 :Author: Ilija Tovilo <tovilo.ilija@gmail.com>, Larry Garfield <larry@garfieldtech.com>
-:Status: Draft
+:Status: Accepted
 :Type: Unknown
 :Created: 2022-12-01
-:Version: 0.9
+:Version: 1.5
 
 Introduction
 ------------
@@ -31,6 +31,12 @@ The design and syntax below is most similar to
 `Kotlin <https://kotlinlang.org/docs/properties.html#getters-and-setters>`__,
 although it also draws influence from C# and
 `Swift <https://docs.swift.org/swift-book/documentation/the-swift-programming-language/properties/#Computed-Properties>`__.
+Python and JavaScript have similar features via a different syntax,
+although that syntax would not be viable for PHP. (See the FAQ section
+below for an explanation.) Ruby treats properties and methods as nearly
+the same, so achieves this functionality as a side effect. In short,
+"property accessors" are a very common feature in major, mainstream
+programming languages.
 
 A primary use case for hooks is actually to **not** use them, but retain
 the ability to do so in the future, should it become necessary. In
@@ -69,7 +75,7 @@ considered idiomatic prior to PHP 7.4:
        }
    }
 
-As of PHP 8.2, if type enforcement is the only need, that can be
+As of PHP 8.3, if type enforcement is the only need, that can be
 abbreviated all the way down to:
 
 .. code:: php
@@ -139,7 +145,7 @@ existing aspects of PHP and its tooling.
                if (strlen($value) === 0) {
                    throw new ValueError("Name must be non-empty");
                }
-               $field = $value;
+               $this->name = $value;
            }
        }
 
@@ -153,6 +159,79 @@ the outward syntax of reading or writing to ``$name``, does not hinder
 static analysis, and does not fold multiple properties into a single
 hard-to-follow method.
 
+Similarly, using methods may also impose an extra syntax burden on
+callers in "read and update" situations. For example:
+
+.. code:: php
+
+   class Foo
+   {
+       private int $runs = 0;
+       
+       public function getRuns(): int { return $this->runs; }
+       
+       public function setRuns(int $runs): void
+       {
+         if ($runs <= 0) throw new Exception();
+         $this->runs = $runs;
+       }
+   }
+
+   $f = new Foo();
+
+   $f->setRuns($f->getRuns() + 1);
+
+With property hooks, this can be simplified to:
+
+.. code:: php
+
+   class Foo
+   {
+       public int $runs = 0 {
+           set {
+               if ($value <= 0) throw new Exception();
+               $this->runs = $value;
+           }
+       }
+   }
+
+   $f = new Foo();
+
+   $f->runs++;
+
+Which is much more ergonomic from the user's point of view. (A
+``incrementRuns()`` method would also work in this case, but would only
+support the one single use case of incrementing, not general read and
+write.)
+
+A note on the approach
+----------------------
+
+This RFC has been designed to be as robust and feature-complete as
+possible. It is based on analysis of five other languages with similar
+functionality (Swift, C#, Kotlin, Javascript, and Python), and multiple
+experiments with PHP itself to find the corner cases. The RFC is, as a
+result, long and detailed, because we have chosen to make explicit all
+the necessary details presented and the reasoning behind them. Very
+little of this RFC could be "split off" to a future RFC (which would not
+be guaranteed to pass) without greatly undermining the design and
+capabilities of the remaining features.
+
+A design goal of this RFC has been to make adding hooks to existing
+properties as transparent as possible, so that consumers of objects
+don't need to care if a property has hooks or not. In cases where it
+cannot be perfectly transparent, we have largely opted to follow the
+pattern of ``__get`` and ``__set``, which already provide similar
+functionality in a far less robust or usable fashion. The result is to
+minimize the amount of thinking that developers need to do.
+
+None of the decisions or inclusions have been arbitrary; PHP just has a
+lot of nooks and crannies, which this RFC has attempted to address in
+the least-edge-casey way possible.
+
+In short, please don't be scared by the length or the number of moving
+parts. View it as a sign of polish and robustness instead.
+
 Proposal Summary
 ----------------
 
@@ -163,6 +242,10 @@ the design includes the ability to support more hooks in the future.
 majority of common reasons to add "just in case" methods to a property
 to be implemented without methods, leading to shorter code and more
 flexibility to improve the code without a hard API break.
+
+There are two syntax variants supported, a full and a short, similar to
+closures. The example below shows both. (See the "Abbreviated Syntax"
+section below.)
 
 .. code:: php
 
@@ -177,7 +260,10 @@ flexibility to improve the code without a hard API break.
            get => $this->first . " " . $this->last;
            
            // Override the "write" action with arbitrary logic.
-           set($value) => [$this->first, $this->last] = explode(' ', $value);
+           set { 
+               [$this->first, $this->last] = explode(' ', $value, 2);
+               $this->isModified = true;
+           }
        }
    }
 
@@ -209,26 +295,39 @@ Detailed Proposal
 -----------------
 
 This RFC applies to object properties only, not static properties.
-Static properties are unaffected by this RFC.
+Static properties are unaffected by this RFC. It applies to both typed
+and untyped object properties.
 
 For a property to use a hook, it must replace its trailing ``;`` with a
 code block denoted by ``{ }``. Inside the block are one or more hook
 implementations, for which the order is explicitly irrelevant. It is a
 compile error to have an empty hook block.
 
-The ``get`` and ``set`` hooks override the PHP default read and write
-behavior. They may be implemented individually or together. Within each
-hook, the "unfiltered" value of the property is available as ``$field``.
-Note that ``$field`` is a compile-time macro that translates to
-``$this->propertyName`` in the engine. The main implication of that is
-more esoteric variable forms (such as ``$$var``) will not work with
-``$field``, though they shouldn't be used anyway. Using
-``$this->propertyName`` directly is supported, but not recommended.
+Properties with hooks may not be used in multi-property declarations.
+Doing so will trigger a syntax error.
 
-If a property has at least one hook, and none of them make use of
-``$field``, then no backing store value will be created in the engine.
-Such properties are known as "virtual properties," as they have no
-materialized stored value.
+The ``get`` and ``set`` hooks override the PHP default read and write
+behavior. They may be implemented individually or together.
+
+When a hook is called, inside that hook ``$this->[propertyName]`` will
+refer to the "unfiltered" value of the property, called the "backing
+value." When accessed from anywhere else, ``$this->[propertyName]``
+calls will go through the relevant hook. This is true for all hooks on
+the same property. This includes, for example, writing to a property
+from the ``get`` hook; that will write to the backing value, bypassing
+the ``set`` hook.
+
+A normal property has a stored "backing value" that is part of the
+object, and part of the memory layout of the class. However, if a
+property has at least one hook, and none of them make use of
+``$this->[propertyName]``, then no backing value will be created and
+there will be no data stored in the object automatically (just as if
+there were no property, just methods). Such properties are known as
+"virtual properties," as they have no materialized stored value.
+
+Be aware, the detection logic works on ``$this->[propertyName]``
+directly at compile time, not on dynamic forms of it like
+``$prop = 'beep'; $this->$prop``. That will not trigger a backing value.
 
 get
 ~~~
@@ -257,14 +356,14 @@ The ``get`` hook body is an arbitrarily complex method body, which MUST
 return a value that is type compatible with the property.
 
 The example above creates a virtual property, as there is at least one
-hook and it does not use ``$field``. Because it is virtual, there is no
-default ``set`` behavior (as there's nowhere to save to). Thus, any
-attempt to write to the property will result in an ``Error`` being
-thrown.
+hook and it does not use ``$this->fullName``. Because it is virtual,
+there is no default ``set`` behavior (as there's nowhere to save to).
+Thus, any attempt to write to the property will result in an ``Error``
+being thrown.
 
-The following example does make use of ``$field``, however, and thus a
-backing value will be created, and write operations will simply write to
-the property as normal.
+The following example does make use of ``$this->[propertyName]``,
+however, and thus a backing value will be created, and write operations
+will simply write to the property as normal.
 
 .. code:: php
 
@@ -272,7 +371,7 @@ the property as normal.
    {
        public string $name {
            get {
-               return strtoupper($field);
+               return strtoupper($this->name);
            }
        }
    }
@@ -300,8 +399,8 @@ behavior.
        public function __construct(private string $first, private string $last) {}
        
        public string $fullName {
-           set ($value) {
-               [$this->first, $this->last] = explode(' ', $value);
+           set (string $value) {
+               [$this->first, $this->last] = explode(' ', $value, 2);
            }
        }
        
@@ -318,25 +417,39 @@ behavior.
    print $u->getFirst();
 
 The ``set`` hook body is an arbitrarily complex method body, which
-accepts one argument. The argument is implicitly typed to the same type
-as the property. Its return type is unspecified, and will be silently
-discarded.
-
-Specifying the argument name is optional. If not specified, it defaults
-to ``$value``. That is, the following ``set`` hook is identical to the
-previous:
-
-.. code:: php
-
-   public string $fullName {
-       set {
-           [$this->first, $this->last] = explode(' ', $value);
-       }
-   }
+accepts one argument. If specified, it must include both the type and
+parameter name.
 
 The above example creates a virtual property. As there is no ``get``
 hook, no read operation from ``$fullName`` is allowed and will throw an
 Error. This particular usage pattern is not common, but valid.
+
+More commonly, a virtual property will either be ``get`` only, or
+symmetric:
+
+.. code:: php
+
+   class User
+   {
+       public function __construct(public string $first, public string $last) {}
+       
+       public string $fullName {
+           get {
+               return "$this->first $this->last";
+           }
+           set (string $value) {
+               [$this->first, $this->last] = explode(' ', $value, 2);
+           }
+       }
+
+   }
+
+   u = new User('Larry', 'Garfield');
+
+   $u->fullName = 'Ilija Tovilo';
+
+   // prints "Ilija"
+   print $u->first;
 
 Alternatively, the following example creates a stored property, and thus
 read actions will proceed as normal.
@@ -345,9 +458,9 @@ read actions will proceed as normal.
 
    class User {
        public string $username {
-           set($value) {
+           set(string $value) {
                if (strlen($value) > 10) throw new \InvalidArgumentException('Too long');
-               $field = strtolower($value);
+               $this->username = strtolower($value);
            }
        }
    }
@@ -360,11 +473,13 @@ read actions will proceed as normal.
 
 We expect this "validate on set" use case to be particularly common.
 
-A ``set`` hook may optionally declare an argument type that is
-contravariant (wider) from the type of the property. That allows the
-``set`` body to accept a more permissive set of values. The type of the
-value returned by ``get`` must still conform to the declared type,
-however.
+A ``set`` hook on a typed property must declare a parameter type that is
+the same as or contravariant (wider) from the type of the property. That
+allows the ``set`` body to accept a more permissive set of values. The
+type of the value written to the backing value and returned by ``get``
+must still conform to the declared type.
+
+A ``set`` hook on an untyped property must not specify a parameter type.
 
 That allows, for example, behavior like this:
 
@@ -376,7 +491,7 @@ That allows, for example, behavior like this:
    {
        public UnicodeString $name {
            set(string|UnicodeString $value) {
-               $field = $value instanceof UnicodeString ? $value : new UnicodeString($value);        
+               $this->name = $value instanceof UnicodeString ? $value : new UnicodeString($value);        
            }
        }
    }
@@ -384,6 +499,9 @@ That allows, for example, behavior like this:
 That allows both strings and ``UnicodeString`` objects to be passed in,
 but normalizes the value to ``UnicodeString`` to enforce a consistent
 and reliable type when reading it (either internally or externally).
+
+The ``set`` hook's return type is unspecified, and will silently be
+treated as ``void``.
 
 Although it is not often used, the ``=`` assignment operator is an
 expression that returns a value. The value returned is already slightly
@@ -400,7 +518,7 @@ same behavior as ``__set``, for the same reason.
        public array $_names;
        public string $names {
            set {
-               $this->_names = explode(',', $value);
+               $this->_names = explode(',', $value, 2);
            }
        }
    }
@@ -416,21 +534,20 @@ today with ``__set``, using the evaluated value of ``=`` is rare, and at
 most can change the type of the resulting value in a coercion-compatible
 way. For that reason we consider that an acceptable edge case.
 
-Abbreviated forms
-~~~~~~~~~~~~~~~~~
+Abbreviated syntax
+~~~~~~~~~~~~~~~~~~
 
-There are two shorthand notations supported, beyond the optional
-argument to ``set``.
+The syntax shown above is the "full-featured" version. There are several
+short-hand options available as well to cover the typical cases more
+easily.
 
-First, if a hook's body is a single expression, then the ``{ }`` and
+Short-get
+^^^^^^^^^
+
+If the ``get`` hook is a single-expression, then the ``{ }`` and
 ``return`` statement may be omitted and replaced with ``=>``, just like
-with arrow functions.
-
-Second, if there is one and only one hook, and that hook is ``get``,
-then the hook name and wrapping ``{}`` may be omitted and replaced with
-``=>``.
-
-That means the following three examples are all semantically identical:
+with arrow functions. That is, the following two examples are
+equivalent:
 
 .. code:: php
 
@@ -443,62 +560,62 @@ That means the following three examples are all semantically identical:
                return $this->first . " " . $this->last;
            }
        }
-   }
-
-   class User
-   {
-       public function __construct(private string $first, private string $last) {}
        
        public string $fullName {
            get => $this->first . " " . $this->last;
        }
    }
 
-   class User
-   {
-       public function __construct(private string $first, private string $last) {}
-       
-       public string $fullName => $this->first . " " . $this->last;
-   }
+Implicit ``set`` parameter
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-As noted, the return value of ``set``, if any, is discarded. That means
-it may also use the short-hand syntax, as whatever value the expression
-evaluates to will be ignored. That is, the following is an example of
-legal syntax:
+If the write-type of a property is the same as its defined type (this is
+the common case), then the argument may be omitted entirely. That is,
+the following two examples are equivalent:
 
 .. code:: php
 
-   class User
-   {
-
-       private array $modified = [];
-
-       public string $fullName {
-           get => $this->first . " " . $this->last;
-           set => [$this->first, $this->last] = explode(' ', \ucfirst($value));
+   public string $fullName {
+       set (string $value) {
+           [$this->first, $this->last] = explode(' ', $value, 2);
        }
-
-       public function __construct(private string $first, private string $last) {}
    }
 
-By way of comparison, here is the same logic implemented via methods in
-PHP 8.2:
+   public string $fullName {
+       set {
+           [$this->first, $this->last] = explode(' ', $value, 2);
+       }
+   }
+
+**If the parameter is not specified, it defaults to ``$value``**. (This
+is the same variable name used by Kotlin and C#.)
+
+Short-set
+^^^^^^^^^
+
+The set hook may also be shortened to a single expression using ``=>``.
+In this case, the value the expression evaluates to will be assigned to
+the backing property. That is, the following two examples are
+equivalent:
 
 .. code:: php
 
-   class User
-   {
-       public function __construct(private string $first, private string $last) {}
-       
-       public function getFullName(): string {
-           return $this->first . " " . $this->last;
+   class User {
+       public string $username {
+           set(string $value) {
+               $this->username = strtolower($value);
+           }
        }
-       
-       public function setFullName(string $value): void {
-           $value = \ucfirst($value);
-           [$this->first, $this->last] = explode(' ', $value);
+
+
+       public string $username {
+           set => strtolower($value);
        }
    }
+
+Note that, by implication, the short-set syntax implies a backing
+property. It is therefore incompatible with virtual properties. Using
+this syntax will always result in a backing property being defined.
 
 Scoping
 ~~~~~~~
@@ -517,7 +634,7 @@ sub-call to an arbitrarily complex method if they wish. For example:
 
    class Person {
        public string $phone {
-           set => $field = $this->sanitizePhone($value);
+           set => $this->sanitizePhone($value);
        }
        
        private function sanitizePhone(string $value): string {
@@ -531,10 +648,15 @@ sub-call to an arbitrarily complex method if they wish. For example:
        }
    }
 
-Note that ``$field`` is only valid in the hook itself, not in a
-sub-called method. That is, writing to ``$field`` from within
-``sanitizePhone()`` would just write to a local variable by that name,
-not to the property.
+If a hook calls a method that in turn tries to read or write from the
+property again, that would normally result in an infinite loop. To
+prevent that, accessing the backing value of a property from a method
+called from a hook on that property will throw an Error. That is
+somewhat different than the existing behavior of ``__get`` and
+``__set``, where such sub-called methods would bypass the magic methods.
+However, as valid use cases for such circular logic are difficult to
+identify and there is added risk of confusion with dynamic properties,
+we have elected to simply block that access entirely.
 
 References
 ~~~~~~~~~~
@@ -544,11 +666,12 @@ properties, they cause issues when acquiring a reference to a property
 or with indirect modification (such as
 ``$this->arrayProp['key'] = 'value';``).
 
-For that reason, the presence of any hook must necessarily also disallow
-acquiring a reference to a property or indirect modification on a
-property.
-
-For example:
+That is because any attempted modification of the value by reference
+would bypass a ``set`` hook, if one is defined. For that reason, the
+presence of a ``set`` hook must necessarily also disallow acquiring a
+reference to a property or indirect modification on a property. For the
+vast majority of properties this causes no issue, as reading or writing
+to properties by reference is extremely rare.
 
 .. code:: php
 
@@ -557,8 +680,8 @@ For example:
        public string $bar;
 
        public string $baz {
-           get => $field;
-           set => $field = strtoupper($value);
+           get => $this->baz;
+           set => strtoupper($value);
        }
    }
 
@@ -569,27 +692,63 @@ For example:
    $foo->bar = &$x;
 
    // This will error, as $baz is a 
-   // hooked property and so references are not allowed.
+   // set-hooked property and so references are not allowed.
    $foo->baz = &$x;
 
-For the vast majority of properties this causes no issue, as reading or
-writing to properties by reference is extremely rare. However, there are
-some edge cases where references to properties are necessary. Arguably,
-the lack of support for references would technically make adding hooks
-to a property a nominal BC break for that class, but property references
-are so rare that we consider it acceptable, especially with the addition
-below.
+If there is no ``set`` hook, however, there is nothing to bypass, so
+obtaining a reference via ``get`` is not inherently problematic.
+Returning by reference for a ``get``-only property is therefore allowed.
+To do so, prefix the hook name with ``&``:
+
+.. code:: php
+
+   class Foo
+   {
+       public string $baz {
+           &get {
+             if ((!isset($this->baz)) {
+               $this->baz = $this->computeBaz();
+             }
+             return $this->baz;
+           }
+       }
+   }
+
+   $foo = new Foo();
+
+   // This triggers the get hook, which lazily computes and caches the string.
+   // It then returns it by reference.
+   print $foo->baz;
+
+   // This obtains a reference to the baz property.
+   $temp =& $foo->baz;
+
+   // $foo->baz is updated to "update".
+   $temp = 'update';
+
+A caller may only obtain a reference to a property that has declared
+``&get``. Attempting to get a reference on a ``get`` property will
+trigger an error.
+
+The ``get`` and ``&get`` operations need to be separated to allow hooked
+properties to "opt-in" to sharing the underlying reference and allowing
+"spooky action at a distance" (by modifying the property through the
+reference). A ``get`` hook is protected from that leak automatically. If
+the property does use ``&get``, it implies the class author is aware of
+that exposure situation and sees it as a feature, not a bug.
+
+Implementing both ``get`` and ``&get`` simultaneously is a compile
+error.
 
 There is one exception to the above: if a property is virtual, then
-there is no presumed connection between the get and set operations.
-Since the ``set`` hook couldn't be expected to update-in-place anyway,
-we have chosen to allow references to be opt-in for the ``get`` hook on
-virtual properties, only. To do so, the ``get`` hook may be prefixed
-with ``&``, which will cause it to return a reference to whatever its
-body returns, rather than the value itself. Subsequent writes to that
-reference will not trigger the ``set`` hook.
-
-That means the following is allowed:
+there is no possible connection between the reference returned from
+``&get`` and the property's backing value (given it doesn't have any).
+This makes it no different from a set of ``&getProp() + setProp()``
+accessor methods that allow a reference to the underlying property to
+leak. We leave this possibility open as an opt-in way to achieve a
+higher degree of backwards compatibility, may it be needed, with the
+caveat that the class may not being aware of every change that may
+happen to the property.
 
 .. code:: php
 
@@ -599,10 +758,12 @@ That means the following is allowed:
        
        public string $baz {
            &get => $this->_baz;
-           set => $this->_baz = strtoupper($value);
+           set {
+               $this->_baz = strtoupper($value);
+           }
        }
    }
-    
+
    $foo = new Foo();
 
    // This invokes "set", and sets $_baz to "BEEP".
@@ -614,15 +775,56 @@ That means the following is allowed:
    // This assigns "boop" to $_baz, bypassing the set hook.
    $x = 'boop';
 
-Setting by reference, however, is not supported, as its semantics are
-not well-defined. This behavior mirrors how the magic methods
-``__get()`` and ``__set()`` handle references. (They are, in a sense,
-generic virtual properties.)
+Setting by reference, however, is not supported. It may be possible to
+add in the future, but its complexity is too large to handle here. See
+the "Assignment by Reference" section under Future Scope for more
+details.
+
+This behavior mirrors how the magic methods ``__get()`` and ``__set()``
+handle references. (They are, in a sense, generic virtual properties.)
+
+To summarize:
+
+-  Backed properties
+
+::
+
+       * ''get'' - Legal, may not assign by reference.
+       * ''get''/''set'' - Legal, may not assign by reference.
+       * ''&get'' - Legal, may assign by reference.
+       * ''&get''/''set'' - Illegal, compile error.
+       * ''set'' - Legal, may not assign by reference
+   * Virtual properties  
+       * ''get'' - Legal, may not assign by reference.
+       * ''get''/''set'' - Legal, may not assign by reference.
+       * ''&get'' - Legal, may assign by reference.
+       * ''&get''/''set'' - Legal, may assign by reference.
+       * ''set'' - Legal, but not particularly useful.
+
+Be aware that a ``&get`` hook may return a value by reference that does
+not correspond to a property of the object. This is true for both backed
+and virtual properties. In that case, writing to the returned value may
+not have the expected effect.
+
+.. code:: php
+
+   class C {
+       public string $a { 
+           &get { 
+               $b = $this->a;
+               return $b;
+           }
+   }
+   $c = new C();
+   $c->a = 'beep';
+   // $c is unchanged.
+
+This concern is the same as for a ``&getA()`` method, however, so it is
+not an edge case limited to hooks.
 
 Additionally, iterating an object's properties by reference will throw
-an error if any of the properties have hooks defined. (Note: We are
-still confirming that this can be caught properly; this part of the
-design may change before the RFC goes to a vote.)
+an error if it encounters a property that has a hook defined. (It will
+not error until it reaches that property.)
 
 .. code:: php
 
@@ -637,118 +839,233 @@ design may change before the RFC goes to a vote.)
 Arrays
 ~~~~~~
 
-There is an additional caveat regarding ``array`` properties. Assigning
-a value to an array property consists of obtaining a pointer to that
-property and modifying it in place without knowledge of whether that
-array came from a property with hooks. It is also common in some systems
-to acquire references to arrays and modify them in some other place.
-That would, as above, bypass any hooks that have been defined.
+There is an additional caveat regarding arrays. Modifications to arrays
+stored in properties may happen "in-place", meaning without causing a
+copy of the array. However, there's no way to achieve this behavior with
+by-value getter and setter methods.
 
-Furthermore, providing a good API for an array modification seems
-impossible. The simplest approach would be to copy the array, modify it
-accordingly, and pass it to ``set`` hook. This would have a large and
-obscure performance penalty, and a ``set`` implementation would have no
-way of knowing which values had changed, leading to, for instance, code
-needing to revalidate all elements even if only one has changed.
+.. code:: php
 
-Another approach might be a separate hook, e.g.
-``setOffset(array $keys, $value)`` where $keys is a list of keys (for
-example, ``$foo['bar']['baz']``). Assuming the user would like to apply
-the change to the array, they would need to iterate the keys, fetch the
-offset by-reference, and at the end assign the value to the last
-reference. This has terrible performance characteristics and is
-non-trivial to implement for the end-user.
+   class Test {
+       public $array = [];
 
-Both of these possible approaches also handle only explicit additions
-and modification. They would not address appending (``[]``) or
-operations such as ``unset``, which would introduce even more
-complexity.
+       public function getArray() {
+           echo "getArray()\n";
+           return $this->array;
+       }
 
-Because all API solutions that come to mind are bad it is the opinion of
-the authors that for arrays, dedicated mutator methods are always the
-superior API choice. Therefore, while hooks may be applied to array
-properties attempting to write to a key of a backed array property that
-has hooks (using ``[]`` or ``['some key']``) will result in a runtime
-error being thrown.
+       public function setArray($array) {
+           echo "setArray()\n";
+           $this->array = $array;
+       }
+   }
 
-This restriction does not apply to ``get`` operations, as the hook would
-run to return the whole array, and then dereferencing off of it for an
-individual key is safe.
+   $test = new Test();
 
-To summarize in code:
+   // This is what we actually want. The array is modified directly, without any performance overhead.
+   $test->array[] = 'foo';
+
+   // getArray() returns a temporary value, modifying it has no effect. This approach does not work.
+   $test->getArray()[] = 'foo';
+
+   // Storing the value from getArray() in a temporary variable, modifying it and assigning it back
+   // works as expected.  However, there's an implicit copy on line 2, because the array is referenced
+   // from both $array and $test->array. The array is copied, just for the copy to immediately
+   // overwrite the original value.
+   $array = $test->getArray();
+   $array[] = 'foo';
+   $test->setArray($array); 
+
+The obvious solution to this is to return from ``getArray`` by
+reference.
+
+.. code:: php
+
+   class Test {
+       // ...
+       public function &getArray() {
+           echo "getArray()\n";
+           return $this->array;
+       }
+       // ...
+   }
+
+   // Now it works!
+   $test->getArray()[] = 'foo';
+
+However, this comes a significant issue: ``setArray`` expects to observe
+changes to ``$array``, but to no avail. An in-place array modification
+consists of calling ``&getArray`` and modifying the array stored in the
+reference. At no point is ``setArray`` invoked.
+
+These problems exist in the exact same way for hooks.
+
+.. code:: php
+
+   class Test {
+       public $array {
+           &get {
+               echo "getArray()\n";
+               return $this->array;
+           }
+           set {
+               echo "setArray()\n";
+               $this->array = $value;
+           }
+       }
+   }
+
+   $test = new Test();
+   // Appending to an array invokes &get and modifies 
+   // the array stored in the returned reference, bypassing
+   // the set hook entirely.
+   $test->array[] = 'foo';
+
+Two mitigations immediately come to mind, but they each come with
+significant limitations.
+
+#. We may introduce various hooks for array modification. For example,
+   ``$test->array[] = 'foo'`` may invoke an ``offsetAppend`` hook.
+   ``unset($test->array['foo'])`` may call an ``offsetUnset`` hook, etc.
+   However, a complete solution is impossible. Imagine
+   ``sort($test->array)``, along with all the other functions that
+   modify the array by-reference. They can make arbitrary changes to the
+   array, which are not directly translatable to a hook.
+#. We may create an implicit copy to the array, and silently pass it
+   back to ``set``. This comes with the aforementioned performance
+   issue. Moreover, assuming a large array is passed to ``set``
+   containing validation, the ``set`` hook is burdened with the task of
+   figuring out *what* in the array has changed, or rechecking it in
+   full.
+
+Neither of these approaches are satisfactory. Because all API solutions
+that come to mind are bad, it is the opinion of the authors that for
+arrays, dedicated mutator methods with a narrow contract are always the
+superior API choice.
+
+.. code:: php
+
+   class Test {
+       private $_array;
+       public $array {
+           get => $this->_array;
+       }
+
+       public function addElement($value) {
+           // We can validate $value, without re-validating the entire array.
+           $this->_array[] = $value;
+       }
+   }
+
+   $test = new Test();
+   $test->addElement('foo');
+
+With `Asymmetric Visibility </rfc/asymmetric-visibility>`__ that was
+previously proposed, the example can be further simplified.
+
+.. code:: php
+
+   // This example not provided by this RFC.
+   // It's just to show how asymmetric visibility would solve this use case better.
+   class Test {
+       public private(set) $array;
+
+       public function addElement($value) {
+           $this->array[] = $value;
+       }
+   }
+
+It would also be possible to make ``addElement()`` private/protected, in
+order to simulate private-write, public-read properties.
+
+For these reasons, we have disallowed intrinsically-reference array
+operations (``[]`` and writing to ``['foo']``) on array properties when
+a ``set`` hook is present.
+
+Here is a exhaustive list of possible hook combinations and their
+supported operations.
+
+To summarize:
+
++-------------+-------------+-------------+-------------+-------------+
+| Property    | Hooks       | Reading     | Writing     | Write whole |
+| type        |             | index       | index       | array       |
++=============+=============+=============+=============+=============+
+| Example     |             | ``$a        | ``$a->a     | ``$a->ar    |
+|             |             | ->arr[1];`` | rr[1] = 2`` | r = $arr2`` |
++-------------+-------------+-------------+-------------+-------------+
+| Backed      | ``get``     | Allowed     | Illegal     | Allowed     |
++-------------+-------------+-------------+-------------+-------------+
+| Backed      | ``&get``    | Allowed     | Allowed     | Allowed     |
++-------------+-------------+-------------+-------------+-------------+
+| Backed      | ``ge        | Allowed     | Illegal     | Allowed     |
+|             | t``/``set`` |             |             |             |
++-------------+-------------+-------------+-------------+-------------+
+| Backed      | ``&ge       | Illegal for |             |             |
+|             | t``/``set`` | any backed  |             |             |
+|             |             | property    |             |             |
++-------------+-------------+-------------+-------------+-------------+
+| Backed      | ``set``     | Allowed     | Illegal     | Allowed     |
++-------------+-------------+-------------+-------------+-------------+
+| Virtual     | ``get``     | Allowed     | Illegal     | Illegal     |
++-------------+-------------+-------------+-------------+-------------+
+| Virtual     | ``&get``    | Allowed     | Allowed     | Illegal     |
++-------------+-------------+-------------+-------------+-------------+
+| Virtual     | ``ge        | Allowed     | Allowed     | Allowed     |
+|             | t``/``set`` |             |             |             |
++-------------+-------------+-------------+-------------+-------------+
+| Virtual     | ``&ge       | Allowed     | Allowed     | Allowed     |
+|             | t``/``set`` |             |             |             |
++-------------+-------------+-------------+-------------+-------------+
+| Virtual     | ``set``\ †  | Illegal     | Illegal     | Allowed     |
++-------------+-------------+-------------+-------------+-------------+
+
+† A set-only virtual property is allowed, but probably not useful in
+practice.
+
+Of note, ``&get``-only allows for lazy-initialization of backed
+properties that still behave "normally" as far as index writing goes.
+For example, a lazy-initialized array that is then "fully public"
+thereafter:
 
 .. code:: php
 
    class C
    {
-       private bool $hasChanged = false;
-       
-       public array $arr {
-           get => $field + ['extra' => 'stuff'];
-           set {
-               $this->hasChanged = true;
-               $field = $value;
+       public array $list {
+           &get {
+             $this->list ??= $this->defaultListValue();
+             return $this->list;
            }
+       }
+       
+       private function defaultListValue() {
+           return ['a', 'b', 'c'];
        }
    }
 
    $c = new C();
 
-   // OK, returns the whole array,
-   // with the extra key on the end.
-   print_r($c->arr);
+   print $c->list[1]; // prints b
 
-   // OK; the hook returns the array by value,
-   // then the 'beep' key is accessed.
-   print $c->arr['beep'];
+   // This calls the &get hook, which returns a reference
+   // to the backing value.  Then this code modifies that reference
+   // to append a value.  This is allowed, as there is no set hook.
+   $c->list[] = 'd';
 
-   // OK.  The entire array is overwritten,
-   // and passed to set as $value to do with
-   // as it pleases.
-   $c->arr = ['new' => 'array'];
+   print count($c->list); // prints 4
 
-   // Error.
-   $c->arr['beep'] = 'boop';
-
-   // Error.
-   $c->arr[] = 'narf';
-
-This check cannot be done at compile time, as we cannot reliably tell at
-compile time whether a property is an array or not, as it could be an
-iterable or mixed, so runtime enforcement would be required anyway.
-There are also valid usecases for arrays with some hooks, such as a
-``get``-only virtual array, which make forbidding hooks entirely
-undesireable.
-
-In practice, a more appropriate and idiomatic usage of hooked arrays
-would be like so:
-
-.. code:: php
-
-   class C 
-   {
-       private array $_elements;
-
-       public array $elements {
-           get => $this->_elements;
-       }
-
-       public function addElement(string $element): void {
-           $this->_elements[] = $element;
-       }
-   }
-
-The "passthrough" ``get`` implementation creates a virtual property,
-which disables writing directly to the ``$elements`` property. As it is
-a virtual property, returning by reference would also be allowed, if
-desired.
+The array-offset rules are enforced at runtime, as we cannot reliably
+tell at compile time what the type and hooks of the property will be.
+(It may be defined in a different file.)
 
 Default values
 ~~~~~~~~~~~~~~
 
 Default values are supported on properties that have a backing store.
 Default values are not supported on virtual properties, as there is no
-natural value for the default to be assigned to.
+natural value for the default to be assigned to, and will be treated as
+a compile-time error.
 
 Of note, the default value is assigned directly, and not passed through
 the ``set`` hook. All subsequent writes will go through the ``set``
@@ -763,7 +1080,7 @@ Default values are listed before the hook block.
    class User
    {
        public string $role = 'anonymous' {
-           set => $field = strlen($value) <= 10 ? $value : throw new \Exception('Too long');
+           set => strlen($value) <= 10 ? $value : throw new \Exception('Too long');
        }
    }
 
@@ -788,32 +1105,37 @@ A child class may also add hooks to a property that had none.
    class PositivePoint extends Point
    {
        public int $x {
-           set($x) {
-               if ($x >= 0) {
-                   $field = $x;
+           set {
+               if ($value < 0) {
+                   throw new \InvalidArgumentException('Too small');
                }
-               throw new \InvalidArgumentException('Too small');
+               $this->x = $value;
            }
        }
    }
 
 Each hook overrides parent implementations independently of each other.
 
-If a child class adds hooks, any default set on the property is removed.
-That is consistent with how inheritance works already; if a property is
-redeclared in a child, its default is removed or must be re-assigned.
-Since hooked properties may not have default values, the default is
-omitted. It may be re-assigned in the class's constructor if desired (in
-which case it would call the ``set`` hook).
+If a child class adds hooks, any default value set on the property is
+removed. That is consistent with how inheritance works already; if a
+property is redeclared in a child, its default is removed or must be
+re-assigned.
 
 Accessing parent hooks
 ^^^^^^^^^^^^^^^^^^^^^^
 
-A hook in a child class may access the parent class's hook it is
-overriding by using the ``parent::$prop`` keyword. If not accessed this
-way, the parent class's hook is ignored. This behavior is consistent
-with how all methods work. This also offers a way to access the parent
-class's storage, if any. That is, the above example could be rewritten:
+A hook in a child class may access the parent class's property using the
+``parent::$prop`` keyword, followed by the desired hook. For example,
+``parent::$propName::get()``. It may be read as "access the ``$prop``
+defined on the parent class, and then run its ``get`` operation" (or
+``set`` operation, as appropriate).
+
+If not accessed this way, the parent class's hook is ignored. This
+behavior is consistent with how all methods work. This also offers a way
+to access the parent class's storage, if any. If there is no hook on the
+parent property, its default get/set behavior will be used.
+
+That is, the above example could be rewritten:
 
 .. code:: php
 
@@ -827,10 +1149,10 @@ class's storage, if any. That is, the above example could be rewritten:
    {
        public int $x {
            set($x) {
-               if ($x >= 0) {
-                   parent::$x::set($x);
+               if ($x < 0) {
+                   throw new \InvalidArgumentException('Too small');
                }
-               throw new \InvalidArgumentException('Too small');
+               parent::$x::set($x);
            }
        }
    }
@@ -855,8 +1177,13 @@ An example of overriding only a ``get`` hook could be:
        }
    }
 
+As only a ``get`` hook is specified, and the parent is a plain property
+(and thus "backed"), setting the property will still happen normally.
 Hooks may not access any other hook except their own parent on their own
 property.
+
+See the FAQ section below for a discussion of why this syntax was
+chosen.
 
 Final hooks
 ^^^^^^^^^^^
@@ -869,7 +1196,7 @@ overridden.
    class User 
    {
        public string $username {
-           final set($value) => $field = strtolower($value);
+           final set => strtolower($value);
        }
    }
 
@@ -877,10 +1204,10 @@ overridden.
    {
        public string $username {
            // This is allowed
-           get => strtoupper($field);
+           get => strtoupper($this->username);
            
-           // But this is NOT allowed, because beforeSet is final in the parent.
-           set => $field = strtoupper($value);
+           // But this is NOT allowed, because set is final in the parent.
+           set => strtoupper($value);
        }
    }
 
@@ -889,19 +1216,20 @@ redeclared by a child class in any way, which precludes altering hooks
 or widening its access.
 
 Declaring hooks ``final`` on a property that is declared ``final`` is
-redundant will throw an error.
+redundant, and will be silently ignored. This is the same behavior as
+final methods.
 
 .. code:: php
 
    class User 
-   {   
+   {
        // Child classes may not add hooks of any kind to this property.
        public final string $name;
 
        // Child classes may not add any hooks or override set,
        // but this set will still apply.
        public final string $username {
-           set => $field = strtolower($value);
+           set => strtolower($value);
        }
    }
 
@@ -956,14 +1284,14 @@ satisfy the interface.
        // Uses only a get hook to create a virtual property.
        // This satisfies the "public get" requirement. It is not
        // writeable, but that is not required by the interface.
-       public string $readable => strtoupper($this->writeable);
+       public string $readable { get => strtoupper($this->writeable); }
      
        // The interface only requires the property be settable,
        // but also including get operations is entirely valid.
        // This example creates a virtual property, which is fine.
        public string $writeable {
            get => $this->written;
-           set => $this->written = $value;
+           set => $value;
        }
      
        // This property requires both read and write be possible,
@@ -971,15 +1299,40 @@ satisfy the interface.
        // the default behavior.
        public string $both {
            get => $this->all;
-           set => $this->all = strtoupper($value);
+           set => strtoupper($value);
        }
    }
 
 Interfaces are only concerned with public access, so the presence of
 non-public properties is both unaffected by an interface and cannot
 satisfy an interface. This is the same relationship as for methods. The
-``public`` keyword on the property is required for syntax consistency,
-but other visibilities are not supported.
+``public`` keyword on the property is required for syntax consistency
+(or its rarely-used alias, ``var``).
+
+A ``get`` hook in an interface may be satisfied by either a ``get`` or
+``&get`` hook in a class. An interface may alternatively specify a
+``&get`` hook in its definition, in which case an implementing class
+must also use a ``&get`` hook. This behavior is identical to how methods
+in interfaces already work.
+
+We have deliberately chosen to not support ``public string $foo`` in
+interfaces, without specifying the required hooks. That is because the
+most common use case would be a get-only property, but it's unclear if
+undefined hooks should mean "get only" or "get and set". It may also
+imply that the property may be referenced, which may not be the case
+depending on the implementing class. To avoid ambiguity, the expected
+operations must be specified explicitly.
+
+Of note, an interface property that only requires ``get`` may be
+satisfied by a public ``readonly`` property, as the restrictions of
+``readonly`` only apply on write. However, an interface property that
+requires ``set`` is incompatible with a ``readonly`` property, as
+public-write would be disallowed.
+
+At this time, it is not possible to specify a covariant (wider)
+write-type in the interface the way a hook implementation can. That is
+mainly to reduce moving parts and complexity. In concept, it could be
+cleanly added without a BC break in the future if desired.
 
 Abstract properties
 ~~~~~~~~~~~~~~~~~~~
@@ -1010,14 +1363,14 @@ methods.
    {
        // This satisfies the requirement and also makes it settable, which is valid.
        public string $readable;
-       
+
        // This would NOT satisfy the requirement, as it is not publicly readable.
        protected string $readable;
 
        // This satisfies the requirement exactly, so is sufficient. It may only
        // be written to, and only from protected scope.    
        protected string $writeable {
-           set => $field = $value;
+           set => $value;
        }
      
        // This expands the visibility from protected to public, which is fine.
@@ -1029,22 +1382,44 @@ for any hook, but must have either ``get`` or ``set`` declared but not
 defined (as in the example above). A property on an interface may not
 implement any hooks.
 
-Abstract property types
-~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
+
+   abstract class A
+   {
+       // This provides a default (but overridable) set implementation, and requires 
+       // child classes to provide a get implementation.
+       abstract public string $foo { 
+           get;
+           set { $this->foo = $value };
+       }
+   }
+
+As with interfaces, omitting a hook indicates no requirement for it, and
+specifying neither hook is not supported, for all the same reasons as
+interfaces.
+
+As with interfaces, a ``get``-only abstract property may be satisfied by
+a ``readonly`` property. A ``set``-requiring abstract property is
+incompatible with ``readonly``.
+
+Property type variance
+~~~~~~~~~~~~~~~~~~~~~~
 
 Normal properties are neither covariant nor contravariant; their type
 may not change in a subclass. The reason for that is "get" operations
 MUST be covariant, and "set" operations MUST be contravariant. The only
 way for a property to satisfy both requirements is to be invariant.
 
-With abstract properties (on an interface or abstract class) it is
-possible to declare a property that has only a get or set operation. As
-a result, abstract properties that have only a ``get`` operation
-required MAY be covariant. Similarly, an abstract property that has only
-a ``set`` operation required MAY be contravariant.
+With abstract properties (on an interface or abstract class) or virtual
+properties, it is possible to declare a property that has only a get or
+set operation. As a result, abstract properties or virtual properties
+that have only a ``get`` operation required MAY be covariant. Similarly,
+an abstract property or virtual property that has only a ``set``
+operation required MAY be contravariant.
 
 Once a property has both a ``get`` and ``set`` operation, however, it is
-no longer covariant or contravariant for further extension.
+no longer covariant or contravariant for further extension. That is, it
+is now invariant (as all properties are in 8.3 and earlier).
 
 .. code:: php
 
@@ -1094,31 +1469,6 @@ is used both declare the same property with hooks, an error is issued.
 We anticipate that being a very rare edge case, and thus no additional
 resolution machinery is necessary.
 
-Interaction with asymmetric visibility
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Swift and C#, the languages on which this design is modeled, both
-support asymmetric visibility in addition to property hooks (by whatever
-name). However, they use different syntaxes. The C# syntax in particular
-includes the visibility on the ``get`` or ``set`` hook.
-
-That would cause a problem for PHP. As noted above, property hooks are
-incompatible with ``array`` properties. However, there is no conceptual
-reason for asymmetric visibility to be incompatible with array
-properties, and there are ample use cases for wanting to support that.
-
-However, using the C#-style syntax for visibility would either
-inherently forbid asymmetric visibility on arrays (undesirable), or
-necessitate more complex syntax to determine if references should or
-should not be disabled on a property. Both are poor options.
-
-For that reason, any concept of asymmetric visibility has been omitted
-from this RFC. Should asymmetric visibility be determined a desirable
-feature in the future, a left-side syntax as used by Swift and as
-demonstrated in the original `Asymmetric
-Visibility </rfc/asymmetric-visibility>`__ RFC would be a complementary
-addition, and the best option in practice.
-
 Interaction with readonly
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1131,14 +1481,14 @@ when readonly works on properties with hooks. Moreover, providing a
 notion of a "initialized" value.
 
 For that reason, a ``readonly`` property with a ``get`` or ``set`` hook
-is disallowed and will throw a syntax error. That also means that a
+is disallowed and will throw a compile error. That also means that a
 child class may not redeclare and add hooks to a ``readonly property``,
 either.
 
 Interaction with magic methods
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PHP 8.2 will invoke the ``__get()``, ``__set()``, ``__isset()``, and
+PHP 8.3 will invoke the ``__get()``, ``__set()``, ``__isset()``, and
 ``__unset()`` magic methods if a property is accessed and it is either
 not defined, OR it is defined but not visible from the calling scope.
 The presence of hooks on a defined property does not change that
@@ -1154,12 +1504,11 @@ from any other method, and thus hooks will still be invoked as normal.
 
    class C
    {
-       private string $normalizedName;
        private string $name {
-           get => $field;
-           set => $field = ucfirst($value);
+           get => $this->name;
+           set => ucfirst($value);
        }
-       
+
        public function __set($var, $val)
        {
            print "In __set\n";
@@ -1180,15 +1529,23 @@ Interaction with isset() and unset()
 If a scope-visible property implements ``get``, then ``isset()`` will
 invoke the ``get`` hook and return true if the value is non-null. That
 is, ``isset($o->foo)``, where ``$foo`` has a ``get`` hook, is equivalent
-to ``!is_null($o->foo)``. This behavior is consistent with how
-``isset()`` interacts with ``__get`` today.
+to ``!is_null($o->foo)``.
+
+In comparison, with an undefined property ``isset()`` currently checks
+both ``__isset()`` and ``__get()``, and returns true only if the isset
+magic method is defined AND returns ``true`` AND the get magic method
+returns non-null. Since a property with a hook is always defined, by
+definition, there is no need to verify it (the equivalent logic would
+always return true). The net result is that the behavior is consistent
+with how ``isset()`` interacts with ``__get``/``__isset()`` today.
 
 If a property has a backing value and there is no ``get`` hook, it will
 operate on the property value directly the same as if there were no
 hooks.
 
 If a property is virtual and has no ``get`` hook, calling ``isset()``
-will throw an Error.
+will throw an Error. (This would only happen on a set-only virtual
+property, which we anticipate being very rare.)
 
 If a property implements any hook, then ``unset()`` is disallowed and
 will result in an error. ``unset()`` is a very narrow-purpose write
@@ -1227,11 +1584,11 @@ combinations of hooks and promotion:
    class User
    {
        public function __construct(
-           public string $username { set => $field = strtolower($value); }
+           public string $username { set => strtolower($value); }
        ) {}
    }
 
-Which is, all things considered, not too bad for the level of power it
+Which is, all things considered, pretty good for the level of power it
 gives.
 
 Interaction with serialization
@@ -1241,16 +1598,19 @@ The behavior of properties with hooks when serialized has been designed
 to model the behavior of non-hooked properties as closely as possible.
 
 There are several serialization contexts to consider. Their behavior is
-sumamrized below, with explanations afterward.
+summarized below, with explanations afterward.
 
 -  ``var_dump()``: Use raw value
 -  ``serialize()``: Use raw value
 -  ``unserialize()``: Use raw value
+-  ``__serialize()``/``__unserialize()``: Custom logic, uses get/set
+   hook
 -  Array casting: Use raw value
 -  ``var_export()``: Use get hook
 -  ``json_encode()``: Use get hook
--  ``JsonSerializable``: Use get hook
+-  ``JsonSerializable``: Custom logic, uses get hook
 -  ``get_object_vars()``: Use get hook
+-  ``get_mangled_object_vars()``: Use raw value
 
 ``serialize()`` and ``var_dump()`` are both intended to show the
 internal state of the object. For that reason, for backed properties
@@ -1262,18 +1622,26 @@ Similarly, ``unserialize()`` will write to a property's backing value
 directly, without invoking ``set``. If the input has a value for a
 virtual property, an error will be thrown.
 
+Note that if the ``__serialize()`` or ``__unserialize()`` magic methods
+are used, those will run like any other method and therefore read
+through the ``get`` hook.
+
 When casting an object to an array (``$arr = (array) $obj``), currently
 the visibility of properties is ignored; the keys returned may have an
-extra ``*`` in them to indicate that they were private, but that's it.
+extra prefix in them to indicate that they were private, but that's it.
 As this operation currently reveals internal implementation details, it
 also will not invoke the ``get`` hook.
+
+``get_mangled_object_vars()`` was intended as a long-term replacement
+for array casting of objects, and therefore its interaction with hooks
+is identical. No hook will get called.
 
 ``JsonSerializable`` is a non-issue; its ``jsonSerialize`` method will
 be called as a normal method and have the same access to properties as
 any other method (that is, through the ``get`` hook if present), and may
 return whatever value it wishes.
 
-In PHP 8.2, using ``json_encode()`` on an object that does not implement
+In PHP 8.3, using ``json_encode()`` on an object that does not implement
 ``JsonSerializable`` will return a JSON object of key/value pairs of the
 public properties only, regardless of what scope it is called from. The
 intent is to serialize the "public face" of the object. For that reason,
@@ -1292,38 +1660,63 @@ export of the object's internal state, and it bypasses visibiilty
 control, but in a way that it may be re-hydrated entirely from
 user-space code in the ``__set_state()`` method. ``__set_state()``
 necessarily must send any assignments through the ``set`` hook, if
-defined.To minimize asymmetry, therefore, we have chosen to invoke
+defined. To minimize asymmetry, therefore, we have chosen to invoke
 ``get`` hooks on properties for ``var_export()``.
 
 Reflection
-----------
+~~~~~~~~~~
+
+There is a new global enum, ``PropertyHookType``. It is string-backed to
+allow for easy "upcasting" of primitive values when appropriate.
+
+.. code:: php
+
+   enum PropertyHookType: string
+   {
+       case Get = 'get';
+       case Set = 'set';
+   }
 
 ``ReflectionProperty`` has several new methods to work with hooks.
 
--  ``GetHooks(): array`` returns an array of ``\ReflectionMethod``
+-  ``getHooks(): array`` returns an array of ``\ReflectionMethod``
    objects keyed by the hook they are for. So for example, a property
    with both ``get`` and ``set`` hook will return a 2 element array with
-   keys ``get`` and ``get``, each of which are a ``\ReflectionMethod``
+   keys ``get`` and ``set``, each of which are a ``\ReflectionMethod``
    object. The order in which they are returned is explicitly undefined.
    If an empty array is returned, it means there are no hooks defined.
--  ``getHook(string $hook): ?\ReflectionMethod`` returns the
-   corresponding ``\ReflectionMethod`` object, null if it is not
-   defined, or throw an error if a non-supported hook is requested
-   (e.g., ``getHook('beep')``).
+-  ``getHook(PropertyHookType $hook): ?\ReflectionMethod`` returns the
+   corresponding ``\ReflectionMethod`` object or null if it is not
+   defined.
 -  ``isVirtual(): bool``, returns ``true`` if the property has no
    backing value, and ``false`` if it does. (That is, all existing
    properties without hooks will return ``false``.)
--  ``getRawValue(): mixed`` will return the raw backing value of the
-   property, without caling a ``get`` hook. If there is no hook, it
-   behaves identically to ``getValue()``. If the property is virtual, it
-   will throw an error. Because it has no meaning on a static property,
-   there is no option to pass in an object to read from.
--  ``setRawValue(mixed $value): void`` will, similarly, set the raw
-   value of a property without invoking a ``set`` hook. If there is no
-   hook, it behaves identically to ``setValue()``. If the property is
-   virtual, it will throw an error. Because it has no meaning on a
-   static property, there is no option to pass in an object to read
-   from.
+-  ``getSettableType(): ?\ReflectionType`` will return the type
+   definition for the set hook, if defined. If there is no set-type
+   specified, it will return the property type exactly as ``getType()``,
+   including ``null`` if the property is untyped. If the property is
+   intrinsically unsettable (because it is virtual and has no set hook),
+   ``ReflectionType(never)`` will be returned. (A ``readonly`` property
+   is still settable, just once, so in that case the behavior is
+   identical to ``getType()``.)
+-  ``getRawValue(object $object): mixed`` will return the raw backing
+   value of the property, without caling a ``get`` hook. If there is no
+   hook, it behaves identically to ``getValue()``. If the property is
+   virtual, it will throw an error. On a static property, this method
+   will always throw an error.
+-  ``setRawValue(object $object, mixed $value): void`` will, similarly,
+   set the raw value of a property without invoking a ``set`` hook. If
+   there is no hook, it behaves identically to ``setValue()``. If the
+   property is virtual, it will throw an error. On a static property,
+   this method will always throw an error.
+-  The existing ``getValue()`` method will invoke a ``get`` hook if one
+   is defined, regardless of whether the property is virtual or not. If
+   a property is write-only (virtual and has only a ``set`` hook
+   defined), an error will be thrown.
+-  The existing ``setValue()`` method will invoke a ``set`` hook if one
+   is defined, regardless of whether the property is virtual or not. If
+   a property is get-only (virtual and has only a ``get`` hook defined),
+   an error will be thrown.
 
 There is also a ``\ReflectionProperty::IS_VIRTUAL`` constant for use in
 property filters.
@@ -1362,7 +1755,7 @@ obtained.
    }
 
    $getAttr = (new ReflectionProperty(C::class, 'prop'))
-       ->getHook('get')
+       ->getHook(PropertyHookType::Get)
        ->getAttributes()[0];
    $aAttrib = $getAttr->getInstance();
 
@@ -1374,8 +1767,8 @@ expected.
 .. code:: php
 
    class C {
-       public $prop { 
-           set(#[SensitiveParameter] $value) {
+       public int $prop { 
+           set(#[SensitiveParameter] int $value) {
                throw new Exception('Exception from $prop');
            }
        }
@@ -1387,6 +1780,184 @@ expected.
    // Stack trace:
    // #0 example.php(4): C->$prop::set(Object(SensitiveParameterValue))
    // #1 {main}
+
+Of note, the ``#[\Override]`` attribute can be applied to a hook, and it
+will treat the parent property's hook as its parent and behave
+accordingly. If the parent property is declared but has no hooks, that
+is considered "existing" as though it had a trivial hook on it.
+
+Frequently Asked Questions
+--------------------------
+
+Why not Python/JavaScript-style accessor methods?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Of the 5 languages we surveyed that had property accessors, C#, Swift,
+and Kotlin put the accessor/hook logic on the property, as is done here.
+Python and JavaScript have no property declaration, instead having an
+annotation on a method that turns it into a getter/setter. Using a
+JavaScript-inspired syntax, in PHP that might look like:
+
+.. code:: php
+
+   class Person
+   {
+       public string $firstName;
+
+       public function __construct(private string $first, private string $last) {}
+
+       public function get firstName(): string
+       {
+           return $this->first . " " . $this->last;
+       }
+       
+       public function set firstName(string $value): void
+       {
+           $this->first = $value;
+       }
+   }
+
+While that may seem superficially preferable, it is not workable for a
+number of reasons.
+
+#. What is the property type of the ``$firstName`` property? Presumably
+   string, but there's nothing inherent that forces,
+   ``public string $firstName``, ``get firstName()``\ s return and
+   ``set firstName()``\ s parameter to be the same. Even if we could
+   detect it as a compile error, it means one more thing that the
+   developer has to keep track of and get right, in three different
+   places. Architecture should "make invalid states impossible", and
+   this does not. (Python and JavaScript are both largely untyped, which
+   is why they don't have this issue.)
+#. What about visibility? Do the get/set methods need to have the same
+   visibility as the property? If not, does that become a way to do
+   asymmetric visibility? But then even if not, the visibility would be
+   repeated multiple times. What about inconsistency between the
+   method's visibility and the property visibility? How is that handled?
+   (Python and JavaScript do not have visibility modifiers in the sense
+   PHP does, which is why they don't have this issue.)
+#. How do you differentiate between virtual and non-virtual properties?
+   Arguably that could be where declaring the property separately has
+   value, but as noted above that introduces a host of additional
+   issues. Without that triple-bookkeeping, however, it's not obvious if
+   a property is virtual or not. (Python and JavaScript both do not
+   pre-define properties, which is why they don't have this issue.)
+#. For non-virtual properties, if you need to triple-enter everything,
+   we're back to constructors pre-promotion. Plus, the accessor methods
+   could be anywhere in the class, potentially hundreds of lines away.
+   That means just looking at the property declaration doesn't tell you
+   what its logic is; the logic may be on line 960, which only makes
+   keeping its type/visibility in sync with the property harder.
+
+Essentially, the tagged-method approach can work well in languages
+without explicit typed properties, where all objects are really just
+dictionaries with funny syntax (Python and JavaScript). In languages
+with explicit typed properties, that becomes vastly more cumbersome and
+un-ergonomic. Of note, all three languages surveyed that have explicit
+typed properties (C#, Swift, and Kotlin) use on-the-property accessor
+definitions instead. As PHP is also a language with explicit typed
+properties, following suit makes logical sense.
+
+Why isn't asymmetric visibility included, like in C#?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Kotlin, Swift, and C#, all of which have a similar accessor model to
+that shown here, all support asymmetric visibility in addition to
+property hooks (by whatever name). However, they all use different
+syntaxes. In some but not all cases, the visibility is placed on the
+``get`` or ``set`` hook.
+
+That would cause a problem for PHP. As noted above, property hooks are
+incompatible with ``array`` properties. However, there is no conceptual
+reason for asymmetric visibility to be incompatible with array
+properties, and there are ample use cases for wanting to support that.
+
+However, using the hook-bound syntax for visibility would either
+inherently forbid asymmetric visibility on arrays (undesirable), or
+necessitate more complex syntax to determine if references should or
+should not be disabled on a property. Both are poor options.
+
+For that reason, any concept of asymmetric visibility has been omitted
+from this RFC. Should asymmetric visibility be determined a desirable
+feature in the future, a left-side syntax as used by Swift and as
+demonstrated in the original `Asymmetric
+Visibility </rfc/asymmetric-visibility>`__ RFC would be a complementary
+addition, and the best option in practice.
+
+What's with the weird syntax for accessing a parent property?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The syntax for accessing a parent property through hooks was designed to
+minimize confusion with other syntax. It's not ideal, but has the fewest
+trade-offs. The seemingly-obvious alternative, using ``parent::$x``, has
+several problems.
+
+First, there's then no way to differentiate between "access parent hook"
+and "read the static property $x on the parent". Arguably that's not a
+common case, but it is a point of confusion.
+
+The larger issue is that ``parent::$x`` can't be just a stand-in for the
+backing value in all cases. While supporting that for the ``=`` operator
+is straightforward enough, it wouldn't give us access to ``++``, ``--``,
+``<=``, and the dozen or so other operators that could conceivably
+apply. In theory those could all be implemented manually, but we
+estimate that would be "hundreds to thousands of lines of code" to do,
+which... is not time or code well spent. :-) Especially as this is a
+very edge-case situation to begin with.
+
+So we have the choice between making ``$a = parent::$prop`` and
+``parent::$prop = $a`` work, but \*nothing else*, inexplicably (creating
+confusion) or the slightly longer syntax of
+``$a = parent::$prop::get()`` and ``parent::$prop::set($a)`` that
+wouldn't support those other operations anyway so there's no confusion.
+
+We feel the current approach is the better trade off, but if the
+consensus generally is for the shorter-but-inconsistent syntax, that can
+be changed.
+
+Why no explicit "virtual" flag?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One change that was suggested was to require virtual properties to be
+marked with a ``virtual`` keyword or similar, rather than relying on
+auto-detecting if a property should be backed. We considered this
+approach, and it has its merits for explicitness, but on further
+investigation determined that it would not be feasiable due to
+inheritance.
+
+Specifically, for implementation reasons if a child class extends a
+parent with a backed property and provides hooks that do not use the
+backing value, the class still has a masked property on it. Conversely,
+if a parent class has a virtual property a child class may override it
+and use a backing value, which will then be created. Essentially, a
+property is "backed" (as far as the engine is concerned) if any class in
+its hierarchy is backed.
+
+That would mean, however, that the ``virtual`` keyword is unreliable, as
+a parent or child class could trigger different behavior. Consider:
+
+.. code:: php
+
+   class P {
+       public virtual $prop { get => ...; set { ... }; }
+   }
+
+   class C extends P {
+       public virtual $prop { get => strtoupper(parent::$prop::get()); }
+   }
+
+In this case, ``C::$prop`` is marked as virtual, because it technically
+does not read from a backing store itself. However, if ``P::$prop`` is
+not-virtual, that means the ``virtual`` declaration on ``C`` is
+technically wrong, as there is a backing value named ``$prop``. If
+``P::$prop`` changes between virtual and non, this could end up being a
+BC break.
+
+While there are ways that the engine could be made to handle that
+scenario without crashing, the syntax would still be confusing to the
+user. We therefore believe that the current approach of "if
+``$this->prop`` is used, it's backed" is simpler for the user in
+practice, less misleading, and easier for the engine.
 
 Usage examples
 --------------
@@ -1454,7 +2025,7 @@ Open questions
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3.
+PHP 8.4.
 
 Future Scope
 ------------
@@ -1479,39 +2050,139 @@ feature unto itself. The authors therefore opted to avoid that for now.
 It is an addition that could be pursued in the future if it's found to
 be useful.
 
+Return to assign for long-set
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In the current design, a long-form ``set`` hook, with body, is always
+return-void. That does make multi-statement ``set`` hooks a bit more
+awkward than allowing them to return the value to set, rather than
+assigning it explicitly to the backing property.
+
+The root problem is that it is not curently possible to differentiate
+between ``return``, ``return null``, and "nothing returned" at runtime,
+from the call-side. They all get seen as ``null``. It's then impossible
+to tell if that means "assign null to the backing property" or "I
+already handled the assignment, do nothing."
+
+(This issue doesn't exist for short-set, as we can safely just declare
+"it's always an assignment, period.")
+
+The proper solution for this problem is to update the engine to
+differentate between "null was explicitly returned" and "nothing was
+returned at all." If that change were made, it would be reasonably
+straightforward to support optionally returning from the set hook.
+However, that is a deeper change with potentially other implications, so
+we feel it is out of scope for this RFC.
+
+A future RFC that makes that engine change and then enables an optional
+return-to-set feature for set hooks is certainly possible, and the
+authors would support that. It would have no BC breakage for the hooks
+feature itself.
+
+Assignment by reference
+~~~~~~~~~~~~~~~~~~~~~~~
+
+This RFC does not support assign-by-reference for hooked properties.
+That is a very rare edge case, and the current dynamic-property
+mechanism (``__set``) doesn't support it either, so it is no great loss,
+even though there is, technically, a very small potential for breakage
+if someone is trying to write to a public property of another class, and
+that class's author changes it to add hooks.
+
+It may be possible to allow assign-by-ref in the future, though it would
+be rather involved, which is why it has been left out of this RFC. We
+are, however, documenting the moving parts involved for future
+reference.
+
+Assigning by reference involves a couple of steps:
+
+-  If the value to be assigned (right side of a ``=&`` operation) is not
+   already a reference, wrap it into a reference.
+-  Assign that (possibly newly created) reference value to the variable
+   specified on the left side of the operator.
+-  The result is the left-side variable is now a reference to some
+   pre-existing value, as are any other references that already exist
+   (and increments refcounts as appropriate).
+-  If the left-side variable was previously a reference already, the
+   previous reference is lost (and refcounts decremented as
+   appropriate).
+
+To support assign-by-ref, we would need to differentiate between an
+incoming value and incoming reference, as the presence of a ``set`` hook
+means we could not do the "wrap if it's not already" logic that a normal
+reference assignment does (as it would need to happen inside the hook
+body in user space). There are two options: One would be to make the
+parameter to ``set`` by-reference, and provide a boolean flag to
+indicate if the method body should save it by reference or not. This
+seems quite ugly and error prone.
+
+The other would be to introduce a by-ref version of set (potentially
+named ``setref`` or ``bindref``) that would get called instead, should
+the engine encounter ``$foo->hookedProperty =& $var``. If no ``set``
+hook is defined on a backed property (but not virtual), it MAY be
+possible to automate the default behavior, but that would have to be
+determined at that time.
+
+Again, this is a very small edge case so we have opted to not address it
+now. Such a change could be made in a BC-friendly way in a future RFC.
+
+Accessing sibling hooks
+~~~~~~~~~~~~~~~~~~~~~~~
+
+By design, when inside a ``get`` hook, references to
+``$this->[propertyName]`` will skip all hooks, including both ``get``
+and ``set``. The same applies to ``set`` hooks reading from the
+property. That should be sufficient for the overwhelming majority of
+cases. However, there may be cases where there is a use for accessing
+the ``set`` hook from the ``get`` hook, or vice versa. (Say, on virtual
+properties.)
+
+If that is shown to be a need in practice, one straightforward way to
+support that would be a ``self::$foo::get()`` syntax, paralleling the
+syntax for accessing parent hooks. Such a syntax would allow issuing a
+method call to the specified hook, and would naturally expand to other
+hooks if they are ever added. However, that would also create
+opportunities to create infinite loops if the developer is not careful.
+
+This syntax has been omitted from this RFC as we do not think it is
+necessary in practice, but it would be possible to add in the future
+without any BC breaks.
+
 Proposed Voting Choices
 -----------------------
 
 This is a simple yes-or-no vote to include this feature. 2/3 majority
 required to pass.
 
+Question: Implement property hooks as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+https://github.com/php/php-src/pull/13455
 
 .. _references-1:
 
 References
 ----------
 
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
+-  `Property Accessors </rfc/property_accessors>`__
+-  `Asymmetric Visibility </rfc/asymmetric-visibility>`__
+-  `RFC discussion thread 1 <https://externals.io/message/120213>`__
+-  `RFC discussion thread 2 <https://externals.io/message/122445>`__
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/iluuu1994/php-src/pull/82
+:Implementation: https://github.com/php/php-src/pull/13455
 :Original Authors: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
-:Original Status: Under discussion
+:Original Status: In Voting
 :Slug: property-hooks
 :Wiki URL: https://wiki.php.net/rfc/property-hooks
