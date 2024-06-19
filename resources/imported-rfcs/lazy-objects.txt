@@ -14,7 +14,7 @@ Martin Fowler identifies [[https://martinfowler.com/eaaCatalog/lazyLoad.html|fou
 
 In both strategies, we start with empty objects typically created with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, attaching an initializer or factory that is called automatically when these objects are used. From an abstraction point of view, lazy objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy. This is a core design principle of this RFC.
 
-Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
+Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include e.g. a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
 
 Implementing proxies and ghost objects in userland is non-trivial. This has been explored in the [[https://packagist.org/packages/ocramius/proxy-manager|ocramius/proxy-manager]] library and later in the [[https://packagist.org/packages/symfony/var-exporter|symfony/var-exporter]] one. Current implementations have several limitations, including incompatibility with final classes, and performance overhead due to magic methods. This RFC proposes to implement ghost objects and state-proxies natively in the engine to address these issues.
 
@@ -44,7 +44,8 @@ class ReflectionClass
 {
     public int const SKIP_INITIALIZATION_ON_SERIALIZE = 1;
     public int const SKIP_DESTRUCTOR = 2;
-    public int const SKIP_INITIALIZED_READONLY = 3;
+    public int const SKIP_INITIALIZED_READONLY = 4;
+    public int const RESET_INITIALIZED_READONLY = 8;
 
     public function newLazyGhost(callable $initializer, int $options): object {}
 
@@ -91,7 +92,7 @@ $initializer = static function (MyClass $ghost): void {
 };
 
 $reflector = new ReflectionClass(MyClass::class);
-$object = $reflector->newLazyGhost($initializer, ReflectionClass::SKIP_DESTRUCTOR);
+$object = $reflector->newLazyGhost($initializer);
 
 // At this point, $object is a lazy ghost object.
 </PHP>
@@ -103,7 +104,7 @@ $initializer = static function (MyClass $proxy): MyClass {
 };
 
 $reflector = new ReflectionClass(MyClass::class);
-$object = $reflector->newLazyProxy($initializer, ReflectionClass::SKIP_DESTRUCTOR);
+$object = $reflector->newLazyProxy($initializer);
 </PHP>
 
 The <php>resetAsLazy*()</php> methods accept an already created instance. This allows writing classes that manage their own laziness:
@@ -120,7 +121,7 @@ class MyLazyClass
 }
 </PHP>
 
-The behavior of these methods is described into more details later.
+The behavior of these methods is described in more details later.
 
 ==== Handling the State of Lazy Objects ====
 
@@ -136,7 +137,7 @@ class BlogPost
 
 $reflector = new ReflectionClass(BlogPost::class);
 $initializer = // Callable that retrieves the title and content from the database.
-$post = $reflector->newLazyGhost($initializer, ReflectionClass::SKIP_DESTRUCTOR);
+$post = $reflector->newLazyGhost($initializer);
 
 // Without this line, the following call to ReflectionProperty::setValue() would trigger initialization.
 $reflector->getProperty('id')->skipInitialization($post);
@@ -215,7 +216,7 @@ $init = function ($object) use (&$originalObject) {
         // we are initializing a clone
     }
 };
-$originalObject = $reflector->newProxyInstance($init);
+$originalObject = $reflector->newLazyProxy($init);
 </PHP>
 
 === Common Behavior ===
@@ -311,7 +312,7 @@ The <php>$initializer</php> argument is a callable with the following signature:
 function (object $object): null {}
 </PHP>
 
-When initialization is required, the <php>$initializer</php> is called with the object as first parameter. The initializer should initialize the object, and must return <php>null</php>. See the "Initialization Sequence" section.
+When initialization is required, the <php>$initializer</php> is called with the object as first parameter. The initializer should initialize the object, and must return <php>null</php> (or <php>void</php>). See the "Initialization Sequence" section.
 
 The <php>$options</php> argument is a bitfield accepting the following flags:
 
@@ -357,7 +358,7 @@ The <php>$options</php> argument accepts the same flag as <php>newLazyGhost()</p
 
   * <php>ReflectionClass::SKIP_DESTRUCTOR</php>: By default, the <php>resetAsLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
   * <php>ReflectionClass::SKIP_INITIALIZED_READONLY</php>: By default, the <php>resetAsLazy*()</php> methods will throw an exception if a readonly property was initialized (on the object itself or on a proxy's actual instance) and the class is final. If this flag is set, these properties are skipped and no exception is thrown. The behavior around readonly properties is explained in more details later.
-  * <php>ReflectionClass::RESET_INITIALIZED_READONLY</php>: Allow <php>resetAsLazy*()</php> methods to reset initialized readonly properties in cases that are normally not allowed. This flag is subject to a secondary vote.
+  * <php>ReflectionClass::RESET_INITIALIZED_READONLY</php>: Allow <php>resetAsLazy*()</php> methods to reset initialized readonly properties in cases that are normally not allowed. This flag is subject to a secondary vote (see below).
 
 When making an object lazy, the object destructor is called and the object is reset to a state equivalent to an instance created by <php>newLazyGhost()</php>. In particular, all non-static properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
 
@@ -509,7 +510,7 @@ It follows that the observable value of a readonly property can change unless th
 
 We preserve these semantics by never changing or unsetting a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the actual instance, for initialized proxies) and the class is final. Calling <php>resetAsLazy*()</php> on a class with such property will throw an Error. Using the <php>SKIP_INITIALIZED_READONLY</php> flag ignores these properties instead of throwing an Error.
 
-Subject to a secondary vote, we propose to let users allow the <php>resetAsLazy*()</php> methods to unset readonly properties in all cases by setting the <php>ReflectionClass::RESET_INITIALIZED_READONLY</php> flags.
+We propose to allow the <php>resetAsLazy*()</php> methods to unset readonly properties in all cases when setting the <php>ReflectionClass::RESET_INITIALIZED_READONLY</php> flags. This capability is subject to a secondary vote so that voters that agree with the rest of this RFC but disagree with this specific flag can express their dissent without rejecting the entire RFC. Nevertheless, we hope voters will recognize the value of this flag for end users, as it would give them more control over the objects they use and would provide consistency over a capability that already exists but not in all cases.
 
 ==== Destructors ====
 
@@ -517,7 +518,7 @@ The destructor of ghost objects is called if and only if the object has been ini
 
 The destructor of proxy objects is never called. We rely on the destructor of the proxied instance instead.
 
-When making an existing object lazy, the <php>resetAsLazy*()</php> methods call the destructor unless the <php>SKIP_DESTRUCTOR</php> flag is given. The rationale is that, unless specified otherwise, we should assume that the constructor was calls on this object, therefore the destructor must be called as well before resetting its state entirely.
+When making an existing object lazy, the <php>resetAsLazy*()</php> methods call the destructor unless the <php>SKIP_DESTRUCTOR</php> flag is given. The rationale is that, unless specified otherwise, we should assume that the constructor was called on this object, therefore the destructor must be called as well before resetting its state entirely.
 
 <PHP>
 class Connection {
@@ -653,7 +654,7 @@ class Connection
 
     public function send(string $data): void
     {
-        // Real implementation we want to make lazy
+        // Real implementation we want to make lazy using decoration
     }
 }
 
@@ -705,7 +706,9 @@ PHP 8.4
 
 ===== Proposed Voting Choices =====
 
-Add lazy-objects as described to the engine: yes/no (2/3 required to pass)
+ * Add lazy-objects as described to the engine: yes/no (2/3 required to pass)
+
+ * Allow the <php>resetAsLazy*()</php> methods to unset readonly properties in all cases when setting the <php>ReflectionClass::RESET_INITIALIZED_READONLY</php> flags (1/2 required to pass)
 
 ===== Patches and Tests =====
 
