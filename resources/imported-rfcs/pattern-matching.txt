@@ -15,6 +15,125 @@ This RFC is part of the [[rfc:adts|Algebraic Data Types Epic]].  It is a steppin
 
 There are many components of this RFC, and many of them can be delayed for future follow-ons with relative ease.  However, some are also straightforward enough and useful enough that it seems wise to include them from the start, even if they logistically could be delayed.  The different patterns below have been grouped by their significance.  As of this time we're not yet sure which to include now and which to save for future scope, or to leave that to a secondary vote.  Feedback on that question is welcome.
 
+===== Overview =====
+
+This RFC proposes a number of possible patterns against which to match a value.  A complete list is shown below, with minimal detail.  Full detail of each option is described in the sections below.  As noted, at this time we are looking for //high level// feedback only on which patterns we should fully develop into the initial proposal, and which we should not bother sweating the details on.  (So if, for instance, you like the idea but not the current syntax, that means you're in favor and want us to spend the time to develop it further.)
+
+<code php>
+The "is" keyword evaluates to a boolean.
+if ($var is <pattern>) {
+  // Do stuff
+}
+
+//// Core patterns we really shouldn't leave out ////
+
+// Basic type matching
+$var is string;
+$var is int|float;
+$var is ?array;
+$var is (Account&Authenticated)|User;
+
+// Literal patterns
+$var is "foo";
+$var is 5;
+$var is 3|5|null;
+$var is 'heart'|'spade'|self::Wild;
+
+// Wildcard
+$var is *; // Matches anything, more useful in the structure patterns below.
+
+// Object patterns
+$p is Point{ x: 3 }; // Matches any Point object whose accessible $x property is 3.
+$p is Point{ x: 4:5 }; // Matches any Point object whose accessible $x property is 4 or 5.
+$p is Point{ y: 3 }|null;
+
+// Array sequence patterns
+$list is [1, 2, 3, 4];   // Exact match.
+$list is [1, 2, 3, ...]; // Begins with 1, 2, 3, but may have other entries.
+$list is [1, 2, *, 4];   // Allows any value in the 3rd position.
+$list is [1, 2, 3|4, 5]; // 3rd value may be 3 or 4.
+
+// Associative array patterns
+$assoc is ['a' => 'A', 'b' => 'B']; // Exact key/value match, but order doesn't matter.
+$assoc is ['b', => 'B', ...];       // Must have a 'b' key with value 'B', and may have other entries.
+$assoc is ['b', => *, ...];        // Must have a 'b' key with any value, and may have other entries.
+
+// Array shapes
+$assoc is ['a' => string, 'b' => int|float, 'c' => 'foo'|'bar'];
+
+// Capturing values out of a structure pattern and binding them to variables in case of a match.
+$p is Point {x: 3, y: $y}; // If $p->x === 3, bind $p->y to $y and return true.
+$assoc is ['a' => 'A', 'b' => $b]; // If $assoc['a'] === 'A', bind $assoc['b'] to $b and return true.
+
+//// Patterns that would be good to include, but aren't a hard requirement ////
+
+// Variable reference expressions
+// The syntax for this one is still in flux, don't worry about the details.
+// This would allow variables from the current scope to be part of a pattern.
+$foo is @($bar); // Matches $foo against the value of $bar
+$p is Point {y: 37, x:@($x)}; // $p->x === $x && $p->y == 37
+
+// Nested patterns for captured variables
+$p is Point { $x: 3, y: $y is 5|6 }; // $p->x === 3, $p->y === $y, but $p->y must also be either 5 or 6.
+
+// "as" pattern enforcement
+// Instead of returning true/false, returns $var if the pattern matches, throws if not.
+// Most useful if "weak mode" is also included (below).
+$var2 = $var as <pattern>;
+
+//// Nice to have patterns we can include if there's interest ////
+
+// Range patterns
+$foo is 0..=10;
+$foo is 0..<10;
+$foo is >10;
+
+// Regex patterns
+$name is /\w{3,}/; // $name must be a string that matches the regex.
+$foo is /^https:\/\/(?<hostname>[^\/]*)/; // Must match, and captures $hostname if it does.
+
+// Array application, apply a pattern across an array
+$foo is array<strings>; // All values in $foo must be strings
+$foo is array<int|float>; // All values in $foo must be ints or floats
+
+// Weak mode matching
+$foo is int;  // Strict type matching, $foo must be an int.
+$foo is ~int; // Weak mode moatching, $foo must be an int or int-ish string.
+$foo as ~int; // Coerces $foo to an int if possible, or throws if not.
+$foo = $foo as array<~int>; // Coerces all elements of $foo to ints if possible, throws if not.
+
+// Property guards.
+{
+    // Equivalent to a set hook that runs this pattern before assigning.
+    // Should be especially helpful when used with constructor promotion.
+    public string $name is /\w{3,}/;
+}
+
+// Parameter and return guards.
+// Enforce a pattern on a parameter when received, and on a return value.
+// Throw if it doesn't match.
+function test(string $name is /\w{3,}/): string is /\w{10,}/ {
+    return $name . ' (retired)';
+}
+
+// Optional array keys
+// Probably most useful in array shape definitions.
+$arr is ['a' => string, ?'b' => string, ...]; // 'b' may be omitted, but if included must be a string.
+
+// Patterns as variables/types
+// To pre-define reusable patterns.
+// We've barely even thought about this syntax, it's probably best to save for later.
+// Possibilities include:
+$naturalNum = new Pattern(int&>0);
+$foo is @($naturalNum);
+
+use pattern int&>0 as NaturalNum;
+$foo is NaturalNum;
+
+pattern int&>0 as NaturalNum;
+$foo is NaturalNum;
+</code>
+
 ===== Proposal =====
 
 This RFC introduces a new keyword and binary operator: ''is''.  The ''is'' keyword indicates that its right hand side is a pattern against which its left hand side should be applied.  The ''is'' operator is technically a comparison operator, and always returns a boolean ''true'' or ''false''.
