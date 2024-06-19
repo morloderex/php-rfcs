@@ -110,7 +110,7 @@ $foo is array<int|float>; // All values in $foo must be ints or floats
 // Weak mode matching
 $foo is int;  // Strict type matching, $foo must be an int.
 $foo is ~int; // Weak mode moatching, $foo must be an int or int-ish string.
-$foo as ~int; // Coerces $foo to an int if possible, or throws if not.
+$result = $foo as ~int; // Coerces $foo to an int and assign to $result if possible, or throws if not.
 $foo = $foo as array<~int>; // Coerces all elements of $foo to ints if possible, throws if not.
 
 // Property guards.
@@ -880,6 +880,100 @@ $intifiedB = $b as array<~int>; // Throws, because 'six' is not coerce-able to a
 
 We have not yet investigated how feasible this sort of coercion would be, but it is a potentially valuable feature.
 
+=== Optional array key marker ===
+
+As described above, array patterns support "this key must be defined and match this pattern" or "I don't care if it's defined or not" (using the ... suffix).  However, there is no obvious way to indicate "this key is optional, but if it is defined it must match this pattern."  Such a marker would be useful to include, although we have not yet explored a syntax for it.  One possibility would be:
+
+<code php>
+// $arr must have a string 'a' key, MAY have a string 'b' key but no other 'b',
+// and any other keys are irrelevant.
+$arr is ['a' => string, ?'b' => string, ...]
+</code>
+
+===== Backward Incompatible Changes =====
+
+A new keyword is added, ''is''.  That will conflict with any user-defined global constant named ''is''.
+
+If the ''as'' keyword is adopted as well, that will also be a new global keyword.
+
+No other BC breaks are expected.
+
+===== Proposed PHP Version(s) =====
+
+PHP 8.next (aka 8.4).
+
+===== RFC Impact =====
+
+===== Open Issues =====
+
+==== Include other patterns in the initial RFC? ====
+
+Do any other patterns need to be included in the initial RFC?  Are there any listed in Future Scope that are must-have for the initial release?
+
+==== Expression pattern syntax ====
+
+The @() syntax for expression patterns is still an open question.  It needs some kind of delimeter to differentiate it from class names and binding variables, but the specific syntax we are flexible on.
+
+==== match() "is" placement ====
+
+The authors are split as to how the syntax for pattern matching <php>match()</php> should work.  There are two options:
+
+<code php>
+$result = match ($somevar) is {
+    Foo => 'foo',
+    Bar => 'bar',
+    Baz|Beep => 'baz',
+};
+</code>
+
+<code php>
+$result = match ($somevar) {
+    is Foo => 'foo',
+    is Bar => 'bar',
+    is Baz|Beep => 'baz',
+};
+</code>
+
+The former is shorter, and applies pattern matching to all arms.  The latter is more explicit, and would allow individual arms to be pattern matched or not depending on the presence of ''is''.  Of course, these options are not mutually exclusive and supporting both would be possible.  We are looking for feedback on this question.
+
+===== Future Scope =====
+
+Numerous other patterns can be supported in the future.  The following additional patterns and use cases are possible future additions for other RFCs.  (Please don't bikeshed them here; they are shown as an example of where pattern matching can extend to in the future.)
+
+==== Enum/ADT pattern ====
+
+A key goal of this RFC is to lay the groundwork for supporting patterns with Algebraic Data Types, aka, Enums with associated values.  We believe that a good pattern matching mechanism is a prerequisite for those being fully usable in the future.
+
+Depending on the implementation, the syntax may be identical to that use for objects above, or it may be positional (using ''()'').  If this RFC passes, a future ADT RFC would include a new enum-targeted pattern if needed.
+
+<PHP>
+// Example of what is possible with both pattern matching and ADTs,
+// All syntax subject to change.
+
+enum Move {
+    case TurnLeft;
+    case TurnRight;
+    case Forward(int $amount);
+}
+
+match ($move) is {
+    Move::TurnLeft => $this->orientation--,
+    Move::TurnRight => $this->orientation++,
+    Move::Forward{$amount} => $this->distance += $amount,
+};
+
+
+enum Option {
+    case None;
+    case Some(mixed $val);
+}
+
+match ($maybe) is {
+    Option::Some {$val} => compute_something($val),
+    Option::None => 'default value',
+}
+</PHP>
+
 === Property guards ===
 
 Something that became apparent during the development of property hooks is that a great many set hooks will be simple validation, often that a number is within a range or a string matches some criteria.  At present, those use cases are achievable with hooks but can be somewhat verbose.  Applying a pattern rule to a property would allow that rule to be applied on the set operation for that property, without having to implement it manually.
@@ -935,17 +1029,7 @@ Naturally type-only pattern checks are entirely redundant.  It would be most use
 function query(array $args, string $sort is 'ASC'|'DESC') { ... }
 </code>
 
-=== Optional array key marker ===
-
-As described above, array patterns support "this key must be defined and match this pattern" or "I don't care if it's defined or not" (using the ... suffix).  However, there is no obvious way to indicate "this key is optional, but if it is defined it must match this pattern."  Such a marker would be useful to include, although we have not yet explored a syntax for it.  One possibility would be:
-
-<code php>
-// $arr must have a string 'a' key, MAY have a string 'b' key but no other 'b',
-// and any other keys are irrelevant.
-$arr is ['a' => string, ?'b' => string, ...]
-</code>
-
-=== Patterns as variables/types ===
+==== Patterns as variables/types ====
 
 With complex array or object patterns, especially if guards are adopted, it becomes natural to want to reuse the same pattern in multiple places.  At this time we are not sure how to do so, although it is a space we are considering.  Possibilities include (unvetted):
 
@@ -964,90 +1048,6 @@ $foo is NaturalNum;
 </code>
 
 This is an area that requires more exploration, but we mention it here for completeness.
-
-===== Backward Incompatible Changes =====
-
-A new keyword is added, ''is''.  That will conflict with any user-defined global constant named ''is''.
-
-If the ''as'' keyword is adopted as well, that will also be a new global keyword.
-
-No other BC breaks are expected.
-
-===== Proposed PHP Version(s) =====
-
-PHP 8.next (aka 8.4).
-
-===== RFC Impact =====
-
-===== Open Issues =====
-
-==== Include other patterns in the initial RFC? ====
-
-Do any other patterns need to be included in the initial RFC?  Are there any listed in Future Scope that are must-have for the initial release?
-
-==== Expression pattern syntax ====
-
-The @() syntax for expression patterns is still an open question.  It needs some kind of delimeter to differentiate it from class names and binding variables, but the specific syntax we are flexible on.
-
-==== match() "is" placement ====
-
-The authors are split as to how the syntax for pattern matching <php>match()</php> should work.  There are two options:
-
-<code php>
-$result = match ($somevar) is {
-    Foo => 'foo',
-    Bar => 'bar',
-    Baz|Beep => 'baz',
-};
-</code>
-
-<code php>
-$result = match ($somevar) {
-    is Foo => 'foo',
-    is Bar => 'bar',
-    is Baz|Beep => 'baz',
-};
-</code>
-
-The former is shorter, and applies pattern matching to all arms.  The latter is more explicit, and would allow individual arms to be pattern matched or not depending on the presence of ''is''.  Of course, these options are not mutually exclusive and supporting both would be possible.  We are looking for feedback on this question.
-
-===== Future Scope =====
-
-Numerous other patterns can be supported in the future.  The following additional patterns are possible future additions for other RFCs.  (Please don't bikeshed them here; they are shown as an example of where pattern matching can extend to in the future.)
-
-==== Enum/ADT pattern ====
-
-A key goal of this RFC is to lay the groundwork for supporting patterns with Algebraic Data Types, aka, Enums with associated values.  We believe that a good pattern matching mechanism is a prerequisite for those being fully usable in the future.
-
-Depending on the implementation, the syntax may be identical to that use for objects above, or it may be positional (using ''()'').  If this RFC passes, a future ADT RFC would include a new enum-targeted pattern if needed.
-
-<PHP>
-// Example of what is possible with both pattern matching and ADTs,
-// All syntax subject to change.
-
-enum Move {
-    case TurnLeft;
-    case TurnRight;
-    case Forward(int $amount);
-}
-
-match ($move) is {
-    Move::TurnLeft => $this->orientation--,
-    Move::TurnRight => $this->orientation++,
-    Move::Forward{$amount} => $this->distance += $amount,
-};
-
-
-enum Option {
-    case None;
-    case Some(mixed $val);
-}
-
-match ($maybe) is {
-    Option::Some {$val} => compute_something($val),
-    Option::None => 'default value',
-}
-</PHP>
 
 ===== Proposed Voting Choices =====
 
