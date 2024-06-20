@@ -64,9 +64,9 @@ class ReflectionClass
 
 class ReflectionProperty
 {
-    public function setRawValueWithoutInitialization(object $object, mixed $value): void {}
+    public function setRawValueWithoutLazyInitialization(object $object, mixed $value): void {}
 
-    public function skipInitialization(object $object): void {}
+    public function skipLazyInitialization(object $object): void {}
 
     // existing methods
 }
@@ -140,14 +140,14 @@ $initializer = // Callable that retrieves the title and content from the databas
 $post = $reflector->newLazyGhost($initializer);
 
 // Without this line, the following call to ReflectionProperty::setValue() would trigger initialization.
-$reflector->getProperty('id')->skipInitialization($post);
+$reflector->getProperty('id')->skipLazyInitialization($post);
 $reflector->getProperty('id')->setValue($post, 123);
 
 // Alternatively, one can use this directly:
-$reflector->getProperty('id')->setRawValueWithoutInitialization($post, 123);
+$reflector->getProperty('id')->setRawValueWithoutLazyInitialization($post, 123);
 </PHP>
 
-The <php>skipInitialization()</php> / <php>setRawValueWithoutInitialization()</php> methods provide ways to disable lazy-initialization when a property is accessed, allowing users to choose the approach that best fits their design.
+The <php>skipLazyInitialization()</php> / <php>setRawValueWithoutLazyInitialization()</php> methods provide ways to disable lazy-initialization when a property is accessed, allowing users to choose the approach that best fits their design.
 
 ==== Lifecycle of Lazy Objects ====
 
@@ -156,7 +156,7 @@ An object is considered lazy if any of its properties are still hooked to the in
 There are three ways to make a lazy object non-lazy:
 
   - Interacting with it in a way that triggers its initializer (more on this bellow).
-  - Using <php>ReflectionProperty::skipInitialization()</php> or <php>setRawValueWithoutInitialization()</php> on all its properties.
+  - Using <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> on all its properties.
   - Calling the <php>ReflectionClass::initialize()</php> method with the instance as argument.
 
 The <php>initialize()</php> method's <php>bool $skipInitializer</php> argument (default <php>false</php>) allows marking a lazy object as non-lazy without running the initializer, leaving uninitialized properties. This is useful for managed entity objects. Accessing a property before it is set throws an "uninitialized property" error.
@@ -174,7 +174,7 @@ This behavior makes lazy objects fully transparent to their consumers.
 
 The following special cases do not trigger initialization of a lazy object:
 
-  * Calls to <php>ReflectionProperty::skipInitialization()</php>, <php>setRawValueWithoutInitialization()</php>, or accesses to properties on which these methods were called.
+  * Calls to <php>ReflectionProperty::skipLazyInitialization()</php>, <php>setRawValueWithoutLazyInitialization()</php>, or accesses to properties on which these methods were called.
   * Calls to <php>get_object_vars()</php> and <php>get_mangled_object_vars()</php>.
   * Calls to <php>serialize()</php> when <php>ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE</php> is set, unless a property is accessed in ''%%__serialize()%%'' or ''%%__sleep()%%'' methods.
   * Calls to <php>ReflectionObject::__toString()</php>.
@@ -189,7 +189,7 @@ By excluding these cases from triggering initialization, developers can perform 
 === Ghost Objects ===
 
   - Before calling the initializer:
-    - Properties that were not initialized with <php>ReflectionProperty::skipInitialization()</php> or <php>setRawValueWithoutInitialization()</php> are initialized to their default value if any, in the same way as using <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
+    - Properties that were not initialized with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> are initialized to their default value if any, in the same way as using <php>ReflectionClass::newInstanceWithoutConstructor()</php>.
     - The object is marked as non-lazy.
   - During initialization, properties can be accessed directly without triggering recursive initialization. Accessing properties without a default value may throw an error, as usual.
   - The initializer must return <php>null</php> or no value
@@ -202,7 +202,7 @@ After initialization, the object is indistinguishable from an object that was ne
   - The initializer is called with the lazy proxy as first parameter.
   - The return value of the initializer has to be a non-lazy instance of a parent or a child class of the lazy-object and it must have the same properties. An Error is thrown if that's not the case. Returning an instance of a child or parent class with the same properties does not break LSP.
   - The actual instance is set to the return value.
-  - Properties are uninitialized (including properties used with <php>ReflectionProperty::skipInitialization()</php> or <php>setRawValueWithoutInitialization()</php>).
+  - Properties are uninitialized (including properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>).
 
 The proxy object is _not_ replaced or substituted for the actual instance. After initialization, property accesses on the proxy are forwarded to the actual instance. Observing properties of the proxy has the same result as observing properties of the actual instance.
 
@@ -269,13 +269,13 @@ $object2 = $reflector->newLazyGhost(function ($object2) {
     $object2->propB = 'value';
     throw new \Exception('initializer exception');
 });
-$reflector->getProperty('propA')->setRawValueWithoutInitialization($object2, 'object-2');
+$reflector->getProperty('propA')->setRawValueWithoutLazyInitialization($object2, 'object-2');
 
 $object1 = $reflector->newLazyGhost(function ($object1) use ($object2) {
     $object1->propB = 'updated';
     $object1->propB = $object2->propB;
 });
-$reflector->getProperty('propA')->setRawValueWithoutInitialization($object1, 'object-1');
+$reflector->getProperty('propA')->setRawValueWithoutLazyInitialization($object1, 'object-1');
 
 // Both objects are uninitalized at this point
 
@@ -427,13 +427,13 @@ If <php>$skipInitializer</php> is <php>true</php>, the behavior is the one descr
 
 The return value is the object itself for ghost objects (or if <php>$skipInitializer</php> is <php>true</php>), or the actual instance for proxy objects.
 
-=== ReflectionProperty::skipInitialization() ===
+=== ReflectionProperty::skipLazyInitialization() ===
 
 <PHP>
-    public function skipInitialization(object $object): void;
+    public function skipLazyInitialization(object $object): void;
 </PHP>
 
-The <php>skipInitialization()</php> method marks a property as non lazy such that it can be accessed directly without triggering initialization. It also initializes the property to its default value, if any.
+The <php>skipLazyInitialization()</php> method marks a property as non lazy such that it can be accessed directly without triggering initialization. It also initializes the property to its default value, if any.
 
 <PHP>
 class MyClass {
@@ -444,7 +444,7 @@ class MyClass {
 $reflector = new ReflectionClass(MyClass::class);
 $object = $reflector->newLazyGhost(function () {});
 
-$reflector->getProperty('id')->skipInitialization($object);
+$reflector->getProperty('id')->skipLazyInitialization($object);
 
 $object->id = 1;        // does not trigger initialization
 var_dump($object->id); // int(1) (does not trigger initialization)
@@ -456,12 +456,12 @@ The property must be non-dynamic, non-static, and non-virtual.
 
 If the property is not lazy, this method has no effect.
 
-The primary use-case of <php>skipInitialization()</php> and <php>setRawValueWithoutInitialization()</php> is to initialize properties whose value is already known and whose access should not trigger initialization. For example, an ORM may initialize the properties representing the identity of an entity.
+The primary use-case of <php>skipLazyInitialization()</php> and <php>setRawValueWithoutLazyInitialization()</php> is to initialize properties whose value is already known and whose access should not trigger initialization. For example, an ORM may initialize the properties representing the identity of an entity.
 
-=== ReflectionProperty::setRawValueWithoutInitialization() ===
+=== ReflectionProperty::setRawValueWithoutLazyInitialization() ===
 
 <PHP>
-    public function setRawValueWithoutInitialization(object $object, mixed $value): void;
+    public function setRawValueWithoutLazyInitialization(object $object, mixed $value): void;
 </PHP>
 
 The <php>setRawPropertyValue</php> is similar to <php>skipInitializerForProperty()</php>, but it allows to specify a value.
@@ -470,7 +470,7 @@ The method does not call hooks, if any, when setting the property value.
 
 ==== Cloning ====
 
-The result of cloning an uninitialized lazy object is a new lazy object with the same initializer, and the same initialized properties (if <php>ReflectionProperty::setRawValueWithoutInitialization()</php> or <php>skipInitialization()</php> were used).
+The result of cloning an uninitialized lazy object is a new lazy object with the same initializer, and the same initialized properties (if <php>ReflectionProperty::setRawValueWithoutLazyInitialization()</php> or <php>skipLazyInitialization()</php> were used).
 
 If the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
 
@@ -574,7 +574,7 @@ class EntityManager
         });
 
         // id is already known and can be accessed without triggering initialization
-        $reflector->getProperty('id')->setRawValueWithoutInitialization($entity, $id);
+        $reflector->getProperty('id')->setRawValueWithoutLazyInitialization($entity, $id);
 
         return $entity;
     }
