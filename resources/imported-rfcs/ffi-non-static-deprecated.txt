@@ -1,0 +1,59 @@
+====== PHP RFC: Deprecate FFI non-static methods ======
+  * Version: 0.2
+  * Date: 2024-06-21
+  * Author: Chopins, chopins.xiao@gmail.com
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/ffi-non-static-deprecated
+
+===== Introduction =====
+**FFI::new(), FFI::type(), FFI::cast()** support static and non-static access, which is very confusing. This issue has been proposed to be amended in the RFC that has already been adopted. However, the RFC proposal and actual implementation is to mark static access as deprecated, which will further confuse and ugliness of the FFI function API. Here's why:
+
+1. Because the method of calling a class method through an FFI instance is the way to access C functions, and this method is mixed with the access of PHP class methods. 
+<code php>
+$a = FFI::cdef($def);
+$a->new(); //This PHP class method is not a C function
+$a->new2(); //This is a C function
+</code>
+
+2. If you can't statically call FFI::new() and other functions, it will cause some PHP code to be very complicated and inefficient.
+<code php>
+$a1 = FFI::cdef()->new('int'); //statically is deprecated, complex and ugly code
+$a2 = FFI::new('int'); //current allowed
+</code>
+
+3. The name of the C library function is occupied, resulting in a vague concept
+
+<code php>
+$b = FFI::cdef('int cast(long a);', 'third-party.so');
+$b->cast($a); //This is a call to FFI::cast(), which is ambiguous.
+</code>
+
+===== Proposal =====
+It is recommended to add a **FFICDef** class to access the handle as a C function. **FFI::cdef()** returns an instance of **FFICDef** instead of an instance of the **FFI** class. For the **FFI::new()**, **FFI::type()**, and **FFI::cast()** methods, the last parameter is added to receive the **FFICDef** instance. This is how FFI's API behavior becomes uniform and less confusing.
+After the change, the method signature is as follows:
+<code php>
+final class FFI\CDef {}
+public static FFI::cdef(string $code = "", ?string $lib = null): FFI\CDef
+public static FFI::new(FFI\CType|string $type, bool $owned = true, bool $persistent = false, FFI\CDef $cdef = null): ?FFI\CData
+public static FFI::cast(FFI\CType|string $type, FFI\CData|int|float|bool|null &$ptr, FFI\CDef $cdef = null): ?FFI\CData
+public static FFI::type(string $type, FFI\CDef $cdef = null): ?FFI\CType
+</code>
+During the transition phase, the class **FFI\CDef** instance will provide **FFI\CDef::new(),FFI\CDef::cast(),FFI\CDef::type()** three non-static methods for the transition, but will deprecated error is reported. As follows:
+<code>
+PHP Deprecated: Calling FFI->new() or FFI\CDdef->new() non-statically is deprecated
+PHP Deprecated: Calling FFI->cast() or FFI\CDdef->cast() non-statically is deprecated
+PHP Deprecated: Calling FFI->type() or FFI\CDdef->type() non-statically is deprecated
+</code>
+
+===== Backward Incompatible Changes =====
+Since non-static calls are marked as stale, they will result in a stale prompt being received for versions less than PHP 8.3. If PHP 9.0 removes non-static calls to FFICDef::new(), FFICDef::cast(), FFICDef::type(), it will result in an error in the unadapted program.
+===== Proposed PHP Version(s) =====
+PHP 8.3
+===== Impact on extensions =====
+FFI
+
+===== Open Issues =====
+https://github.com/php/php-src/issues/8554
+
+===== Implementation =====
+Implementation reference https://github.com/php/php-src/pull/8585
