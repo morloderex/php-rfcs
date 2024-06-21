@@ -32,15 +32,13 @@ $var is string;
 $var is int|float;
 $var is ?array;
 $var is (Account&Authenticated)|User;
+$var is mixed; // Matches anything, effectively a wildcard.
 
 // Literal patterns
 $var is "foo";
 $var is 5;
 $var is 3|5|null;
 $var is 'heart'|'spade'|self::Wild;
-
-// Wildcard
-$var is *; // Matches anything, more useful in the structure patterns below.
 
 // Object patterns
 $p is Point{ x: 3 }; // Matches any Point whose $x property is 3.
@@ -50,7 +48,7 @@ $p is Point{ y: 3 }|null;
 // Array sequence patterns
 $list is [1, 2, 3, 4];   // Exact match.
 $list is [1, 2, 3, ...]; // Begins with 1, 2, 3, but may have other entries.
-$list is [1, 2, *, 4];   // Allows any value in the 3rd position.
+$list is [1, 2, mixed, 4];   // Allows any value in the 3rd position.
 $list is [1, 2, 3|4, 5]; // 3rd value may be 3 or 4.
 
 // Associative array patterns
@@ -60,7 +58,7 @@ $assoc is ['a' => 'A', 'b' => 'B'];
 // Must have a 'b' key with value 'B', and may have other entries.
 $assoc is ['b' => 'B', ...];
 // Must have a 'b' key with any value, and may have other entries.
-$assoc is ['b' => *, ...];
+$assoc is ['b' => mixed, ...];
 
 // Array shapes
 $assoc is ['a' => string, 'b' => int|float, 'c' => 'foo'|'bar'];
@@ -206,7 +204,7 @@ $foo is int|string;
 $foo is User|(Account&Authenticated)
 </code>
 
-If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern.
+If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern, with the exception of ''never'' and ''void'', which could never match anything and so are excluded.
 
 === Type pattern ===
 
@@ -244,6 +242,10 @@ Type patterns are always evaluated in strict mode, so as to be consistent with <
 
 A type match may be any syntax supported by a parameter type; in a sense, ''$foo is pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification in strict mode."  Should more complex type checks become allowed (such as type aliases, etc.) they will become valid in a pattern as well.  Note that, as shown in the 4th example above, an integer will pass a pattern match for type <php>float</php>.  That is consistent with how strict type declarations work today.
 
+Any type may be used, with the exception of ''never'' and ''void'', which can only be used in a return type and would never match anything anyway.
+
+Of particular note, the <php>mixed</php> type pattern would match any value, so becomes a de facto "wildcard" to use in complex patterns.  (See some further examples below.)
+
 === Literal pattern ===
 
 Any scalar literal may be a pattern.  When used on its own it is not particularly useful (it's equivalent to <php>===</php>), but can be used in a compound pattern to more complex effect.  It is also valuable when used with ''match()'' (see below).
@@ -276,14 +278,6 @@ $foo is 'spade'|'heart'|self::Wild;
 Global constants may not be used directly, as they cannot be differentiated from class names.  However, they may be used in expression patterns (see next section).
 
 Enumeration cases are implemented as class constants, so are supported as well.
-
-=== Wildcard pattern ===
-
-The pattern <php>*</php> will match any defined, initialized value.  As with many of the above patterns it's not particularly useful on its own, but when combined with the compound patterns below offers a great deal more flexibility.  See the "object property pattern" and "array pattern" sections below for more useful and real-world examples.
-
-<code php>
-$foo is *;   // Trivially true.
-</code>
 
 === match() enhancement ===
 
@@ -360,8 +354,8 @@ $p is Point { x: 2|3 }
 // Equivalent to
 $p instanceof Point && ($p->x === 2 || $p->x === 3)
 
-// Using a wildcard to indicate the value must be defined and initialized, but don't care what it is.
-$p is Point{ x: 3, y: * }
+// x must be 3, and y must be defined and initialized but we don't care what it is.
+$p is Point{ x: 3, y: mixed }
 
 // The following is NOT allowed.
 $p is (Product|Point){ x: 3 }
@@ -385,7 +379,7 @@ By default, array matching is exhaustive.  That is, the arity of the array and p
 
 The value for each array element is itself a pattern.  While the most common use case would normally be a literal match, it also supports a type match, ORed pattern, etc.  This means that array patterns can function as "array shapes" if desired.  This ability becomes more powerful as more of the optional patterns (listed later, such as range or regex) are adopted, as they would also be supported for each property.
 
-The wildcard pattern may be used to assert that a key is defined without constraining what its value may be.
+The <php>mixed</php> pattern may be used to assert that a key is defined without constraining what its value may be.
 
 Sequential arrays:
 
@@ -432,7 +426,7 @@ if (is_array($list)
     print "Yes";
 }
 
-if ($list is [1, 3, *, 7]) {
+if ($list is [1, 3, mixed, 7]) {
   print "Yes";
 }
 // True.  Equivalent to:
@@ -460,7 +454,7 @@ if (is_array($list)
 }
 
 // A sequential "array shape".
-if ($list is [int, int, int, *]) {
+if ($list is [int, int, int, mixed]) {
   print "Yes";
 }
 // True.  Equivalent to:
@@ -512,7 +506,7 @@ if (is_array($assoc) && && array_key_exists('b', $assoc)  && $assoc['b'] === 'B'
     print "Yes";
 }
 
-if ($assoc is ['b' => *, ...]) {
+if ($assoc is ['b' => mixed, ...]) {
   print "Yes";
 }
 // True.  Equivalent to:
