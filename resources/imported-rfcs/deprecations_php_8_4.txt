@@ -12,7 +12,7 @@
 
 ===== Introduction =====
 
-The RFC proposes to deprecate the listed functionality in PHP 8.4 and remove it in PHP 9.
+The RFC proposes to deprecate the listed functionality in PHP 8.4 and remove it in PHP 9 (except where otherwise noted).
 
 The following list provides a short overview of the functionality targeted for deprecation, while more detailed explanation is provided in the Proposal section:
 
@@ -351,7 +351,7 @@ The <php>lcg_value()</php> function is documented to return “A pseudo random f
 
 Looking at the implementation, the function is able to return one of 2147483562 different floats between ''4.6566130000000002e-10'' and ''0.99999832898966134'' (both inclusive). The returned floats are however //not// uniformly distributed within this interval, because the internal step size ''4.6566128730773926e-10'' that transform a randomly generated integer between 1 and 2147483562 into a float does not always result in a float that can be represented exactly, resulting in effective distances of ''4.6566128730773926e-10'' for most results, ''4.6566139833004172e-10'' for others and a much smaller distance of ''1.2790449366306689e-08'' between the highest possible return value and ''1.0''.
 
-The internally used “Combined LCG” RNG to generate the random integer between ''1'' and ''2147483562'' cannot be usefully be used for any other purpose, for example generating uniformly selected integers, either, because it cannot generate ''0'' and because the upper bound is not a value directly below a power of two, requiring expensive post-processing compared to the other engines available to userland (Mt19937, xoshiro256**, and PcgOneseq128XslRr64).
+The internally used “Combined LCG” RNG to generate the random integer between ''1'' and ''2147483562'' cannot be usefully be used for any other purpose, for example generating uniformly selected integers, either, because it cannot generate ''0'' and because the upper bound is not a value directly below a power of two, requiring expensive post-processing compared to the other engines available to userland (Mt19937, Xoshiro256StarStar, and PcgOneseq128XslRr64).
 
 Furthermore the current implementation makes it possible for the seeding to generate degenerate internal states that either cut the period short, prevent some of results from being returned, or may generate a zero value.
 
@@ -382,9 +382,38 @@ function lcg_value(): float {
 
   * Author: Tim Düsterhus <timwolla@php.net>
 
-TODO: Commonly misused where strong randomness is required, documentation is full of warnings. Output is effectively a transformation of the current timestamp.
+The <php>uniqid()</php> function is documented to “Generate a unique ID”. The documentation further expands on this that the returned value is a “[…] timestamp based unique identifier as a string”. In other words, the <php>uniqid()</php> function is just a formatter for the current time.
 
-Polyfill (64 bit PHP only):
+While the <php>uniqid()</php> function makes sure to not generate the same timestamp for two consecutive calls, it nevertheless is incapable of actually guaranteeing that a unique ID is generated:
+
+    * Concurrent requests, for example by using multiple php-fpm workers on the same system, or when running the application on multiple servers, might call <php>uniqid()</php> at exactly the same point in time.
+    * A NTP client might move the clock backwards, for example if the hardware clock of the system in question is ticking too fast.
+
+The function also takes a <php>$prefix</php> parameter, which as per the documentation may be used to add a unique prefix for every host, for example by prefixing the generated ID with the hostname. This however does not protect against the clock moving backwards and is also hard to apply to separate multiple FPM workers within the same pool. It also requires manual effort on the user’s end to make the function safe to use.
+
+Likewise the function also provides a <php>$more_entropy</php> parameter adding at most 32 bits of entropy to distinguish different values generated in the same microsecond. 32 bits of randomness is generally insufficient to guarantee uniqueness in the long term, especially if generated IDs are shared outside of a single application with other applications also leveraging <php>uniqid()</php>. As a comparison: The two behaviorally closest ID standards, UUIDv7 and ULIDs only use a timestamp with millisecond precision, but include 80 bits of randomness, resulting in 38 bits of effective additional randomness compared to <php>uniqid()</php>.
+
+A GitHub search for ''"uniqid()" language:PHP'' reveals 136k results where <php>uniqid()</php> is not called with the <php>$more_entropy</php> parameter set to <php>true</php>, which is the bare minimum to consider the usage safe. Right on the first page of the results, a bare call to <php>uniqid()</php> is [[https://github.com/HackerExperience/legacy/blob/5605b69400f9d91e951e71336e53c7040983d628/reset.php#L36|used to generate a security-sensitive “email reset” token]] that is trivially guessable by knowing when the token was generated.
+
+However even when specifying <php>$more_entropy</php> as <php>true</php>, <php>uniqid()</php> is often used in places where an //unguessable// rather than just a unique value is required. The previously mentioned “email reset” token would be such a place. Enumerating the 32 bits of randomness added is trivial for an attacker. Often complex, but ultimately meaningless, constructions, such as passing the output of <php>uniqid()</php> [[https://github.com/manxoom/Ecommerce/blob/88b50675007ecc86bef8320e4be760e540c3277c/cart.php#L11|through a hash function]], are used. The use of a hash function does not increase the unpredictability of the underlying value, because it cannot add entropy.
+
+As users rely on <php>uniqid()</php>’s output format, it is not possible to adjust the behavior to make the function safer to use, except by adding more optional parameters that users will need to remember to add.
+
+While there may be situations where <php>uniqid()</php> can safely be used, they are few and far between. The results of the GitHub search make it clear that users inappropriately use <php>uniqid()</php> for security-sensitive code, despite the warnings in the documentation. We expect most of them to be better served by using a purpose-built solution to safely generate a random string or random identifier.
+
+This includes:
+
+  * The ramsey/uuid library to generate database identifiers.
+  * PHP’s <php>\Random\Randomizer::getBytesFromString()</php> method to generate random strings with a specific format.
+  * PHP’s <php>DateTimeImmutable::format()</php> method to generate a time-based string when uniqueness is only a best-effort requirement.
+
+To gently nudge users away from <php>uniqid()</php> towards safer or more-standard alternatives in newly written code, we propose to deprecate <php>uniqid()</php>.
+
+We acknowledge that there is a vast collection of existing code that uses <php>uniqid()</php>. While it is likely often the case that these usages are unsafe and should be replaced, this may not necessarily easy, due to consumers expecting a specific ID format. As such the removal of <php>uniqid()</php> will likely have a large impact on existing code to the point where users will hold off upgrading their PHP versions to not break their application.
+
+As the internal implementation of <php>uniqid()</php> is low-maintenance and does not otherwise interact with the language’s behavior, keeping <php>uniqid()</php> available indefinitely is possible. Therefore we propose just a deprecation, **without any specific plans for the removal** of the <php>uniqid()</php>. To ease planning on the user’s end, the <php>uniqid()</php> function shall remain available for at least 5 years or at least another full major version cycle, whichever is longer. This means it **may be removed in PHP 10 at the earliest** and the removal shall be part of a fresh RFC vote.
+
+A polyfill (64 bit PHP only) is as follows:
 
 <PHP>
 function my_uniqid(string $prefix = '', bool $more_entropy = false) {
@@ -407,6 +436,11 @@ function my_uniqid(string $prefix = '', bool $more_entropy = false) {
 	}
 }
 </PHP>
+
+<doodle title="Deprecate uniqid()?" auth="timwolla" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ==== Deprecate passing E_USER_ERROR to trigger_error() ====
 
