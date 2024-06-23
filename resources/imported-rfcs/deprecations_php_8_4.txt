@@ -347,7 +347,36 @@ The proposal is to deprecate the <php>mysqli_kill()</php> function and <php>$mys
 
   * Author: Tim Düsterhus <timwolla@php.net>
 
-TODO: Contradicting documentation about the returned range, catastrophic failure if the state of the underlying RNG is nulled, fallback an extremely short period if half of the state of the underlying RNG is nulled, probably biased towards larger numbers (but hard to determine for sure). There is a better replacement in Randomizer::getFloat() since PHP 8.3.
+The <php>lcg_value()</php> function is documented to return “A pseudo random float value between 0.0 and 1.0, inclusive” and also “lcg_value() returns a pseudo random number in the range of (0, 1)”, the latter of which is generally understood as an open interval, excluding the boundary values, indicated by the use of round parentheses. This makes the documentation about the returned range contradict itself.
+
+Looking at the implementation, the function is able to return one of 2147483562 different floats between ''4.6566130000000002e-10'' and ''0.99999832898966134'' (both inclusive). The returned floats are however //not// uniformly distributed within this interval, because the internal step size ''4.6566128730773926e-10'' that transform a randomly generated integer between 1 and 2147483562 into a float does not always result in a float that can be represented exactly, resulting in effective distances of ''4.6566128730773926e-10'' for most results, ''4.6566139833004172e-10'' for others and a much smaller distance of ''1.2790449366306689e-08'' between the highest possible return value and ''1.0''.
+
+The internally used “Combined LCG” RNG to generate the random integer between ''1'' and ''2147483562'' cannot be usefully be used for any other purpose, for example generating uniformly selected integers, either, because it cannot generate ''0'' and because the upper bound is not a value directly below a power of two, requiring expensive post-processing compared to the other engines available to userland (Mt19937, xoshiro256**, and PcgOneseq128XslRr64).
+
+Furthermore the current implementation makes it possible for the seeding to generate degenerate internal states that either cut the period short, prevent some of results from being returned, or may generate a zero value.
+
+The current state of the function makes it unfit for any serious usage, returning uniformly distributed results is the bare minimum one expects from a random number generator, unless a specific distribution is requested.
+
+While it would be possible to fix the internal implementation as the RNG is not seedable from userland, this would technically still be a breaking change and it would not really improve the situation for the end user.
+
+Even when the function would generate a uniformly generated integer between 0 and 1 (both excluded) to keep main semantics the current interval boundaries, the results would not be particularly useful. Expanding the values onto a larger interval would re-introduce a bias, as explained in the warning box on the [[https://www.php.net/manual/en/random-randomizer.nextfloat.php|documentation page for ''\Random\Randomizer::nextFloat()'']]. Generating values from an open interval as a building block is also much less useful compared to a right-open interval that would include the lower bound as a possible return value.
+
+Furthermore the function name is not particularly well-chosen. It does not indicate what the function does and references the underlying Combined LCG as an implementation detail within the ''lcg_'' prefix of the function name.
+
+Since PHP 8.3, PHP provides <php>\Random\Randomizer::getFloat()</php> as a safe solution to generate uniformly distributed floats within arbitrary intervals.
+
+As the function cannot be used in a safe way, except possibly for obscure use-cases, we propose the deprecation of it. It is possible to polyfill the functionality for users that rely on this peculiar behavior. An implementation based on the CSPRNG that avoids the issues of the Combined LCG would be as follows:
+
+<PHP>
+function lcg_value(): float {
+  return random_int(1, 2147483562) * 4.656613e-10;
+}
+</PHP>
+
+<doodle title="Deprecate lcg_value()?" auth="timwolla" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ==== Deprecate uniqid() ====
 
