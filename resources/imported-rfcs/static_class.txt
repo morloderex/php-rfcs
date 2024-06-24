@@ -1,17 +1,17 @@
 ====== PHP RFC: Static class ======
-  * Version: 1.1
+  * Version: 1.2
   * Date: 2024-06-23
-  * Author: Paul Morris, bilge@scriptfusion.com
+  * Author: Paul Morris <bilge@scriptfusion.com>
   * Status: Under Discussion
   * First Published at: https://wiki.php.net/rfc/static_class
 
 ===== Introduction =====
 
-A static class is a class whose members (properties and methods) are all static. Implicit static classes can be created today, by simply only including static members. However, explicitly marking a class as static has several advantages:
+A static class is a class that cannot be instantiated, and whose members (properties and methods) are all static. Implicit static classes can be created today, by simply only including static members. However, explicitly marking a class as static has several advantages:
 
   * Clear expression of developer intent.
   * Language-level compile-time checks to verify no instance members are included anywhere in the inheritance chain.
-  * Language-level runtime checks to verify the object is never instantiated (using ''new'').
+  * Language-level runtime checks to verify the class is never instantiated by any mechanism.
 
 Of these advantages, the first can be somewhat mitigated with a [[https://github.com/ScriptFUSION/StaticClass/blob/master/src/StaticClass.php|userland trait]], but as such traits are non-standard, there is no consistent way to identify them between projects. The language-level checks cannot be so easily emulated, and are better suited for inclusion within PHP.
 
@@ -23,7 +23,7 @@ A //static class// is so marked with the existing ''static'' keyword, adjacent t
 static class Foo {}
 </code>
 
-We introduce the ''static'' keyword at the class level to preclude the need to create a private constructor. That is, ''function %%__%%construct()'' is a compile-time error in a static class. Furthermore, instantiating a static class with ''new'' is a runtime error.
+We introduce the ''static'' keyword at the class level to preclude the need to create a private constructor. That is, ''function %%__%%construct()'' is a compile-time error in a static class. Furthermore, attempting to instantiate a static by any means, whether with the ''new'' keyword, ''ReflectionClass::newInstance*'' methods or ''unserialize()'' hacks, is strictly forbidden and will result in a runtime error.
 
 Whilst the goals of this RFC so expressed are fairly straightforward, we acknowledge there are many finer points to consider. In particular:
 
@@ -53,13 +53,23 @@ There is also third position one might take, to treat static as //forbidden// fo
 
 Choosing whether ''static'' should be //required//, //optional// or //forbidden// for members of a static class is still open for debate, and if it cannot be clearly settled on the mailing list, it may be posed as an additional voting option for this RFC (separately from the static class feature itself).
 
+==== Mutually exclusive modifiers ====
+
+When ''static'' is applied to a class, the following other class-level modifiers become invalid and will raise compile-time errors.
+
+  * ''abstract'' — This modifier exists to denote a class cannot be instantiated, but the ''static'' modifier already carries this meaning.
+  * ''readonly'' — Read-only properties are only supported for instance properties, but instance properties are forbidden by ''static''.
+
 ==== Anonymous classes ====
 
 Anonymous classes are always instantiated and thus at odds with the concept of a static class. That is, the notion of an //anonymous static class// is inherently invalid and not supported.
 
+==== Dynamic properties ====
+
+Undeclared object properties can be added //dynamically// to object instances, but since static classes cannot be instantiated, there is nothing to attach such properties to. Static properties must always be declared explicitly.
+
 ===== Open questions =====
 
-  - Can static classes be forbidden as type hints? If so, we should implement this.
   - Should static classes only permit extending //explicitly marked// static classes?
 
 ===== Backward Incompatible Changes =====
@@ -83,18 +93,23 @@ This feature is expected to be complete by itself.
 
 The patch and tests will be created by myself and/or Lanre. A draft PR by Lanre is currently available at https://github.com/php/php-src/pull/14583.
 
-===== Implementation =====
-
-After the project is implemented, this section should contain 
-  - the version(s) it was merged into
-  - a link to the git commit(s)
-  - a link to the PHP manual entry for the feature
-  - a link to the language specification section (if any)
-
 ===== References =====
 
   * [[https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-classes-and-static-class-members|Static Classes and Static Class Members (C# Programming Guide)]]
 
 ===== Rejected Features =====
 
-Keep this updated with features that were discussed on the mail lists.
+==== Forbidding static class type hints ====
+
+It should be regarded as an error to type hint a static class, since they cannot be instantiated and thus the requirement can never be fulfilled by a matching instance. However, it is not technically possible to forbid such hints within PHP itself because type checking is done when an instance is passed at runtime (and we can never have such an instance). The engine does not support type checking at compile time for function/method signatures.
+
+===== Special thanks =====
+
+I would feel remiss not to give thanks to the following list contributors whose high quality feedback made this RFC what it is.
+
+  * Mike Schinkel
+  * Alexandru Pătrănescu
+  * Claude Pache
+  * Everyone else who engaged with this proposal.
+
+Thank you!
