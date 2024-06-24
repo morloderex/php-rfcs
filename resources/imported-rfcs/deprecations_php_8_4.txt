@@ -29,7 +29,8 @@ The following list provides a short overview of the functionality targeted for d
   * Deprecate proprietary CSV escaping mechanism
   * Deprecate <php>E_STRICT</php> Constant
   * Deprecate <php>strtok()</php>
-  * Deprecate return invalid types for user output handler callables
+  * Deprecate returning non-strings values from a user output handler
+  * Deprecate producing output in a user output handler
   * <php>file_put_contents()</php> with <php>$data</php> as an array
   * Deprecate <php>mysqli_ping()</php> and <php>mysqli::ping()</php>
   * Deprecate <php>mysqli_refresh()</php>
@@ -254,13 +255,44 @@ Therefore, we propose to deprecate the <php>strtok()</php> function.
    * No
 </doodle>
 
-==== Deprecate return invalid types for user output handler callables ====
+==== Deprecate returning non-strings values from a user output handler ====
 
   * Author: Gina Peter Banyard <girgias@php.net>
 
-It doesn't enforce the return type of string|false (false has special meaning here which is unfortunate) converts <php>true</php> to an empty string. Other implementation bug is suppressing the Array conversion warning due to how the outputs are being buffered/written
+PHP's output buffering mechanism has some quirks due to its age.
+One of them is how the return value of a userland callback is treated.
+The documentation has indicated for a long time that the callback should return a string, however for most values it will try to cast the return value to a string.
+This is an issue because if the return value is an array it wil be converted to the string ''Array'' but the warning will be suppressed as the output of the warning has no-where to go.
 
-See https://github.com/php/doc-en/pull/3126#discussion_r1460917389
+Moreover, it treats the values <php>true</php> and <php>false</php> as special.
+A return value of <php>true</php> is treated like a context reset, which is identical to returning an empty string.
+A return value of <php>false</php> is treated like a failure to process the buffer, which will cause the handler to be disabled and pass the input buffer to the next output handler in the stack.
+
+As the behaviour of returning values other than <php>string</php> from an output buffer is unintuitive we propose deprecating this behaviour.
+
+Return values of <php>true</php> should be changed to an empty string, and if <php>false</php> is returned, we think it would be better to throw an exception instead.
+
+For more information see the documentation: https://www.php.net/manual/en/outcontrol.user-level-output-buffers.php
+
+<doodle title="Deprecate retuning non-string values from a user output buffer handler?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+
+==== Deprecate producing output in a user output handler ====
+
+  * Author: Gina Peter Banyard <girgias@php.net>
+
+Because an output handler should just be manipulating the incomming buffer, any output that it produces is discarded.
+As such, issues within an output handler can go unnoticed and be hard to debug.
+
+Therefore, we propose deprecating producing any output in an output handler, in the same way as attempting to use an output buffering function in an output handler will emit a Fatal Error.
+
+<doodle title="Deprecate producing output in a user output handler?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ==== file_put_contents() with $data as an array ====
 
