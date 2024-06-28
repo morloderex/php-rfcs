@@ -1,0 +1,181 @@
+====== PHP RFC: Operator Overrides -- Lite Edition ======
+  * Version: 0.0
+  * Date: 2024-06-28
+  * Author: Robert Landers, landers.robert@gmail.com
+  * Status: Under Discussion (or Under Discussion or Accepted or Declined)
+  * First Published at: http://wiki.php.net/rfc/operator_overrides_lite
+
+===== Introduction =====
+
+Nearly three years ago, [PHP: rfc:user\_defined\_operator\_overloads](https://wiki.php.net/rfc/user_defined_operator_overloads) was started before eventually coming to a vote and being declined for multiple reasons, mostly around scope and new syntax. It has come to the author's attention that the GMP object (which represents the GMP extensions representation of a number) was left non-final. In an [experimental library](https://github.com/withinboredom/time/tree/v4.1.0?tab=readme-ov-file#math), I decided to extend it and just see what happens.
+
+The GMP extension overrides operators in order to provide a clean way to express mathematical constructs, such that when a 2 * StandardSecond is written in this library, a number representing 4 seconds comes out the other side. The author then began investigating how to make it so that instead of a standard GMP object representing 4 seconds, a "time object" would come out the other end.
+
+This RFC aims to embrace the accidental non-final aspect of the \GMP class, allow for a small subset of operator overriding, such that anything that can be backed by a single number can be represented like a number. For example a unit library could allow for multiplying space / time to get velocity, a complex number library, a time library, etc.
+
+Further, this will only be enabled when the GMP extension is enabled/installed.
+
+===== Proposal =====
+
+The \GMP class will have the following methods added as protected static:
+
+- add($left, $right): static
+- subtract($left, $right): static
+- multiply($left, $right): static
+- divide($left, $right): static
+- mod($left, $right): static
+- exp($left, $right): static
+- comparable($left, right): bool
+
+There will not be a way to override equals, less-than, greater-than, etc. Thus the overriding class will need to represent itself as a number, however, it can return `false` from `comparable` to prevent itself to being compared to non-sensical types (e.g., "is 5 miles more than 30 seconds" or "is 1 falcon equal to 12 parsecs").
+
+Binary operations will be handled as such:
+
+- In the case that both types of a binary operation are the base class, no behavior will be changed. 
+- In the event that one of them is a child class of \GMP, the extension will execute the child class's associated override.
+- In the event both of them are child classes of \GMP, the exension will only call the left one. Thus it is the library's responsibility to check that it is compatable with the arguments passed.
+
+Here's a basic implementation example for duration represented in seconds:
+
+<code php>
+  class Duration extends \GMP {
+    public function __construct(int|\GMP|float $time) {
+      parent::__construct($time, 10);
+    }
+  
+    private static function assertCompatible($arg): void {
+      if($arg instanceof Time || is_numeric($arg) || (is_object($arg) && class_name($arg) === '\GMP')) {
+        return;
+      }
+      // dummy error message
+      throw new LogicException('Time is not compatible with ' . $arg);
+    }
+  
+    private static function assertNumber($arg): void {
+      if(is_numeric($arg) || (is_object($arg) && class_name($arg) === '\GMP')) {
+        return;
+      }
+      // dummy error message
+      throw new LogicException('Time is not compatible with ' . $arg);
+    }
+  
+    protected static function add($left, $right): static {
+      self::assertCompatible($right);
+      return new self(parent::add($left, $right));
+    }
+  
+    protected static function subtract($left, $right): static {
+      self::assertCompatible($right);
+      return new self(parent::subtract($left, $right));
+    }
+  
+    protected static function multiply($left, $right): static {
+      if($left instanceof self) self::assertNumber($right);
+      if($right instanceof self) self::assertNumber($left);
+  
+      return new self(parent::multiply($left, $right);
+    }
+  
+    protected static function divide($left, $right): static {
+      self::assertNumber($right); // anything divided by time is non-sensical
+  
+      return new self(parent::divide($left, $right);
+    }
+  
+    protected static function mod($left, $right): static {
+      throw new LogicException('Not implemented');
+    }
+  
+    protected static function exp($left, $right): static {
+      throw new LogicException('Not implemented');
+    }
+  
+    protected static function comparable($left, $right): bool {
+      if($left instanceof Time && $right instanceof Time) return true;
+      return false;
+    }
+  
+    public function asMinutes(): float {
+      return $this / 60;
+    }
+  
+    /* and so on */
+  }
+</code>
+
+This could provide valuable semantics, especially for usage in attributes:
+
+<code php>
+define('SECOND', new Duration(1));
+
+// use in attributes
+#[Delay(5*SECOND)]
+
+// use in properties
+public Duration $delay = 5 * SECOND;
+</code>
+
+While this isn't proper operator overrides, it does provide some much needed type safety when it comes to units.
+
+===== Backward Incompatible Changes =====
+What breaks, and what is the justification for it?
+
+===== Proposed PHP Version(s) =====
+List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
+
+===== RFC Impact =====
+==== To SAPIs ====
+Describe the impact to CLI, Development web server, embedded PHP etc.
+
+==== To Existing Extensions ====
+Will existing extensions be affected?
+
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
+
+==== New Constants ====
+Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+
+==== php.ini Defaults ====
+If there are any php.ini settings then list:
+  * hardcoded default values
+  * php.ini-development values
+  * php.ini-production values
+
+===== Open Issues =====
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
+===== Future Scope =====
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+Links to any external patches and tests go here.
+
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
