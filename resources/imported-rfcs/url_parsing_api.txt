@@ -8,7 +8,7 @@
 
 ===== Introduction =====
 
-URLs are one of the most fundamental concepts of the web because they make it possible to reference specific resources on a network. URLs were invented by Tim Berners-Lee himself, and his work was accepted as [[https://datatracker.ietf.org/doc/html/rfc1738|RFC 1738]]. Since then other specifications have also emerged, out of which [[https://url.spec.whatwg.org/#title|WHATWG URL]] is the most notable one, because it's implemented by most browsers nowadays.
+URLs are one of the most fundamental concepts of the web because they make it possible to reference specific resources on a network. URLs were defined by Tim Berners-Lee in [[https://datatracker.ietf.org/doc/html/rfc1738|RFC 1738]]. Since then other specifications have also emerged, out of which [[https://url.spec.whatwg.org/#title|WHATWG URL]] is the most notable one, because it's implemented by most browsers nowadays.
 
 Despite the ubiquitous nature of URLs, they are not so unequivocal as people may think, because different clients treat and parse them differently by either following one of the standards, or even worse, not following any at all. Unfortunately, PHP falls into the latter category: the ''parse_url()'' function is offered for parsing URLs, however, it isn't compliant with any standards. Even the PHP manual contains the following warning:
 
@@ -50,45 +50,45 @@ final readonly class UrlParser
 final readonly class Url implements \Stringable
 {
     public function __construct(
-        public ?string $scheme,
-        public ?string $host,
+        public string $scheme,
+        public string $host,
         public ?int $port,
-        public ?string $user,
-        public ?string $password,
-        public ?string $path,
-        public ?string $query,
-        public ?string $fragment
+        public string $user,
+        public string $password,
+        public string $path,
+        public string $query,
+        public string $fragment
     ) {}
 
-    public function getScheme(): ?string {}
+    public function getScheme(): string {}
 
-    public function withScheme(?string $scheme): static {}
+    public function withScheme(string $scheme): static {}
 
-    public function getAuthority(): ?string {}
+    public function getAuthority(): string {}
 
-    public function getUserInfo(): ?string {}
+    public function getUserInfo(): string {}
 
-    public function withUserInfo(?string $user, ?string $password): static {}
+    public function withUserInfo(string $user, string $password): static {}
 
-    public function getHost(): ?string {}
+    public function getHost(): string {}
 
-    public function withHost(?string $host): static {}
+    public function withHost(string $host): static {}
 
     public function getPort(): ?int {}
 
-    public function withPort(?int $port): static {}
+    public function withPort(int $port): static {}
 
-    public function getPath(): ?string {}
+    public function getPath(): string {}
 
-    public function withPath(?string $path): static {}
+    public function withPath(string $path): static {}
 
-    public function getQuery(): ?string {}
+    public function getQuery(): string {}
 
-    public function withQuery(?string $query): static {}
+    public function withQuery(string $query): static {}
 
-    public function getFragment(): ?string {}
+    public function getFragment(): string {}
 
-    public function withFragment(?string $fragment): static {}
+    public function withFragment(string $fragment): static {}
 
     public function __toString(): string {}
 }
@@ -107,17 +107,37 @@ The firm position of this RFC is that a WHATWG compliant URL parser extension sh
 
 The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A WHATWG compliant parser will always be slower than ''parse_url()'', because it has to execute more code. According to the initial benchmarks, ''Url\UrlParser::parseUrl()'' is ~3.6x, while ''Url\UrlParser::parseUrlToArray()'' is ~3x slower than ''parse_url()''. The new functions still have some room for performance optimizations, but we shouldn't expect a significant performance improvement.
 
-===== API Design, relation to PSR-7 =====
+===== API Design =====
 
-The new URL parsing API consists of two classes: ''Url\UrlParser'' and ''Url\Url''. It's a deliberate design decision to separate parsing from the representation: this way it's possible to support multiple representations (class, array, scalar value). However, it's still to be decided which representations are really necessary to have.
+The new URL parsing API consists of two classes: ''Url\UrlParser'' and ''Url\Url''. It's a deliberate design decision to separate parsing from representation: this way URLs can be parsed into multiple representations (class, array, scalar values). However, it's still to be decided which representations are really necessary to have.
 
-The ''Url\Url'' class is very similar to the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]]. The key difference between the two classes is that the one proposed by the current RFC is completely immutable.
+Additionally, this design makes it easier to support custom parser backends. For example, one can then create an extension which uses the [[https://www.ada-url.com|ADA URL parser]] library to parse URLs.
 
-===== Examples in other languages =====
+===== Relation to PSR-7 =====
 
-In Java, a [[https://docs.oracle.com/en/java/javase/22/docs/api/java.base/java/net/URL.html|URL]] class has been available from the beginning. Since Java 20, all of its constructors are deprecated in favor of using ''URI.toURL()''. ''URL'' itself is also immutable, but peculiarly, it contains some methods which can open a connection to the URL, or get its content.
+The ''Url\Url'' class is intentionally compatible with the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]]. This makes it possible for a next iteration of the PSR-7 standard to use ''Url\Url'' directly instead of requiring implementations to provide their own ''Psr\Http\Message\UriInterface'' implementation.
 
-Although Go's standard library contains a `net/url` package containing an `url.Parse()` function, but it's not highlighted which standard it conforms for.
+===== Examples in Other Languages =====
+
+==== Go ====
+
+Although Go's standard library ships with a ''net/url'' package containing a ''url.Parse()'' function along with some utility functions, unfortunately it's not highlighted in the documentation which standard it conforms to. Although it's not very promising that the manual mentions the following sentence:
+
+<blockquote>Trying to parse a hostname and path without a scheme is invalid but may not necessarily return an error, due to parsing ambiguities.</blockquote>
+
+==== Java ====
+
+In Java, a [[https://docs.oracle.com/en/java/javase/22/docs/api/java.base/java/net/URL.html|URL]] class has been available from the beginning. Unfortunately, it's unclear whether it adheres to any URL standards. Speaking about its design, ''URL'' itself is immutable, and somewhat peculiarly, it contains some methods which can open a connection to the URL, or get its content.
+
+Since Java 20, all of the ''URL'' constructors are deprecated in favor of using ''URI.toURL()''. The [[https://docs.oracle.com/en/java/javase/22/docs/api/java.base/java/net/URI.html|URI]] class conforms to [[https://datatracker.ietf.org/doc/html/rfc2396|RFC 2396]] standard.
+
+==== NodeJS ====
+
+NodeJS recently added support for a decent WHATWG URL compliant [[https://nodejs.org/api/url.html#the-whatwg-url-api|URL parser]], built on top of the ADA URL parser project.
+
+==== Python ====
+
+Python also comes with built-in support for parsing URLs, made available by the [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlparse|urllib.parse.urlparse]] and [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlsplit|urllib.parse.urlsplit]] functions. According to the documentation, "these functions incorporate some aspects of both, but cannot be claimed compliant with either [the WHATWG URL or the RFC 3986 specifications]".
 
 ===== Backward Incompatible Changes =====
 
