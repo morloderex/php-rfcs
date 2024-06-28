@@ -7,119 +7,106 @@
 
 ===== Introduction =====
 
-Nearly three years ago, [[rfc:user_defined_operator_overloads|PHP RFC: User Defined Operator Overloads]] was started before eventually coming to a vote and being declined for multiple reasons, mostly around scope and new syntax. It has come to the author's attention that the GMP object (which represents the GMP extensions representation of a number) was left non-final. In an  [[https://github.com/withinboredom/time/tree/v4.1.0?tab=readme-ov-file#math|experimental library]], I decided to extend it and just see what happens.
-
-The GMP extension overrides operators in order to provide a clean way to express mathematical constructs, such that when a 2 * StandardSecond is written in this library, a number representing 4 seconds comes out the other side. The author then began investigating how to make it so that instead of a standard GMP object representing 4 seconds, a "time object" would come out the other end.
-
-This RFC aims to embrace the accidental non-final aspect of the \GMP class, allow for a small subset of operator overriding, such that anything that can be backed by a single number can be represented like a number. For example a unit library could allow for multiplying space / time to get velocity, a complex number library, a time library, etc.
-
-Further, this will only be enabled when the GMP extension is enabled/installed.
+Nearly three years ago, [[rfc:user_defined_operator_overloads|PHP RFC: User Defined Operator Overloads]] was declined due to scope and new syntax concerns. However, the GMP class, which represents numbers in the GMP extension, was (accidentally) left non-final. This RFC explores the potential of extending GMP with a limited form of operator overriding, providing cleaner expressions for mathematical constructs and allowing new types of numerical representations such as units, complex numbers, and more.
 
 ===== Proposal =====
 
 The \GMP class will have the following methods added as protected static:
 
-  * add($left, $right): static
-  * subtract($left, $right): static
-  * multiply($left, $right): static
-  * divide($left, $right): static
-  * mod($left, $right): static
-  * exp($left, $right): static
-  * comparable($left, right): bool
+  * add(mixed $left, mixed $right): static
+  * subtract(mixed $left, mixed $right): static
+  * multiply(mixed $left, mixed $right): static
+  * divide(mixed $left, mixed $right): static
+  * mod(mixed $left, mixed $right): static
+  * exp(mixed $left, mixed $right): static
+  * comparable(mixed $left, mixed right): bool
 
-There will not be a way to override equals, less-than, greater-than, etc. Thus the overriding class will need to represent itself as a number, however, it can return `false` from `comparable` to prevent itself to being compared to non-sensical types (e.g., "is 5 miles more than 30 seconds" or "is 1 falcon equal to 12 parsecs").
+These methods will enable operator-like behavior when extended. Overriding equals, less-than, greater-than, etc., is not included to maintain simplicity and avoid non-sensical comparisons.
 
 Binary operations will be handled as such:
 
-  - In the case that both types of a binary operation are the base class, no behavior will be changed. 
-  - In the event that one of them is a child class of \GMP, the extension will execute the child class's associated override.
-  - In the event both of them are child classes of \GMP, the exension will only call the left one. Thus it is the library's responsibility to check that it is compatable with the arguments passed.
+  - If both operands are instances of `\GMP`, standard behavior applies.
+  - If one operand is a subclass of `\GMP`, the subclass's method is invoked.
+  - If both operands are subclasses, only the left operand's method is called. Compatibility checks are the subclass's responsibility.
 
 Here's a basic implementation example for duration represented in seconds:
 
 <code php>
   class Duration extends \GMP {
     public function __construct(int|\GMP|float $time) {
-      parent::__construct($time, 10);
+        parent::__construct($time, 10);
     }
-  
+
     private static function assertCompatible($arg): void {
-      if($arg instanceof Time || is_numeric($arg) || (is_object($arg) && class_name($arg) === '\GMP')) {
-        return;
-      }
-      // dummy error message
-      throw new LogicException('Time is not compatible with ' . $arg);
+        if ($arg instanceof self || is_numeric($arg) || (is_object($arg) && get_class($arg) === '\GMP')) {
+            return;
+        }
+        throw new LogicException('Duration is not compatible with ' . gettype($arg));
     }
-  
+
     private static function assertNumber($arg): void {
-      if(is_numeric($arg) || (is_object($arg) && class_name($arg) === '\GMP')) {
-        return;
-      }
-      // dummy error message
-      throw new LogicException('Time is not compatible with ' . $arg);
+        if (is_numeric($arg) || (is_object($arg) && get_class($arg) === '\GMP')) {
+            return;
+        }
+        throw new LogicException('Argument is not a number: ' . gettype($arg));
     }
-  
-    protected static function add($left, $right): static {
-      self::assertCompatible($right);
-      return new self(parent::add($left, $right));
+
+    protected static function add(mixed $left, mixed $right): static {
+        self::assertCompatible($right);
+        return new self(parent::add($left, $right));
     }
-  
-    protected static function subtract($left, $right): static {
-      self::assertCompatible($right);
-      return new self(parent::subtract($left, $right));
+
+    protected static function subtract(mixed $left, mixed $right): static {
+        self::assertCompatible($right);
+        return new self(parent::subtract($left, $right));
     }
-  
-    protected static function multiply($left, $right): static {
-      if($left instanceof self) self::assertNumber($right);
-      if($right instanceof self) self::assertNumber($left);
-  
-      return new self(parent::multiply($left, $right);
+
+    protected static function multiply(mixed $left, mixed $right): static {
+        if ($left instanceof self) self::assertNumber($right);
+        if ($right instanceof self) self::assertNumber($left);
+        return new self(parent::multiply($left, $right));
     }
-  
-    protected static function divide($left, $right): static {
-      self::assertNumber($right); // anything divided by time is non-sensical
-  
-      return new self(parent::divide($left, $right);
+
+    protected static function divide(mixed $left, mixed $right): static {
+        self::assertNumber($right);
+        return new self(parent::divide($left, $right));
     }
-  
-    protected static function mod($left, $right): static {
-      throw new LogicException('Not implemented');
+
+    protected static function mod(mixed $left, mixed $right): static {
+        throw new LogicException('Not implemented');
     }
-  
-    protected static function exp($left, $right): static {
-      throw new LogicException('Not implemented');
+
+    protected static function exp(mixed $left, mixed $right): static {
+        throw new LogicException('Not implemented');
     }
-  
-    protected static function comparable($left, $right): bool {
-      if($left instanceof Time && $right instanceof Time) return true;
-      return false;
+
+    protected static function comparable(mixed $left, mixed $right): bool {
+        return $left instanceof self && $right instanceof self;
     }
-  
+
     public function asMinutes(): float {
-      return $this / 60;
+        return $this / 60;
     }
   
     /* and so on */
   }
 </code>
 
-This could provide valuable semantics, especially for usage in attributes:
+This approach provides valuable semantics and type safety, especially in contexts like attributes and properties:
 
 <code php>
 define('SECOND', new Duration(1));
 
-// use in attributes
-#[Delay(5*SECOND)]
+// Use in attributes
+#[Delay(5 * SECOND)]
 
-// use in properties
+// Use in properties
 public Duration $delay = 5 * SECOND;
 </code>
 
-While this isn't proper operator overrides, it does provide some much needed type safety when it comes to units.
-
 ===== Backward Incompatible Changes =====
 
-There are no backward incompatible changes.
+There are no backward incompatible changes. Existing GMP-based code will remain unaffected.
 
 ===== Proposed PHP Version(s) =====
 
@@ -141,24 +128,23 @@ None, yet.
 
 ===== Unaffected PHP Functionality =====
 
-Code using the GMP extension will be unaffected by this change as there will be no behavior changes.
+Code using the GMP extension without extending it will remain unchanged.
 
 ===== Future Scope =====
 
   * support for other operators
   * serialization/unserialization
-  * 
 
 ===== Proposed Voting Choices =====
 
   * Allow extending the \GMP class and use a form of operator overloading
   * Disallow extending the \GMP class
 
-Note that voting "NO" to this RFC will mean we should make the \GMP class final so it cannot be extended any more, as it doesn't make sense to be able to extend it.
+A "NO" vote implies making the `\GMP` class final to prevent further extensions.
 
 ===== Patches and Tests =====
 
-A prototype patch will be provided BEFORE this RFC goes to vote.
+A prototype patch will be provided before voting.
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
