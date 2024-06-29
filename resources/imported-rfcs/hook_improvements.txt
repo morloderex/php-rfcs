@@ -46,7 +46,7 @@ We consider the slightly worse error handling fully justified by the performance
 
 Support for hooks on ''readonly'' properties was omitted from the original RFC, primarily to minimize complexity as there were questions around when it was safe to do.  On further consideration, we believe that hooks on backed properties are sufficiently safe to support readonly, but not on virtual properties.
 
-We therefore propose to allow both ''get'' and ''set'' hooks on ''readonly'' properties, if and only if it is a backed property.  More precisely, the ''readonly'' flag would apply to the backing value of the property rather than to the hooked property construct around it.
+We therefore propose to allow both ''get'' and ''set'' hooks on ''readonly'' properties, if and only if it is a backed property.
 
 The main concern is that readonly implies a property is immutable and idempotent.  However, a ''get'' hook supports arbitrary code, so technically a developer could do something silly like:
 
@@ -92,31 +92,7 @@ That is, we feel, an entirely reasonable use of hooks, and would allow for lazy-
 
 This is subtly different from the Lazy Proxy RFC, which operates on the whole object at once.  We believe both use cases are valuable and should be supported.
 
-A ''set'' hook, meanwhile, offers no issue for a backed readonly property.  As long as it is backed we are able to determine if it is still uninitialized, and so a second set call would correctly fail as it should.
-
-<code php>
-class Foo
-{
-    public readonly string $val {
-        get {
-            // If this is called first, the backing value will be
-            // uninitialized and so a write will happen here. This
-            // is the only allowed write.
-            $this->val ??= 'default';
-        }
-        set {
-            if (strlen($value) < 4) {
-                throw new Exception();
-            }
-            // If this is called first, the write to the backing value
-            // will do the uninitialized check.  If the value has already
-            // been set, the "can't write to readonly property" error will
-            // be thrown from this line.
-            $this->val = $value;
-        }
-    }
-}
-</code>
+A ''set'' hook, meanwhile, offers no issue for a backed readonly property.  As long as it is backed we are able to determine if it is still uninitialized, and so a second set call would correctly fail as it should.  In particular, the "uninitialized" check is made before the ''set'' hook is called, at the same time that visibility is checked.  That ensures that the author of the set hook doesn't need to worry if the value is already set, and the same machinery will work for the [[rfc:asymmetric-visibility-v2|Asymmetric Visibility]] enforcement.  That allows both features to interoperate more cleanly.
 
 On balance, we believe the advantages and use cases for a lazy readonly property outweigh the potential for developers to do silly things.  For that reason, we propose to allow both get and set hooks on backed readonly properties.
 
