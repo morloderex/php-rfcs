@@ -1,5 +1,5 @@
 ====== PHP RFC: Operator Overrides -- Lite Edition ======
-  * Version: 0.0
+  * Version: 0.1
   * Date: 2024-06-28
   * Author: Robert Landers, landers.robert@gmail.com
   * Status: Under Discussion (or Under Discussion or Accepted or Declined)
@@ -7,108 +7,222 @@
 
 ===== Introduction =====
 
-Nearly three years ago, [[rfc:user_defined_operator_overloads|PHP RFC: User Defined Operator Overloads]] was declined due to scope and new syntax concerns. However, the GMP class, which represents numbers in the GMP extension, was (accidentally) left non-final. This RFC explores the potential of extending GMP with a limited form of operator overriding, providing cleaner expressions for mathematical constructs and allowing new types of numerical representations such as units, complex numbers, and more.
+Nearly three years ago, [[rfc:user_defined_operator_overloads|PHP RFC: User Defined Operator Overloads]] was declined due to scope and new syntax concerns. However, the GMP class, which represents integer numbers in the GMP extension, was (accidentally) left non-final. This RFC explores the potential of extending GMP with a limited form of operator overriding, providing cleaner expressions for mathematical constructs and allowing new types of numerical representations such as units, complex numbers, and more.
+
+This is to integers as ArrayAccess is to arrays, and Stringable is to strings, providing a simplified framework for defining integer mathematics, such as units.
+
+===== What this is not =====
+
+This is not a full operator overrides implementation; it is much simpler and it does not stop us from implementing that in the future. It, does, however seek to be a polar opposite of the [[rfc:user_defined_operator_overloads|PHP RFC: User Defined Operator Overloads]] RFC.
+
+===== Why the GMP extension? =====
+
+Several curious people have wondered why this is focused on the GMP extension. The reasons are quite simple:
+
+  - Numbers are surprisingly hard to implement "from scratch" (which is required if implemented in another extension) and libraries like GMP/BCMath are great libraries that make this simple.
+  - GMP has a practically infinite numerical range, meaning if you wanted to write a "Duration" library that counted in nanoseconds, you could have a range larger than 292 years (the limit for 64 bit machines using PHP_INT_MAX).
+  - People using the GMP extension are already familiar with the way overloading works in the engine.
+  - The extension already has all the plumbing in-place to handle casting, operator overloads, and all in an OOP oriented way.
 
 ===== Proposal =====
 
-The \GMP class will have the following methods added as protected static:
-
-  * add(mixed $left, mixed $right): static
-  * subtract(mixed $left, mixed $right): static
-  * multiply(mixed $left, mixed $right): static
-  * divide(mixed $left, mixed $right): static
-  * mod(mixed $left, mixed $right): static
-  * exp(mixed $left, mixed $right): static
-  * comparable(mixed $left, mixed right): bool
-
-These methods will enable operator-like behavior when extended. Overriding equals, less-than, greater-than, etc., is not included to maintain simplicity and avoid non-sensical comparisons.
-
-Binary operations will be handled as such:
-
-  - If both operands are instances of `\GMP`, standard behavior applies.
-  - If one operand is a subclass of `\GMP`, the subclass's method is invoked.
-  - If both operands are subclasses, only the left operand's method is called. Compatibility checks are the subclass's responsibility.
-
-Here's a basic implementation example for duration represented in seconds:
+The \GMP class will be changed to the following signature:
 
 <code php>
-  class Duration extends \GMP {
-    public function __construct(int|\GMP|float $time) {
-        parent::__construct($time, 10);
-    }
+class GMP
+{
+    public function __construct(int|string|GMP $num = 0, int $base = 0) {}
 
-    private static function assertCompatible($arg): void {
-        if ($arg instanceof self || is_numeric($arg) || (is_object($arg) && get_class($arg) === '\GMP')) {
-            return;
-        }
-        throw new LogicException('Duration is not compatible with ' . gettype($arg));
-    }
+    public function __serialize(): array {}
 
-    private static function assertNumber($arg): void {
-        if (is_numeric($arg) || (is_object($arg) && get_class($arg) === '\GMP')) {
-            return;
-        }
-        throw new LogicException('Argument is not a number: ' . gettype($arg));
-    }
+    public function __unserialize(array $data): void {}
 
-    protected static function add(mixed $left, mixed $right): static {
-        self::assertCompatible($right);
-        return new self(parent::add($left, $right));
-    }
+    protected function add(GMP|int|string $left, GMP|int|string $right): GMP {}
 
-    protected static function subtract(mixed $left, mixed $right): static {
-        self::assertCompatible($right);
-        return new self(parent::subtract($left, $right));
-    }
+    protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {}
 
-    protected static function multiply(mixed $left, mixed $right): static {
-        if ($left instanceof self) self::assertNumber($right);
-        if ($right instanceof self) self::assertNumber($left);
-        return new self(parent::multiply($left, $right));
-    }
+    protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {}
 
-    protected static function divide(mixed $left, mixed $right): static {
-        self::assertNumber($right);
-        return new self(parent::divide($left, $right));
-    }
+    protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {}
 
-    protected static function mod(mixed $left, mixed $right): static {
-        throw new LogicException('Not implemented');
-    }
+    protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {}
 
-    protected static function exp(mixed $left, mixed $right): static {
-        throw new LogicException('Not implemented');
-    }
+    protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {}
 
-    protected static function comparable(mixed $left, mixed $right): bool {
-        return $left instanceof self && $right instanceof self;
-    }
-
-    public function asMinutes(): float {
-        return $this / 60;
-    }
-  
-    /* and so on */
-  }
+    protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {}
+}
 </code>
 
-This approach provides valuable semantics and type safety, especially in contexts like attributes and properties:
+For any existing GMP code, absolutely nothing changes. The extension's behavior ONLY changes when the developer extends the GMP class and uses it mathematically. The developer must override the desired operations and make them public to be usable. This ensures the class can be used even if the GMP extension is unavailable. A polyfill is included in the example below, which can be included in libraries that use this functionality.
+
+Note the lack of equals, less-than, and greater-than operators. These are deliberately left out and replaced by a "comparable" method where the developer can indicate whether the two objects are compatible. They are left out for several reasons:
+
+  - PHP reorders comparables as needed
+  - The core tenant here is that these objects should represent types of integers, and it is expected that they are internally comparable but possibly not comparable to other types. For example, the number of goats on a farm may not be comparable to the speed of a car.
+
+Shift and bitwise operations are also left out of the class because it is expected that these behaviors won't change for any type of number that could be implemented here.
+
+Below is a listing showing a polyfill, a Duration class that only allows adding, multiplying, and exponentiation with scalars and is only comparable to Durations. Further, it cannot be negative.
 
 <code php>
-define('SECOND', new Duration(1));
+<?php
 
-// Use in attributes
-#[Delay(5 * SECOND)]
+if(!class_exists('GMP')) {
+    // polyfill
+    class GMP {
+        public function __construct(private int|string|GMP $num) {}
 
-// Use in properties
-public Duration $delay = 5 * SECOND;
+        protected function add(GMP|int|string $left, GMP|int|string $right): GMP {
+            return new self($left?->num + $right?->num);
+        }
+
+        protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {
+            return new self($left?->num * $right?->num);
+        }
+
+        protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {
+            return new self($left?->num - $right?->num);
+        }
+
+        protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {
+            return new self($left?->num / $right?->num);
+        }
+
+        protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {
+            return new self($left?->num % $right?->num);
+        }
+
+        protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {
+            return new self($base?->num ** $exp?->num);
+        }
+
+        protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {
+            return is_numeric($op1) && is_numeric($op2);
+        }
+    }
+}
+
+class Duration extends GMP {
+    public function __construct(int|string|GMP $num = 0)
+    {
+        parent::__construct($num);
+    }
+
+    // Asserts that a value is scalar for our purposes.
+    private function assertValidScalar(mixed $maybeScalar, string $operation): void {
+        if(is_numeric($maybeScalar)) {
+            return;
+        }
+
+        if(get_class($maybeScalar) === 'GMP') {
+            return;
+        }
+
+        throw new ValueError("Can only perform $operation on GMP or int. Got " . get_debug_type($maybeScalar) . " instead.");
+    }
+
+    // checks that at least one of the operands is us and that the other is a scalar
+    private function guardScalars(GMP|int|string $left, GMP|int|string $right, string $operation): void
+    {
+        if($left === $this) {
+            $this->assertValidScalar($right, $operation);
+        }
+
+        if($right === $this) {
+            $this->assertValidScalar($left, $operation);
+        }
+        
+        throw new LogicException('should not happen');
+    }
+
+    // given a numerical result, check that it is positive and return a new Duration
+    private function guardAndGetResult(GMP $result): self {
+        if($result < 0) {
+            throw new ArithmeticError('Duration cannot be negative.');
+        }
+
+        return new self($result);
+    }
+
+    // describe how to add Durations
+    public function add(GMP|int|string $left, GMP|int|string $right): static
+    {
+        $this->guardScalars($left, $right, 'addition');
+
+        return $this->guardAndGetResult(parent::add($left, $right));
+    }
+
+    // describe how to multiply Durations
+    public function multiply(GMP|int|string $left, GMP|int|string $right): GMP
+    {
+        $this->guardScalars($left, $right, 'multiplication');
+
+        return $this->guardAndGetResult(parent::multiply($left, $right));
+    }
+
+    // describe how to raise a Duration to a power
+    public function pow(GMP|int|string $base, GMP|int|string $exp): GMP
+    {
+        $this->assertValidScalar($exp, 'exponentiation');
+
+        return $this->guardAndGetResult(parent::pow($base, $exp));
+    }
+
+    // we are only comparable to other Durations
+    public function comparable(GMP|int|string $op1, GMP|int|string $op2): bool
+    {
+        return $op1 instanceof self && $op2 instanceof self;
+    }
+}
+
+$duration = new Duration(10);
+$other = new Duration(200);
+$regular = new GMP(10);
+
+function do_op($description, $op): void {
+    global $duration, $other, $regular;
+    try {
+        $result = eval('return ' . $op . ';');
+        echo "$description: $op = $result" . PHP_EOL;
+    } catch (Throwable $exception) {
+        echo "$description: $op = [" . $exception->getMessage() . ']' . PHP_EOL;
+    }
+}
+
+do_op('Duration', '$duration');
+do_op('Regular', '$regular');
+do_op('Other', '$other');
+
+do_op('Regular', '$regular + 10');
+do_op('Duration', '$duration + 10');
+do_op('Duration + Duration', '$duration + $other');
+do_op('Duration + Regular', '$duration + $regular');
+do_op('Division not allowed', '$duration / 10');
+do_op('Multiplication', '$regular * 10');
+do_op('No negatives', '$duration + -20');
+
+/**
+ * output:
+ * Duration: $duration = 10
+ * Regular: $regular = 10
+ * Other: $other = 200
+ * Regular: $regular + 10 = 20
+ * Duration: $duration + 10 = 20
+ * Duration + Duration: $duration + $other = [Can only perform addition on GMP or int. Got Duration instead.]
+ * Duration + Regular: $duration + $regular = 20
+ * Division not allowed: $duration / 10 = [Invalid callback Duration::divide, cannot access protected method Duration::divide()]
+ * Multiplication: $regular * 10 = 100
+ * No negatives: $duration + -20 = [ArithmeticError: Duration cannot be negative.]
+ */
+ */
 </code>
 
-====== Methods and their definitions ======
+The following exceptions can be thrown by the engine while attempting to perform mathematical operations:
 
-Add, subtract, multiply, divide, mod, and exp all correspond to their associated arithmetic operations. The user can throw an exception from these methods or call the parent method to perform the base operation on its underlying number. Trying to perform the operation again will result in a RuntimeException to prevent infinite recursion.
+  * Error: when trying to perform an unsupported operation, which shows as "Invalid callback Duration::divide, cannot access protected method Duration::divide()"
+  * ArithmeticError: when ANY participating comparison indicates that it is not comparable: "Can't compare incompatible types: Duration to int"
 
-The comparable method determines if the objects being compared can be more than, less than, or equal to each other. For example, money is probably not less than, equal to, or more than distance, time, or a plain number. Unlike other binary operations, these are called for all objects in a binary operation and all must agree that they are comparable to each other in order for the comparison to succeed. If any other them return "false" from this method, an ArithmeticError exception will be thrown.
+Additionally, the implementor may throw additional exceptions, such as a ValueError in the example above, to indicate that something is not possible to the developer.
 
 ===== Backward Incompatible Changes =====
 
@@ -140,6 +254,7 @@ Code using the GMP extension without extending it will remain unchanged.
 
   * support for other operators
   * serialization/unserialization
+  * support for non-integers via BCMath
 
 ===== Proposed Voting Choices =====
 
@@ -148,11 +263,11 @@ Code using the GMP extension without extending it will remain unchanged.
 
 ===== Patches and Tests =====
 
-A prototype patch will be provided before voting.
+Prototype patch: [[https://github.com/php/php-src/pull/14730|PR 14730]]
 
 ===== Implementation =====
 After the project is implemented, this section should contain 
-  - the version(s) it was merged into
+  - 
   - a link to the git commit(s)
   - a link to the PHP manual entry for the feature
   - a link to the language specification section (if any)
@@ -160,5 +275,17 @@ After the project is implemented, this section should contain
 ===== References =====
 Links to external references, discussions or RFCs
 
-===== Rejected Features =====
-Keep this updated with features that were discussed on the mail lists.
+===== Rejected Features and Concerns =====
+
+=== A separate extension ===
+
+On paper, a separate extension sounds like a good idea. However, I've attempted this with varying degrees of success. Reimplementing mathematics is not straightforward or a good idea when libraries like GMP do a much better job. Since there is already a GMP extension, it makes sense to merge it with that extension instead of forking it. If this RFC is rejected, it is rather straightforward to fork the extension and create a new one. However, that will certainly cause problems in environments where the standard GMP extension is installed instead.
+
+=== Full Operator Overloading ===
+
+Some people on the list have voiced their opinion that we should revisit full operator overloading. This RFC does not prevent us from revisiting that in the future, but it is outside the scope of this RFC.
+
+=== More Operators ===
+
+There are many more operators that could be implemented. However, another concern was raised that people may "abuse" this feature to implement arbitrary objects that do strange things with operators. Thus, the scope is kept to "obviously integer-y things," and the GMP extension goes to great lengths to have the engine treat its objects as numbers.
+
