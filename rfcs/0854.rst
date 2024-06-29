@@ -1,226 +1,191 @@
-Include Cleanup
-===============
+Property Hook Improvements
+==========================
 
 :PHP-RFC: 0854
-:Title: Include Cleanup
-:Author: Max Kellermann <max.kellermann@ionos.com>
-:Status: Declined
+:Title: Property Hook Improvements
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>, Larry Garfield <larry@garfieldtech.com>
+:Status: Draft
 :Type: Unknown
-:Created: 2023-01-18
-:Version: 0.1
+:Created: 2024-06-28
+:Version: 0.9
 
 Introduction
 ------------
 
-The PHP code base has grown over more than 2 decades, which leaves some
-room for code cleanups. While attempting to fix several crash bugs in
-the JIT, I found that PHP's C headers (*.h) and the existing #include
-directives are inconsistent, incomplete and bloated; many things just
-worked by chance, not by design, because there were a few headers which
-just included everything.
-
--  there are lots of undocumented headers without clear scope; what is
-   the purpose/scope of zend.h and zend_API.h? What types should
-   zend_types.h make available? Which types are supposed to live in
-   zend_types.h and which ones are supposed to live in a type-specific
-   header? What is zend_portability.h and what does ZEND_ASSERT have to
-   do with portability? All those headers seemed confusing to me.
--  many source files check for build option macros (e.g ZEND_DEBUG) but
-   do not ensure that \`php_config.h\` or \`zend_config.w32.h\` is
-   included; it is not documented what needs to be done to make those
-   macros available; that can easily lead to silent corruption of the
-   PHP executable if a header or include ordering gets changed
--  reordering of #include lines must never cause C compiler failures,
-   but that is a very common problem in the PHP code base
--  there is a lot of code duplication for macro definitions, e.g.
-   MAXPATHLEN is defined in 5 different headers in 3 different ways;
-   PHPAPI is defined in 2 headers in different ways; this is yet another
-   way to produce corrupt PHP executables by reordering #include lines
--  it is all but obvious which header should be included to make certain
-   symbols available
--  e.g. if I want to work with zend_string instances, I expect to just
-   include zend_string.h, but that header doesn't contain the
-   definition, nor all necessary functions/macros; those are in
-   zend_types.h, and so nobody includes zend_string.h; but anyway
-   including zend_string.h would pull in everything else via zend.h
--  ... and so on
-
-I wanted to help clean up this mess that had accumulated over two
-decades. After four PRs doing exactly that were widely welcomed and
-accepted, there was resistance from two individuals who demanded my
-changes to be reverted. This resistance surprised me, because I
-previously thought those code cleanups were common sense, and just
-nobody had so far taken the time to do it.
+While finalizing the implementation of the `property hooks
+RFC </rfc/property-hooks>`__ patch, we have found a few small areas for
+improvement. These are nominally changes from the behavior defined in
+the original RFC, and thus we want to refer them through the RFC
+process.
 
 Proposal
 --------
 
-I propose an addition to PHP's coding standard describing how C headers
-and #includes should be managed:
+There are two improvements we propose.
 
-#. Include only the headers (`*.h`) that are really needed.
-#. Use struct/union forward declarations to eliminate \`#include\`
-   directives if possible.
-#. If some headers are needed only in some build configurations, enclose
-   them in the same \`#if\` that also guards the use of its definitions.
-#. Each source file (`*.c`) should include its own header file first to
-   ensure that the header's \`#includes\` are complete.
-#. Header inclusions are ordered this way: its own header first, then
-   PHP headers, then third-party library headers, then system headers
-   (e.g. libc, POSIX).
+Remove the proactive guard against recursive backing value access
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-(GitHub PR with the same contents:
-https://github.com/php/php-src/pull/10338)
+As defined in the original RFC, the following code would have been
+detected and throw a dedicated error.
 
-Then, the reverted cleanups should be reconsidered:
+.. code:: php
 
--  https://github.com/php/php-src/pull/10216
--  https://github.com/php/php-src/pull/10220
--  https://github.com/php/php-src/pull/10279
--  https://github.com/php/php-src/pull/10300
+   class C
+   {
+       public string $val = 'a' {
+           get {
+             return $this->val . $this->suffix();
+           }
+       }
+       
+       public function suffix(): string
+       {
+           return $this->val;
+       }
+   }
 
-I have already posted a new draft PR which contains all these, plus some
-more: https://github.com/php/php-src/pull/10345
+   $c = new C();
+   print $c->val;
 
-Advantages of this proposal:
+While looking for optimizations, Ilija found he was able to refactor the
+hook logic to make it more than twice as fast: While there is still some
+overhead to a hook compared to a traditional get method, it's been
+reduced from "close to the cost of ``__get``" to "almost negligible
+compared to a method." Enough that it would almost certainly be swamped
+by the cost of the hook body itself. This is a massive improvement.
 
--  more correct code
--  cleaner and more readable code (less obscurity in huge amounts of
-   undocumented/unnecessary #includes)
--  less fragile code (build fails early if you forget an #include;
-   currently, removing one unnecessary #include in one header may break
-   dozens of sources)
--  reduced compile times (because the compiler processes less code)
+A side effect of that optimization, however, is that we cannot
+proactively detect the bug above. Instead, it would result in an
+infinite loop, which would eventually trigger a a stack overflow.
 
-Disadvantages of this proposal:
+We consider the slightly worse error handling fully justified by the
+performance improvement, and by the fact that the code above is a bug no
+matter what (it's just a question of when the bug gets reported). But as
+it is a change from the behavior stated in the previous RFC, we are
+putting it out for consideration.
 
--  like every time code gets refactored, there may be regressions in
-   build configurations not tested by the CI, like the DTrace build
-   failure that was introduced by my work (which was trivial to fix)
+Partial support for readonly properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Criticism issued on this proposal:
+Support for hooks on ``readonly`` properties was omitted from the
+original RFC, primarily to minimize complexity as there were questions
+around when it was safe to do. On further consideration, we believe that
+hooks on backed properties are sufficiently safe to support readonly,
+but not on virtual properties.
 
--  Dmitry Stogov disliked that I documented many #include directives
-   ("good for review only") but did not object to cleaning up #include
-   directives
-   (https://github.com/php/php-src/pull/10216#issuecomment-1375140255)
--  later Dmitry Stogov changed his mind, saying "This is just a useless
-   permutation. [...] How is this clearly?"
-   https://github.com/php/php-src/pull/10220#issuecomment-1383739816
-   which Derick Rethans agreed with ("It adds nothing but clutter."
-   https://github.com/php/php-src/pull/10220#issuecomment-1383784480)
--  Dmitry Stogov rejected the idea of forward declarations because
-   "Functions may change their prototypes, unions may be turned into
-   structures, etc"
-   (https://github.com/php/php-src/pull/10338#discussion_r1071169392)
--  Derick Rethans believes that "comments that go out of date as to why
-   a header is included is also clutter" (though this can be said about
-   all documentation/code comments, and the argument can thus be used to
-   reject all code comments)
--  Dmitry Stogov and Derick Rethans worried that these changes would
-   make merging branches harder, due to possible merge conflicts or
-   build failures because the source branch does not have correct
-   #includes and now uses a new symbol from a header which was not
-   included (though the same can be said about all code changes, and
-   changing #includes is not very intrusive, because these rarely ever
-   change in stable branches, and there's never a semantic change)
--  There was some opposition against struct forward declarations; they
-   allegedly "decrease code readability".
+We therefore propose to allow both ``get`` and ``set`` hooks on
+``readonly`` properties, if and only if it is a backed property. More
+precisely, the ``readonly`` flag would apply to the backing value of the
+property rather than to the hooked property construct around it.
+
+The main concern is that readonly implies a property is immutable and
+idempotent. However, a ``get`` hook supports arbitrary code, so
+technically a developer could do something silly like:
+
+.. code:: php
+
+   class Dumb
+   {
+       public readonly int $value { get => $this->value * random_int(1, 100); }
+   }
+
+On the other hand, there is no shortage of dumb things that people can
+do with PHP already. The exact same silliness could be implemented using
+``__get``, for instance. However, there are valid uses for a readonly
+get hook, especially for ORMs and proxies. For example:
+
+.. code:: php
+
+   readonly class ProductFromDB
+   {
+       public string $id;
+       
+       public function __construct(
+           public string $name,
+           public float $price,
+           public Category $category,
+       ) {}
+   }
+
+   // Generated code.
+   readonly class LazyProduct
+   {
+       // Assigned via reflection or a closure.
+       private DbConnection $dbApi;
+       
+       // Assigned via reflection or a closure.
+       private string $categoryId;
+
+       public Category $category {
+           get {
+               $this->category ??= $this-dbApi->loadCategory($this->categoryId);
+           }
+       }
+   }
+
+That is, we feel, an entirely reasonable use of hooks, and would allow
+for lazy-load behavior per-property on readonly classes.
+
+This is subtly different from the Lazy Proxy RFC, which operates on the
+whole object at once. We believe both use cases are valuable and should
+be supported.
+
+A ``set`` hook, meanwhile, offers no issue for a backed readonly
+property. As long as it is backed we are able to determine if it is
+still uninitialized, and so a second set call would correctly fail as it
+should.
+
+.. code:: php
+
+   class Foo
+   {
+       public readonly string $val {
+           get {
+               // If this is called first, the backing value will be
+               // uninitialized and so a write will happen here. This
+               // is the only allowed write.
+               $this->val ??= 'default';
+           }
+           set {
+               if (strlen($value) < 4) {
+                   throw new Exception();
+               }
+               // If this is called first, the write to the backing value
+               // will do the uninitialized check.  If the value has already
+               // been set, the "can't write to readonly property" error will
+               // be thrown from this line.
+               $this->val = $value;
+           }
+       }
+   }
+
+On balance, we believe the advantages and use cases for a lazy readonly
+property outweigh the potential for developers to do silly things. For
+that reason, we propose to allow both get and set hooks on backed
+readonly properties.
 
 Backward Incompatible Changes
 -----------------------------
 
-This proposal has no runtime effect. The PHP language is not affected,
-and the PHP executable will not change.
-
-At the C source code level, reducing #includes may break the build of
-third-party extensions which forgot to include a header that was
-previously implied by PHP, e.g. "errno.h" is included for no reason, and
-extensions may rely on that.
-
-If staying compatible with defective extensions is deemed important,
-these includes may be re-added to a header such as "php_compat.h",
-possibly with a way to opt-out. That way, broken extensions still build,
-but PHP itself still benefits from a smaller and more correct set of
-#includes.
+None.
 
 Proposed PHP Version(s)
 -----------------------
 
-"master" branch (which may eventually become 8.3 or 9.0?).
+PHP 8.4.
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-No runtime impact.
-
-The build of out-of-tree SAPIs may break for the same reasons as
-described above.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-No runtime impact.
-
-The build of out-of-tree extensiosn may break for the same reasons as
-described above.
-
-To Opcache
-~~~~~~~~~~
-
-No impact.
-
-Being an in-tree extension, opcache benefits from those code cleanups.
-My PR contains cleanup commits for opcache.
-
-New Constants
-~~~~~~~~~~~~~
-
-Not applicable.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-Not applicable.
-
-Open Issues
------------
-
-Unaffected PHP Functionality
-----------------------------
-
-The PHP language is completely unaffected.
-
-Future Scope
-------------
-
-Not applicable. This is an incremental improvement to PHP's source code.
-
 Proposed Voting Choices
 -----------------------
 
--  Clean up #include directives? (Yes/No)
--  Is it allowed to document an #include line with a code comment?
-   (Yes/No)
--  Is it allowed to forward-declare structs/unions/typedefs? (Yes/No)
--  Is it allowed to split a large header, e.g. move zend_result to a
-   separate header, to reduce dependencies on catch-all headers such as
-   zend_types.h? (Yes/No)
+There will be two independent primary votes, one for each of the
+improvements suggested above. Please vote for each separately.
 
-Vote
-----
-
-Voting started on 2023-02-01 (two weeks after the RFC was posted to
-php-internals) and will end on 2023-02-15 at 15:00 UTC (another two
-weeks).
-
-Primary vote:
-
-Question: Should #include directives be cleaned up?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Remove the extra hook recursion guard?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -228,34 +193,10 @@ Voting Choices
 -  Yes
 -  No
 
-Secondary (clarifications on how to clean up):
-
-Question: Is it allowed to document an #include line with a code comment?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Permit hooks on backed readonly properties?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Question: Is it allowed to forward-declare structs/unions/typedefs?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Question: Is it allowed to split a large header to reduce dependencies?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-3:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -269,40 +210,28 @@ Patches and Tests
 Implementation
 --------------
 
-https://github.com/php/php-src/pull/10338 tracks the specification.
-https://github.com/php/php-src/pull/10345 tracks my proposed
-implementation.
+After the project is implemented, this section should contain
 
-https://github.com/php/php-src/pull/10410 is a PR splitted from
-https://github.com/php/php-src/pull/10345 with some minimal cleanup, as
-suggested on php-internals by Jakub Zelenka; it contains compatibility
-tweaks so (bad) third-party extensions do not break, such as always
-including errno.h from php.h
-
-https://github.com/php/php-src/pull/10404 is a PR that adds a few
-third-party extensions to the CI; more extensions could easily be added.
-This is slighly out of this RFC's scope, but may help those who worry
-about extension breakages.
-
-If voters decide that #include directives should not have code comments,
-then existing comments should be removed to reduce "clutter"; see
-https://github.com/php/php-src/pull/10472
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
 
 References
 ----------
 
--  https://github.com/php/php-src/pull/10216
--  https://github.com/php/php-src/pull/10220
--  https://github.com/php/php-src/pull/10279
--  https://github.com/php/php-src/pull/10300
--  https://github.com/php/php-src/pull/10338
--  https://github.com/php/php-src/pull/10345
--  https://marc.info/?l=php-internals&m=167387060703714&w=2
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:First Published At: https://github.com/php/php-src/pull/10216
-:Original Authors: Max Kellermann, max.kellermann@ionos.com
-:Slug: include_cleanup
-:Wiki URL: https://wiki.php.net/rfc/include_cleanup
+:Original Authors: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+:Original Date: 2024-06-28 (use today's date here)
+:Original Status: Under Discussion
+:Slug: hook_improvements
+:Wiki URL: https://wiki.php.net/rfc/hook_improvements

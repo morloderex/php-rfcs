@@ -1,459 +1,129 @@
-Implicit Move Optimisation
-==========================
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0852
-:Title: Implicit Move Optimisation
-:Author: Niels Dossche nielsdos <dossche.niels@gmail.com>
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-05-13
-:Version: 0.2.2
+:Type: Standards Track
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-PHP currently contains two data types which are copy-on-write (CoW):
-string and arrays. When you pass a variable containing a CoW type as an
-argument to a function, you don't copy the data. Instead, you increment
-the reference count of the data by one. The lowest possible reference
-count for a variable passed to a function is therefore 2: one reference
-is the variable, and the other is the function argument. Let's look at a
-toy code example:
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-.. code:: php
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
 
-   function my_function(array $my_array) {
-       // Remember: $my_array has a reference count of 2:
-       //   one reference in $array (main), and one in $my_array (my_function).
-       $my_array[] = 3;
-       return $my_array;
-   }
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
 
-   function main() {
-       $array = [0, 1, 2];
-       $array = my_function($array);
-       var_dump($array);
-   }
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
 
-   main();
-
-The code example shows an array being passed to "my_function", which
-modifies the array and returns the modified result. However, due to the
-copy-on-write (CoW) mechanism, the variable "$my_array" is copied within
-"my_function" because the array's reference count is greater than 1 and
-it is modified. In this example, the copy is unnecessary because the
-result always overwrites the original array. The purpose of this RFC is
-to propose an optimisation for avoiding such unnecessary copies.
-
-While this example may not highlight the significance of the copy cost,
-there are scenarios where it does matter, such as processing large data
-batches (e.g., Extract-Transform-Load processes) or having more complex
-data manipulation functions. The reason for having a separate "main()"
-function in the example will become clear later in the proposal.
-
-A similar case where this optimisation is beneficial is for variables
-which are passed to functions and then never used again the caller.
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-We will first give some brief background information and then dive into
-the technical details of the proposal.
-
-Background
-^^^^^^^^^^
-
-During optimisation, opcache will transform the PHP opcodes into Static
-Single Assignment (SSA) form. This is a special representation in which
-every variable has a single definition. An SSA variable is thus not the
-same as a PHP variable. In fact, a PHP variable may correspond to many
-SSA variables because of the single definition requirement. Let's take a
-look at the following PHP code and how it looks in SSA form.
-
-.. code:: php
-
-   function main(array $array) {
-       $a = $array;
-       $a = array_merge($a, [4]);
-   }
-
-This results in the following SSA code, with the type information
-removed for clarity.
-
-::
-
-   main:
-        ; #0.CV0($array) NOVAL
-        ; #1.CV1($a) NOVAL
-   0000 #2.CV0($array) = RECV 1
-   0001 #3.CV1($a) = QM_ASSIGN #2.CV0($array)
-   0002 INIT_FCALL 2 112 string("array_merge")
-   0003 SEND_VAR #3.CV1($a) 1
-   0004 SEND_VAL array(...) 2
-   0005 #5.V3 = DO_ICALL
-   0006 ASSIGN #3.CV1($a) -> #6.CV1($a) NOVAL #5.V3
-   0007 RETURN null
-
-Let's break it down. A variable that's actually in the code, like
-"$array" and "$a" is called a Compiled Variable (CV). CV0 refers to
-"$array" and CV1 refers to "$a". As an SSA variable may only be assigned
-once, but there are multiple assignments to "$a", "$a" is numbered in
-the SSA code. We have: "#0.CV0($array)" and "#2.CV0($array)" for
-"$array"; and "#1.CV1($a)", "#3.CV1($a)", and "#6.CV1($a)" for "$a".
-Every time "$a" is modified, the SSA variable needs to be "redefined".
-The counter after the pound symbol will increase and from that point on
-the SSA variable we use for "$a" is the one with the incremented
-counter. In particular, the PHP code "$a = array_merge($a, [4]);"
-results in using the SSA variable "#3.CV1($a)" and the assignment
-results in a new SSA variable "#6.CV1($a)".
-
-Technical Details
-^^^^^^^^^^^^^^^^^
-
-This optimisation, known as "implicit move," will be added to the
-existing optimisation pipeline as an SSA-based optimization. The term
-"implicit" indicates that this optimisation occurs automatically: it
-eliminates the need for PHP developers to take any specific action. The
-“move” refers to the fact that the lifetime and data is moved into the
-called function. The optimisation is only applied to local variables,
-because properties and array dimensions are not represented as SSA
-variables.
-
-The implementation pull request introduces this optimisation by setting
-a special flag on the opcodes for SEND_VAR and SEND_VAR_EX, indicating
-the possibility of an implicit move. A specialized VM handler is
-implemented to handle cases where this flag is set. It passes the
-array/string as an argument without creating a copy and it unsets the
-original variable. As a result, the reference count of the array/string
-remains unchanged. If the data's reference count is 1, it remains as
-such when the callee executes. Therefore, the need for a copy (even when
-the data is modified) is avoided.
-
-When do we set that flag? The SSA optimisation pipeline already detects
-when an SSA variable is never used after its definition. This happens
-using the NOVAL flag. We use this information, along with alias
-information, to determine when to set the flag. Furthermore, the flag
-can only be set if the variable may be an array or may be a string.
-
-Because the optimisation unsets the PHP variable, we need a new SSA
-definition for the affected PHP variable. The SSA code from above will
-look like this with this optimisation:
-
-::
-
-   main:
-        ; #0.CV0($array) NOVAL
-        ; #1.CV1($a) NOVAL
-   0000 #2.CV0($array) = RECV 1
-   0001 #3.CV1($a) = QM_ASSIGN #2.CV0($array)
-   0002 INIT_FCALL 2 112 string("array_merge")
-   0003 SEND_VAR #3.CV1($a) -> #4.CV1($a) NOVAL 1
-   0004 SEND_VAL array(...) 2
-   0005 #5.V3 = DO_ICALL
-   0006 ASSIGN #4.CV1($a) NOVAL -> #6.CV1($a) NOVAL #5.V3
-   0007 RETURN null
-
-As we can see above, there is now a redefinition for "$a" ("#4.CV1($a)")
-in the SEND_VAR opcode. The optimisation pass sees that "#4.CV1($a)" has
-the NOVAL flag, which indicates its result is never used again. It also
-knows that "$a" may be an array, and "$a" is not an argument of "main".
-Therefore, the special flag is set on the SEND_VAR opcode.
-
-Constraints
-~~~~~~~~~~~
-
-There are situations where this optimisation cannot be applied.
-Specifically, we cannot allow the user code to observe the unsetting of
-the variable.
-
-The optimisation is not applied if the caller uses one of the following:
-
--  Variadic arguments
--  "func_get_args" etc.
--  Variable variables
--  "compact", "extract" etc.
--  Try - catch/finally
-
-Furthermore, the optimisation is also not applied on the pseudo-main
-function of PHP, because of globals. In fact, no SSA-based optimisations
-take place in that case because of global complications. It is also not
-applied on arguments in the **caller**. This is because it could
-influence backtraces from exceptions or influence the result of
-"debug_get_backtrace". For example:
-
-.. code:: php
-
-   function boom(array $x) {
-       throw new Exception("boom");
-   }
-
-   function test(array $x) {
-       boom($x);
-   }
-
-   function main() {
-       test(range(1, 10));
-   }
-
-   main();
-
-If we were to allow the optimisation on **caller** arguments, this would
-give the following output:
-
-::
-
-   PHP Fatal error:  Uncaught Exception: boom in test.php:4
-   Stack trace:
-   #0 test.php(8): boom(Array)
-   #1 test.php(12): test(NULL)
-   #2 test.php(15): main()
-   #3 {main}
-     thrown in test.php on line 4
-
-Notice that the argument for "test" is NULL according to the backtrace.
-This is because the data and the lifetime has been moved into "boom".
-Because of this observation artifact, we don't perform the optimisation
-in the above case.
-
-Examples
-~~~~~~~~
-
-Not only userland functions can benefit from this optimisation, builtin
-functions can too. Some builtin functions already avoid a copy if the
-array argument has a reference count of 1. One example of a builtin
-function that already does this is "array_merge". Combined with the
-proposed optimisation, the following code will become a lot faster:
-
-.. code:: php
-
-   function array_merge_loop($n) {
-       $a = range(1, 3);
-       for ($i = 0; $i < $n; ++$i) {
-           $a = array_merge($a, [1, 2, 3]);
-       }
-   }
-
-For 30000 iterations **without** the optimisation, this takes 3.405s on
-my machine. **With** the optimisation this takes only 0.002s. This is an
-artificial micro-benchmark for a single function of course, but it shows
-that the idea works.
-
-Other examples of builtin functions that are optimised for a reference
-count of 1 are "array_replace", "array_unique", and "array_intersect".
-More functions can follow in the future.
-
-Alternatives
-~~~~~~~~~~~~
-
-There are two alternative solutions to the problem outlined in this
-proposal: references, or explicit moves. I will discuss each of them
-briefly and explain why they are not ergonomic solutions.
-
-References
-^^^^^^^^^^
-
-You might wonder why we cannot just use references instead to prevent
-copies. References are less ergonomic for developers because they are
-rarely used, and it can be surprising to developers that functions use
-references as an optimisation. Surprising behaviour can lead to bugs.
-Furthermore, builtin functions such as "array_merge", "array_replace",
-etc., don't take a reference so those functions wouldn't be able to
-avoid a copy.
-
-For ergonomics, take a look at the following code example:
-
-.. code:: php
-
-   function my_function(array &$my_array) {
-       $my_array[] = 3;
-       var_dump($my_array); // Do something interesting
-   }
-
-   function example_ref() {
-       $array = [0, 1, 2];
-       my_function($array); // No copy, we want to change the array
-   }
-
-   function example_copy() {
-       $array = [0, 1, 2];
-       $array_copy = array_merge($array, []); // copy the array
-       my_function($array_copy); // Operates on the copy
-       var_dump($array); // Should be the original
-   }
-
-In the function "example_ref", we want to modify "$array" in-place,
-while in "example_copy" we want the original array to stay the same.
-With references We have to explicitly copy the array if we want to keep
-the original. If we instead have an optimisation that can detect when it
-can modify in-place, then we can avoid references and the code becomes
-simpler (while still avoiding a copy):
-
-.. code:: php
-
-   function my_function(array $my_array) {
-       $my_array[] = 3;
-       var_dump($my_array); // Do something interesting
-   }
-
-   function example_ref() {
-       $array = [0, 1, 2];
-       my_function($array); // No copy, we want to change the array
-   }
-
-   function example_copy() {
-       $array = [0, 1, 2];
-       my_function($array); // Operates on the copy
-       var_dump($array); // Should be the original
-   }
-
-Explicit Moves
-^^^^^^^^^^^^^^
-
-An alternative is creating a new keyword "move", which the programmer
-can place manually in their code to perform the move optimisation
-manually. Ilija has prototyped this in the past, independently from this
-proposal. An optimisation that is applied automatically is more
-ergonomic and automatically benefits existing PHP code.
-
-Risks
-~~~~~
-
-Every optimisation that gets added to PHP has the risk of introducing
-breakages. In particular, the type inference needs to be changed to
-reflect the move of a variable. Type inference is heavily used in the
-JIT engine, so there's a concern that this optimisation might cause bugs
-in the JIT. The type inference only affects SSA variables that are not
-used again, so it should not have an impact on the JIT.
-
-The SSA construction change does introduce a **compile-time**
-performance decrease for WordPress because the optimiser performs extra
-work. However, the optimisation improves the **run-time** performance of
-WordPress slightly, which is what actually matters.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-There's a subtle BC break. Consider the following code:
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-.. code:: php
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
-   class Foo {
-       public function __destruct() {
-           var_dump(1);
-       }
-   }
+Further Motivation
+------------------
 
-   function test(array $x) {
-       unset($x[0]);
-   }
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-   function main() {
-       $x = [new Foo];
-       test($x);
-       var_dump(2);
-   }
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
-   main();
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
-Without this optimisation this will first output 2, and then 1. But
-**with** the optimisation this will output 1 first, and then 2. This is
-because with the optimisation the array "$x" is destroyed after the call
-to "test" finishes as its lifetime was transferred to "test". It is hard
-to predict what the impact will be on real-world applications. Executing
-code with side-effects which needs to happen in a specific order is
-dangerous as-is, because even in current PHP no such guarantees are made
-if objects have cycles for example.
+Version
+-------
 
-Proposed PHP Version(s)
------------------------
+Next minor version, which is PHP 8.4.
 
-Next PHP 8.x (which is PHP 8.3 at the time of writing).
+Vote
+----
 
-RFC Impact
-----------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-To SAPIs
-~~~~~~~~
+Voting started on 2024-XX-XX and will end on 2024-XX-XX.
 
-None.
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+Voting Choices
+^^^^^^^^^^^^^^
 
-None.
-
-To Opcache
-~~~~~~~~~~
-
-This proposal implements an extra optimisation in the DFA pass in the
-optimiser. There need to be changes to SCCP, DFG, type inference, and
-SSA construction to account for the behaviour change in SEND_VAR. The
-SEND_VAR opcode now redefines op1 because it can set its type to UNDEF.
-The type inference needs to reflect that as well.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
-
-Open Issues
------------
-
-Make sure there are no open issues when the vote starts!
-
-Unaffected PHP Functionality
-----------------------------
-
-Everything that's not the optimiser.
-
-Future Scope
-------------
-
-This proposal depends on functions being able to operate on data
-in-place. Support for this has already been added in 8.3 for the
-"array_merge", "array_replace", "array_unique", and "array_intersect".
-More functions (and especially string functions) may follow.
-
-Proposed Voting Choices
------------------------
-
-One primary vote with a simple yes/no option.
-
-Patches and Tests
------------------
-
-Current implementation: https://github.com/php/php-src/pull/11166
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-.. _references-1:
+-  Yes
+-  No
 
 References
 ----------
 
-Links to external references, discussions or RFCs
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-Rejected Features
------------------
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-Keep this updated with features that were discussed on the mail lists.
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
+
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
+
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
+
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Original Authors: Niels Dossche (nielsdos), dossche.niels@gmail.com
-:Slug: implicit_move_optimisation
-:Wiki URL: https://wiki.php.net/rfc/implicit_move_optimisation
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Under Discussion
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final

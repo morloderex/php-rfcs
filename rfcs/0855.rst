@@ -1,257 +1,146 @@
-Interface Default Methods
-=========================
+Add Http_(get|clear)_last_response_headers() Function
+=====================================================
 
 :PHP-RFC: 0855
-:Title: Interface Default Methods
-:Author: Levi Morrison <levim@php.net>
-:Status: Declined
-:Type: Unknown
-:Created: 2022-06-27
-:Version: 2.0
+:Title: Add Http_(get|clear)_last_response_headers() Function
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
+:Type: Standards Track
+:Created: 2024-01-03
+:PHP-Version: 8.4
+:Version: 0.2
 
 Introduction
 ------------
 
-Over time, authors sometimes want to add methods to an interface. Today,
-this causes large breakages to every implementor. This RFC proposes a
-way to reduce the scale of breakage.
+The
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable is magically created in the local scope whenever an HTTP
+request is performed through PHP's stream layer, i.e. when using the
+`HTTP wrapper <https://www.php.net/manual/en/wrappers.http.php>`__. One
+such usage is using ``file_get_contents()`` to retrieve the content of a
+URL.
 
-Additionally, sometimes interfaces can implement some functionality of
-their interface in terms of other parts of their interface. For example,
-the interface ``Countable`` could implement ``function isEmpty(): bool``
-by using ``$this->count() == 0``. Today, traits are often used to
-accomplish this, but a default interface implementation could be used
-instead, and would be simpler. When interfaces are designed with this
-technique in mind, it can enable productivity of the interface over
-time.
+The
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable will contain all the HTTP headers that were encountered during
+the request performed via the HTTP wrapper.
 
-For example, see `Rust's Iterator
-trait <https://doc.rust-lang.org/std/iter/trait.Iterator.html>`__ which
-has more than 40 functions with default implementations and the
-implementor mostly needs to implement a single function,
-``next(): Option<T>``. These functions with default behaviors have been
-stabilized over time with little to no breakage in practice. For
-example, ``for_each`` was added in v1.21 and ``map_while`` was added in
-v1.57.
+All other features using this operating principle, such as
+`$php_errormsg <https://www.php.net/manual/en/reserved.variables.phperrormsg.php>`__,
+have been removed because creating a variable in the local scope is a
+terrible way of returning additional information. This variable itself
+was initially slated `to be deprecated in PHP
+8.1 </rfc/deprecations_php_8_1#predefined_variable_http_response_header>`__,
+but due to a lack of convenient alternatives, it was removed from the
+proposal at that time.
+
+This variable is created and populated even if the HTTP request fails, a
+behaviour that requires dropping down to the stream layer, providing an
+additional stream context to ignore errors. Subsequently, the user can
+manually parse the response header and detect if the HTTP request failed
+or not. This is impractical and a better interface would be simply
+checking if the return value of the initial call was ``false``.
+
+As a replacement, we propose adding functions similar to
+``error_get_last()``/``error_clear_last()`` which replaced
+`$php_errormsg <https://www.php.net/manual/en/reserved.variables.phperrormsg.php>`__.
+
+Motivation
+----------
+
+The primary motivation for adding this function, is to be able to remove
+the
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+variable completely. To create this variable one needs to use the
+``zend_set_local_var_str()`` engine function. This is also the last
+usage of this engine function and its sibling function
+``zend_set_local_var()``.
+
+Moreover, this variable needs to be special cased in the optimizer/JIT
+(via the ``HTTP_RESPONSE_HEADER_ALIAS`` enum case of
+``zend_ssa_alias_kind``). Which means that any extension that would use
+this engine API would misbehave under opcache.
+
+See the `Backward Incompatible
+Changes </rfc/http-last-response-headers#backward_incompatible_changes>`__
+section for an impact analysis of the removal of this feature.
 
 Proposal
 --------
 
-Interface methods can now provide a method body. This implementation
-will be used if the implementer does not otherwise provide an
-implementation. Default implementations are available for both instance
-and static methods.
+Add the following two functions:
 
-.. code:: php
+-  ``function http_get_last_response_header(): ?array``
+-  ``function http_clear_last_response_header(): void``
 
-   interface Example {
-     // Today, you cannot specify an implementation, only a
-     // signature.
-     function method1(): void;
-
-     // With this RFC, you can provide an implementation:
-     function method2(): void {
-       echo __METHOD__, "\n";
-     } 
-   }
-
-Interface methods can also now be ``private`` if they a have method
-body. The purpose here is to allow helper routines if the default
-implementations of the ``public`` methods need them.
-
-The methods with default implementations are inherited similarly to
-abstract base classes, as opposed to how traits behave. For instance, a
-private method on the interface is not accessible to the class which
-implements the interface; with a trait it would be.
-
-Default Method Resolution
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Default methods for interfaces introduce a form of multiple inheritance.
-How is a method selected?
-
-Java's resolution algorithm looks like this:
-
-#. Class definitions always win. If a class, or a parent class, defines
-   a concrete method, then this will always win over all possible
-   default methods.
-#. More specific interfaces take priority over less specific ones. If
-   interfaces ``A`` and ``B`` exist and ``B`` extends ``A``, and both
-   have a default method for the same method, then when a class
-   implements B directly or indirectly the method from ``B`` will take
-   precedence over the method from ``A``.
-#. If the above rules fail, then the class needs to implement the method
-   itself, possibly delegating to one of the interfaces.
-
-This RFC proposes the same. However, rule 2 is only partially
-implemented at this time.
-
-Here's an example of a class delegating to another method:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   interface Interface2 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   class Class1 implements Interface1, Interface2 {
-       function method1() {
-           Interface1::method1();
-       }
-   }
-
-   (new Class1())->method1(); // Interface1::method1
-
-Parent Scoping
-~~~~~~~~~~~~~~
-
-In interface default methods, you cannot use the ``parent::`` scoping
-mechanism. The following does not work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1() { parent::method1(); }
-   }
-
-The reason is that interfaces can extend multiple other interfaces e.g.
-
-.. code:: php
-
-   interface Interface3 extends Interface1, Interface2 {}
-
-The name of the interface should be used instead:
-
-.. code:: php
-
-   interface Interface2 extends Interface1 {
-       function method1() { Interface1::method1(); }
-   }
-
-However, if a sub-class of the inheriting class calls
-``parent::method1()``, it will work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   class Class1 implements Interface1 {
-       // Inherits Interface1::method1() here.
-   }
-
-   class Class2 extends Class1 {
-       function method1() { parent::method1(); }
-   }
-
-   (new Class2())->method1);
-   // output:
-   // Interface1::method1
-
-Cancelling Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If an interface method extends a parent interface method which has a
-default, this prevents using the default method for classes which
-implement the child interface but do not directly implement the parent
-one:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, "\n"; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1();
-   }
-
-   /* Would be an error because method1 has not been implemented.
-   class Class1 implements Interface2 {
-       // error: method1 has not been implemented.
-   }
-    */
-
-   // This is subtly different, but valid:
-   class Class1 implements Interface1, Interface2 {}
-
-The behavior could go either way. I picked this behavior because if it's
-wrong, it's easier to correct than the other way around.
+``http_get_last_response_header()`` would provide the same information
+as
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+if a request via the HTTP wrapper is made, and also return the headers
+as an array even when the request fails. If no request via the HTTP
+wrapper is made, or the last headers have been cleared by calling
+``http_clear_last_response_header()``, then ``null`` is returned.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as long as you do not use the feature.
+As this RFC does not yet propose deprecating
+`$http_response_header <https://www.php.net/manual/en/reserved.variables.httpresponseheader.php>`__
+there are no backward incompatible changes.
 
-If you do use the feature:
+Considering the possible simplification to the engine and the optimizer
+by removing this last usage of the capability to create a variable in
+this way, we have conducted a usage analysis of the feature. We found
+only 65 usages in 30 projects across a sample of over 900 projects
+(composer packages, standalone open source projects, and private
+codebases) which were analyzed with `Exakat <https://www.exakat.io>`__.
+[1] Most of those usages stem from packages like Guzzle or OAuth client
+libraries.
 
--  Adding a default implementation to an existing interface method will
-   not break existing code, because every existing usage has a higher
-   priority than the default.
--  If you add a new method to an interface, there is a compatibility
-   break. The impact of the break is limited to places where the
-   implementor/inheritor of the interface has a method of the same name.
+It is impossible to polyfill this feature, however it is possible to
+write cross version compatible code in the following way:
 
-Proposed PHP Version(s)
------------------------
+.. code:: php
 
-PHP 8.3.
+   $content = file_get_contents('http://example.com/');
+   if (function_exists('http_get_last_response_headers')) {
+       $http_response_header = http_get_last_response_headers();
+   }
+   // Use $http_response_header as before
 
-RFC Impact
-----------
+Considering the sparse usage of this feature, the possibility to write
+cross version compatible code, and the possible engine and optimizer
+simplifications, it seems reasonable to slate this feature for removal
+even without a deprecation notice if the need arises.
 
-To Extensions
-~~~~~~~~~~~~~
+Rejected ideas
+--------------
 
-Modules can specify an interface implementation as well. These internal
-default methods should not be marked with ``ZEND_ACC_ABSTRACT`` and
-should be instead marked with ``ZEND_ACC_DEFAULT_METHOD``.
+One suggested idea was to provide those headers via a by-reference entry
+to the stream context. This idea was rejected by us, and other members
+of the PHP Foundation, as we wish to maintain stream contexts as a
+stateless configuration data structure passed to the stream.
 
-To Opcache
-~~~~~~~~~~
+This one-to-one feature replacement does not prevent the introduction of
+a more generic solution for other stream wrappers. And this pair of new
+functions can always be slated for future deprecation and removal.
 
-Opcache should also work with this feature. The proof of concept
-implementation has not triggered any issues so far in CI.
+Version
+-------
 
-To the Ecosystem
-~~~~~~~~~~~~~~~~
+Next minor version, PHP 8.4.
 
-Previously, interface methods were not allowed to have method bodies.
-These tools such as parsers, code analyzers, etc will need to be
-updated.
+Vote
+----
 
-Open Issues
------------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Make sure there are no open issues when the vote starts!
+Voting started on 2024-01-29 and will end on 2024-02-14.
 
-Future Scope
-------------
-
-This feature may be used to enhance existing interfaces in PHP.
-
--  ``Countable`` could add
-   ``function isEmpty(): bool { return $this->count() == 0; }``.
--  ``Iterator`` could add methods like ``map``, ``filter``, and
-   ``reduce`` which behave similarly to ``array_map``, ``array_filter``,
-   and ``array_reduce``.
-
-Voting
-------
-
-The vote will be a simple yes/no vote on whether to include the feature.
-
-Question: Interface Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Add http_(get|clear)_last_response_headers() function RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -259,35 +148,17 @@ Voting Choices
 -  Yes
 -  No
 
-Patches and Tests
------------------
-
-Here is a work-in-progress pull request:
-https://github.com/php/php-src/pull/11467.
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
 References
 ----------
 
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
+[1] https://gist.github.com/exakat/454e503458e231dc0695837ad2561540
 
 Additional Metadata
 -------------------
 
-:Original Authors: Levi Morrison, levim@php.net
-:Slug: interface-default-methods
-:Wiki URL: https://wiki.php.net/rfc/interface-default-methods
+:Implementation: https://github.com/php/php-src/pull/12500
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: http-last-response-headers
+:Wiki URL: https://wiki.php.net/rfc/http-last-response-headers
