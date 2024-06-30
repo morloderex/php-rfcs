@@ -29,7 +29,7 @@ Several curious people have wondered why this is focused on the GMP extension. T
 The \GMP class will be changed to the following signature:
 
 <code php>
-class GMP
+readonly class GMP
 {
     public function __construct(int|string|GMP $num = 0, int $base = 0) {}
 
@@ -53,7 +53,13 @@ class GMP
 }
 </code>
 
-For any existing GMP code, absolutely nothing changes. The extension's behavior ONLY changes when the developer extends the GMP class and uses it mathematically. The developer must override the desired operations and make them public to be usable. This ensures the class can be used even if the GMP extension is unavailable. A polyfill is included in the example below, which can be included in libraries that use this functionality.
+The changes are listed below:
+
+  - The class is made ''readonly'' to prevent developers from using state in inherited types.
+  - The constructor accepts another GMP instance instead of only ''string|int''
+  - Mathematical methods are added to the class as protected. It is expected that developers wanting to support an operation make the associated operation ''public''.
+
+For any existing GMP code, absolutely nothing changes. The extension's behavior ONLY changes when the developer extends the GMP class and uses it mathematically. To be usable, the developer must override the desired operations and make them public. This ensures the class can be used even if the GMP extension is unavailable. A polyfill is included in the example below, which can be included in libraries that use this functionality.
 
 Note the lack of equals, less-than, and greater-than operators. These are deliberately left out and replaced by a "comparable" method where the developer can indicate whether the two objects are compatible. They are left out for several reasons:
 
@@ -68,8 +74,8 @@ Below is a listing showing a polyfill, a Duration class that only allows adding,
 <?php
 
 if(!class_exists('GMP')) {
-    // polyfill
-    class GMP {
+    // polyfill for completion
+    readonly class GMP {
         public function __construct(private int|string|GMP $num) {}
 
         protected function add(GMP|int|string $left, GMP|int|string $right): GMP {
@@ -102,13 +108,16 @@ if(!class_exists('GMP')) {
     }
 }
 
-class Duration extends GMP {
+readonly class Duration extends GMP {
     public function __construct(int|string|GMP $num = 0)
     {
+        if($num < 0) {
+            throw new ArithmeticError('Duration cannot be negative.');
+        }
+
         parent::__construct($num);
     }
 
-    // Asserts that a value is scalar for our purposes.
     private function assertValidScalar(mixed $maybeScalar, string $operation): void {
         if(is_numeric($maybeScalar)) {
             return;
@@ -121,54 +130,50 @@ class Duration extends GMP {
         throw new ValueError("Can only perform $operation on GMP or int. Got " . get_debug_type($maybeScalar) . " instead.");
     }
 
-    // checks that at least one of the operands is us and that the other is a scalar
     private function guardScalars(GMP|int|string $left, GMP|int|string $right, string $operation): void
     {
         if($left === $this) {
             $this->assertValidScalar($right, $operation);
+            return;
         }
 
         if($right === $this) {
             $this->assertValidScalar($left, $operation);
+            return;
         }
-        
-        throw new LogicException('should not happen');
+
+        throw new LogicException('$left or $right must be the same instance as $this.');
     }
 
-    // given a numerical result, check that it is positive and return a new Duration
-    private function guardAndGetResult(GMP $result): self {
-        if($result < 0) {
-            throw new ArithmeticError('Duration cannot be negative.');
-        }
-
+    private function getResult(GMP $result): self {
         return new self($result);
     }
 
-    // describe how to add Durations
     public function add(GMP|int|string $left, GMP|int|string $right): static
     {
         $this->guardScalars($left, $right, 'addition');
 
-        return $this->guardAndGetResult(parent::add($left, $right));
+        return $this->getResult(parent::add($left, $right));
     }
 
-    // describe how to multiply Durations
     public function multiply(GMP|int|string $left, GMP|int|string $right): GMP
     {
         $this->guardScalars($left, $right, 'multiplication');
 
-        return $this->guardAndGetResult(parent::multiply($left, $right));
+        return $this->getResult(parent::multiply($left, $right));
     }
 
-    // describe how to raise a Duration to a power
     public function pow(GMP|int|string $base, GMP|int|string $exp): GMP
     {
         $this->assertValidScalar($exp, 'exponentiation');
 
-        return $this->guardAndGetResult(parent::pow($base, $exp));
+        if($base !== $this) {
+            throw new LogicException('$base must be the same instance as $this.');
+        }
+
+        return $this->getResult(parent::pow($base, $exp));
     }
 
-    // we are only comparable to other Durations
     public function comparable(GMP|int|string $op1, GMP|int|string $op2): bool
     {
         return $op1 instanceof self && $op2 instanceof self;
@@ -185,7 +190,7 @@ function do_op($description, $op): void {
         $result = eval('return ' . $op . ';');
         echo "$description: $op = $result" . PHP_EOL;
     } catch (Throwable $exception) {
-        echo "$description: $op = [" . $exception->getMessage() . ']' . PHP_EOL;
+        echo "$description: $op = [" . get_class($exception) . ': ' . $exception->getMessage() . ']' . PHP_EOL;
     }
 }
 
@@ -200,20 +205,23 @@ do_op('Duration + Regular', '$duration + $regular');
 do_op('Division not allowed', '$duration / 10');
 do_op('Multiplication', '$regular * 10');
 do_op('No negatives', '$duration + -20');
+do_op('Comparison', '$duration < $other');
+do_op('Comparison failure', '$duration < 20');
 
 /**
- * output:
+ * Output:
  * Duration: $duration = 10
  * Regular: $regular = 10
  * Other: $other = 200
  * Regular: $regular + 10 = 20
  * Duration: $duration + 10 = 20
- * Duration + Duration: $duration + $other = [Can only perform addition on GMP or int. Got Duration instead.]
+ * Duration + Duration: $duration + $other = [ValueError: Can only perform addition on GMP or int. Got Duration instead.]
  * Duration + Regular: $duration + $regular = 20
- * Division not allowed: $duration / 10 = [Invalid callback Duration::divide, cannot access protected method Duration::divide()]
+ * Division not allowed: $duration / 10 = [Error: Invalid callback Duration::divide, cannot access protected method Duration::divide()]
  * Multiplication: $regular * 10 = 100
  * No negatives: $duration + -20 = [ArithmeticError: Duration cannot be negative.]
- */
+ * Comparison: $duration < $other = 1
+ * Comparison failure: $duration < 20 = [ArithmeticError: Can't compare incompatible types]
  */
 </code>
 
