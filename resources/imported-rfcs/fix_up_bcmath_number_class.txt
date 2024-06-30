@@ -1,0 +1,113 @@
+====== PHP RFC: Fix up BCMath Number Class / Change GMP bool cast behavior ======
+  * Version: 1
+  * Date: 2024-06-30
+  * Author: Saki Takamachi (saki@php.net)
+  * Status: Under Discussion
+  * First Published at: https://wiki.php.net/rfc/fix_up_bcmath_number_class
+
+===== Introduction =====
+Regarding [[rfc:support_object_type_in_bcmath|RFC: Support object type in BCMath]], I received several comments and suggestions, so I created this RFC to respond to them.
+
+Also, in those discussions, there were suggestions regarding the behavior of casting GMP classes to bool, and for procedural efficiency, I will combine these into one RFC. (Each vote will be taken separately.)
+
+===== Proposal =====
+This RFC makes several corrections and changes to the <php>BCMath\Number</php> class and proposes to override the first RFC.
+
+Also proposes that when cast a GMP object to bool, change it so that <php>0</php> is <php>false</php> and everything else is <php>true</php>, like an int.
+
+Details of the proposal regarding BCMath are as follows:
+  - Casting a Number object to bool makes it <php>false</php> if it is <php>0</php> and <php>true</php> otherwise.
+  - Of the six comparison methods <php>comp()</php>, <php>eq()</php>, <php>gt()</php>, <php>gte()</php>, <php>lt()</php>, <php>lte()</php>, remove five except <php>comp()</php>.
+  - Remove format method.
+  - Fixed typo in stub.
+
+=== bool cast ===
+
+Change both GMP and BCMath to behave like int. 
+
+==== BCMath ====
+
+=== More information about comparison methods ===
+In fact, only need the <php>comp()</php> method to fulfill the functionality of the other five methods.
+
+Adding methods later is easy, but removing them always involves a BC Break.  Providing 6 methods from the start is obviously overkill, so will only provide <php>comp()</php>.
+
+By the way, the reason <php>comp()</php> is needed, and why comparison operators are underpowered, is to specify the scale to use for the comparison. 
+
+=== Remove format method ===
+
+The optimal format varies greatly from country to country, and the signature proposed in the original RFC is insufficient. There are also opinions that such functionality should be implemented in Intl rather than BCMath.
+
+If released in a half-finished state, BC Break will become a problem later, so this feature will be removed. If this functionality is really needed for this class, we can always consider adding it again.
+
+=== Fixed typo in stub === 
+
+This probably doesn't require an RFC per se, but I'll make it explicit to keep things clear.
+
+<PHP>
+public function pow(Number|string|int $exponent, int $minScale, ?int $scale = null, int $roundingMode = PHP_ROUND_HALF_UP): Number {}
+</PHP>
+
+I forgot to delete <php>int $minScale</php> in this signature. Correctly, it should look like this:
+
+<PHP>
+public function pow(Number|string|int $exponent, ?int $scale = null, int $roundingMode = PHP_ROUND_HALF_UP): Number {}
+</PHP>
+
+===== Backward Incompatible Changes =====
+BCMath: None.
+
+GMP: Code like <php>if ($gmp) {}</php> will behave differently. However, due to the nature of GMP, such codes are likely to be quite rare.
+
+===== Proposed PHP Version(s) =====
+next PHP 8.x (8.4)
+
+===== RFC Impact =====
+==== To SAPIs ====
+None.
+
+==== To Existing Extensions ====
+BCMath: only BCMath
+
+GMP: only GMP
+
+==== To Opcache ====
+None.
+
+==== New Constants ====
+None.
+
+==== php.ini Defaults ====
+None.
+
+===== Open Issues =====
+None.
+
+===== Unaffected PHP Functionality =====
+BCMath: nothing other than BCMath is affected.
+
+GMP: nothing other than GMP is affected.
+
+===== Future Scope =====
+BCMath: Methods removed in this RFC may be considered for implementation again in the future. However, there are no specific plans at this time.
+
+===== Proposed Voting Choices =====
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+This RFC combines two RFCs into one for procedural efficiency, and the BCMath and GMP proposals will be voted on separately. This means that the two RFCs are completely independent and do not influence each other's voting results.
+
+These are not second-round votes, so each requires a two-thirds majority vote to pass.
+
+===== Patches and Tests =====
+None.
+
+===== Implementation =====
+None.
+
+===== References =====
+https://wiki.php.net/rfc/support_object_type_in_bcmath
+
+https://externals.io/message/123323
+
+===== Rejected Features =====
+Some methods will be removed, but since this class has not been released yet, essentially no functionality will be removed.
