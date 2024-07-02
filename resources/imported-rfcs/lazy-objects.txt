@@ -57,6 +57,8 @@ class ReflectionClass
 
     public function markAsInitialized(object $object): object {}
 
+    public function getLazyInitializer(object $object): ?callable
+
     public function isInitialized(object $object): bool {}
 
     // existing methods
@@ -155,7 +157,7 @@ An object is considered lazy if any of its properties are still hooked to the in
 
 There are three ways to make a lazy object non-lazy:
 
-  - Interacting with it in a way that triggers its initializer (more on this bellow).
+  - Interacting with it in a way that triggers its initializer (more on this below).
   - Using <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> on all its properties.
   - Calling the <php>ReflectionClass::initialize()</php> or <php>markAsInitialized()</php> methods with the instance as argument.
 
@@ -167,7 +169,7 @@ Except for the special cases listed below, any attempt to observe the state of a
 
   * Reading or writing a property
   * Testing if a property is set or unsetting it
-  * Calling <php>ReflectionProperty::getValue()</php> and <php>setValue()</php>
+  * Calling <php>ReflectionProperty::getValue()</php> and <php>set[Raw]Value()</php>
   * Calling <php>ReflectionObject::getProperties()</php>
 
 This behavior makes lazy objects fully transparent to their consumers.
@@ -200,11 +202,11 @@ After initialization, the object is indistinguishable from an object that was ne
 
   - Before calling the initializer, the object is marked as non-lazy.
   - The initializer is called with the lazy proxy as first parameter.
-  - The return value of the initializer has to be an instance of a parent or a child class of the lazy-object and it must have the same properties. A <php>TypeError</php> is thrown if that's not the case. Returning an instance of a child or parent class with the same properties does not break LSP. The instance must not be lazy or an initialized proxy.
+  - The return value of the initializer has to be an instance of a parent of or the same class as the lazy-object. If the lazy-object is child class of the returned instance, it can declare additionnal properties but those must be skipped or set before with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>. If any of those condition is not true, a <php>TypeError</php> is thrown.
   - The real instance is set to the return value.
-  - Properties are uninitialized (including properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>).
+  - Properties that are declared on the real instance are uninitialized on the proxy instance (including overlapping properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>) to synchronize the state shared by both instances.
 
-The proxy object is _not_ replaced or substituted for the real instance. After initialization, property accesses on the proxy are forwarded to the real instance. Observing properties of the proxy has the same result as observing properties of the real instance.
+The proxy object is _not_ replaced or substituted for the real instance. After initialization, property accesses on the proxy are forwarded to the real instance. Observing properties of the real instance has the same result as observing the corresponding properties of the proxy.
 
 The real instance is allowed to escape the proxy and to create direct references to itself. This is demonstrated in the section named "About Proxies". The proxy may be released independently of the real instance when it's not referenced anymore. The proxy and real instance have distinct identities. 
 
@@ -304,7 +306,7 @@ var_dump($object2); // lazy ghost object(MyClass) { "propA" => "object-2" }
 
 The <php>newLazyGhost()</php> method instantiates an object without calling the constructor, and marks the object as lazy.
 
-Properties are not initialized to their default value (they are initialized before calling the initializer). This is only mentioned for completeness, as this is not observable currently. 
+Properties are not initialized to their default value yet (they are initialized before calling the initializer).
 
 The <php>$initializer</php> argument is a callable with the following signature:
 
@@ -400,7 +402,7 @@ After calling <php>resetAsLazyGhost()</php>, the behavior of the object is the s
 === ReflectionClass::resetAsLazyProxy() ===
 
 <PHP>
-    public function resetAsLazyProxy(object $object, callable $initializer, int $options = 0): void;
+    public function resetAsLazyProxy(object $object, callable $factory, int $options = 0): void;
 </PHP>
 
 The behavior of the <php>resetAsLazyProxy()</php> method is the same as <php>resetAsLazyGhost()</php>, except that it uses the Proxy strategy.
@@ -413,7 +415,7 @@ The object itself becomes the proxy. Similarly to <php>resetAsLazyGhost()</php>,
     public function isInitialized(object $object): bool;
 </PHP>
 
-The <php>isInitialized</php> method returns <php>true</php> if the object was initialized. It also returns <php>true</php> if the object has never been lazy, since an initialized lazy ghost is indistinguishable from an object that was never lazy.
+The <php>isInitialized</php> method returns <php>true</php> if the object was initialized. It also returns <php>true</php> if the object has never been lazy, since an initialized lazy object is indistinguishable from an object that was never lazy.
 
 === ReflectionClass::initialize() ===
 
@@ -438,6 +440,14 @@ Its behavior is the same as described for Ghost Objects in the Initialization Se
 The return value is the object itself.
 
 One use-case of this method is to initialize an object manually outside of the initializer function.
+
+=== ReflectionClass::getLazyInitializer() ===
+
+<PHP>
+    public function getLazyInitializer(object $object): ?callable;
+</PHP>
+
+The <php>getLazyInitializer()</php> method can be used to get the initializer bound to a lazy instance. If the instance is not lazy, null is returned.
 
 === ReflectionProperty::skipLazyInitialization() ===
 
@@ -488,9 +498,11 @@ The result of cloning an uninitialized lazy object is a new lazy object with the
 
 The initializer itself is not cloned (the original object and its clone have the same initializer). If necessary, an initializer can detect being called on a clone by comparing the initializer argument with the original lazy object. See the example in the Initialization Sequence section.
 
-If the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
+For uninitialized ghost objects: if the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
 
-Cloning an initialized lazy proxy clones the real instance into a new lazy proxy clone. If any, the <php>__clone()</php> method is called on the proxy but not on the real instance. As an optimization, if the proxy and the real instances are of the same class, the clone of the real instance is returned directly.
+For uninitialized lazy proxies, the real instance is cloned into the proxy clone. If any, the <php>__clone()</php> method is *not* called on the real instance nor on the proxy clones yet. Instead, the method is called later on - on the real instance clone - if initialization of the proxy clone is triggered.
+
+Cloning an initialized lazy proxy clones the real instance into the proxy clone. If any, the <php>__clone()</php> method is called on the real instance (not on the proxy).
 
 ==== Readonly properties ====
 
