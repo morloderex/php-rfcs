@@ -44,8 +44,6 @@ class ReflectionClass
 {
     public int const SKIP_INITIALIZATION_ON_SERIALIZE = 1;
     public int const SKIP_DESTRUCTOR = 2;
-    public int const SKIP_INITIALIZED_READONLY = 4;
-    public int const RESET_INITIALIZED_READONLY = 8;
 
     public function newLazyGhost(callable $initializer, int $options = 0): object {}
 
@@ -361,8 +359,6 @@ The <php>$object</php> argument must be a non-lazy instance of the class represe
 The <php>$options</php> argument accepts the same flag as <php>newLazyGhost()</php> in addition to:
 
   * <php>ReflectionClass::SKIP_DESTRUCTOR</php>: By default, the <php>resetAsLazy*()</php> methods will call the destructor of an object (if any) before making it lazy. This provides safety regarding any preexisting state in the object. But when the object has just been created and is empty, calling the destructor is not desired and can be skipped with this flag.
-  * <php>ReflectionClass::SKIP_INITIALIZED_READONLY</php>: By default, the <php>resetAsLazy*()</php> methods will throw an exception if a readonly property was initialized (on the object itself or on a proxy's real instance) and the class is final. If this flag is set, these properties are skipped and no exception is thrown. The behavior around readonly properties is explained in more details later.
-  * <php>ReflectionClass::RESET_INITIALIZED_READONLY</php>: Allow <php>resetAsLazy*()</php> methods to reset initialized readonly properties in cases that are normally not allowed. This flag is subject to a secondary vote (see below).
 
 When making an object lazy, the object destructor is called and the object is reset to a state equivalent to an instance created by <php>newLazyGhost()</php>. In particular, all non-static properties are <php>unset()</php>. This effect could be achieved in user space with the Reflection API and Closure scopes:
 
@@ -494,7 +490,7 @@ The initializer itself is not cloned (the original object and its clone have the
 
 If the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
 
-Cloning an initialized lazy proxy returns a clone of the real instance.
+Cloning an initialized lazy proxy clones the real instance into a new lazy proxy clone. If any, the <php>__clone()</php> method is called on the proxy but not on the real instance. As an optimization, if the proxy and the real instances are of the same class, the clone of the real instance is returned directly.
 
 ==== Readonly properties ====
 
@@ -530,9 +526,7 @@ var_dump($b->prop); // int(2)
 
 It follows that the observable value of a readonly property can change unless the class is final.
 
-We preserve these semantics by never changing or unsetting a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the real instance, for initialized proxies) and the class is final. Calling <php>resetAsLazy*()</php> on a class with such property will throw an Error. Using the <php>SKIP_INITIALIZED_READONLY</php> flag ignores these properties instead of throwing an Error.
-
-We propose to allow the <php>resetAsLazy*()</php> methods to unset readonly properties in all cases when setting the <php>ReflectionClass::RESET_INITIALIZED_READONLY</php> flags. This capability is subject to a secondary vote so that voters that agree with the rest of this RFC but disagree with this specific flag can express their dissent without rejecting the entire RFC. Nevertheless, we hope voters will recognize the value of this flag for end users, as it would give them more control over the objects they use and would provide consistency over a capability that already exists but not in all cases.
+We preserve these semantics by never changing or unsetting a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the real instance, for initialized proxies) and the class is final. Calling <php>resetAsLazy*()</php> on a class with such property will skip these properties as if they were flagged with the <php>skipInitialization()</php> method. Trying to set those properties in the initializer will throw the usual Error "Cannot modify readonly property".
 
 ==== Destructors ====
 
@@ -760,8 +754,6 @@ PHP 8.4
 ===== Proposed Voting Choices =====
 
  * Add lazy-objects as described to the engine: yes/no (2/3 required to pass)
-
- * Allow the <php>ReflectionClass::resetAsLazy*()</php> methods to unset readonly properties in all cases when setting the <php>ReflectionClass::RESET_INITIALIZED_READONLY</php> flags (1/2 required to pass)
 
 ===== Patches and Tests =====
 
