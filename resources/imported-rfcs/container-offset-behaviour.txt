@@ -1,0 +1,1067 @@
+====== PHP RFC: Improve language coherence for the behaviour of offsets and containers ======
+
+  * Version: 0.1
+  * Date: 2023-12-07
+  * Author: Gina Peter Banyard <girgias@php.net>
+  * Status: Under Discussion
+  * Target Version: PHP 8.4
+  * Implementations:
+  * New handler API: https://github.com/Girgias/php-src/pull/19
+  * <php>ArrayObject</php>: https://github.com/php/php-src/pull/12037
+  * Original string offset clean-up PR: https://github.com/php/php-src/pull/7173
+  * First Published at: http://wiki.php.net/rfc/container-offset-behaviour
+  * Markdown source: https://github.com/Girgias/php-rfcs/blob/master/container-offset-behaviour.md
+
+===== Introduction =====
+
+PHP supports accessing sub-elements of a type via an offset using brackets <php>[]</php> with the following notation <php>$container[$offset]</php>.
+However, the behaviour of such accesses depends not only on the type of the container and that of the offset,
+but also on the operation that is being performed while accessing the offset.
+The existing behaviour is highly inconsistent and difficult to anticipate.
+
+The objectives of this RFC is to showcase the current complicated behaviour.
+Present behaviour that we deem to be coherent and easy to reason about.
+And a path to go from the existing behaviour to the desired target behaviour.
+
+To explain the current language semantics we will describe and explain the different:
+
+  * Operations relating to containers and offsets
+  * Types that can be used as offsets
+  * Types that can be used as containers
+
+==== Operations ====
+
+We consider there to be nine (9) different operations that relate to containers and offsets,
+which are the following:
+
+  * Read
+  * Write
+  * Read-Write
+  * Appending, via the <php>$container[] = $value</php> syntax
+  * Unsetting
+  * Existence checks via <php>isset()</php> and/or <php>empty()</php>
+  * Existence checks via the null coalesce operator <php>??</php>
+  * Fetch
+  * Fetch-Append
+
+The read, write, read-write, appending, and unsetting operations are what one would expect.
+
+We split the existence check operation into two distinct sub-operations as the behaviour between
+<php>iseet()</php>/<php>empty()</php> and the null coalesce operator <php>??</php> is sometimes different.
+
+A fetch operation occurs when reference to the offset must be acquired,
+be that explicitly when taking a reference (e.g. <php>$r = &$container[$offset]</php>),
+or when writing/appending/unsetting to sub-dimensions (e.g. <php>$container[$offset1][$offset2] = $value</php>
+the first offset <php>$container[$offset1]</php> will be accessed via a fetch operation).
+
+The peculiar fetch-append operation happens when retrieving a reference of an append operation.
+For example <php>$r = &$container[];</php>, or a more common use <php>$container[][$offset] = $value</php>.
+
+In general, a nested operation will perform all the necessary fetch/read operations,
+interpreting the returned value as a container, until it reaches the final dimension.
+
+==== Container types ====
+
+We consider there to exist thirteen (13) different types of containers:
+
+  * <php>null</php>
+  * <php>false</php>
+  * <php>true</php>
+  * <php>bool</php>
+  * <php>int</php>
+  * <php>float</php>
+  * <php>resource</php>
+  * <php>string</php>
+  * <php>array</php>
+  * Userland objects that do //not// implement <php>ArrayAccess</php>
+  * Userland objects that implement <php>ArrayAccess</php>
+  * Internal objects that override none of the following object handlers: <php>read_dimension</php>, <php>write_dimension</php>, <php>has_dimension</php>, and <php>unset_dimension</php>
+  * Internal objects that override at least one, but not all the following object handlers: <php>read_dimension</php>, <php>write_dimension</php>, <php>has_dimension</php>, or <php>unset_dimension</php>
+  * Internal objects that override all the following object handlers: <php>read_dimension</php>, <php>write_dimension</php>, <php>has_dimension</php>, and <php>unset_dimension</php>
+  * <php>ArrayObject</php> as its behaviour is rather peculiar
+
+We consider <php>false</php> and <php>true</php> to be different container types,
+as <php>false</php> supports auto-vivification.
+
+==== Offset types ====
+
+Finally, we consider there to exist the standard eight (8) built-in types in PHP for offsets, namely:
+
+  * <php>null</php>
+  * <php>bool</php>
+  * <php>int</php>
+  * <php>float</php>
+  * <php>resource</php>
+  * <php>string</php>
+  * <php>array</php>
+  * <php>object</php>
+
+Note: the behaviour of integer strings used as offsets for arrays being automatically converted to <php>int</php> is out of scope for this RFC.
+Meaning the behaviour of the string <php>"15"</php> being cast to the integer <php>15</php> when used as an <php>array</php> offset will not change.
+
+
+===== Current behaviour =====
+
+Considering the large possible combination of containers, offsets, and operations;
+we will start by grouping related container types together,
+and then detail the behaviour depending on the offset type or the operation, which ever is clearer.
+
+==== Invalid container types ====
+
+This sections covers a large number of types when used as a container, as this usage is invalid.
+
+=== "Scalar" types ===
+
+For the purpose of this section,
+<php>true</php>, <php>int</php>, <php>float</php>,
+and <php>resource</php> are considered to be a "scalar" types,
+as the engine treats those container types identically.
+
+  * For read operations, <php>null</php> is returned and the following warning is emitted: <code>
+Warning: Trying to access array offset on TYPE
+</code>
+  * For write, read-write, appending, fetch, and fetch-append operations, the following error is thrown: <code>
+Cannot use a scalar value as an array
+</code>
+  * For the unset operation, the following error is thrown: <code>
+Cannot unset offset in a non-array variable
+</code>
+  * For existence operations, no warning is emitted and the behaviour is as if the offset did not exist.
+
+=== Classes that do not implement ArrayAccess and Internal objects which do not implement any dimension object handler ===
+
+For every single operation, regardless of the type of the offset, the following <php>Error</php> is thrown:
+<code>
+Cannot use object of type ClassName as array
+</code>
+
+
+==== null type as container ====
+
+PHP supports a feature called auto-vivification to <php>array</php> when writing to an offset when the container is of type <php>null</php>.
+
+Therefore, the behaviour depending on the operator is as follows:
+
+  * For read operations,<php>null</php> is returned, the container continues to be <php>null</php>, and the following warning is emitted: <code>
+Warning: Trying to access array offset on null
+</code>
+  * For write, append, fetch, and fetch-append operations the container is converted to array. And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
+  * For read-write operations, the container is converted to array, before the read operation. And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
+  * For the unset operation, the container continues to be <php>null</php> and no warning or error is emitted/thrown.
+  * For existence operations, no warning is emitted and the behaviour is as if the offset did not exist.
+
+==== false as container ====
+
+PHP also supports auto-vivification to <php>array</php> for <php>false</php> containers,
+however this was
+[[rfc:autovivification_false|deprecated in PHP 8.1]].
+
+Therefore, the behaviour depending on the operator is as follows:
+  * For read operations,<php>null</php> is returned, the container continues to be <php>false</php>, and the following warning is emitted: <code>
+Warning: Trying to access array offset on false
+</code>
+
+  * For write, append, fetch, and fetch-append operations the container is converted to array, Emitting the following deprecation notice: <code>
+Deprecated: Automatic conversion of false to array is deprecated
+</code> And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
+
+  * For read-write operations, the container is converted to array, before the read operation, Emitting the following deprecation notice: <code>
+Deprecated: Automatic conversion of false to array is deprecated
+</code> And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
+
+  * For the unset operation, the container continues to be <php>false</php> and the following deprecation notice is emitted: <code>
+Deprecated: Automatic conversion of false to array is deprecated
+</code>
+
+  * For existence operations, no warning is emitted and the behaviour is as if the offset did not exist.
+
+
+
+==== Arrays ====
+
+Arrays are the ubiquitous container type in PHP and support all the operations,
+therefore the behaviour is only affected by the type of offsets used.
+
+=== Valid offsets ===
+
+Arrays in PHP accepts offsets of either type <php>int</php> or <php>string</php> and in those cases the behaviour is as expected.
+
+One thing to note is that when attempting to read an undefined offset the following warning is emitted:
+
+<code>
+Warning: Undefined array key KEY_NAME
+</code>
+
+
+=== Offset types cast to int ===
+
+The following offset types are cast to int silently:
+
+  * <php>false</php> is cast to 0
+  * <php>true</php> is cast to 1
+  * Non-fractional floating point numbers which fit in an <php>int</php> are cast to their integer value
+
+Offsets of type <php>resource</php> are cast to int with the following warning:
+<code>
+Warning: Resource ID#%d used as offset, casting to integer (%d)
+</code>
+
+Offsets of type <php>float</php> that are fractional, non-finite,
+or do not fit in an integer are cast to <php>int</php> with the following deprecation notice:
+<code>
+Deprecated: Implicit conversion from float %F to int loses precision
+</code>
+
+
+=== Offset types cast to string ===
+
+  * <php>null</php> is cast to an empty string
+
+=== Invalid offsets ===
+
+The following offset types are invalid offsets types for arrays:
+
+  * <php>array</php>
+  * <php>object</php>
+
+The behaviour is identical for all operations except existence checks with <php>isset()</php>/<php>empty()</php>.
+
+Generally the following error is thrown:
+<code>
+Cannot access offset of type TYPE on array
+</code>
+
+For <php>isset()</php> and <php>empty()</php> the following error is thrown:
+<code>
+Cannot access offset of type TYPE in isset or empty
+</code>
+
+
+
+==== Strings ====
+
+Strings in PHP are effectively byte-arrays,
+as such the only valid type of offsets are integers.
+However, the behaviour in regard to string offsets is extremely inconsistent and complicated.
+To showcase the current behaviour we will explain the behaviour by going through each different offset type.
+
+Moreover, some operations are invalid on string offsets:
+  * Read-Write operations on a string offset will throw the following error: <code>
+Cannot use assign-op operators with string offsets
+</code>
+  * Unset operations on a string offset will throw the following error: <code>
+Cannot unset string offsets
+</code>
+  * The append and fetch-append operations will throw the following error: <code>
+[] operator not supported for strings
+</code>
+  * Fetch operations will throw different errors depending on the fetch operation, //after// the type of the offset has been checked:
+  * For attempting to retrieve a reference to a string offset: <code>
+Cannot create references to/from string offsets
+</code>
+  * For attempting to use the string offset as a container: <code>
+Cannot use string offset as an array
+</code>
+  * For attempting to use the string offset as an object: <code>
+Cannot use string offset as an object
+</code>
+  * For attempting to use increment or decrement the string offset: <code>
+Cannot increment/decrement string offsets
+</code>
+
+Attempting to read a non initialized string offset emits the following warning:
+<code>
+Warning: Uninitialized string offset INTEGER
+</code>
+
+Finally, attempting to write more than one byte to a string offset will emit the following warning:
+<code>
+Warning: Only the first byte will be assigned to the string offset
+</code>
+
+=== Integer offsets ===
+
+Integers are the only valid offset type,
+however, some integers values remain invalid offsets.
+
+Indeed, a negative offset can be outside the range of a valid string offsets.
+Negative offsets start counting from the end of the string,
+if the absolute value of the offset is greater than <php>strlen($string)</php>
+it implies that the negative offset points to a byte before the first byte of the string,
+therefore being invalid, when attempting to perform a write operation in such cases
+the following warning is emitted:
+<code>
+Warning: Illegal string offset %s
+</code>
+
+=== Offset types that warn about being cast to int ===
+
+The offset types
+  * <php>null</php>
+  * <php>bool</php>
+  * <php>float</php>
+
+have a simple behaviour.
+They are cast to <php>int</php> and behave like an integer offset.
+
+The following warning is emitted for all operations except existence check operations
+(this includes read-write operations which emits the warning prior to the <php>Error</php> being thrown)
+before being cast to <php>int</php>:
+<code>
+Warning: String offset cast occurred
+</code>
+
+However, floating point numbers that are fractional, non-finite, or do not fit in an integer;
+emit the following deprecation notice when using an existence check with <php>isset()</php> or <php>empty()</php>:
+<code>
+Deprecated: Implicit conversion from float %F to int loses precision
+</code>
+
+=== Invalid offsets ===
+
+The following offset types are invalid string offsets types:
+
+  * <php>array</php>
+  * <php>object</php>
+  * <php>resource</php>
+
+For Read, Write, Existence checks via the null coalesce operator <php>??</php>,
+and even Read-Write the following error is thrown:
+<code>
+Cannot access offset of type %s on string
+</code>
+
+For existence checks via <php>isset()</php> and <php>empty()</php> no warning is emitted and the behaviour is as if the offset did not exist.
+
+
+=== String offsets ===
+
+Using a string as an offset adds yet another layer of complexity as a string might be:
+  * Numeric integer
+  * Numeric float
+  * Leading numeric integer
+  * Leading numeric float
+  * Non-numeric
+
+Although the concept of leading numeric strings has been mostly been removed with
+the [[rfc:saner-numeric-strings|Saner numeric strings RFC]]
+due to backwards compatibility concerns some part of the engine are still aware of them,
+string offsets being one such case.
+
+== Numeric integer ==
+
+Numeric integer strings behave like a normal integer type.
+
+== Leading numeric integer ==
+
+Leading numeric integers act similarly to
+[[#offset_types_that_warn_about_being_cast_to_int|Offset types that warn about being cast to int]]
+but rather than emitting the <php>Warning: String offset cast occurred</php> warning
+it emits a <php>Warning: Illegal string offset "%s"</php> warning.
+
+One difference however, is that this warning is also emitted for
+existence checks via the null coalesce operator <php>??</php>,
+but existence checks with <php>isset()</php> and <php>empty()</php> remain silent.
+
+However, the behaviour of <php>isset()</php> and <php>empty()</php> is completely broken in this case.
+It always indicates that an offset does not exist, when in fact it can be accessed:
+<PHP>
+<?php
+$s = "abcdefghijklmnopqrst";
+$o = "5x4";
+var_dump(isset($s[$o]));
+var_dump(empty($s[$o]));
+var_dump($s[$o] ?? "default");
+var_dump($s[$o]);
+</PHP>
+results in the following output:
+<code>text
+bool(false)
+bool(true)
+
+Warning: Illegal string offset "5x4" in /tmp/preview on line 7
+string(1) "f"
+
+Warning: Illegal string offset "5x4" in /tmp/preview on line 8
+string(1) "f"
+</code>
+
+== Other strings ==
+
+Non-numeric, numeric float, and leading numeric float
+string offsets behave like an invalid string offset, with one exception,
+they do not throw an error for existence checks via the null coalesce operator <php>??</php>.
+
+Meaning the behaviour is identical to existence checks with <php>isset()</php> and <php>empty()</php>.
+
+
+==== Internal objects ====
+
+Internal objects can overload the different operations by replacing
+the following mandatory object handlers:
+  * <php>read_dimension(zend_object *object, zval *offset, int type, zval *rv)</php>
+  * <php>write_dimension(zend_object *object, zval *offset, zval *value)</php>
+  * <php>has_dimension(zend_object *object, zval *member, int check_empty)</php>
+  * <php>unset_dimension(zend_object *object, zval *offset)</php>
+
+The default handlers provided by <php>std_object_handlers</php>,
+which are used by userland objects,
+verifies if <php>ArrayAccess</php> is implemented and calls the relevant method,
+or throw an <php>Error</php> if not.
+
+One important thing to note is that internal objects can overload only //some//
+of the handlers.
+One such example is the DOM extension, that only overwrites the read and has handlers
+for <php>DOMNodeMap</php> and <php>DOMNodeList</php>.
+Other extensions overwrite the handler to immediately throw an error,
+or customize the error message (e.g. <php>PDORow</php> for write and unset operations).
+The <php>ResourceBundle</php> class overloads the <php>read_dimension</php> handler,
+but not the <php>has_dimension</php> handler,
+which leads to a situation where one can access offset but not check for their existence.
+
+Moreover, it is //not required// for an internal object that overwrites those handlers
+to implement <php>ArrayAccess</php>, this is the case for all non-SPL extension.
+This is especially confusing for <php>SimpleXMLElement</php> as it actually overloads and supports all
+the dimension handlers.
+
+Let's now have a more in depth look at the individual object handlers,
+and some of the pitfalls the current object handler API design causes.
+
+=== The has_dimension handler ===
+
+The <php>check_empty</php> parameter of the <php>has_dimension</php> is there to indicate to the handler if
+the existence check is a call to <php>isset()</php> or <php>empty()</php> and the handler must implement the logic
+for determining if the value is falsy or not.
+This is error-prone, and indeed <php>PDORow</php> did not implement the logic for handling calls to <php>empty()</php>
+properly. [1:https://github.com/php/php-src/pull/13512]
+
+One other requirement of the <php>has_dimension</php> is to return <php>false</php> if the offset exists but the value
+at this offset is <php>null</php>, this is to mimic the semantics of <php>isset()</php>.
+However, this is error-prone (e.g. <php>PDORow</php> didn't implement this logic correctly)
+and also prevents supporting objects in <php>array_key_exists()</php> as this function explicitly does //not//
+check the value pointed to by the offset.
+
+This requirement is explicitly violated in <php>SplObjectStorage</php> with a comment explaining that
+because <php>SplObjectStorage::offsetExists()</php> is an alias of <php>SplObjectStorage::contains()</php>
+the <php>has_dimension</php> handler returns <php>true</php> even if the value is <php>null</php>.
+
+=== The write_dimension handler ===
+
+The <php>write_dimension</php> handler is also responsible for the appending operation,
+in which case the <php>offset</php> parameter is the <php>NULL</php> pointer.
+Therefore, it is possible for an internal object to allowing writing to an offset,
+but not appending to the object by throwing en exception when the <php>offset</php> pointer is null.
+<php>SplFixedArray</php> for example does this.
+
+=== The read_dimension handler ===
+
+The <php>type</php> parameter of the <php>read_dimension</php> indicates the type of the operation the read handler is called in,
+and is provided by the VM at run time.
+It may be one of <php>BP_VAR_R</php>, <php>BP_VAR_W</php>, <php>BP_VAR_RW</php>, <php>BP_VAR_IS</php>, or <php>BP_VAR_UNSET</php>.
+
+Obviously, the <php>read_dimension</php> handler is called for read operations with the <php>type</php> being <php>BP_VAR_R</php> in that case.
+
+However, the <php>read_dimension</php> handler is also called for existence checks via the null coalesce operator <php>??</php>,
+in which case <php>BP_VAR_IS</php> is passed to the <php>type</php> parameter.
+
+Finally, the <php>read_dimension</php> handler is also called for fetch and fetch-append operations.
+In which case the <php>type</php> parameter might be <php>BP_VAR_W</php>, <php>BP_VAR_RW</php>, or <php>BP_VAR_UNSET</php>
+depending on what the purpose of the fetch is.
+(Note: retrieving a reference is a <php>BP_VAR_W</php> operation.)
+For the fetch-append operation the <php>offset</php> parameter is the <php>NULL</php> pointer,
+mimicking the behaviour of the <php>write_handler</php>.
+
+This effectively means that the <php>read_dimension</php> handler must handle every possible <php>BP_VAR_*</php> type
+and possibly not having an offset.
+
+The complexity of these requirements for the <php>read_dimension</php> handler are generally not understood,
+and was the source of a bug in <php>PDORow</php> which did a <php>NULL</php> pointer dereference for fetch-append operations.
+[1:https://github.com/php/php-src/pull/13512]
+
+The only extension that properly implements all this complexity is SimpleXML
+and uses it to support auto-vivification of XML elements.
+
+=== General handler requirements and pitfalls ===
+
+For classes that are not final, all overridden dimension handlers must
+forward calls to the userland methods if a child class implements <php>ArrayAccess</php>.
+If not, the child class's <php>ArrayAccess</php> methods are never called.
+Such bugs exist in ext/dom, and it is not clear how to fix them.
+
+To help with this case, the <php>zend_class_arrayaccess_funcs</php> struct is populated with
+the <php>zend_function *</php> pointers of the overloaded methods when <php>ArrayAccess</php> is implemented.
+And the corresponding pointer on the <php>zend_class_entry</php> is set to point to this allocated struct.
+However, as far as we can tell only SPL actually uses this.
+
+One additional pitfall that is common to all dimension handlers is the need to call <php>ZVAL_DEREF()</php>
+on the offset <php>zval*</php> so that when PHP references are used they work properly.
+This requirement wasn't followed by <php>DOMNodeMap</php> and <php>DOMNodeList</php> [1:https://github.com/php/php-src/pull/13511],
+<php>ResourceBundle</php> [1:https://github.com/php/php-src/pull/13503],
+and <php>PDORow</php> [1:https://github.com/php/php-src/pull/13512].
+Moreover, some extensions do dereference the offset, but only indirectly, and it is not know if
+this was done on purpose or happens to work, for example <php>FFI\CData</php> dereferences them via the call to
+<php>zval_get_long()</php>.
+Meanwhile <php>SplObjectStorage</php> fallbacks to calling the PHP method implementation instead of using the C handler,
+which will dereference the reference as the parameter is by-value.
+
+==== Userland classes that implement ArrayAccess ====
+
+Userland classes can overload the dimension access operators by implementing the <php>ArrayAccess</php> interface.
+The four interface methods roughly correspond to the four relevant dimension object handlers.
+
+The interface methods are called in the following way for the different operations:
+
+  * Read: the <php>ArrayAccess::offsetGet($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php>
+  * Write: the <php>ArrayAccess::offsetSet($offset, $value)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php> and <php>$value</php> being the value that is being assigned to the offset. 
+  * Read-Write: the <php>ArrayAccess::offsetGet($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php>, the binary operation is then performed, and if the binary operation succeeds the <php>ArrayAccess::offsetSet($offset, $value)</php> method is called with <php>$value</php> being the result of the binary operation 
+  * Appending: the <php>ArrayAccess::offsetSet($offset, $value)</php> method is called with <php>$offset</php> being equal to <php>null</php> and <php>$value</php> being the value that is being appended to the container.
+  * Unsetting: the <php>ArrayAccess::offsetUnset($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php>
+  * Existence checks via isset(): the <php>ArrayAccess::offsetExists($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php>
+  * Existence checks via empty(): the <php>ArrayAccess::offsetExists($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php> if <php>true</php> is returned, a call to <php>ArrayAccess::offsetGet($offset)</php> is made to check the value is falsy or not.
+  * Existence checks via the null coalesce operator <php>??</php>: the <php>ArrayAccess::offsetExists($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php> if <php>true</php> is returned, a call to <php>ArrayAccess::offsetGet($offset)</php> is made to retrieve the value. (Note this is handled by the default <php>read_dimension</php> object handler instead of the <php>has_dimension</php> handler)
+  * Fetch: the <php>ArrayAccess::offsetGet($offset)</php> method is called with <php>$offset</php> being equal to the value between <php>[]</php>
+  * Fetch Append: the <php>ArrayAccess::offsetGet($offset)</php> method is called with <php>$offset</php> being equal to <php>null</php>
+
+Because <php>ArrayAccess::offsetGet($offset)</php> is called for fetching operations, if it does not return an object or by-reference,
+the following notice is emitted:
+<code>text
+Notice: Indirect modification of overloaded element of ClassName has no effect in %s on line %d
+</code>
+
+Of note is the behaviour with <php>isset()</php>.
+Because the value at the offset is never checked via a call to <php>offsetGet()</php>,
+a correct implementation of the <php>offsetExists($offset)</php> method that follows the general <php>isset()</php> semantics,
+//must// return <php>false</php> if the backing value is <php>null</php>.
+As such the following implementation of <php>ArrayAccess</php> is semantically //incorrect//:
+<PHP>
+class A implements ArrayAccess {
+    private array $a = [];
+    
+    public function offsetSet($offset, $value): void {
+        var_dump(__METHOD__);
+        $this->a[$offset] = $value;
+    }
+    public function offsetGet($offset): mixed {
+        var_dump(__METHOD__);
+        return $this->a[$offset];
+    }
+    public function offsetUnset($offset): void {
+        var_dump(__METHOD__);
+        unset($this->a[$offset]);
+    }
+    public function offsetExists($offset): bool {
+        var_dump(__METHOD__);
+        return array_key_exists($offset, $this->a);
+    }
+}
+</PHP>
+
+Indeed, the following call sequence would break the expectations of <php>isset()</php> by returning <php>true</php>:
+<PHP>
+$a = new A();
+
+$a[3] = null;
+var_dump(isset($a[3]));
+</PHP>
+
+This behaviour is confusing to users and has been reported as a bug for
+[[https://github.com/php/php-src/issues/8437|WeakMap]].
+
+==== ArrayObject ====
+
+<php>ArrayObject</php> has some peculiar behaviour as it attempts to mimic the built-in <php>array</php>
+type by implementing various interfaces and object handlers.
+
+Moreover, it allows to use another object as the backing "array"
+in which case offsets correspond to properties of the passed object.
+
+This feature is currently implemented in such a way that it breaks
+assumptions surrounding objects.
+Indeed, <php>ArrayObject</php> will write to the property HashTable directly,
+by-passing any write restrictions on the property.
+This includes overwriting <php>readonly</php> properties that have been already set,
+overwriting typed properties with values of incorrect types,
+suppressing dynamic properties deprecation notices,
+and ignoring any <php>__set()</php> or <php>__get()</php> magic methods.
+
+<php>ArrayObject</php> has an <php>append()</php> method that can be called to append values to it.
+However, counterintuitively, this method is //*not//* called when using the append
+operations <php>$ArrayObject[] = $value</php>, as the method that is actually called is
+<php>offsetSet(null, $value)</php>.
+This gets even more confusing when subclassing <php>ArrayObject</php> and redefining <php>append()</php>
+to modify the default appending behaviour.
+
+Moreover, attempting to call <php>append()</php> when the backing array is another object,
+correctly throws an <php>Error: Cannot append properties to objects, use ArrayObject::offsetSet() instead</php>,
+but when using the appending operator this error does not get thrown.
+
+Another problem is that <php>offsetSet()</php> cannot distinguish between using <php>null</php> as an explicit offset
+or being provided by default for the appending operation,
+it treats both of these cases as an appending operations.
+This leads to an inconsistency as one can set a value to an offset of <php>null</php>,
+but not be able to read it, as for read operations <php>null</php> gets converted to an empty string,
+like for the built-in array type.
+
+One final problem with <php>ArrayObject</php> is the implementation around <php>isset()</php>,
+when using it without a backing object, it works as intended and like an array.
+However, when using a backing object any offset that correspond to a declared property
+is considered to exist, even if it is an uninitialized typed property.
+
+The following code:
+<PHP>
+class T {
+    public int $p;
+}
+
+$o = new T();
+$a = new ArrayObject();
+
+$a = new ArrayObject($o);
+var_dump(isset($a['p']));
+var_dump($a['p']);
+</PHP>
+
+results in the following behaviour:
+<code>text
+bool(true)
+
+Warning: Undefined array key "p" in %s on line %d
+NULL
+</code>
+while keeping the typed property in an uninitialized state.
+
+===== Ideal semantics =====
+
+In this section we present semantics for containers and how offsets
+should behave for this sort of container, that are easy
+to reason about and remember.
+
+Valid container types are:
+  * <php>array</php>
+  * <php>string</php>
+  * <php>object</php> that implement an interface indicating it can be used as a container
+
+==== Arrays ====
+
+The semantics of arrays are mostly unchanged,
+except in regard to the handling of offset types.
+
+Valid offset types for array are <php>int</php> and <php>string</php>,
+all other offset types throw a <php>TypeError</php>;
+regardless of the operation being performed.
+
+
+==== Strings ====
+
+The semantics of strings are mostly unchanged,
+except in regard to the handling of offset types.
+
+The only valid offset type for strings is <php>int</php>,
+all other offset types throw a <php>TypeError</php>;
+regardless of the operation being performed.
+
+
+==== null ====
+
+The semantics of <php>null</php> are mostly unchanged.
+It continues to support auto-vivification to <php>array</php>, except for read, and read-write operations;
+in which case a <php>TypeError</php> is thrown about invalid access of an offset on <php>null</php>.
+Meaning that auto-vivification to <php>array</php> is supported for write, append, fetch, and fetch-append operations.
+
+Moreover, it continues to short-cut nested dimension checks with existence check operations.
+
+==== Objects ====
+
+Objects should be able to implement an interface for each corresponding operation they support:
+  * Read and existence checks
+  * Write
+  * Appending
+  * Unsetting
+  * Fetching
+  * Fetch appending
+
+If an object is used in a container operation and does not implement the corresponding interface,
+a <php>TypeError</php> is thrown.
+
+Existence checks for <php>isset()</php>/<php>empty()</php> and the null coalesce operator <php>??</php> should follow the following algorithm:
+
+  * Call method to verify the offset exists:
+  * If it does not exist: return <php>false</php> (<php>true</php> for <php>empty()</php>)
+  * Otherwise: call method to get value of offset:
+    - If the value is <php>null</php> (or falsy for <php>empty()</php>) return <php>false</php> (<php>true</php> for <php>empty()</php>)
+    - Otherwise: return <php>true</php> (<php>false</php> for <php>empty()</php>)
+
+The following algorithm is easily understood and means general assumptions about the existence
+check method are valid.
+
+==== Invalid container types ====
+
+This corresponds to all other types and objects that do not implement an interface
+indicating it can be used as a container.
+
+This should throw a <php>TypeError</php> for every single operation, regardless of the type of the offset.
+
+Ideally, the error message is standardized to be consistent and descriptive for all types.
+
+One possibility is <php>Cannot use value of type TYPE as an array</php>.
+
+
+===== Motivations =====
+
+We think that the proposed ideal semantics would make it obvious and intuitive for what would happen
+when using offsets and containers in PHP.
+
+We will slightly expand on the motivation for certain changes.
+
+==== Throwing Errors for invalid container types for all operations ====
+
+This should be self-explanatory, attempting to use a type which is not a container as a container is a programming error.
+
+This is applicable even when checking for the existence of an offset.
+
+==== Throwing Errors for invalid offset types for all operations ====
+
+Similarly, using invalid offset types on a container is a programming error,
+regardless of checking for the existence of an offset or not.
+
+Moreover, <php>array</php> offsets already behaves this way.
+
+==== Change requirements for the has_dimension handler ====
+
+The current requirements are very confusing and unintuitive.
+
+As show-cased the requirement to return <php>false</php> if the offset exist but is <php>null</php>
+is largely misunderstood and affects userland by requiring them to propagate this behaviour to their implementation
+of <php>offsetExists()</php>.
+Handling this correctly adds implementation complexity as the <php>has_dimension</php> handler needs to effectively be able to perform read operations,
+and if it doesn't it can lead to unintuitive semantics if the handler considers <php>null</php> to be set.
+These semantics also preventing the widening of the <php>$array</php> parameter type of <php>array_key_exists()</php> to
+accept objects that support accessing offsets, something that has been requested by userland. [1:https://externals.io/message/122435]
+
+Needing to handle <php>empty()</php> suffers most of the same implementation pitfalls and unintuitive semantics if the handler considers non-falsy things empty.
+Moreover, if we ever want to make <php>empty()</php> a simple function an object handler cannot influence on its behaviour.
+
+
+===== Migration path =====
+
+To go from the current semantics and behaviour to the desired semantics we propose
+the following changes for PHP 8.4, and PHP 9.0:
+
+==== Changes in PHP 8.4 ====
+
+=== Changes to objects ===
+
+== Add granular interfaces ==
+
+Introduce new, more granular, interfaces:
+  * <php>DimensionReadable</php>: which would have the equivalent of <php>offsetGet()</php> and <php>offsetExists()</php>
+  * <php>DimensionWritable</php>: which would have the equivalent of <php>offsetSet()</php>
+  * <php>DimensionUnsetable</php>: which would have the equivalent of <php>offsetUnset()</php>
+  * <php>Appendable</php>: which would have a single method <php>append(mixed $value): mixed</php> that is called when appending
+  * <php>DimensionFetchable</php>: which would extend <php>DimensionReadable</php> and have a method that returns by-reference
+  * <php>FetchAppendable</php>: which would extend <php>Appendable</php> and have a method that returns by-reference the appended value
+
+<PHP>
+interface DimensionReadable
+{
+    public function offsetGet(mixed $offset): mixed;
+
+    public function offsetExists(mixed $offset): bool;
+}
+
+interface DimensionFetchable extends DimensionReadable
+{
+    public function &offsetFetch(mixed $offset): mixed;
+}
+
+interface DimensionWritable
+{
+    public function offsetSet(mixed $offset, mixed $value): void;
+}
+
+interface DimensionUnsetable
+{
+    public function offsetUnset(mixed $offset): void;
+}
+
+interface Appendable
+{
+    public function append(mixed $value): void;
+}
+
+interface FetchAppendable extends Appendable
+{
+    public function &fetchAppend(): mixed;
+}
+</PHP>
+
+Ideally, we would want the interfaces to have generic types,
+as this would allow <php>TypeErrors</php> to be thrown by the engine without needing
+to manually handle the type of the offset and/or value.
+
+However, <php>mixed</php> allows us to migrate to generic types if we ever get them.
+
+Intersection and DNF types makes the addition and usage of more granular interfaces possible.
+
+Those new interfaces and methods provide clearer semantics and behaviour that is known
+to be supported or not by the class, while simplifying the implementation of said classes.
+
+Cross-version compatible code can use DNF types to type their input arguments, e.g:
+<PHP>
+function foo(ArrayAccess|(DimensionReadable&DimensionWritable)) {
+    /// Do something useful ///
+}
+</PHP>
+
+== Changes to internal objects ==
+
+Currently, the dimension handlers have a default handler which makes it difficult to
+know if an object supports certain dimension handlers.
+
+Therefore, we move the handlers out of the <php>zend_object_handlers</php> structure and into the <php>zend_class_entry</php> structure.
+We add new handlers which correspond to the above interfaces which are all defined in a new struct:
+<code>c
+typedef struct _zend_class_dimensions_functions {
+	/* rv is a slot provided by the callee that is returned */
+	zval *(*read_dimension)(zend_object *object, zval *offset, zval *rv);
+	bool  (*has_dimension)(zend_object *object, zval *offset);
+	zval *(*fetch_dimension)(zend_object *object, zval *offset, zval *rv);
+	void  (*write_dimension)(zend_object *object, zval *offset, zval //value);
+	void  (*append)(zend_object *object, zval *value);
+	zval *(*fetch_append)(zend_object *object, zval *rv);
+	void  (*unset_dimension)(zend_object *object, zval *offset);
+} zend_class_dimensions_functions;
+</code>
+
+If the object does not support being used as a container then the pointer for the <php>zend_class_dimensions_functions</php>
+should be the <php>NULL</php> pointer. Otherwise, it should be allocated and be populated with function pointers for
+the operations that are supported, and the <php>NULL</php> pointer for operations that are not.
+
+Moreover, the object should implement the relevant interfaces for the capabilities that it supports.
+This is relatively straight forward for all bundled extensions except for ext/ffi as the <php>CData</php> class
+is used to represent scalar data but also arrays and pointer types, which do overload the dimension handlers.
+
+The new handlers are slightly different from the existing one,
+as it is designed to reduce implementation complexity of the handlers.
+The <php>has_dimension</php> handler does not know if it is being called with <php>empty()</php>,
+as this is meaningless with the algorithm that is implemented.
+Its only duty is to indicate if the offset exists or not, not check if the backed value is <php>null</php> or <php>falsy</php>.
+Moreover, it is also called with the null coalesce operator.
+
+This change means that the <php>read_dimension</php> doesn't need to know in what context it is called,
+as it will only ever be called in a read context.
+Because the fetch and fetch append handlers would be called during fetching operations instead of the read handler.
+
+Another consequence of using the new algorithm is that some idiosyncratic code that produces side effects
+in the <php>had_dimension</php> handler might not work as before,
+this also applies to userland classes implementing <php>ArrayAccess</php>.
+For example, the following code:
+<PHP>
+class Test implements ArrayAccess {
+    public function offsetExists($x): bool { $GLOBALS["name"] = 24; return true; }
+    public function offsetGet($x): mixed { var_dump($x); return 42; }
+    public function offsetSet($x, $y): void { }
+    public function offsetUnset($x): void { }
+}
+
+$obj = new Test;
+$name = "foo";
+var_dump($obj[$name] ?? 12);
+var_dump($name);
+</PHP>
+
+currently produces the following output:
+<code>
+string(3) "foo"
+int(42)
+int(24)
+</code>
+
+however, with the new algorithm, would produce this output:
+<code>
+int(24)
+int(42)
+int(24)
+</code>
+
+As the <php>offsetExists()</php> wasn't called before, but now is.
+
+== Changes to ArrayObject ==
+
+The introduction of the new interfaces and handlers allows us to fix part of the implementation of <php>ArrayObject</php>
+to follow the usual semantics of <php>array</php> and not break assumptions around objects:
+
+  * Implement the new interfaces
+  * Call <php>append()</php> for the appending operation (following from the new <php>Appendable</php> interface)
+  * Fix <php>null</php> offset handling (following from the proper support of the appending operation)
+  * When using an object as a backing value:
+  * Throw <php>Error</php> on appending
+  * Emit dynamic properties warning when using an object as a backing value that does not allow dynamic properties
+  * Throw <php>Error</php> on writing to <php>readonly</php> properties
+  * Throw <php>Error</php> on writing a value of the wrong type to a typed property
+  * Continue to ignore any <php>__set()</php>/<php>__get()</php> magic methods
+
+Most of these changes are implemented as [[https://github.com/php/php-src/pull/12037|PR-12037]].
+
+== Changes to ArrayAccess ==
+
+Supporting <php>ArrayAccess</php> in a backwards compatibility way is slightly tricky.
+It is effectively extending <php>DimensionReadable</php>, <php>DimensioWriteable</php>, and <php>DimensionUnsettable</php>,
+but it also "supports" appending, fetching, and fetch-appending.
+
+Our solution is to add legacy dimension handlers to classes that implement <php>ArrayAccess</php>
+reproducing the current behaviour for appending, fetching and fetch-appending.
+However, if one of the new interfaces is implemented for dedicated support to appending, fetching,
+and fetch-appending, then the new behaviour is used.
+
+== Changes to SplObjectStorage ==
+
+As mentioned previously, the current implementation of <php>SplObjectStorage::offsetExists()</php>
+violates the expectations of <php>isset()</php>, however with the implementation of the new algorithm
+this is fixed, which leads to a behavioural change.
+
+Moreover, <php>SplObjectStorage</php> defines the following methods which are aliases to the dimension handler methods:
+
+  * <php>SplObjectStorage::contains()</php> for <php>SplObjectStorage::offsetExists()</php>
+  * <php>SplObjectStorage::detatch()</php> for <php>SplObjectStorage::offsetUnset()</php>
+  * <php>SplObjectStorage::attach()</php> for <php>SplObjectStorage::offsetSet()</php>
+
+However, extending <php>SplObjectStorage</php> and overwriting one of the alias methods does _not_ modify
+the behaviour of using the offset access operators.
+As such we propose to deprecate the aliases in favour of the normal offset methods.
+
+== Changes to MultipleIterator==
+
+The implementation of <php>MultipleIterator</php> shares the same internal object handlers as <php>SplObjectStorage</php>.
+This means it also supported the various offset access operators as a consequence.
+As the dimension handlers would no longer be part of the object handlers,
+this results in <php>MultipleIterator</php> not supporting them any longer.
+
+As it does not implement <php>ArrayAccess</php> and there are no tests covering this behaviour,
+it seems to us that this iterator was never designed to be accessed with the offset access operators.
+
+As such we do not intend to formally implement any interfaces and support for using offset access operators
+with <php>MultipleIterator</php> objects would be removed.
+
+=== Changes to array offset handling ===
+
+== Disallow resources to be used as array offsets ==
+
+Considering the phasing out of resources,
+resources being generally considered equivalent as objects,
+and a warning having been emitted for using resources as offset,
+we propose to promote this warning to a TypeError in PHP 8.4.
+
+This removes variations and a lot of complexity to the engine.
+
+The <php>array_key_exists()</php> function, and any objects mimicking array offsets, is also affected and would have the <php>resource</php>
+type removed from the union type for the <php>$key</php> parameter.
+
+== Emit warnings for invalid offset types on arrays ==
+
+Emit the following warnings when using invalid offsets on an array,
+this includes <php>null</php>, <php>bool</php>, and <php>float</php> types:
+
+<code>
+Warning: offset of type TYPE has been cast to (int|string)
+</code>
+
+=== Changes to string offset handling ===
+
+== Disallow leading numeric strings to be used as string offsets ==
+
+Considering the prolonged existence of notice/warnings when using numeric strings,
+and the fact <php>isset()/empty()</php> is completely broken with such offsets,
+we propose to promote this warning to the usual <php>Cannot access offset of type %s on string</php> error.
+
+== Normalize the behaviour of invalid string offsets ==
+
+This effectively means that non integer-numeric strings used as an offset for strings
+with the null coalesce operator <php>??</php> would throw the following error:
+<code>
+Cannot access offset of type %s on string
+</code>
+
+== Emit warning for checking existence of string offset with invalid offset types ==
+
+Emit a warning when using invalid offsets on a string during existence check operations:
+<code>
+Cannot access offset of type TYPE on string in isset or empty
+</code>
+
+=== Emit warning on read-write operations on <php>null</php> container ===
+
+Emit the same warning as a simple read operation when using <php>null</php> as a container:
+<code>
+Warning: Trying to access array offset on null
+</code>
+
+=== Emit warnings for checking existence of offsets on invalid container types ===
+
+Emit a warning when using invalid offsets on an invalid container during existence check operations
+as it is a programming error.
+
+Note: this does //not// include <php>null</php> as a container, which will continue to short-cut existence checks.
+
+=== Improved error messages ===
+
+Part of this RFC will be to improve error messages and indicate if the
+value cannot be used as an array:
+<code>
+Cannot use value of type TYPE as an array
+</code>
+
+And if the specific operation is not supported the error would ressemble:
+
+<code>text
+Cannot OPERATION offset of type TYPE on value of type TYPE
+</code>
+
+==== Changes in a future version of PHP 8 ====
+
+=== Internal objects must implement the relevant interfaces ===
+
+This requirement would be checked in DEBUG builds of PHP.
+
+The main reason for not making this a hard requirement with the other proposed changes for PHP 8.4
+is that the <php>CData</php> class from the FFI extension is an opaque class that interfaces with different
+C data types, such as scalars, C arrays, and pointers.
+
+However, blindly adding the new dimension interfaces to indicate that offsets can always be accessed
+would be a lie, as CData backing scalar data types can not be accessed in this manner.
+
+To properly support this, it requires refactoring the <php>CData</php> class into a sealed interface and have
+concrete class implementation for the different sorts of C data types,
+e.g. <php>CScalar</php>, <php>CArray</php>, <php>CPointer</php>.
+
+==== Changes in PHP 9.0 ====
+
+Promote all warnings to <php>Error</php>
+
+===== Version =====
+
+Next minor version, PHP 8.4, and next major version PHP 9.0.
+
+===== Vote =====
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2024-XX-XX and will end on 2024-XX-XX.
+ 
+<doodle title="Accept Improve language coherence for the behaviour of offsets and containers RFC?" auth="girgias" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Future scope =====
+
+Ideas proposed in this section are not part of the RFC and may be something to do as a follow-up to this RFC.
+
+  * Phase out <php>ArrayAccess</php>, c.f. https://wiki.php.net/rfc/phase_out_serializable
+  * Deprecate <php>ArrayObject</php>
+
+===== References =====
+
+Current behaviour has been mostly discovered and documented by adding behavioural tests in https://github.com/php/php-src/pull/12723
+
+Behaviour for ArrayObject mostly comes out of attempting to fix various bugs in https://github.com/php/php-src/pull/12037
