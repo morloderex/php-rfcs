@@ -1,267 +1,426 @@
-PHP Technical Committee
-=======================
+PDO Driver Specific SQL Parsers
+===============================
 
 :PHP-RFC: 0875
-:Title: PHP Technical Committee
-:Author: Jakub Zelenka <bukka@php.net>, Larry Garfield <larry@garfieldtech.com>
-:Status: Declined
-:Type: Unknown
-:Created: 2023-03-03
+:Title: PDO Driver Specific SQL Parsers
+:Author: Matteo Beccati <mbeccati@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-04-11
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-The Open Source project that develops the PHP language and its reference
-implementation uses an RFC process to discuss and vote on proposed
-changes. This was created mainly for user facing changes. It works well
-for that purpose but it is not that effective for deciding about purely
-technical changes that impact PHP internals and extension APIs. It is
-not clear how it should resolve technical conflicts between core
-developers.
+The PDO extension contains a SQL parser, whose main purpose is to
+recognise parameter placeholders inside queries (i.e. ``"?"`` and
+``":paramName"``), so that it knows how many and what parameters to
+expect for a query, and pass the information to the PDO driver in use.
+
+This parser had historically been modelled to work with the de-facto SQL
+standard in the PHP ecosystem at that time: MySQL. However, the SQL
+dialect used by MySQL is different when handling string literals from
+standard SQL, followed by other database vendors, such as PostgreSQL and
+SQLite.
+
+Specifically, MySQL treats the backslash character as an escape
+character: ``'This \'word\' is a single quoted'`` Whereas the SQL
+standard uses double single quotes:
+``'This ''word'' is a single quoted'``
+
+When using databases other than MySQL with PDO, valid queries having
+string literals ending with a backslash character are throwing off the
+parser and causing apparently inexplicable bugs.
+
+For example:
+
+.. code:: sql
+
+   SELECT 'foo\' AS a, '?' AS b
+
+will make PDO consider ``"'foo\' AS a, '"`` to be a string literal and
+will parse the following "?" as a positional parameter placeholder. In
+fact, if you pay close attention, even the DocuWiki SQL code formatter
+is thrown off by this very example.
+
+We have several reports of similar bugs
+`[1 <https://bugs.php.net/bug.php?id=78534>`__],
+`[2 <https://bugs.php.net/bug.php?id=79276>`__],
+`[3 <https://bugs.php.net/bug.php?id=80340>`__], and possibly other
+duplicates\ `[7 <https://github.com/php/php-src/issues/13958>`__].
+
+In a nutshell, the PDO SQL scanner function doesn't need to completely
+parse the SQL dialect in use. **It is sufficient to properly recognise
+quoted string literals, quoted identifier literals, and comments to skip
+placeholder detection inside them**.
+
+Bonus improvement
+~~~~~~~~~~~~~~~~~
+
+The limitation of a global SQL parser in PDO meant that my previous `RFC
+to support the PostgreSQL-only "?"
+operator </rfc/pdo_escape_placeholders>`__\ [4] had to apply the parser
+change to all database types. The change had no known side effects, but
+I feel this RFC could improve by keeping this peculiarity inside the
+pdo_pgsql scanner only.
 
 Proposal
 --------
 
-This RFC proposes an introduction of the PHP Technical Committee (TC)
-that would decide about all technical aspects of php-src when there are
-disagreements between core developers.
+Following a detailed research (see below) for each of the databases
+currently supported by PDO in core, the proposal is to allow drivers to
+optionally provide a custom scanner function to handle their specific
+SQL dialect and:
 
-Definitions
-~~~~~~~~~~~
+#. Change the `default PDO
+   scanner <https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42>`__
+   to expect standard SQL only:
 
-The text contains various terms that need further clarification to
-prevent future wording dispute. Here are their definitions:
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. two-dashes and C-style comments (non-nested, as that seems to be
+      the most common format, already implemented in PDO)
 
--  php-src - Source code in https://github.com/php/php-src/.
--  core developer - Anyone with write commit access to php-src.
--  dev branch - php-src branch consisting of PHP- prefix and major and
-   minor version number (e.g. PHP-8.2).
--  maintainer - person responsible for core subsystem (e.g. extension or
-   SAPI) that is listed in the php-src CODEOWNERS files.
--  issue - php-src GitHub issue, including pull requests.
--  process changes - Any changes impacting how the PHP project is
-   managed.
--  pull request - php-src GitHub pull request.
--  RM - PHP release managers.
--  user facing changes - Changes in PHP language and its semantics, user
-   visible functions, classes, interfaces, constants and other user
-   visible constructs.
--  technical change - Any change to php-src that has no user-facing
-   change, including the implementation details of an RFC-accepted user
-   facing change.
--  technical aspect - The portions of pull request or commit in php-src
-   or commit to php-src master and dev branches that would be technical
-   changes.
--  technical decision - Decision on a technical aspect.
--  TC - PHP Technical Committee.
+#. Add a MySQL-specific scanner function:
 
-To further clarify some of the defined terms, following subsection
-provides some useful examples.
+   #. single and double quoted literals with both doubling and backslash
+      as escaping mechanisms (MySQL default)
+   #. backtick literals with doubling as escaping mechanism (I also
+      tested and it seems MySQL doesn't accept backslashes as escapes)
+   #. two-dashes (if followed by 1 whitespace), C-style comments, and
+      Hash-comments
+   #. Tests, as necessary
 
-Changes
-^^^^^^^
+#. Add a PgSQL-specific scanner function:
 
-It is important to clarify difference between user facing change and
-technical changes. As it is defined, the technical change is any php-src
-change that is not a user facing change. However, the implementation of
-user facing change is still a technical change. Put another way, the
-*definition* of the user interface is user facing only, while the
-*implementation* itself is a technical change.
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. C-style "escape" string literals
+   #. Dollar-quoted string literals
+   #. two-dashes and C-style comments (non-nested, as nesting would
+      require unwanted changes to the common parser functionality)
+   #. Support for "??" as escape sequence for the "?" operator
+   #. Tests, as necessary
 
-For example if there is a proposal to add accessors for PHP classes,
-then everything that is visible to user space like the constructs and
-their usage in PHP code is a user facing change. The actual C
-implementation and tests are a technical change.
+#. Add a SqLite-specific scanner function:
 
-TC membership
-~~~~~~~~~~~~~
+   #. single, double quoted, and backtick literals, with doubling as
+      escaping mechanism
+   #. square brackets quoting for identifiers
+   #. two-dashes and C-style comments (non-nested)
+   #. Tests, as necessary
 
-The TC consists of five elected members. Any core developer is eligible
-to run for the TC. One member of the TC, selected by the TC members
-themselves, is the TC Secretary.
+To keep the change as simple as possible, the proposal tries to cover
+the default SQL syntax for each database as closely as possible, without
+heavy changes to the common parser code.
 
-The TC Secretary is responsible for:
+One important thing to mention is that the proposed changes are only
+targeting the part of PDO that scans the SQL query for parameter
+placeholders. Quoting literals or using parameters in queries is **not
+going to be affected**.
 
--  Administering the election of the next set of TC members.
--  Documenting and communicating any decisions of the TC.
--  In case of a tie, the Secretary's vote will be considered the winning
-   position.
+Detailed Proposal
+-----------------
 
-Elections
-^^^^^^^^^
+To execute the plan, a new member will be appended to:
 
-The election process takes place annually, concurrent with the election
-of the Release Managers in approximately March/April. (The exact date
-may vary year to year.) The sitting TC Secretary officially begins the
-process with a call for nominations. The nomination period lasts for one
-month.
+.. code:: c
 
-During that week, any eligible core developer may self-nominate by
-posting to the Internals mailing list. If the candidate is paid to work
-on php-src or PHP extensions, they must state in their nomination which
-company or organization they work for to prevent potential conflicts of
-interest. Failure to do so will result in disqualification, as
-determined by the TC Secretary.
+   struct pdo_dbh_methods {
+       pdo_dbh_close_func      closer;
+       pdo_dbh_prepare_func        preparer;
+       pdo_dbh_do_func         doer;
+       pdo_dbh_quote_func      quoter;
+       // ...
+       pdo_dbh_sql_scanner     scanner;
+   }
 
-Once nominations are over, the voting process will begin. Eligible
-voters are the same as for any RFC.
+Each PDO driver defines already `their own
+struct <https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code>`__.
+Leaving the new member to NULL will make the driver use the default PDO
+scanner function. Otherwise, a pointer to a custom scanner function will
+override the default when parsing queries. It's really as simple as
+that.
 
-If there are five or fewer nominees, there is no vote and all nominated
-individuals are elected.
+The rest of the implementation is the actual re2c scanner code,
+config.*, Makefile changes, etc. required to incorporate the
+driver-specific scanner into the build.
 
-If there are six or more nominees, a two week vote using the Single
-Transferable Vote method will take place. The five winning candidates at
-the end of the vote are elected.
+To support dollar-quoted strings on Postgres, the functionality of
+custom quoting has been added to the common PDO parser function. The
+change has no side effects for other database drivers.
 
-The newly elected TC members will elect from their own number a TC
-Secretary by simple majority.
+One minor potential BC-break was reported while researching bug
+`#14244 <https://github.com/php/php-src/issues/14244>`__, which
+basically describes lack of support for dollar quoting in pdo_pgsql. One
+of the currently viable workarounds is to use escaped question marks
+inside dollar-quoted strings to avoid unexpected placeholder detection.
+The last version of the implementation still allows that, while raising
+the following deprecation notice:
 
-Vacancies
-^^^^^^^^^
+``Escaping question marks inside dollar quoted strings is not required anymore and is deprecated``.
 
-Any TC member may resign at any time via an email to the Internals
-mailing list. If the resigning member is the TC Secretary, then the TC
-will elect a new Secretary from its number.
+Such BC-compatibility can be removed in the next major version.
 
-Should a TC member become inactive for more than 30 days, the TC may
-declare that member's seat vacant, by a majority vote. If the vote
-passes, the TC member is removed.
+Research on String Literals, Identifiers, and Comments
+------------------------------------------------------
 
-If the number of TC members is reduced to three or fewer and there are
-more than two months until the next regularly scheduled election, the
-Secretary must call for a special election for the vacant seats. The
-election process is the same as for any other election, but the newly
-elected TC members will serve only until the next regular election.
+MySQL
+~~~~~
 
-Should the number of TC members fall to zero, the senior-most Release
-Manager of the latest stable release will step in to act as TC Secretary
-and immediately call for a new vacancy election.
+MySQL by default accepts both backslash escaped quotes and SQL standard.
+String literals can use single or double quotes. See `the
+documentation <https://dev.mysql.com/doc/refman/8.0/en/string-literals.html>`__
+(8.0 current is linked here, but 5.7 and 8.3 behave the same).
 
-Work flow
-~~~~~~~~~
+The
+`NO_BACKSLASH_ESCAPE <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>`__
+SQL mode will disable recognition of the backslash as escape character.
+If set it will break SQL scanning regardless of this RFC.
 
-The TC is primarily a reactive body, and is not expected to proactively
-search for issues.
+The
+`ANSI_QUOTES <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes>`__
+SQL mode switches from backtick to SQL standard double quotes for
+identifier literals.
 
-Should a dispute or question about a change arise, the TC may be called
-on to resolve it.
+Several `comment
+types <https://dev.mysql.com/doc/refman/8.0/en/comments.html>`__
+supported: ''-- '', ``#``, and ``/* */`` (not nested).
 
-#. Any core developer (including a TC member) may ask for TC resolution
-   of an issue by adding the label ``tc-hold`` to it and @-mentioning
-   the TC GitHub team.
-#. An issue with the ``tc-hold`` tag MUST NOT be merged.
-#. The TC members will confer in whatever manner they deem most
-   convenient, public or private or both.
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults. All
+comment types will be supported.
 
-   -  The TC SHOULD consult with relevant other individuals, including
-      the core developers involved in the issue, Release Managers, and
-      impacted maintainers as appropriate.
+PostgreSQL
+~~~~~~~~~~
 
-#. The TC MUST deliver a decision within one month, via the mechanism
-   described below.
-#. The TC Secretary MUST announce the decision and reasoning for it on
-   the issue in question and remove the ``tc-hold`` tag.
-#. The decision of the TC is binding. That means a relevant change MUST
-   NOT be merged until and unless it conforms with the TC's decision.
-   Depending on the decision, the core developer involved may merge the
-   issue, close it, or revise it accordingly.
+Escaping has evolved over the years. Historically accepted "\'", but
+started gradually transitioning to the SQL standard around 2005, going
+from memory. Since 9.1 (2011+) it accepts only single-quoted string
+literals by default according to the SQL standard. See `the
+documentation <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS>`__.
 
-If an issue has been marked ``tc-hold`` for more than two weeks with no
-response or acknowledgement from the TC, the developer SHOULD post to
-the Internals mailing list a notification of absence.
+Postgres also supports `String Constants with Unicode
+Escapes <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE>`__,
+which follow the same conventions as standard strings and are parsed by
+PDO as regular strings.
 
-If a notification of absence receives no response from the TC or any
-member of it for 30 days, then the entire TC is automatically removed.
-New elections must then be immediately called as described above.
+It also accepts `“escape” string
+constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE>`__,
+e.g.
 
-The election of a new TC will "reset the clock" on any outstanding
-``tc-hold`` issues.
+.. code:: php
 
-Decision process
-~~~~~~~~~~~~~~~~
+   E'This \'word\' is a single quoted'
 
-User-facing changes
-^^^^^^^^^^^^^^^^^^^
+Lastly, `Dollar-Quoted String
+Constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING>`__
+are very common, especially when defining functions.
 
-The RFC process will continue to be used for user facing changes.
-However, it will no longer be used for non-user-facing technical
-decisions.
+The behaviour of strings can also be manipulated in multiple ways
+through configuration variables, such as:
+`standard_conforming_strings <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>`__,
+`backslash_quote <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE>`__,
+and
+`escape_string_warning <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING>`__.
 
-TC members have no special role or authority in the RFC process.
+About
+`comments <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS>`__,
+it follows the standard with ``--`` and ``/* */`` (w/ nested comments
+allowed)
 
-Process changes
-^^^^^^^^^^^^^^^
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults.
+Dollar-quoting support requires minimal changes to the common PDO parser
+function. All comment types are already supported, albeit support for
+nested comments will not be introduced.
 
-The RFC process will continue to be used for process changes, including
-changes to the role of the TC.
+SQLite
+~~~~~~
 
-Technical changes
-^^^^^^^^^^^^^^^^^
+Follows the SQL standard, and requires double single quotes to represent
+the single quote in a string literal. See
+`documentation <https://www.sqlite.org/lang_expr.html#literal_values_constants_>`__.
 
-As noted, the TC has no special role or authority on user-facing
-changes. The TC may, however, decide on the implementation of those
-features. In other words the TC can decide about implementation and C
-ABI and API but not about PHP API.
+It will however accept double-quoted strings as string literals under
+`some
+circumstances <https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted>`__.
 
-The TC SHOULD NOT block the merging of a user-facing change approved by
-the RFC process, unless the provided implementation would result in
-introduction of new bugs, side effects not mentioned in the RFC,
-significant performance penalties not mentioned in RFC, or if there is
-an equivalent implementation in progress that the TC finds more
-appropriate.
+Double quoted identifiers, but also `backticks and square
+brackets <https://sqlite.org/lang_keywords.html>`__.
 
-The TC SHOULD give due consideration and weight to previous decisions
-regarding technical aspects, either by the TC or by RFCs prior to the
-TC's creation. However, it is NOT REQUIRED to abide by them, and may
-make decisions as it sees best to ensure the quality and maintainability
-of the code at the time the decision is made.
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
 
-Technical aspects on which the TC may make a decision include, but are
-not limited to:
+The RFC aims to support single-quoted, double-quoted, backtick, and
+square-bracketed literals. All comment types are already supported.
 
--  Whether a given pull request implements a feature or resolves a bug.
--  Whether a given change qualifies as user-facing, and thus requires an
-   RFC.
--  Whether a given technical aspect or implementation approach is
-   acceptable.
+SQL Server
+~~~~~~~~~~
 
-TC voting
-^^^^^^^^^
+SQL standard string literals, according to the
+`documentation <https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql?view=sql-server-ver16#character-string-constants>`__.
 
-Once an issue has been brought to the TC, the Secretary will facilitate
-a discussion period lasting two weeks or until all TC members have had
-time to offer their input, whichever comes first. Once the Secretary
-feels the issue has been sufficiently discussed, the Secretary will call
-a vote of the TC members. The vote will be private and conducted however
-the TC chooses.
+Depending on the QUOTED_IDENTIFIER setting, double quotes are either
+used for strings or identifiers.
 
-The vote will last for two weeks or until all TC members have voted,
-whichever comes first. All votes are simple-majority, with no quorum on
-a binary question (which could be yes/no or either/or, depending on the
-situation, as determined by the Secretary). Members may explicitly
-abstain, and refraining from voting counts as an abstention. Abstentions
-do not count toward the result.
+Almost SQL standard
+`comments <https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16>`__:
+``--`` and ``/* */`` (non nested).
 
-In case of a tie, the Secretary's vote will be considered the winning
-position.
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
 
-Alternatively, if there is clear consensus among the TC members the
-Secretary may opt to skip the vote and report the consensus decision,
-provided all members have been given time to weigh in. Any member of the
-TC may require that a vote be held.
+Firebird
+~~~~~~~~
 
-Proposed Voting Choices
+SQL standard string literals, according to the
+`documentation <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants>`__.
+It also support hexadecimal (binary) strings, e.g. ``x'50444F``', and,
+similarly to Oracle, quoted strings (out of scope).
+
+The documentation mentions "Double quotes are NOT VALID for quoting
+strings. The SQL standard reserves double quotes for a different
+purpose: quoting identifiers."
+
+Almost SQL standard
+`comments <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+ODBC
+~~~~
+
+Since ODBC can connect to various types of databases, the SQL standard
+parser hopefully will suffice.
+
+Oracle
+~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html>`__.
+It also supports alternative quoting, e.g. q'<literal>' and many other
+variants, which is out of scope for this RFC.
+
+`Double quoted
+identifiers <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA>`__.
+
+Almost SQL standard
+`comments <https://docs.oracle.com/en/database/oracle/oracle-database/12.2/sqlrf/Comments.html#SQLRF-GUID-5C84C344-CEB3-4DBF-B748-337DE11CCE2A>`__:
+``--`` and ``/* */`` (not nested).
+
+The OCI driver lives in PECL: the default scanner will be used by
+default, bringing compatibility for SQL standard string literals,
+identifiers, and comments.
+
+Historical Background
+---------------------
+
+A few years back I attempted to fix a bug and came up with a `pull
+request <https://github.com/php/php-src/pull/6852>`__ that could be
+considered a proof of concept for this RFC. The same topic was also
+brought up `by others on
+internals <https://externals.io/message/114016>`__, but no one had time
+to follow up with a proper RFC.
+
+Backward Incompatible Changes
+-----------------------------
+
+No BC breaks, but a deprecation notice will be raised when using the
+"escaped question marks inside dollar quoted string" workaround
+described before.
+
+Users having applications that can work with multiple database engines
+should still be very careful and write portable queries, possibly using
+the ``PDO::quote()`` method when necessary instead of hardcoding strings
+containing escape characters.
+
+Proposed PHP Version(s)
 -----------------------
 
-As per the voting RFC a yes/no vote with a 2/3 majority is needed for
-this proposal to be accepted.
+Next PHP 8.x, hopefully, 8.4.
 
-Voting started on 2023-04-28 10:00 UTC and will end on 2023-05-12 10:00
-UTC.
+RFC Impact
+----------
 
-Question: Introduce the PHP Technical Committee as defined in this RFC
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+To SAPIs
+~~~~~~~~
+
+No impact
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Drivers outside of php-src might have to be modified if they make
+assumptions about the structure of the enum pdo_param_type. They would
+have to be rebuilt since the PDO_DRIVER_API macro would be updated.
+
+That has historically been allowed/expected in minor versions. The last
+time it happened was for PHP 7.2 with `PHP RFC: Extended String Types
+For PDO </rfc/extended-string-types-for-pdo>`__.
+
+To Opcache
+~~~~~~~~~~
+
+No impact to opcache.
+
+New Constants
+~~~~~~~~~~~~~
+
+No new constant.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No php.ini changes
+
+Open Issues
+-----------
+
+No open issues ATM.
+
+Unaffected PHP Functionality
+----------------------------
+
+Anything not related to PDO scanning the SQL query for parameter
+placeholders.
+
+Out Of Scope
+------------
+
+Dynamic changes to the scanner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The scanners are generated when PHP is compiled and, currently, cannot
+be modified at runtime. However, some databases allow configuration
+directives or ``SET`` queries to change the accepted syntax for
+literals, identifiers, etc.
+
+Being able to understand all possible combinations would require
+tracking what directives are different from the expected default and
+having several scanners inside each driver for each possible permutation
+of such configuration directives.
+
+Future Scope
+------------
+
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or
+add other custom scanner functionality.
+
+Voting
+------
+
+Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As
+usual, 2/3 majority is needed for this proposal to be accepted.
+
+Question: Implement PDO Driver specific SQL parsers?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -269,9 +428,32 @@ Voting Choices
 -  Yes
 -  No
 
+Patches and Tests
+-----------------
+
+`Implementation Pull
+Request <https://github.com/php/php-src/pull/14035>`__
+
+References
+----------
+
+-  [1] `https:bugs.php.net/bug.php?id=78534]] \* [2]
+   [[https:\ bugs.php.net/bug.php?id=79276|https:bugs.php.net/bug.php?id=79276]]
+   \* [3]
+   [[https:\ bugs.php.net/bug.php?id=80340|https:bugs.php.net/bug.php?id=80340]]
+   \* [4] [[rfc:pdo_escape_placeholders|PHP RFC: Escape PDO "?"
+   parameter placeholder]] \* [5]
+   [[https:\ github.com/php/php-src/pull/6852|PoC implementation of a
+   custom pdo_pgsql scanner <https://bugs.php.net/bug.php?id=78534>`__
+-  [6] `Previous discussion of the topic on
+   internals <https://externals.io/message/114016>`__
+-  [7] `More recent bug <https://github.com/php/php-src/issues/13958>`__
+
 Additional Metadata
 -------------------
 
-:Original Authors: Jakub Zelenka (bukka@php.net), Larry Garfield (larry@garfieldtech.com)
-:Slug: php_technical_committee
-:Wiki URL: https://wiki.php.net/rfc/php_technical_committee
+:Discussion: https://externals.io/message/123141
+:Implementation: https://github.com/php/php-src/pull/14035
+:Original Authors: Matteo Beccati, mbeccati@php.net
+:Slug: pdo_driver_specific_parsers
+:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_parsers
