@@ -1,453 +1,747 @@
-DOMDocument HTML5 Parsing And Serialization
-===========================================
+New Ext-dom Features In PHP 8.4
+===============================
 
 :PHP-RFC: 0845
-:Title: DOMDocument HTML5 Parsing And Serialization
+:Title: New Ext-dom Features In PHP 8.4
 :Author: Niels Dossche <nielsdos@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-08-12
-:Version: 0.3.0
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-04-12
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-PHP's DOM extension supports loading HTML documents using the methods
-``DOMDocument::loadHTML`` and ``DOMDocument::loadHTMLFile``. This uses
-libxml2's HTML parser under the hood to parse these documents into a
-libxml2 document tree that ext/dom uses. Unfortunately, this parser only
-supports HTML up to version 4.01. This is a problem because HTML5 has
-become the de facto standard for websites over the past decade.
-Introducing HTML5 parsing to PHP's DOM implementation is crucial for
-modernizing and enhancing PHP's capabilities in handling modern web
-content.
-
-Using loadHTML(File) to load HTML5 content results in multiple parsing
-errors and incorrect document trees. These issues arise from changes in
-parsing rules between HTML4 and HTML5. Notably, the current parser does
-not recognize semantic HTML5 tags (e.g., main, article, section, ...) as
-valid tags. Then there's also problems with certain element nestings not
-allowed in HTML4, but allowed in HTML5, causing incorrect document
-trees. Another concern highlighted in PHP's bug tracker is the handling
-of closing tags within script contexts. With the common practice of
-embedding HTML within JavaScript, HTML4 parsers encounter problems with
-closing tags within JavaScript literals. Consequently, parsing through
-loadHTML(File) leads to incorrect document trees. The list of issues
-goes on and on. Not being able to parse HTML5 properly is one of the
-major pain points of our DOM extension.
-
-There's an open issue at the libxml2 bugtracker to add HTML5 parsing
-support: https://gitlab.gnome.org/GNOME/libxml2/-/issues/211. However,
-it seems like this won't happen anytime soon. Furthermore, there are
-also problems with saving (also known as serializing) HTML5 documents
-due to subtle rule differences between HTML4 and HTML5. This RFC
-proposes a fully backwards compatible solution to deal with these
-problems. To solve the parsing issue, we will leverage an alternative
-HTML5 parser to create the libxml2 document tree. This parser seamlessly
-integrates with the DOM extension, ensuring compatibility for all
-existing code and third-party extensions. To solve the serialization
-issue, an implementation for the HTML5 serialization algorithm will also
-be added. The new functionality will be available via a
-``DOMHTML5Document`` class that extends ``DOMDocument`` and overrides
-the loadHTML(File) and saveHTML(File) methods.
+The PHP 8.4 development cycle has seen two major improvements to the
+ext-dom extension already: `HTML 5
+support </rfc//domdocument_html5_parser>`__, and `opt-in spec
+compliance </rfc/opt_in_dom_spec_compliance>`__. This RFC is (probably)
+the final improvement to ext-dom for PHP 8.4: it proposes to add new
+features to the extension. In particular, we'll be focussing on CSS
+selector support, filling in missing but common features, and adding new
+properties. These improvements / changes only apply to the new classes
+in the Dom namespace.
 
 Proposal
 --------
 
-The most important requirement is that the new class must integrate
-seamlessly with the DOM extension. This means that using it must be a
-simple drop-in replacement. You will still be able to use all the
-existing APIs to manipulate and traverse DOM documents and nodes.
+The RFC consists of multiple sub-proposals bundled together under one
+RFC to minimize overhead. In this section, we'll discuss each proposal
+separately.
 
-This proposal introduces the ``DOMHTML5Document`` class that extends the
-``DOMDocument`` class. The reason we introduce a new class instead of
-replacing the methods of the existing class is to ensure full backwards
-compatibility. There are applications that work with legacy HTML4
-documents, and want the HTML4 behaviour. By keeping the DOMDocument
-class, nothing changes for existing code. Code that wants HTML5
-functionality can use the ``DOMHTML5Document`` class.
+CSS selectors
+~~~~~~~~~~~~~
 
-Here's how its definition looks:
+There exist multiple ways to query nodes in an XML or HTML document. The
+one that's already implemented since the existence of the DOM extension
+is using XPath. Another popular way, that people are likely more
+familiar with, is CSS selectors. In theory, every query you can write
+with CSS selectors can also be written with XPath. However, XPath is
+much more cumbersome to use in a lot of cases. For example, a simple
+query like ``p:contains("hello") + span`` is equivalent to
+``./​/p[contains(normalize-space(),"hello")]/following-sibling::*[1]/self::span``.
+Things can get much more complicated when you use pseudo-functions like
+``:disabled`` which are a real pain to express in XPath.
+
+The DOM spec defines the following CSS selector functions:
 
 .. code:: php
 
-   class DOMHTML5Document extends DOMDocument {
-       public function loadHTML(string $source, int $options = 0): bool {}
-       public function loadHTMLFile(string $filename, int $options = 0): bool {}
-       public function saveHTML(?DOMNode $node = null): string|false {}
-       public function saveHTMLFile(string $filename): int|false {}
+   namespace Dom {
+     interface ParentNode {
+       public function querySelector(string $selectors): ?Element {}
+       public function querySelectorAll(string $selectors): NodeList {}
+     }
+
+     class Element extends Node implements ParentNode {
+       public function closest(string $selectors): ?Element {}
+       public function matches(string $selectors): bool {}
+     }
    }
 
-The options argument
-~~~~~~~~~~~~~~~~~~~~
+This is what the methods do:
 
-Just like the load methods of ``DOMDocument``, their HTML5 counterparts
-also take an optional options argument. The options for the load methods
-change the way the parser behaves. The only two options that will have
-an effect for the new methods are ``LIBXML_HTML_NOIMPLIED`` and
-``LIBXML_NOERROR``. Here's an overview why the other options are not
-implemented and the reason why:
+-  querySelector: Returns the first descendant element that matches the
+   CSS selectors
+-  querySelectorAll: Returns a NodeList containing all descendant
+   elements that match the CSS selectors
+-  closest: Finds the closest ancestor of the element that matches the
+   CSS selectors
+-  matches: Returns true if the element matches the CSS selectors, false
+   otherwise
 
-+--------------------------+------------------------------------------+
-| Option                   | Reasoning                                |
-+==========================+==========================================+
-| ``LIBXML_BIGLINES``      | Not needed, this always works for the    |
-| ``LIBXML_PARSEHUGE``     | new methods.                             |
-+--------------------------+------------------------------------------+
-| ``LIBXML_COMPACT``       | This is a transparent optimization for   |
-|                          | the program, not implemented right now   |
-|                          | because it requires quite a few hacks.   |
-|                          | It can be implemented in the future      |
-+--------------------------+------------------------------------------+
-| ``LIBXML_DTDATTR``       | There is only one valid DTD for HTML5,   |
-| ``LIBXML_DTDLOAD``       | these options don't make sense.          |
-| ``LIBXML_DTDVALID``      |                                          |
-+--------------------------+------------------------------------------+
-| ``LIBXML_HTML_NODEFDTD`` | Not needed, this is the default HTML5    |
-|                          | behaviour.                               |
-+--------------------------+------------------------------------------+
-| ``LIBXML_NOBLANKS``      | This doesn't remove blank nodes in all   |
-|                          | cases. There's rules that libxml2        |
-|                          | follows based on whether the element     |
-|                          | accepts #PCDATA, and based on the        |
-|                          | position of the element. As HTML5 is not |
-|                          | based on XML, there is no concept of     |
-|                          | #PCDATA. Hence, it is unclear how to     |
-|                          | implement this.                          |
-+--------------------------+------------------------------------------+
-| ``LIBXML_NOCDATA``       | This is only valid in XML, the concept   |
-| ``LIBXML_NOEMPTYTAG``    | doesn't exist in HTML5.                  |
-| ``LIBXML_NOENT``         |                                          |
-| ``LIBXML_NSCLEAN``       |                                          |
-| ``LIBXML_XINCLUDE``      |                                          |
-| ``LIBXML_SCHEMA_CREATE`` |                                          |
-+--------------------------+------------------------------------------+
-| ``LIBXML_NONET``         | Not needed, the new methods never access |
-|                          | the network.                             |
-+--------------------------+------------------------------------------+
-| ``LIBXML_NOWARNING``     | Not needed, only errors are reported,    |
-|                          | there's no concept of a warning because  |
-|                          | this is not a conformance checker.       |
-+--------------------------+------------------------------------------+
-| ``LIBXML_PEDANTIC``      | Error reporting follows the spec, no     |
-|                          | custom modification is done.             |
-+--------------------------+------------------------------------------+
+It's worth noting that CSS selectors can contain pseudo-classes that
+only make sense when something is rendered on screen. Like for example
+``:hover``, which matches when a user hovers over an element. Because in
+the context of PHP this is nonsensical, a CSS selector that uses such a
+pseudo-class will match nothing.
 
-Additional background info
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+While it's possible to implement ``closest`` and ``matches`` using
+XPath, it cannot be done performance-efficiently (as far as I know).
 
-The DOM extensions supports both XML and HTML documents. It's built
-heavily upon libxml2's APIs and data structures, just like all
-XML-related PHP extensions within php-src. This is great for
-interoperability (e.g. with simplexml and xsl). Third-party extensions
-also use libxml2 APIs. For example, the
-`xmldiff <https://pecl.php.net/package/xmldiff>`__ PECL extension peeks
-into the internals of DOMDocument to grab the libxml2 data structures
-and compare them. It is not possible to switch away from the libxml2
-library as the underlying basis for the DOM extension because that will
-cause a major BC break.
+The underlying library we use for the HTML5 parsing also contains the
+CSS functionality necessary to implement these methods. Therefore, we
+can get the functionality relatively easily. I only had to adapt the
+node data structures to match PHP's data structures.
 
-Approach
-~~~~~~~~
+There exist workarounds in userland that implement a CSS selector to
+XPath translation, but based on what I've seen:
 
-Parsing an HTML document via an HTML parser results in a document tree.
-The tree consists of HTML nodes. These nodes are structs on the heap
-created by the parser. In order to integrate an alternative parser into
-our DOM extension, these nodes need to be converted into libxml2 nodes.
-The resulting tree, after conversion, is then used in the DOM extension,
-just *as if* it had come from libxml2's parser.
+-  They will take a performance hit because translation isn't "free"
+-  They don't provide an efficient way to implement ``closest`` and
+   ``matches``
+-  Because they are implemented around the old DOM classes, and the old
+   DOM classes didn't take into account the different HTML namespaces
+   properly, they also don't take into account the namespaces properly.
 
-The conversion is fairly straight-forward. We perform a depth-first
-traversal on the tree, checking the node type and creating the
-corresponding libxml2 node. The traversal is performed using iteration
-instead of recursion to prevent stack overflows with deep trees. After
-this process is done, we throw away the old tree and are left with only
-the libxml2 tree.
+Examples
+^^^^^^^^
 
-For serializing, I wrote code implementing the `HTML5 serialization
-algorithm <https://html.spec.whatwg.org/#serialising-html-fragments>`__
-using libxml2 nodes. I could've also developed a method of converting a
-libxml2 tree back to the original type of tree that the parser produced,
-but that's more complicated to implement and likely has slower
-performance.
+**Example 1: querySelector**
 
-Choosing an HTML5 parser
-~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
 
-We have to choose a suitable HTML5 parser. It should be spec-compliant,
-heavily tested, and fast. I propose to use
-`Lexbor <https://github.com/lexbor/lexbor>`__. According to its README,
-it satisfies our requirements. Furthermore, it already has bindings for
-Elixir, Crystal, Python, D, and Ruby. This shows that it has been used
-in practice in other serious projects.
+   $dom = Dom\XMLDocument::createFromString(<<<XML
+   <root>
+     <span>1</span>
+     <p>hi</p>
+     <span>2</span>
+   </root>
+   XML);
 
-It is fully written in C99. That's ideal, because PHP is also using the
-C99 standard. One small complication is that this library is not
-available in package managers for almost all distros. Therefore, I
-propose to bundle it with PHP. This also gives us the freedom to
-incorporate a patch to expose the line and column numbers of HTML nodes
-such that the error messages are richer and the ``DOMNode::getLineNo()``
-function will work properly. Bundling a library with PHP is not
-unprecedented, PHP already bundles e.g. pcre2lib, gd, libmagic, ...
+   var_dump($dom->querySelector('p ~ span')->textContent); // string(1) "2"
 
-Lexbor also supports overriding the allocation routines. Therefore, we
-can make it work with PHP's memory limit. Something that is currently
-not done with libxml2.
+**Example 2: closest**
 
-Alternative considered HTML5 parsers
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. code:: php
 
-Lexbor is one of several HTML5 parsers available. During my
-investigation, I considered two alternatives:
+   $dom = Dom\XMLDocument::createFromString(<<<XML
+   <root>
+     <div class="foo" xml:id="div1">
+       <div xml:id="div2">
+         <div class="bar" xml:id="div3"/>
+       </div>
+     </div>
+   </root>
+   XML);
 
--  Gumbo: https:*github.com/google/gumbo-parser.
-   A relatively well-known HTML5 parser developed by Google in C.
-   Unfortunately, it has been unmaintained since 2016, as indicated in
-   its README, making it unsuitable for use. \* html5ever:
-   https:*\ github.com/servo/html5ever.
-   This is Servo's HTML5 parser, written in Rust.
-   I have implemented a `proof-of-concept
-   conversion <https://github.com/nielsdos/html5ever-libxml2-bridge/blob/main/src/lib.rs>`__
-   from html5ever to libxml2, and a `proof-of-concept integration with
-   PHP <https://github.com/nielsdos/php-src/commits/dom-bridge>`__ on my
-   fork.
-   I decided to not go with this option for a few reasons.
-   \* Firstly, while writing it in Rust would enhance memory safety
-   (especially for untrusted documents), introducing Rust as an
-   additional dependency for PHP adds extra complexity. PHP's
-   default-enabled extensions can currently be built using only C, but
-   if we go this route this would change.
-   \* Secondly, the implementation is incomplete, primarily the lack of
-   character encoding support is problematic: it currently only supports
-   UTF-8 documents. Moreover, logic for character encoding meta tags is
-   absent.
-   \* Lastly, observing the commit activity raises doubts about the
-   ongoing activity of this project.
+   var_dump($dom->getElementById('div3')->closest('div')->getAttribute("xml:id")); // string(4) "div3"
+   var_dump($dom->getElementById('div3')->closest(':not(div[class])')->getAttribute("xml:id")); // string(4) "div2"
 
-Considering these factors, I opted against using the above two. Lexbor
-emerged as the better choice after this investigation.
+**Example 3: matches**
 
-A note on conformance checkers
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. code:: php
 
-I want to emphasize that the HTML5 parser is *not* a conformance
-checkers. Conformance checkers check for additional rules in addition to
-the parsing rules. Browsers, and the proposed class, *only* perform the
-parsing rules checks. An example of something that's fine for a HTML5
-parser, but not fine for a conformance checker is the following
-document:
+   $dom = Dom\XMLDocument::createFromString(<<<XML
+   <root>
+     <div xml:id="div1">
+       <div xml:id="div2">
+         <div xml:id="div3"/>
+       </div>
+     </div>
+   </root>
+   XML);
 
-``<!doctype html>``
+   var_dump($dom->getElementById('div3')->matches('div > div')); // bool(true)
+   var_dump($dom->getElementById('div3')->matches('root > div')); // bool(false)
 
-This is perfectly valid for a parser. Our implementation won't report
-any errors. Conformance checkers, however, will report the lack of a
-title element (amongst some other minor things).
+Element::$innerHTML
+~~~~~~~~~~~~~~~~~~~
 
-Error handling
-~~~~~~~~~~~~~~
+This is a property on the Element class defined in the DOM spec:
+https://html.spec.whatwg.org/#the-innerhtml-property
 
-When parsing a document, potential parse errors may occur. With the load
-methods of DOMDocument, a parser error results in an E_WARNING by
-default. *However*, you can use ``libxml_use_internal_errors(true)`` to
-store the errors inside an array. In this case, no warning will be
-generated and the parse errors may be inspected using
-``libxml_get_errors()`` and ``libxml_get_last_error()``.
+.. code:: php
 
-The naming of these methods is a bit unfortunate because it leaks
-implementation details. Users shouldn't have to care that it's actually
-libxml2 under the hood producing these errors. The reality is that these
-error methods have become synonymous with "handling errors in
-DOMDocument / SimpleXML / ...". To offer a seamless HTML5 drop-in, my
-current implementation follows the same error handling as described
-above. That means, by default we will emit an E_WARNING. If
-``libxml_use_internal_errors(true)`` is used then the errors will be
-stored, and can be retrieved in the same way as described above. This
-may seem unconventional since the errors originate from Lexbor rather
-than libxml2. However, we have good reasons to do so.
+   namespace Dom {
+     class Element /* ... */ {
+       public string $innerHTML;
+     }
+   }
 
-The alternative would be to introduce methods specific to getting the
-errors from the HTML5 parser. However, I do not believe that's a good
-idea because:
+Reading from this field will get the serialization of the inner content
+of the element, writing to it will parse a string into a subtree and
+replace the contents of the element with the new subtree. If the
+document is an HTML document, the HTML parser / serializer will be used.
+If the document is an XML document, the XML parser / serializer will be
+used. Yes, that means that inner\ **HTML** can set **XML** content, and
+this is as defined by spec. This naming oopsie is legacy baggage from
+the spec that stems from the fact that the Element class is shared
+between XML and HTML documents for interopability.
 
-#. The developers utilising these new parsing methods don't necessarily
-   know that it uses Lexbor. So they expect the error handling behaviour
-   to be the same as the existing methods.
-#. The proposed approach makes it easier to use as a drop-in
-   replacement.
-#. If libxml2 ever introduces its own HTML5 parser, we can drop Lexbor
-   and nothing changes for the end user w.r.t. error handling.
+If the serialization is not well-formed for XML, then a DOMException
+with ``$code`` DOM_SYNTAX_ERR will be thrown, as defined by the spec.
 
-External entity loader
+Parsing documents (or fragments) can cause hard/soft errors. The soft
+errors are reported via warnings, or if the internal error handling
+mechanism is used then the errors are stored inside an array. Unless
+LIBXML_NOERROR is provided, in which case those soft errors are
+silenced. Note that we don't have a way to provide a parsing option to
+the innerHTML property, and so we cannot provide a way to silence the
+errors cleanly. I asked about this on the mailing list
+(https://externals.io/message/123224) but got no response. This probably
+means that people are uncertain or don't care, and so I choose to not
+implement the error reporting because it's easier to omit something and
+add it later than it is to remove something later.
+
+New properties for Document
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+I propose the additional of several new properties to the Document class
+to make developing a bit easier:
+
+.. code:: php
+
+   namespace Dom {
+     class HTMLElement extends Element {
+       /* There's an opportunity to add useful HTML-spec properties here for the future. */
+     }
+
+     class Document /* ... */ {
+       public ?HTMLElement $body;
+       /** @readonly */
+       public ?HTMLElement $head;
+       public string $title;
+     }
+   }
+
+These additions are described in the HTML addendum for the DOM
+specification in https://html.spec.whatwg.org/#document.
+
+The properties should be relatively self-explanatory. ``$body`` refers
+to the body element (if there is one), ``$head`` to the head element (if
+there is one), and ``$title`` to the text inside the title element
+(which in turn is inside the head element). You can read about all the
+details using the link above, because it's a bit more complicated when
+SVG is involved for example, but you should be familiar with these
+properties from Javascript.
+
+As you can see, this requires adding the HTMLElement class as well. This
+class extends the Element class. In the future we may add properties on
+them too but this is left out of this RFC for now. Elements that are
+within the HTML namespace will now return an instance of HTMLElement
+instead of Element. For example, ``$documentElement`` is a property on
+the Document class of type Element. If this is an HTML element, we will
+get an instance of HTMLElement instead of Element. This is all as
+defined in the spec.
+
+TokenList
+~~~~~~~~~
+
+I propose to add the TokenList class from the DOM specification to PHP
+(https://dom.spec.whatwg.org/#interface-domtokenlist):
+
+.. code:: php
+
+   namespace Dom {
+     /**
+      * @not-serializable
+      * @strict-properties
+      */
+     final class TokenList implements \IteratorAggregate, \Countable {
+       private function __construct() {}
+
+       /** @readonly */
+       public int $length;
+       public function item(int $index): ?string {}
+       public function contains(string $token): bool {}
+       public function add(string ...$tokens): void {}
+       public function remove(string ...$tokens): void {}
+       public function toggle(string $token, ?bool $force = null): bool {}
+       public function replace(string $token, string $newToken): bool {}
+       public function supports(string $token): bool {}
+       public string $value;
+
+       public function count(): int {}
+
+       public function getIterator(): \Iterator {}
+     }
+   }
+
+An instance of TokenList can be obtained via the ``Element::$classList``
+property. As of now, its purpose is limited to managing the class names
+of an element, but the class is built in a way that it represents a set
+of tokens. On the surface level, it might seem trivial to manage the
+class names in documents, but that's not quite true. TokenList will
+consider the classes as a set, handle whitespace normalization,
+iteration, easy manipulations like toggling, ... all for you in an
+easy-to-use API.
+
+.. _examples-1:
+
+Examples
+^^^^^^^^
+
+**Example 1: Basic operations**
+
+.. code:: php
+
+   $dom = Dom\XMLDocument::createFromString("<root class='first second\tthird'/>");
+   $root = $dom->documentElement;
+   $list = $root->classList;
+
+   var_dump($list);
+   /*
+   object(Dom\TokenList)#3 (2) {
+     ["length"]=>
+     int(3)
+     ["value"]=>
+     string(18) "first second third"
+   }
+   */
+
+   var_dump($list->contains("second")); // bool(true)
+   var_dump($list->toggle("second")); // bool(false)
+   var_dump($root->className); // string(11) "first third"
+
+   $list->replace("third", "something-else");
+   var_dump($list->item(1)); // string(14) "something-else"
+
+PHP-specific additions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-XML supports something called "external entities". This will load data
-from an external source into the current document (if enabled). Because
-you might want to customise the external entity handling, there's a
-``libxml_set_external_entity_loader(?callable $resolver_function)``
-function to setup a custom "resolver". This "resolver" returns either a
-path, a stream resource, or null. In the former two cases, the entity
-will be loaded from the path or stream. In the latter case, the loading
-will be blocked.
+The DOM extension already implements some PHP-specific extensions to the
+DOM classes, like normalization and canonicalization support. To better
+support some workloads, I propose the following PHP-specific additions:
 
-This interacts a bit surprisingly with the existing loadHTMLFile method.
-You can observe this here: https://3v4l.org/rJTTc. The loadHTMLFile
-method considers loading the file also as loading an external entity,
-hence the "resolver" is invoked.
+.. code:: php
 
-There's a (deprecated) similar function
-``libxml_disable_entity_loader(bool $disable)`` that completely disables
-loading external entities. This function has been perceived as broken by
-the community due to it blocking loading anything that's not coming from
-a string. See https://github.com/php/php-src/pull/5867 for more details.
-I don't know how the community perceives the interaction between
-loadHTMLFile and ``libxml_set_external_entity_loader``.
+   namespace Dom {
+     /**
+      * @not-serializable
+      * @strict-properties
+      */
+     final class NamespaceInfo
+     {
+       public readonly ?string $prefix;
+       public readonly ?string $namespaceURI;
+       public readonly Element $element;
 
-Unlike XML, HTML5 does not have a concept of external entities. The
-question I have is whether ``libxml_set_external_entity_loader`` should
-affect the new class's loadHTMLFile in the same way as it does for the
-existing class. The advantage would be consistency, but I don't know if
-this is what the community wants. I'm leaving this for a secondary vote
-for the community to decide on.
+       private function __construct() {}
+     }
+     
+     class Attr /* ... */ {
+       public function rename(?string $namespace, string $qualifiedName): void {}
+     }
+     
+     class Element /* ... */ {
+       public string $substitutedNodeValue;
 
-Interoperability between DOMDocument and DOMHTML5Document
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+       /** @return list<NamespaceInfo> */
+       public function getInScopeNamespaces(): array {}
 
-Because ``DOMHTML5Document`` is a subclass of ``DOMDocument``, all
-methods accepting a ``DOMDocument`` also accept a ``DOMHTML5Document``.
-These functions can transparently work on HTML5 documents. If you want
-to restrict your code to only accept HTML5 documents, you can use the
-more stricter ``DOMHTML5Document`` type hint.
+       /** @return list<NamespaceInfo> */
+       public function getDescendantNamespaces(): array {}
 
-However, what if you're using a library that returns a (non-HTML5)
-``DOMDocument`` but you'd like a ``DOMHTML5Document`` (or vice versa)?
-You can solve this issue by using the ``DOMDocument::importNode`` or
-``DOMDocument::adoptNode`` methods.
+       public function rename(?string $namespace, string $qualifiedName): void {}
+     }
+   }
 
-Parsing benchmarks
-~~~~~~~~~~~~~~~~~~
+Let's go over them one by one.
 
-You might wonder about the performance impact of the tree conversion. In
-particular, how does the performance of ``DOMHTML5Document::loadHTML``
-compare with the performance of ``DOMDocument::loadHTML()``? Note that
-the latter method doesn't follow the HTML5 rules, but it does give an
-indication about the performance.
+NamespaceInfo
+^^^^^^^^^^^^^
 
-Experimental setup
-^^^^^^^^^^^^^^^^^^
+This class is the modern replacement of the ``DOMNamespaceNode`` class.
+``DOMNamespaceNode`` is misdesigned in that it tries to be a Node, but
+it actually isn't a node because it's not in the tree. For example, in
+"old DOM", when using ``getAttributeNode("xmlns")`` it may return a
+``DOMNamespaceNode`` for the namespace declaration even though there's
+not necessarily such an attribute. The other way you could obtain a
+``DOMNamespaceNode`` instance is via XPath by using the ``namespace::*``
+axis.
 
-I downloaded the homepages of the top 50 websites (excluding blank pages
-and NSFW pages) as listed according to
-`similarweb <https://www.similarweb.com/top-websites/>`__. This means 43
-websites remain: 6 NSFW sites, and one blank page (microsoftonline.com)
-were removed. I created a PHP script that invokes each parser 300 times.
-I ran the experiment on an i7-4790 with 16GiB RAM.
+The reason we have the ``DOMNamespaceNode`` instance returned for XPath
+is because of some peculiar rules laid out by
+https://www.w3.org/TR/1999/REC-xpath-19991116/#namespace-nodes. In
+particular, the namespace axis needs to return all in-scope namespaces
+for an element. However that spec link *also* states:
 
-Results
-^^^^^^^
+    Elements never share namespace nodes: if one element node is not the
+    same node as another element node, then none of the namespace nodes
+    of the one element node will be the same node as the namespace nodes
+    of another element node.
 
-The following graph shows the results. The blue bar shows the parse time
-in seconds for ``DOMDocument``, and the orange bar does so for
-``DOMHTML5Document``. Lower is better. The black vertical line indicates
-the minimum & maximum measured times for each bar. First of all, some
-measurements on the far left are very low. That's because those sites
-primarily generate their content using JavaScript. Hence, there are not
-many HTML nodes in the document. Some sites also show a geo-blocked
-page, so these pages are rather simple and will be parsed quickly.
-Second, we can see that ``DOMHTML5Document`` is usually on par or faster
-than ``DOMDocument``'s parser, despite having to do a conversion. For
-very short documents, the HTML5 parser can be a little bit slower
-because of the larger startup overhead.
+So we can't return the attribute node corresponding to the namespace
+declaration (if there even is one) because we'd have to return the
+*same* attribute node for *different* elements. Hence, the
+``DOMNamespaceNode`` is returned in "old DOM". However, implementing
+this in "new DOM" is a problem because we'd be returning something from
+an XPath query that *isn't* a node. This is confusing for users and also
+for static analysis tools.
 
-Based on this limited experiment, I conclude that the performance is
-acceptable.
+Because these APIs are also implemented by browsers, it's worth looking
+at how they solve this problem and what the spec says. Turns out this is
+all undocumented in the spec, and browsers don't implement the namespace
+axis at all.
 
-.. image:: /rfc/domdocument_html5_parser/bench.png
-   :width: 400px
+I propose to add two methods to "new DOM" that replace the namespace
+axis functionality: ``getInScopeNamespaces`` that replaces
+``./namespace::*`` and ``getDescendantNamespaces`` that replaces
+``./​/namespace::*``. When users would try to query namespace nodes from
+the namespace axis in ``Dom\XPath``, we'll throw a DOMException with
+``$code`` DOM_NOT_SUPPORTED_ERR, redirecting users to use one of these
+two methods.
 
-Impact on binary size
-~~~~~~~~~~~~~~~~~~~~~
+To identify a namespace we only need to know the prefix, the uri, and
+the element it is scoped upon. Therefore, it has these three fields. It
+can only be constructed by the DOM extension, not by users. No
+node-specific properties will be implemented in ``NamespaceInfo``.
 
-Incorporating any library will increase the binary size of the DOM
-extension. The Lexbor library is fairly big. The reality is however that
-a lot of the library is not actually used. Diving into each source file
-and ripping out functions that are not used is time-consuming and
-difficult however. Furthermore, this would make syncing upstream changes
-also more difficult.
+The main advantages are:
 
-Inspecting the dom.so shared library using the size command yields the
-following results:
+-  The guarantee that XPath queries for nodes will always return nodes
+-  Better static analysis results
+-  Less confusion for users
 
-================= =========== =========== ===========
-before/after      text        data        total
-================= =========== =========== ===========
-before this patch 174.78 KiB  15.18 KiB   192.24 KiB
-after this patch  5347.72 KiB 2012.19 KiB 7362.44 KiB
-================= =========== =========== ===========
+.. _examples-2:
 
-The large data section is due to the large lookup tables for text
-encoding handling: Lexbor supports a lot of text encodings. The HTML5
-parser spec requires quite a few character encodings to be supported by
-a compliant parser. This also has some influence on the text section,
-but another big part of it is simply all the parsing logic.
+Examples
+''''''''
 
-Completely alternative solution
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
 
-This section will list alternative solutions that I considered, but
-rejected.
+   $dom = Dom\XMLDocument::createFromString(<<<XML
+   <root xmlns="urn:a">
+       <b:sibling xmlns:b="urn:b" xmlns:d="urn:d" d:foo="bar">
+           <d:child xmlns:d="urn:d2"/>
+       </b:sibling>
+   </root>
+   XML);
 
-Alternative DOM extension
-^^^^^^^^^^^^^^^^^^^^^^^^^
+   $sibling = $dom->documentElement->firstElementChild;
+   var_dump($sibling->getInScopeNamespaces());
+   var_dump($sibling->getDescendantNamespaces());
 
-One might wonder why we don't just create an entirely new DOM extension,
-based on another library, with HTML5 support. There are a couple of
-reasons:
+**Example: getInscopeNamespaces() output**
 
-#. Interoperability problems with other extensions (both within php-src
-   and third-party).
-#. Fragmentation of userland.
-#. Additional maintenance work and complexity.
-#. I don't have time to do build this.
+::
+
+   array(3) {
+     [0]=>
+     object(Dom\NamespaceInfo)#2 (3) {
+       ["prefix"]=>
+       NULL
+       ["namespaceURI"]=>
+       string(5) "urn:a"
+       ["element"]=> ... (<b:sibling>)
+     }
+     [1]=>
+     object(Dom\NamespaceInfo)#4 (3) {
+       ["prefix"]=>
+       string(1) "b"
+       ["namespaceURI"]=>
+       string(5) "urn:b"
+       ["element"]=> ... (<b:sibling>)
+     }
+     [2]=>
+     object(Dom\NamespaceInfo)#5 (3) {
+       ["prefix"]=>
+       string(1) "d"
+       ["namespaceURI"]=>
+       string(5) "urn:d"
+       ["element"]=> ... (<b:sibling>)
+     }
+   }
+
+**Example: getInscopeNamespaces() output**
+
+::
+
+   array(6) {
+     [0]=>
+     object(Dom\NamespaceInfo)#5 (3) {
+       ["prefix"]=>
+       NULL
+       ["namespaceURI"]=>
+       string(5) "urn:a"
+       ["element"]=> ... (<b:sibling>)
+     }
+     [1]=>
+     object(Dom\NamespaceInfo)#4 (3) {
+       ["prefix"]=>
+       string(1) "b"
+       ["namespaceURI"]=>
+       string(5) "urn:b"
+       ["element"]=> ... (<b:sibling>)
+     }
+     [2]=>
+     object(Dom\NamespaceInfo)#2 (3) {
+       ["prefix"]=>
+       string(1) "d"
+       ["namespaceURI"]=>
+       string(5) "urn:d"
+       ["element"]=> ... (<b:sibling>)
+     }
+     [3]=>
+     object(Dom\NamespaceInfo)#6 (3) {
+       ["prefix"]=>
+       NULL
+       ["namespaceURI"]=>
+       string(5) "urn:a"
+       ["element"]=> ... (<d:child>)
+     }
+     [4]=>
+     object(Dom\NamespaceInfo)#8 (3) {
+       ["prefix"]=>
+       string(1) "b"
+       ["namespaceURI"]=>
+       string(5) "urn:b"
+       ["element"]=> ... (<d:child>)
+     }
+     [5]=>
+     object(Dom\NamespaceInfo)#9 (3) {
+       ["prefix"]=>
+       string(1) "d"
+       ["namespaceURI"]=>
+       string(6) "urn:d2"
+       ["element"]=> ... (<d:child>)
+     }
+   }
+
+$substitutedNodeValue
+^^^^^^^^^^^^^^^^^^^^^
+
+In "old DOM", the ``$nodeValue`` property performed entity substitution,
+which goes against the spec and can cause `security
+issues <https://github.com/php/php-src/issues/8388>`__. In "new DOM",
+``$nodeValue`` does not substitute entities (as intended by spec).
+However, that means we can no longer substitute entities *on purpose*.
+This isn't the most common use-case, but is sometimes necessary when
+dealing with XML *that you trust*. The ``$substitutedNodeValue``
+property will be the node's value, but with entity substitution
+explicitly enabled.
+
+.. _examples-3:
+
+Examples
+''''''''
+
+**Example 1: Setting the substituted value to a built-in entity**
+
+.. code:: php
+
+   $dom = Dom\XMLDocument::createFromString('<root/>');
+   $root = $dom->documentElement;
+
+   $root->substitutedNodeValue = "&amp;";
+
+   var_dump($root->textContent); // string(1) "&"
+
+   // Note: this will escape the entity in accordance to the XML serialization rules
+   echo $dom->saveXml(); // <root>&amp;</root>
+
+rename method
+^^^^^^^^^^^^^
+
+This is only partially PHP-specific. This method did kind of exist in
+`DOM Core Level
+3 <https://www.w3.org/TR/2004/REC-DOM-Level-3-Core-20040407/>`__, but
+was never implemented in PHP. It doesn't exist anymore in the living
+standard: the authors removed it to simplify the API and I think also
+because the DOM spec is more HTML-centric nowadays than XML-centric. We
+propose something very similar to what once existed in spec, but
+slightly improved.
+
+Sometimes it's necessary to either change a namespace prefix for an
+element/attribute, change an element/attribute's name, or change its
+namespace URI. This use-case occurs when combining different documents,
+or fixing up documents, like for example with userland SOAP
+implementations. You can *kinda* do this today by recreating the entire
+subtree under an element with the new name, prefix, and namespace; but
+this is extremely annoying and difficult to get right. This approach
+also won't work if you have references to the same Element instance as
+now one piece of code is working on a new node while other pieces of
+code work on the old node.
+
+It turns out that changing these properties is actually super easy to do
+internally, so it makes sense to just expose this functionality to the
+user.
+
+You'll see that the rename method follows the same signature as the
+``createElementNS`` method, and it also performs the same
+namespace-related sanity checks. These sanity checks ensure that the
+namespace-related rules are satisfied, and if they're not, the method
+will throw a ``NAMESPACE_ERR`` (or ``INVALID_CHARACTER_ERR``) type of
+``DOMException``.
+
+.. code:: php
+
+   public function createElementNS(?string $namespace, string $qualifiedName): Element {} // in Dom\Document
+   public function rename(?string $namespace, string $qualifiedName): void {} // In Dom\Element and Dom\Attr
+
+The first argument of the rename method allows you to change the
+namespace URI of the element/attribute, while the second one allows you
+to change the qualified name. The qualified name is the combination of
+the prefix and local name; or just the local name if there is no prefix.
+You may be wondering: "why not split this method up into multiple
+different methods?". The answer is that it's not possible to do: the
+namespace you choose has implications on what qualified names are
+allowed. Therefore, in some cases you have to change these two at the
+*same time*. It is of course possible to just change one of the two
+while keeping the other intact, but that must happen in accordance to
+the namespace-related rules.
+
+We have previously seen how elements in the HTML namespace will create
+an instance of ``HTMLElement`` instead of ``Element``. This imposes a
+restriction on the rename API because otherwise it becomes possible to
+create Elements in the HTML namespace or HTMLElements not in the HTML
+namespace. Therefore, if the element is in the HTML namespace, it must
+remain in that namespace; and if it's not in the HTML namespace, it may
+not enter the HTML namespace. If you try to do this, a DOMException with
+``$code`` DOM_INVALID_MODIFICATION_ERR will be thrown.
+
+.. _examples-4:
+
+Examples
+''''''''
+
+**Example 1: Basic operation on an element**
+
+.. code:: php
+
+   $dom = Dom\XMLDocument::createFromString('<root/>');
+   $root = $dom->documentElement;
+   $root->rename(NULL, 'document');
+
+   echo $dom->saveXml(); // <document/>
+
+   $root->rename('urn:test', 'document');
+
+   echo $root->namespaceURI; // urn:test
+   var_dump($root->prefix); // NULL
+   echo $dom->saveXml(); // <document xmlns="urn:test"/>
+
+   $root->rename('urn:test', 'prefix:document');
+
+   echo $root->namespaceURI; // urn:test
+   var_dump($root->prefix); // prefix
+   echo $dom->saveXml(); // <prefix:document xmlns:prefix="urn:test"/>
+
+**Example 2: Changing an HTML element's name**
+
+.. code:: php
+
+   $dom = Dom\HTMLDocument::createFromString('<p>hello</p>', LIBXML_NOERROR);
+   $p = $dom->getElementsByTagName('p')[0];
+
+   $p->rename($p->namespaceURI, 'span');
+
+   echo $dom->saveHTML(); // <html><head></head><body><span>hello</span></body></html>
+
+**Example 3: Changing an attribute's name**
+
+.. code:: php
+
+   $dom = Dom\HTMLDocument::createFromString('<p align="center"></p>', LIBXML_NOERROR);
+   $p = $dom->getElementsByTagName('p')[0];
+   $attr = $p->getAttributeNode('align');
+
+   $attr->rename($attr->namespaceURI, 'title');
+
+   echo $dom->saveHTML(); // <html><head></head><body><p title="center"></p></body></html>
+
+**Example 4: Changing an element's prefix, keeping the rest intact
+(special-case example)**
+
+.. code:: php
+
+   $dom = Dom\XMLDocument::createFromString('<prefix:root xmlns:prefix="urn:x"/>');
+   $root = $dom->documentElement;
+   $root->rename($root->namespaceURI, 'foo:' . $root->localName);
+
+   // Prefix changed, but not in serialization due to the namespace urn:x being bound to "prefix" by the attribute
+   var_dump($root->prefix); // string(3) "foo"
+   echo $dom->saveXML(); // <prefix:root xmlns:prefix="urn:x"/>
+
+   // We fix this by either renaming the attribute or removing it
+   $root->removeAttribute('xmlns:prefix');
+   echo $dom->saveXML(); // <foo:root xmlns:foo="urn:x"/>
+
+Allowing PHP-specific developer experience improvements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+DOM functions like
+``Element::insertAdjacentElement(string $where, Element $element)`` and
+``Element::insertAdjacentText(string $where, string $data)`` have a
+first "where" argument. There are only four valid values for "where":
+"beforebegin", "afterbegin", "beforeend", "afterend". So that's actually
+an enum in disguise. I propose to make use of the PHP enum feature. This
+would prevent programming mistakes and make IDE hints much nicer,
+contributing to a better developer experience. Strictly speaking, this
+deviates from the DOM spec, but we already model the DOM classes in a
+way that fits PHP's OOP model anyway. In fact, I'd propose to allow the
+use of enums where it makes sense in the extension for new APIs. Since
+the Element class didn't exist prior to the opt-in spec compliance RFC,
+we can change the signature without affecting users as no releases of
+PHP 8.4 have been made so far.
+
+In particular, this will result in the following enum and function
+signatures:
+
+.. code:: php
+
+   namespace Dom {
+     enum AdjacentPosition : string {
+       case BeforeBegin = "beforebegin";
+       case AfterBegin = "afterbegin";
+       case BeforeEnd = "beforeend";
+       case AfterEnd = "afterend";
+     }
+
+     class Element /* ... */ {
+       public function insertAdjacentElement(AdjacentPosition $where, Element $element): ?Element {}
+       public function insertAdjacentText(AdjacentPosition $where, string $data): void {}
+     }
+   }
+
+The ``AdjacentPosition`` enum is backed such that the literal values
+from the DOM spec can still be used by using
+``AdjacentPosition::from("beforebegin")`` etc.
+
+API amendments
+~~~~~~~~~~~~~~
+
+Initially, the `DOM spec-compliance
+RFC </rfc/opt_in_dom_spec_compliance>`__ copied the existing APIs from
+the old DOM classes without a deviation for most APIs. Someone reported
+that the ``(DOM)Document::xinclude()`` has weird return value behaviour.
+In particular, quoting from the documentation:     Returns the number of XIncludes in the document, -1 if some
+    processing failed, or false if there were no substitutions. This seems to be
+caused by an implementation mistake. The more sensical behaviour would
+be to throw on failure (to avoid 0/false confusion), and return the
+number of substitutions on success. If there were no substitutions the
+number 0 should be returned.
+
+The new signature of this function would look like this:
+
+.. code:: php
+
+   final class XMLDocument extends Document {
+     public function xinclude(int $options = 0): int {}
+   }
+
+The exception thrown will be DOMException with ``$code`` set to
+INVALID_MODIFICATION_ERR.
 
 Backward Incompatible Changes
 -----------------------------
 
-This RFC adds two new methods, but the existing methods for loading
-HTML4 documents remain as-is. Therefore, this feature is purely opt-in,
-and there is no BC break.
+None because this RFC only affects classes added in 8.4.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x. At the time of writing this is PHP 8.4.
+PHP 8.4.
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-None.
-
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Only ext/dom is affected.
-
-To Opcache
-~~~~~~~~~~
-
-No impact.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
+Only ext-dom is affected.
 
 Open Issues
 -----------
@@ -457,46 +751,51 @@ None yet.
 Unaffected PHP Functionality
 ----------------------------
 
-Everything outside of ext/dom is unaffected.
+Everything outside ext-dom.
 
 Future Scope
 ------------
 
-This section details areas where the feature might be improved in
-future, but that are not currently proposed in this RFC.
+I initially planned on including the outerHTML property too. This is
+very feasible with all the internal DOM work that happened during the
+PHP 8.4 development cycle. However, given that I haven't seen demand for
+this, I think my time is better spent with other features. If someone
+really wants this in 8.4, feel free to make a PoC implementation, should
+be fairly doable using Lexbor and the current ext-dom internal APIs.
 
-The Lexbor library also includes functionality outside of HTML parsing
-that we do not use right now.
-
-#. It contains a CSS selector parser, that transforms the expression
-   into a list of actions we must follow to find the elements. This
-   *could* make implementing querySelector(All) more easy.
-#. It contains a WHATWG-compliant URL parser, which might be useful for
-   extending PHP's URL pasing capabilities.
-#. There are more performance optimization opportunities.
+The ``HTMLElement`` class can offer some useful properties but that's
+left out of here because no one really asked for that feature so far, so
+development time is better spent elsewhere.
 
 Proposed Voting Choices
 -----------------------
 
-There are two votes:
+One primary yes/no vote with 2/3 majority to accept this proposal as a
+whole.
 
-#. Whether ``DOMHTML5Document`` should be introduced. This requires 2/3
-   majority.
-#. Whether ``DOMHTML5Document::loadHTMLFile`` should respect the
-   resolver set by ``libxml_set_external_entity_loader``. This requires
-   50% majority.
+Voting started on 2024-06-10 and will end on 2024-06-24.
+
+Question: Accept PHP 8.4 DOM additions RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-#. Pull request: https://github.com/nielsdos/php-src/pull/32 (TODO: move
-   this to php-src)
-#. Try it out yourself:
-   https://gist.github.com/nielsdos/139099c54ddc4a43bc66f4c0b7ef02fc
-
-This does not yet include the external entity loader support. I want to
-wait until we have the results of the secondary vote before I spend time
-coding this part.
+#. CSS selector implementation:
+   https://github.com/php/php-src/pull/13819
+#. innerHTML implementation:
+   https://github.com/nielsdos/php-src/pull/104
+#. TokenList implementation: https://github.com/php/php-src/pull/13664
+#. HTMLDocument properties implementation:
+   https://github.com/php/php-src/pull/13791
+#. PHP-specific extensions implementation:
+   https://github.com/nielsdos/php-src/pull/93
 
 Implementation
 --------------
@@ -511,16 +810,29 @@ After the project is implemented, this section should contain
 References
 ----------
 
-None yet.
+#. innerHTML error handling: https://externals.io/message/123224
+#. DOM spec: https://dom.spec.whatwg.org/
+#. HTML spec that defines DOM addendums: https://html.spec.whatwg.org
+#. Old feature request for getting in scope namespaces:
+   https://bugs.php.net/bug.php?id=63410
+#. Feature request for TokenList:
+   https://github.com/php/php-src/issues/11688
+#. Discussion (externals.io): https://externals.io/message/123405
 
-Rejected Features
------------------
+Changelog
+---------
 
-None yet.
+-  0.1: First version put under discussion and voting
+
+Acknowledgements
+----------------
+
+I'd like to thank `Toon Verwerft <https://github.com/veewee/>`__ for his
+feedback and early testing.
 
 Additional Metadata
 -------------------
 
 :Original Authors: Niels Dossche, nielsdos@php.net
-:Slug: domdocument_html5_parser
-:Wiki URL: https://wiki.php.net/rfc/domdocument_html5_parser
+:Slug: dom_additions_84
+:Wiki URL: https://wiki.php.net/rfc/dom_additions_84
