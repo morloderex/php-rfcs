@@ -22,7 +22,7 @@ Unless specified otherwise, this RFC will refer to "virtual proxies" and "state-
 
 ===== Implementation =====
 
-Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed. This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. No performance overhead is thus added to non-lazy use cases. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
+Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed (dynamic or declared ones). This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. No performance overhead is thus added to non-lazy use cases. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
 
 A lazy object can be created via the Reflection API, with the user specifying an initializer function that is called when initialization is required.
 
@@ -151,6 +151,8 @@ $reflector->getProperty('id')->setRawValueWithoutLazyInitialization($post, 123);
 
 The <php>skipLazyInitialization()</php> / <php>setRawValueWithoutLazyInitialization()</php> methods provide ways to disable lazy-initialization when a property is accessed, allowing users to choose the approach that best fits their design.
 
+Dynamic properties trigger like declared properties. They cannot be skipped using <php>skipLazyInitialization()</php>, but they can be set using <php>setRawValueWithoutLazyInitialization()</php>.
+
 ==== Lifecycle of Lazy Objects ====
 
 An object is considered lazy if any of its properties are still hooked to the initializer passed to the <php>newLazy*()</php> and <php>resetAsLazy*()</php> methods that made it lazy.
@@ -200,7 +202,7 @@ After initialization, the object is indistinguishable from an object that was ne
 
 === Proxy Objects ===
 
-  - Before calling the initializer, the object is marked as non-lazy.
+  - Before calling the initializer, the object is marked as non-lazy by detaching it from its initializer. Unlike ghost objects, skipped properties are not set to their default value as this would cost some CPU cycles for no practical reasons.
   - The initializer is called with the lazy proxy as first parameter.
   - The return value of the initializer has to be an instance of a parent of or the same class as the lazy-object. If the lazy-object is child class of the returned instance, it can declare additionnal properties but those must be skipped or set before with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>. If any of those condition is not true, a <php>TypeError</php> is thrown.
   - The real instance is set to the return value.
@@ -538,7 +540,7 @@ var_dump($b->prop); // int(2)
 
 It follows that the observable value of a readonly property can change unless the class is final.
 
-We preserve these semantics by never changing or unsetting a readonly property in the <php>makeInstanceLazy*()</php> methods, if the property is initialized (on the object itself or the real instance, for initialized proxies) and the class is final. Calling <php>resetAsLazy*()</php> on a class with such property will skip these properties as if they were flagged with the <php>skipInitialization()</php> method. Trying to set those properties in the initializer will throw the usual Error "Cannot modify readonly property".
+We preserve these semantics by never changing or unsetting a readonly property in the <php>resetAsLazy*()</php> methods, if the property is initialized (on the object itself or the real instance, for initialized proxies) and the class is final. Calling <php>resetAsLazy*()</php> on a class with such property will skip these properties as if they were flagged with the <php>skipInitialization()</php> method. Trying to set those properties in the initializer will throw the usual Error "Cannot modify readonly property".
 
 ==== Destructors ====
 
