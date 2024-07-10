@@ -7,13 +7,11 @@
 
 ===== Introduction =====
 
-While finalizing the implementation of the [[rfc:property-hooks|property hooks RFC]] patch, we have found a few small areas for improvement.  These are nominally changes from the behavior defined in the original RFC, and thus we want to refer them through the RFC process.
+While finalizing the implementation of the [[rfc:property-hooks|property hooks RFC]] patch, we have found a small area for improvement.  This is nominally changes from the behavior defined in the original RFC, and thus we want to refer them through the RFC process.
 
 ===== Proposal =====
 
-There are two improvements we propose.
-
-==== Remove the proactive guard against recursive backing value access ====
+There is one improvement we propose.
 
 As defined in the original RFC, the following code would have been detected and throw a dedicated error.
 
@@ -42,61 +40,6 @@ A side effect of that optimization, however, is that we cannot proactively detec
 
 We consider the slightly worse error handling fully justified by the performance improvement, and by the fact that the code above is a bug no matter what (it's just a question of when the bug gets reported).  But as it is a change from the behavior stated in the previous RFC, we are putting it out for consideration.
 
-==== Partial support for readonly properties ====
-
-Support for hooks on ''readonly'' properties was omitted from the original RFC, primarily to minimize complexity as there were questions around when it was safe to do.  On further consideration, we believe that hooks on backed properties are sufficiently safe to support readonly, but not on virtual properties.
-
-We therefore propose to allow both ''get'' and ''set'' hooks on ''readonly'' properties, if and only if it is a backed property.
-
-The main concern is that readonly implies a property is immutable and idempotent.  However, a ''get'' hook supports arbitrary code, so technically a developer could do something silly like:
-
-<code php>
-class Dumb
-{
-    public readonly int $value { get => $this->value * random_int(1, 100); }
-}
-</code>
-
-On the other hand, there is no shortage of dumb things that people can do with PHP already.  The exact same silliness could be implemented using <php>__get</php>, for instance.  However, there are valid uses for a readonly get hook, especially for ORMs and proxies.  For example:
-
-<code php>
-readonly class ProductFromDB
-{
-    public string $id;
-    
-    public function __construct(
-        public string $name,
-        public float $price,
-        public Category $category,
-    ) {}
-}
-
-// Generated code.
-readonly class LazyProduct
-{
-    // Assigned via reflection or a closure.
-    private DbConnection $dbApi;
-    
-    // Assigned via reflection or a closure.
-    private string $categoryId;
-
-    public Category $category {
-        get {
-            $this->category ??= $this->dbApi->loadCategory($this->categoryId);
-        }
-    }
-}
-</code>
-
-That is, we feel, an entirely reasonable use of hooks, and would allow for lazy-load behavior per-property on readonly classes.
-
-This is subtly different from the Lazy Proxy RFC, which operates on the whole object at once.  We believe both use cases are valuable and should be supported.
-
-A ''set'' hook, meanwhile, offers no issue for a backed readonly property.  As long as it is backed we are able to determine if it is still uninitialized, and so a second set call would correctly fail as it should.
-
-At this time, Ilija is still investigating whether it is more sensible to put the uninitialized check on the wrapping property, when visibility is checked, or only on the backing property, so the error would be thrown from within the hook body.  In practice it will not make much difference to the developer, so we consider either case acceptable depending on what ends up being easier to do.
-
-On balance, we believe the advantages and use cases for a lazy readonly property outweigh the potential for developers to do silly things.  For that reason, we propose to allow both get and set hooks on backed readonly properties.
 
 ===== Backward Incompatible Changes =====
 
@@ -111,17 +54,8 @@ PHP 8.4.
 
 ===== Proposed Voting Choices =====
 
-There will be two independent primary votes, one for each of the improvements suggested above.  Please vote for each separately.
-
 
 <doodle title="Remove the extra hook recursion guard?" auth="crell" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-------
-
-<doodle title="Permit hooks on backed readonly properties?" auth="crell" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
