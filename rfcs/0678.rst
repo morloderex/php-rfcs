@@ -94,7 +94,6 @@ is some non-trivial behavior to consider:
    preserve proper identity for object keys, while retaining backwards
    compatibility with the existing format, we need to count object keys
    only for back references.
--  ...
 
 Backward Incompatible Changes
 -----------------------------
@@ -152,32 +151,21 @@ The key zval may have type ``IS_LONG``, ``IS_STRING`` or ``IS_OBJECT``.
 During bucket lookups, object keys can be mostly treated the same way as
 integer keys, because comparison of objects only requires comparison of
 the object pointers. The hash value for object keys is the object
-pointer shifted right by the minimum object alignment. The hash is
-computed by ``zend_hash_obj_key()``.
+pointer shifted right by the minimum object alignment.
 
-A number of new hash APIs for working with object keys is added:
-
-.. code:: c
-
-   ZEND_API zval* ZEND_FASTCALL zend_hash_obj_key_add(HashTable *ht, zend_object *obj_key, zval *val);
-   ZEND_API zval* ZEND_FASTCALL zend_hash_obj_key_add_new(HashTable *ht, zend_object *obj_key, zval *val);
-   ZEND_API zval* ZEND_FASTCALL zend_hash_obj_key_update(HashTable *ht, zend_object *obj_key, zval *val);
-   ZEND_API zend_result ZEND_FASTCALL zend_hash_obj_key_del(HashTable *ht, zend_object *obj_key);
-   ZEND_API zval* ZEND_FASTCALL zend_hash_obj_key_find(const HashTable *ht, zend_object *obj_key);
-
-However, the majority of internal code will never use these APIs
-directly. They only need to be used when working with object keys
-specifically.
-
-Instead, a new ``zkey`` family of hash functions and macros is added,
-which allows working with hash table keys in a more generic manner.
+In order to support object keys (and potentially other key types in the
+future), a new ``zkey`` family of hash functions and macros is added.
 ``zkey`` functions accept a zval key, which must be of type ``IS_LONG``,
-``IS_STRING`` or ``IS_OBJECT``.
+``IS_STRING`` or ``IS_OBJECT``. The u2 value of the zval must already be
+initialized to contain the key hash. These functions are primarily used
+when taking a key from an existing array, in which case this initialized
+is already given.
 
-The following new functions are added:
+A non-exhaustive list of new functions:
 
 .. code:: c
 
+   // This omits various _ind, _ptr, etc variants.
    ZEND_API zval* ZEND_FASTCALL zend_hash_zkey_add_or_update(HashTable *ht, zval *key, zval *val, uint32_t flag);
    ZEND_API zval* ZEND_FASTCALL zend_hash_zkey_update(HashTable *ht, zval *key, zval *val);
    ZEND_API zval* ZEND_FASTCALL zend_hash_zkey_add(HashTable *ht, zval *key, zval *val);
@@ -185,9 +173,11 @@ The following new functions are added:
    ZEND_API zend_result ZEND_FASTCALL zend_hash_zkey_del(HashTable *ht, zval *key);
    ZEND_API zval* ZEND_FASTCALL zend_hash_zkey_find(const HashTable *ht, zval *key);
    static zend_always_inline zend_bool zend_hash_zkey_exists(const HashTable *ht, zval *key);
-
-   // This is a low-level API that requires the hash value in u2 to be initialized.
    static zend_always_inline zval *_zend_hash_zkey_append(HashTable *ht, zval *key, zval *zv);
+
+**TODO**: It's not clear yet how to handle the case where now u2
+initialization is given. Should there be additional functions for that
+case, or a function to handle the initialization up-front?
 
 Similarly, ``ZKEY`` variants of ``ZEND_HASH_FOREACH`` macros are
 introduced:
@@ -269,7 +259,7 @@ Yes/No.
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/6588
+:Implementation: TBD
 :Original Authors: Nikita Popov nikic@php.net
 :Original PHP Version: PHP 8.1
 :Slug: object_keys_in_arrays
