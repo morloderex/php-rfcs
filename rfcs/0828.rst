@@ -1,581 +1,1322 @@
-New Core Autoloading Mechanism With Support For Function Autoloading
-====================================================================
+Improve Language Coherence For The Behaviour Of Offsets And Containers
+======================================================================
 
 :PHP-RFC: 0828
-:Title: New Core Autoloading Mechanism With Support For Function Autoloading
-:Author: George Peter Banyard <girgias@php.net>, Dan Ackroyd <danack@basereality.com>
+:Title: Improve Language Coherence For The Behaviour Of Offsets And Containers
+:Author: Gina Peter Banyard <girgias@php.net>
 :Status: Draft
 :Type: Standards Track
-:Created: 2023-04-03
-:PHP-Version: 8.3
-:Version: 0.1
+:Created: 2023-12-07
+:PHP-Version: 8.4
+:Version: 0.2
 
 Introduction
 ------------
 
-PHP has had support for class autoloading since PHP 5 and it is an
-extremely useful feature that is relied on to only load classes that are
-being used within the current request. However, the current autoloading
-mechanism does not support autoloading functions.
-
-The need for such a feature seems very clear as users will create
-"helper" classes with static methods to take advantage of autoloading
-via the class autoloading mechanism.
-
-A previous `draft RFC for function
-autoloading <https://wiki.php.net/rfc/function_autoloading>`__ did not
-proceed to a vote, due to concerns on a performance hit related to
-global functions. This RFC has avoided that performance problem.
-
-This RFC proposes the introduction of autoloading for functions and an
-updated mechanism for classes which addresses some minor design issues
-with the current SPL design.
-
-Proposal
---------
-
-The proposal consists of adding a better designed class autoloading
-mechanism and a new function autoloading mechanism, and aliasing the
-existing autoload functions to the new versions.
+PHP supports accessing sub-elements of a type via an offset using
+brackets ``[]`` with the following notation ``$container[$offset]``.
+However, the behaviour of such accesses depends not only on the type of
+the container and that of the offset, but also on the operation that is
+being performed while accessing the offset. The existing behaviour is
+highly inconsistent and difficult to anticipate.
+
+The objectives of this RFC is to showcase the current complicated
+behaviour. Present behaviour that we deem to be coherent and easy to
+reason about. And a path to go from the existing behaviour to the
+desired target behaviour.
+
+To explain the current language semantics we will describe and explain
+the different:
+
+-  Operations relating to containers and offsets
+-  Types that can be used as offsets
+-  Types that can be used as containers
+
+Operations
+~~~~~~~~~~
+
+We consider there to be nine (9) different operations that relate to
+containers and offsets, which are the following:
+
+-  Read
+-  Write
+-  Read-Write
+-  Appending, via the ``$container[] = $value`` syntax
+-  Unsetting
+-  Existence checks via ``isset()`` and/or ``empty()``
+-  Existence checks via the null coalesce operator ``??``
+-  Fetch
+-  Fetch-Append
+
+The read, write, read-write, appending, and unsetting operations are
+what one would expect.
+
+We split the existence check operation into two distinct sub-operations
+as the behaviour between ``isset()``/``empty()`` and the null coalesce
+operator ``??`` is sometimes different.
+
+A fetch operation occurs when reference to the offset must be acquired,
+be that explicitly when taking a reference (e.g.
+``$r = &$container[$offset]``), or when writing/appending/unsetting to
+sub-dimensions (e.g. ``$container[$offset1][$offset2] = $value`` the
+first offset ``$container[$offset1]`` will be accessed via a fetch
+operation).
+
+The peculiar fetch-append operation happens when retrieving a reference
+of an append operation. For example ``$r = &$container[];``, or a more
+common use ``$container[][$offset] = $value``.
+
+In general, a nested operation will perform all the necessary fetch/read
+operations, interpreting the returned value as a container, until it
+reaches the final dimension.
+
+Container types
+~~~~~~~~~~~~~~~
+
+We consider there to exist thirteen (13) different types of containers:
+
+-  ``null``
+-  ``false``
+-  ``true``
+-  ``bool``
+-  ``int``
+-  ``float``
+-  ``resource``
+-  ``string``
+-  ``array``
+-  Userland objects that do *not* implement ``ArrayAccess``
+-  Userland objects that implement ``ArrayAccess``
+-  Internal objects that override none of the following object handlers:
+   ``read_dimension``, ``write_dimension``, ``has_dimension``, and
+   ``unset_dimension``
+-  Internal objects that override at least one, but not all the
+   following object handlers: ``read_dimension``, ``write_dimension``,
+   ``has_dimension``, or ``unset_dimension``
+-  Internal objects that override all the following object handlers:
+   ``read_dimension``, ``write_dimension``, ``has_dimension``, and
+   ``unset_dimension``
+-  ``ArrayObject`` as its behaviour is rather peculiar
+
+We consider ``false`` and ``true`` to be different container types, as
+``false`` supports auto-vivification.
+
+Offset types
+~~~~~~~~~~~~
+
+Finally, we consider there to exist the standard eight (8) built-in
+types in PHP for offsets, namely:
+
+-  ``null``
+-  ``bool``
+-  ``int``
+-  ``float``
+-  ``resource``
+-  ``string``
+-  ``array``
+-  ``object``
 
-The proposal does *not* include a default implementation for either the
-class or the function autoloading mechanism.
+Note: the behaviour of integer strings used as offsets for arrays being
+automatically converted to ``int`` is out of scope for this RFC. Meaning
+the behaviour of the string ``"15"`` being cast to the integer ``15``
+when used as an ``array`` offset will not change.
 
-New autoloading API
-~~~~~~~~~~~~~~~~~~~
+Current behaviour
+-----------------
 
-Classes
-^^^^^^^
-
-The API related to class autoloading is mostly identical to the existing
-SPL design with some minor design issues addressed. It introduces the
-following functions:
+Considering the large possible combination of containers, offsets, and
+operations; we will start by grouping related container types together,
+and then detail the behaviour depending on the offset type or the
+operation, which ever is clearer.
 
--  ``autoload_register_class(callable $callback, bool $prepend = false): void``
--  ``autoload_unregister_class(callable $callback): bool`` for which
-   ``spl_autoload_unregister()`` is an alias
--  ``autoload_call_class(string $class): void`` for which
-   ``spl_autoload_call()`` is an alias
--  ``autoload_list_class(): iterable`` for which
-   ``spl_autoload_functions()`` is an alias
-
-The ``spl_autoload_register()`` does not become an alias for
-``autoload_register_class()`` to preserve BC by continuing to return
-``true``, allowing it to register the default SPL autoloader, and
-accepting the ignored second parameter, but they are both forwarded to
-an identical internal implementation.
-
-The ``autoload_list_class()`` has a formal type of ``iterable`` but
-continues to return an array for the time being.
-
-Secondly, the behaviour to pass
-``autoload_call_class()``/``spl_autoload_call()`` to
-``autoload_unregister_class()`` as a magic value to empty the autoloader
-list will be deprecated.
+Invalid container types
+~~~~~~~~~~~~~~~~~~~~~~~
 
-It will still be possible to unregister all autoloaders by traversing
-the list returned by ``autoload_list_class()`` and call
-``autoload_unregister_class()`` on each entry.
+This sections covers a large number of types when used as a container,
+as this usage is invalid.
 
-Functions
-^^^^^^^^^
-
-The API related to function autoloading introduces the following
-functions:
-
--  ``autoload_register_function(callable $callback, bool $prepend = false): void``
-   - Register given function as a function autoloader implementation
--  ``autoload_unregister_function(callable $callback): bool`` -
-   Unregister given function as a function autoloader implementation
--  ``autoload_call_function(string $function): void`` - Try all
-   registered function autoloader functions to load the requested
-   function
--  ``autoload_list_function(): iterable`` - Return all registered
-   function autoloader functions
-
-The 'class autoloader' list and 'function autoloader' list are separate
-lists.
-
-Modified function
-~~~~~~~~~~~~~~~~~
-
-The ``function_exists()`` function will be modified by adding a
-``$autoload`` parameter which defaults to ``true`` same as the
-``class_exists()`` function.
-
-Intended usage
-~~~~~~~~~~~~~~
-
-For most people who are writing their own autoloader, the usage would
-look this:
-
-.. code:: php
-
-   function my_function_loader(string $function_name) {
-       // This callback only receives requests to load functions
-       // do the needful to load function $function_name
-   }
-
-   function my_class_loader(string $class_name) {
-       // This callback only receives requests to load classes
-       // do the needful to load class $class_name
-   }
-
-   autoload_register_function(my_function_loader(...));
-   autoload_register_class(my_class_loader(...));
-
-i.e. separate autoloader callback receive 'Foo' for class 'Foo' and
-'foo' for function 'foo', and there is no ambiguity what is being
-autoloaded, even though the names are the same.
-
-Function autoloading mechanism
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-When namespaces were introduced in PHP 5.3.0, to avoid requiring leading
-slashes before all basic functions, function calls in a namespace would
-'fallback' to the global scope.
-
-e.g. for the code:
-
-.. code:: php
-
-   namespace bar {
-       echo "length of hmm is " . strlen("hmm") . "\n";
-   }
-
-If a function named ``strlen`` exists in the namespace ``bar`` PHP would
-use that, otherwise PHP would 'fallback' to the ``strlen()`` function in
-the global namespace. Note, the ``use function strlen;`` syntax was
-introduced in PHP 5.6.
-
-This RFC preserves that fallback behaviour.
-
-When code tries to call a function that doesn't currently exist in the
-current namespace, the function autoloader mechanism will call the
-registered function autoloaders once with the fully namespaced function
-name.
-
-If an appropriately named function is not loaded during that call, the
-PHP engine will fallback that function to the global namespace. If a
-function already exists with the global namespace name, that will be
-used, otherwise the function autoloader mechanism will call the
-registered function autoloaders once with the global function name.
-
-After a function in a namespace is resolved (i.e. a function is located
-in the current namespace either because it already exists, or a function
-autoload call loads it, or the global fallback occurs), the function
-will be 'pinned' to that function entry, and no more function autoload
-calls will be generated for that function in that namespace.
-
-This is possibly easier to understand through code:
-
-.. code:: php
-
-   namespace {
-       function loader($name) {
-           echo "function loader called with '$name'\n";
-
-           if (strcasecmp($name, 'foo') === 0 && function_exists('foo') === false) {
-               // use eval to avoid foo already being defined
-               eval('function foo() {
-                   echo "I am foo in global namespace.\n";
-               }');
-           }
-
-           if (strcasecmp($name, 'Quux\foo') === 0 && function_exists('Quux\foo') === false) {
-               // use eval to avoid foo already being defined
-               eval('
-               namespace Quux {
-                 function foo() {
-                  echo "I am foo in Quux namespace.\n";
-                 }
-               }');
-           }
-       }
-
-       autoload_register_function('loader');
-
-       foo(); // Autoload called in global namespace
-   }
-
-   namespace bar {
-       foo(); // Autoload called in bar namespace
-
-       for ($i = 0; $i < 3; $i += 1) {
-           foo(); // Autoload not called, as function already pinned for namespace
-       }
-   }
-   namespace bar {
-       foo(); // Autoload not called, as function already pinned for namespace
-   }
-
-   namespace Quux {
-       foo(); // Autoload called in Quux namespace
-       foo(); // Autoload not called, as function already pinned for namespace
-       non_existent_function(); // Autoload called twice, once with namespace, once without
-   }
-
-
-   // Output is
-   function loader called with 'foo'
-   I am foo in global namespace.
-   function loader called with 'bar\foo'
-   I am foo in global namespace.
-   I am foo in global namespace.
-   I am foo in global namespace.
-   I am foo in global namespace.
-   I am foo in global namespace.
-   function loader called with 'Quux\foo'
-   I am foo in Quux namespace.
-   I am foo in Quux namespace.
-   function loader called with 'Quux\non_existent_function'
-   function loader called with 'non_existent_function'
-
-   Fatal error: Uncaught Error: Call to undefined function Quux\non_existant_function()...
-
-The position of this RFC is that this behaviour is correct both from a
-performance point-of-view, and a 'being able to reason about code'
-point-of-view.
-
-Having the function autoloader called on each use of an unqualified
-function call in a namespace would be a performance hit that would be
-unacceptable to most PHP users.
-
-Having it possible for what appears to be the same function call, to
-actually be dispatched to different functions, would be far too
-surprising a behaviour to the RFC authors.
-
-As a result of the pinning, ``function_exists()`` will return true for
-functions in namespaces that have been pinned to a global function. In
-the above example ``function_exists('bar\foo')`` would return true,
-after the first use of it in the namespace. This is the correct
-behaviour from both a "will this trigger autoloading (no)" and a "is it
-safe to get reflection about that function" point of view, though
-arguably from other positions it might be less correct.
-
-Details of global fallback and absolute function names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-(Note, this section is mostly just clarification of how PHP currently
-works, and how function autoloading fits in with that. It is not
-proposing a change to the global fallback.)
-
-The global fallback is not invoked for functions with absolute names.
-Absolute function names happen:
-
--  In a PHP file that has an alias/import of a function, when that file
-   is compiled, an absolute name is used for the function name.
--  Functions that are directly invoked with an absolute name e.g.
-   ``\strlen("bar");``
-
-For functions that are not invoked with an absolute function name, the
-function autoloader will be called once per function name per namespace.
-After that, the function will be pinned to the function that was
-resolved.
-
-Again, this is possibly easier to understand through code:
-
-.. code:: php
-
-   namespace {
-       function loader($name) {
-           echo "function loader called with '$name'\n";
-       }
-
-       autoload_register_function('loader');
-   }
-
-   namespace Foo {
-       use function strlen;
-       use function Bar\strcmp;
-
-       // As the function strlen is imported and so has an absolute
-       // function name, and already exists once PHP starts up no
-       // call to the autoloader happens
-       echo "strlen length is " . strlen('strlen') . "\n";
-
-       // As the function strpos is not imported, there is a
-       // single call to the autoloader with 'Foo/strpos' as the
-       // name. As no function is loaded, the fallback to \strpos
-       // occurs, and the name 'Foo/strpos' is pinned to '\strpos'
-       echo "pos position is " . strpos("strpos", "pos") . "\n";
-
-       // As 'Foo/strpos' is now pinned to '\strpos' no autoload call occurs
-       echo "pos position is " . strpos("strpos", "pos") . "\n";
-       echo "pos position is " . strpos("strpos", "pos") . "\n";
-       echo "pos position is " . strpos("strpos", "pos") . "\n";
-
-       // As '\substr' is an absolute function name, and already
-       // exists once PHP starts up, no call to the autoloader happens
-       echo "absolute substr: " . \substr("haystack", 3) . "\n";
-
-       // The function 'Bar\strcmp' is imported as an absolute function name,
-       // so no global fallback occurs. There is a single call to the function
-       // autoloader to load 'Bar\strcmp' and then the program errors due to
-       // an "undefined function Bar\strcmp"
-       strcmp('aaa', 'bbb');
-   }
-
-   // Output is:
-   //
-   // strlen length is 6
-   // function loader called with 'Foo\strpos'
-   // pos position is 3
-   // pos position is 3
-   // pos position is 3
-   // pos position is 3
-   // absolute substr: stack
-   // function loader called with 'Bar\strcmp'
-   //
-   // Fatal error: Uncaught Error: Call to undefined function Bar\strcmp()
-
-Backward Incompatible Changes
------------------------------
-
-Passing ``spl_autoload_call()`` to ``spl_autoload_unregister()`` is
-deprecated.
-
-The current RFC as proposed has a large BC break for the code:
-
-.. code:: php
-
-
-   namespace foo;
-
-   var_dump(function_exists('foo\strlen'));
-   var_dump(strlen('x'));
-   var_dump(function_exists('foo\strlen'));
-
-   if (true) {
-       function strlen($x) { return 42; }
-       var_dump(function_exists('foo\strlen'));
-   }
-
-   var_dump(strlen('x'));
-
-Which needs to be thought about.
-
-Proposed PHP Version
---------------------
-
-Next minor version, i.e. PHP 8.3.
-
-Open Issues
------------
-
-Accuracy of the naming
+"Scalar" types
+^^^^^^^^^^^^^^
+
+For the purpose of this section, ``true``, ``int``, ``float``, and
+``resource`` are considered to be a "scalar" types, as the engine treats
+those container types identically.
+
+-  For read operations, ``null`` is returned and the following warning
+   is emitted: ``Warning: Trying to access array offset on TYPE``
+
+-  For write, read-write, appending, fetch, and fetch-append operations,
+   the following error is
+   thrown:``Cannot use a scalar value as an array``
+
+-  For the unset operation, the following error is
+   thrown:``Cannot unset offset in a non-array variable``
+
+-  For existence operations, no warning is emitted and the behaviour is
+   as if the offset did not exist.
+
+Classes that do not implement ArrayAccess and Internal objects which do not implement any dimension object handler
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For every single operation, regardless of the type of the offset, the
+following ``Error`` is thrown:
+
+::
+
+   Cannot use object of type ClassName as array
+
+null type as container
 ~~~~~~~~~~~~~~~~~~~~~~
 
-The use of the word ``class`` in the API is currently accurate, but it
-seems likely that at some point PHP will have type aliases e.g.
+PHP supports a feature called auto-vivification to ``array`` when
+writing to an offset when the container is of type ``null``.
+
+Therefore, the behaviour depending on the operator is as follows:
+
+-  For read operations, ``null`` is returned, the container continues to
+   be ``null``, and the following warning is emitted:
+   ``Warning: Trying to access array offset on null``
+
+-  For write, append, fetch, and fetch-append operations the container
+   is converted to array. And thus behave like an ``array``, meaning the
+   behaviour depends on the offset type. Please see the ``array``
+   section for details.
+
+-  For read-write operations, the container is converted to array,
+   before the read operation. And thus behave like an ``array``, meaning
+   the behaviour depends on the offset type. Please see the ``array``
+   section for details.
+
+-  For the unset operation, the container continues to be ``null`` and
+   no warning or error is emitted/thrown.
+
+-  For existence operations, no warning is emitted and the behaviour is
+   as if the offset did not exist.
+
+false as container
+~~~~~~~~~~~~~~~~~~
+
+PHP also supports auto-vivification to ``array`` for ``false``
+containers, however this was `deprecated in PHP
+8.1 </rfc/autovivification_false>`__.
+
+Therefore, the behaviour depending on the operator is as follows:
+
+-  For read operations, ``null`` is returned, the container continues to
+   be ``false``, and the following warning is emitted:
+   ``Warning: Trying to access array offset on false``
+
+-  For write, append, fetch, and fetch-append operations the container
+   is converted to array, Emitting the following deprecation
+   notice:``Deprecated: Automatic conversion of false to array is deprecated``
+   And thus behave like an ``array``, meaning the behaviour depends on
+   the offset type. Please see the ``array`` section for details.
+
+-  For read-write operations, the container is converted to array,
+   before the read operation,
+
+::
+
+   Emitting the following deprecation notice: <code>Deprecated: Automatic conversion of false to array is deprecated</code> And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type.  Please see the <php>array</php> section for details.
+
+-  For the unset operation, the container continues to be ``false`` and
+   the following deprecation notice is emitted:
+   ``Deprecated: Automatic conversion of false to array is deprecated``
+
+-  For existence operations, no warning is emitted and the behaviour is
+   as if the offset did not exist.
+
+Arrays
+~~~~~~
+
+Arrays are the ubiquitous container type in PHP and support all the
+operations, therefore the behaviour is only affected by the type of
+offsets used.
+
+Valid offsets
+^^^^^^^^^^^^^
+
+Arrays in PHP accepts offsets of either type ``int`` or ``string`` and
+in those cases the behaviour is as expected.
+
+One thing to note is that when attempting to read an undefined offset
+the following warning is emitted:
+
+::
+
+   Warning: Undefined array key KEY_NAME
+
+Offset types cast to int
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The following offset types are cast to int silently:
+
+-  ``false`` is cast to 0
+-  ``true`` is cast to 1
+-  Non-fractional floating point numbers which fit in an ``int`` are
+   cast to their integer value
+
+Offsets of type ``resource`` are cast to int with the following warning:
+
+::
+
+   Warning: Resource ID#%d used as offset, casting to integer (%d)
+
+Offsets of type ``float`` that are fractional, non-finite, or do not fit
+in an integer are cast to ``int`` with the following deprecation notice:
+
+::
+
+   Deprecated: Implicit conversion from float %F to int loses precision
+
+Offset types cast to string
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+-  ``null`` is cast to an empty string
+
+Invalid offsets
+^^^^^^^^^^^^^^^
+
+The following offset types are invalid offsets types for arrays:
+
+-  ``array``
+-  ``object``
+
+The behaviour is identical for all operations except existence checks
+with ``isset()``/``empty()``.
+
+Generally the following error is thrown:
+
+::
+
+   Cannot access offset of type TYPE on array
+
+For ``isset()`` and ``empty()`` the following error is thrown:
+
+::
+
+   Cannot access offset of type TYPE in isset or empty
+
+Strings
+~~~~~~~
+
+Strings in PHP are effectively byte-arrays, as such the only valid type
+of offsets are integers. However, the behaviour in regard to string
+offsets is extremely inconsistent and complicated. To showcase the
+current behaviour we will explain the behaviour by going through each
+different offset type.
+
+Moreover, some operations are invalid on string offsets:
+
+-  Read-Write operations on a string offset will throw the following
+   error: ``Cannot use assign-op operators with string offsets``
+
+-  Unset operations on a string offset will throw the following error:
+   ``Cannot unset string offsets``
+
+-  The append and fetch-append operations will throw the following
+   error: ``[] operator not supported for strings``
+
+-  Fetch operations will throw different errors depending on the fetch
+   operation, *after* the type of the offset has been checked:
+-  For attempting to retrieve a reference to a string offset:
+   ``Cannot create references to/from string offsets``
+-  For attempting to use the string offset as a container:
+   ``Cannot use string offset as an array``
+-  For attempting to use the string offset as an object:
+   ``Cannot use string offset as an object``
+-  For attempting to use increment or decrement the string offset:
+   ``Cannot increment/decrement string offsets``
+
+Attempting to read a non initialized string offset emits the following
+warning:
+
+::
+
+   Warning: Uninitialized string offset INTEGER
+
+Finally, attempting to write more than one byte to a string offset will
+emit the following warning:
+
+::
+
+   Warning: Only the first byte will be assigned to the string offset
+
+Integer offsets
+^^^^^^^^^^^^^^^
+
+Integers are the only valid offset type, however, some integers values
+remain invalid offsets.
+
+Indeed, a negative offset can be outside the range of a valid string
+offsets. Negative offsets start counting from the end of the string, if
+the absolute value of the offset is greater than ``strlen($string)`` it
+implies that the negative offset points to a byte before the first byte
+of the string, therefore being invalid, when attempting to perform a
+write operation in such cases the following warning is emitted:
+
+::
+
+   Warning: Illegal string offset %s
+
+Offset types that warn about being cast to int
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The offset types
+
+-  ``null``
+-  ``bool``
+-  ``float``
+
+have a simple behaviour. They are cast to ``int`` and behave like an
+integer offset.
+
+The following warning is emitted for all operations except existence
+check operations (this includes read-write operations which emits the
+warning prior to the ``Error`` being thrown) before being cast to
+``int``:
+
+::
+
+   Warning: String offset cast occurred
+
+However, floating point numbers that are fractional, non-finite, or do
+not fit in an integer; emit the following deprecation notice when using
+an existence check with ``isset()`` or ``empty()``:
+
+::
+
+   Deprecated: Implicit conversion from float %F to int loses precision
+
+.. _invalid-offsets-1:
+
+Invalid offsets
+^^^^^^^^^^^^^^^
+
+The following offset types are invalid string offsets types:
+
+-  ``array``
+-  ``object``
+-  ``resource``
+
+For Read, Write, Existence checks via the null coalesce operator ``??``,
+and even Read-Write the following error is thrown:
+
+::
+
+   Cannot access offset of type %s on string
+
+For existence checks via ``isset()`` and ``empty()`` no warning is
+emitted and the behaviour is as if the offset did not exist.
+
+String offsets
+^^^^^^^^^^^^^^
+
+Using a string as an offset adds yet another layer of complexity as a
+string might be:
+
+-  Numeric integer
+-  Numeric float
+-  Leading numeric integer
+-  Leading numeric float
+-  Non-numeric
+
+Although the concept of leading numeric strings has been mostly been
+removed with the `Saner numeric strings
+RFC </rfc/saner-numeric-strings>`__ due to backwards compatibility
+concerns some part of the engine are still aware of them, string offsets
+being one such case.
+
+Numeric integer
+'''''''''''''''
+
+Numeric integer strings behave like a normal integer type.
+
+Leading numeric integer
+'''''''''''''''''''''''
+
+Leading numeric integers act similarly to `Offset types that warn about
+being cast to int <#offset_types_that_warn_about_being_cast_to_int>`__
+but rather than emitting the ``Warning: String offset cast occurred``
+warning it emits a ``Warning: Illegal string offset "%s"`` warning.
+
+One difference however, is that this warning is also emitted for
+existence checks via the null coalesce operator ``??``, but existence
+checks with ``isset()`` and ``empty()`` remain silent.
+
+However, the behaviour of ``isset()`` and ``empty()`` is completely
+broken in this case. It always indicates that an offset does not exist,
+when in fact it can be accessed:
 
 .. code:: php
 
-   type number = int | float;
+   <?php
+   $s = "abcdefghijklmnopqrst";
+   $o = "5x4";
+   var_dump(isset($s[$o]));
+   var_dump(empty($s[$o]));
+   var_dump($s[$o] ?? "default");
+   var_dump($s[$o]);
 
-When that happens, and you have some code that uses that type alias:
+results in the following output:
+
+::
+
+   bool(false)
+   bool(true)
+
+   Warning: Illegal string offset "5x4" in /tmp/preview on line 7
+   string(1) "f"
+
+   Warning: Illegal string offset "5x4" in /tmp/preview on line 8
+   string(1) "f"
+
+Other strings
+'''''''''''''
+
+Non-numeric, numeric float, and leading numeric float string offsets
+behave like an invalid string offset, with one exception, they do not
+throw an error for existence checks via the null coalesce operator
+``??``.
+
+Meaning the behaviour is identical to existence checks with ``isset()``
+and ``empty()``.
+
+Internal objects
+~~~~~~~~~~~~~~~~
+
+Internal objects can overload the different operations by replacing the
+following mandatory object handlers:
+
+-  ``read_dimension(zend_object *object, zval *offset, int type, zval *rv)``
+-  ``write_dimension(zend_object *object, zval *offset, zval *value)``
+-  ``has_dimension(zend_object *object, zval *member, int check_empty)``
+-  ``unset_dimension(zend_object *object, zval *offset)``
+
+The default handlers provided by ``std_object_handlers``, which are used
+by userland objects, verifies if ``ArrayAccess`` is implemented and
+calls the relevant method, or throw an ``Error`` if not.
+
+One important thing to note is that internal objects can overload only
+*some* of the handlers. One such example is the DOM extension, that only
+overwrites the read and has handlers for ``DOMNodeMap`` and
+``DOMNodeList``. Other extensions overwrite the handler to immediately
+throw an error, or customize the error message (e.g. ``PDORow`` for
+write and unset operations). The ``ResourceBundle`` class overloads the
+``read_dimension`` handler, but not the ``has_dimension`` handler, which
+leads to a situation where one can access offset but not check for their
+existence.
+
+Moreover, it is *not required* for an internal object that overwrites
+those handlers to implement ``ArrayAccess``, this is the case for all
+non-SPL extension. This is especially confusing for ``SimpleXMLElement``
+as it actually overloads and supports all the dimension handlers.
+
+Let's now have a more in depth look at the individual object handlers,
+and some of the pitfalls the current object handler API design causes.
+
+The has_dimension handler
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``check_empty`` parameter of the ``has_dimension`` is there to
+indicate to the handler if the existence check is a call to ``isset()``
+or ``empty()`` and the handler must implement the logic for determining
+if the value is falsy or not. This is error-prone, and indeed ``PDORow``
+did not implement the logic for handling calls to ``empty()`` properly.
+ [1]_
+
+One other requirement of the ``has_dimension`` is to return ``false`` if
+the offset exists but the value at this offset is ``null``, this is to
+mimic the semantics of ``isset()``. However, this is error-prone (e.g.
+``PDORow`` didn't implement this logic correctly) and also prevents
+supporting objects in ``array_key_exists()`` as this function explicitly
+does *not* check the value pointed to by the offset.
+
+This requirement is explicitly violated in ``SplObjectStorage`` with a
+comment explaining that because ``SplObjectStorage::offsetExists()`` is
+an alias of ``SplObjectStorage::contains()`` the ``has_dimension``
+handler returns ``true`` even if the value is ``null``.
+
+The write_dimension handler
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``write_dimension`` handler is also responsible for the appending
+operation, in which case the ``offset`` parameter is the ``NULL``
+pointer. Therefore, it is possible for an internal object to allowing
+writing to an offset, but not appending to the object by throwing en
+exception when the ``offset`` pointer is null. ``SplFixedArray`` for
+example does this.
+
+The read_dimension handler
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``type`` parameter of the ``read_dimension`` indicates the type of
+the operation the read handler is called in, and is provided by the VM
+at run time. It may be one of ``BP_VAR_R``, ``BP_VAR_W``, ``BP_VAR_RW``,
+``BP_VAR_IS``, or ``BP_VAR_UNSET``.
+
+Obviously, the ``read_dimension`` handler is called for read operations
+with the ``type`` being ``BP_VAR_R`` in that case.
+
+However, the ``read_dimension`` handler is also called for existence
+checks via the null coalesce operator ``??``, in which case
+``BP_VAR_IS`` is passed to the ``type`` parameter.
+
+Finally, the ``read_dimension`` handler is also called for fetch and
+fetch-append operations. In which case the ``type`` parameter might be
+``BP_VAR_W``, ``BP_VAR_RW``, or ``BP_VAR_UNSET`` depending on what the
+purpose of the fetch is. (Note: retrieving a reference is a ``BP_VAR_W``
+operation.) For the fetch-append operation the ``offset`` parameter is
+the ``NULL`` pointer, mimicking the behaviour of the ``write_handler``.
+
+This effectively means that the ``read_dimension`` handler must handle
+every possible ``BP_VAR_*`` type and possibly not having an offset.
+
+The complexity of these requirements for the ``read_dimension`` handler
+are generally not understood, and was the source of a bug in ``PDORow``
+which did a ``NULL`` pointer dereference for fetch-append operations.
+ [2]_
+
+The only extension that properly implements all this complexity is
+SimpleXML and uses it to support auto-vivification of XML elements.
+
+General handler requirements and pitfalls
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For classes that are not final, all overridden dimension handlers must
+forward calls to the userland methods if a child class implements
+``ArrayAccess``. If not, the child class's ``ArrayAccess`` methods are
+never called. Such bugs exist in ext/dom, and it is not clear how to fix
+them.
+
+To help with this case, the ``zend_class_arrayaccess_funcs`` struct is
+populated with the ``zend_function *`` pointers of the overloaded
+methods when ``ArrayAccess`` is implemented. And the corresponding
+pointer on the ``zend_class_entry`` is set to point to this allocated
+struct. However, as far as we can tell only SPL actually uses this.
+
+One additional pitfall that is common to all dimension handlers is the
+need to call ``ZVAL_DEREF()`` on the offset ``zval*`` so that when PHP
+references are used they work properly. This requirement wasn't followed
+by ``DOMNodeMap`` and ``DOMNodeList``  [3]_, ``ResourceBundle``  [4]_,
+and ``PDORow``  [5]_. Moreover, some extensions do dereference the
+offset, but only indirectly, and it is not know if this was done on
+purpose or happens to work, for example ``FFI\CData`` dereferences them
+via the call to ``zval_get_long()``. Meanwhile ``SplObjectStorage``
+fallbacks to calling the PHP method implementation instead of using the
+C handler, which will dereference the reference as the parameter is
+by-value.
+
+Userland classes that implement ArrayAccess
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Userland classes can overload the dimension access operators by
+implementing the ``ArrayAccess`` interface. The four interface methods
+roughly correspond to the four relevant dimension object handlers.
+
+The interface methods are called in the following way for the different
+operations:
+
+-  Read: the ``ArrayAccess::offsetGet($offset)`` method is called with
+   ``$offset`` being equal to the value between ``[]``
+
+-  Write: the ``ArrayAccess::offsetSet($offset, $value)`` method is
+   called with ``$offset`` being equal to the value between ``[]`` and
+   ``$value`` being the value that is being assigned to the offset.
+
+-  Read-Write: the ``ArrayAccess::offsetGet($offset)`` method is called
+   with ``$offset`` being equal to the value between ``[]``, the binary
+   operation is then performed, and if the binary operation succeeds the
+   ``ArrayAccess::offsetSet($offset, $value)`` method is called with
+   ``$value`` being the result of the binary operation
+
+-  Appending: the ``ArrayAccess::offsetSet($offset, $value)`` method is
+   called with ``$offset`` being equal to ``null`` and ``$value`` being
+   the value that is being appended to the container.
+
+-  Unsetting: the ``ArrayAccess::offsetUnset($offset)`` method is called
+   with ``$offset`` being equal to the value between ``[]``
+
+-  Existence checks via isset(): the
+   ``ArrayAccess::offsetExists($offset)`` method is called with
+   ``$offset`` being equal to the value between ``[]``
+
+-  Existence checks via empty(): the
+   ``ArrayAccess::offsetExists($offset)`` method is called with
+   ``$offset`` being equal to the value between ``[]`` if ``true`` is
+   returned, a call to ``ArrayAccess::offsetGet($offset)`` is made to
+   check the value is falsy or not.
+
+-  Existence checks via the null coalesce operator ``??``: the
+   ``ArrayAccess::offsetExists($offset)`` method is called with
+   ``$offset`` being equal to the value between ``[]`` if ``true`` is
+   returned, a call to ``ArrayAccess::offsetGet($offset)`` is made to
+   retrieve the value. (Note this is handled by the default
+   ``read_dimension`` object handler instead of the ``has_dimension``
+   handler)
+
+-  Fetch: the ``ArrayAccess::offsetGet($offset)`` method is called with
+   ``$offset`` being equal to the value between ``[]``
+
+-  Fetch Append: the ``ArrayAccess::offsetGet($offset)`` method is
+   called with ``$offset`` being equal to ``null``
+
+Because ``ArrayAccess::offsetGet($offset)`` is called for fetching
+operations, if it does not return an object or by-reference, the
+following notice is emitted:
+
+::
+
+   Notice: Indirect modification of overloaded element of ClassName has no effect in %s on line %d
+
+Of note is the behaviour with ``isset()``. Because the value at the
+offset is never checked via a call to ``offsetGet()``, a correct
+implementation of the ``offsetExists($offset)`` method that follows the
+general ``isset()`` semantics, *must* return ``false`` if the backing
+value is ``null``. As such the following implementation of
+``ArrayAccess`` is semantically *incorrect*:
 
 .. code:: php
 
-   function add(number $x, number $y) {
-       return $x + $y;
+   class A implements ArrayAccess {
+       private array $a = [];
+       
+       public function offsetSet($offset, $value): void {
+           var_dump(__METHOD__);
+           $this->a[$offset] = $value;
+       }
+       public function offsetGet($offset): mixed {
+           var_dump(__METHOD__);
+           return $this->a[$offset];
+       }
+       public function offsetUnset($offset): void {
+           var_dump(__METHOD__);
+           unset($this->a[$offset]);
+       }
+       public function offsetExists($offset): bool {
+           var_dump(__METHOD__);
+           return array_key_exists($offset, $this->a);
+       }
    }
 
-then if the type alias hadn't already been loaded, PHP would need to
-load it.
+Indeed, the following call sequence would break the expectations of
+``isset()`` by returning ``true``:
 
-Loading any of parameter, return, or property type would need to go
-through the callback that is passed to ``autoload_register_class()``,
-but as 'number' would be a type alias rather than a class, that would be
-a slightly incorrect name.
+.. code:: php
 
-It may be eventually more accurate to use the word ``type`` rather than
-``class`` i.e. ``autoload_register_type()``, but it's probably more
-confusing right now.
+   $a = new A();
 
-Future scope
-------------
+   $a[3] = null;
+   var_dump(isset($a[3]));
 
-Higher performance through maps
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This behaviour is confusing to users and has been reported as a bug for
+`WeakMap <https://github.com/php/php-src/issues/8437>`__.
 
-There is an ongoing conversation, and a `previous
-RFC <https://wiki.php.net/rfc/autoload_classmap>`__ about adding
-functions to have a native classmap/functionmap/typemap resolver written
-in C. That is outside the scope of this RFC.
+ArrayObject
+~~~~~~~~~~~
 
-However, a basic implementation of that RFC has been created and can be
-tried with the implementation of this RFC:
-https://gitlab.com/Girgias/php-autoloading-maps-extension
+``ArrayObject`` has some peculiar behaviour as it attempts to mimic the
+built-in ``array`` type by implementing various interfaces and object
+handlers.
 
-Deprecating the SPL autoloader functions
-========================================
+Moreover, it allows to use another object as the backing "array" in
+which case offsets correspond to properties of the passed object.
 
-Although at some point the current SPL autoloader functions could be
-deprecated and then removed in a later version of PHP, there is little
-cost in leaving those functions as aliases (and an internally redirected
-call) to the updated functions. Because of that, this RFC does not
-propose deprecating them in PHP 8.3, and instead leaves that to a future
-RFC.
+This feature is currently implemented in such a way that it breaks
+assumptions surrounding objects. Indeed, ``ArrayObject`` will write to
+the property HashTable directly, by-passing any write restrictions on
+the property. This includes overwriting ``readonly`` properties that
+have been already set, overwriting typed properties with values of
+incorrect types, suppressing dynamic properties deprecation notices, and
+ignoring any ``__set()`` or ``__get()`` magic methods.
 
-Constant and stream autoloading
-===============================
+``ArrayObject`` has an ``append()`` method that can be called to append
+values to it. However, counterintuitively, this method is *\*not*\ \*
+called when using the append operations ``$ArrayObject[] = $value``, as
+the method that is actually called is ``offsetSet(null, $value)``. This
+gets even more confusing when subclassing ``ArrayObject`` and redefining
+``append()`` to modify the default appending behaviour.
 
-It would be possible to add autoloading for constants and streams,
-however to limit the scope of this RFC it only adds support for
-functions.
+Moreover, attempting to call ``append()`` when the backing array is
+another object, correctly throws an
+``Error: Cannot append properties to objects, use ArrayObject::offsetSet() instead``,
+but when using the appending operator this error does not get thrown.
 
-F.A.Q.
-------
+Another problem is that ``offsetSet()`` cannot distinguish between using
+``null`` as an explicit offset or being provided by default for the
+appending operation, it treats both of these cases as an appending
+operations. This leads to an inconsistency as one can set a value to an
+offset of ``null``, but not be able to read it, as for read operations
+``null`` gets converted to an empty string, like for the built-in array
+type.
 
-Why change the function names from SPL?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+One final problem with ``ArrayObject`` is the implementation around
+``isset()``, when using it without a backing object, it works as
+intended and like an array. However, when using a backing object any
+offset that correspond to a declared property is considered to exist,
+even if it is an uninitialized typed property.
 
-At some point, the SPL may be decoupled from PHP core. As autoloading
-should be part of core PHP, and not part of a library, moving the
-function names to not include SPL seems appropriate.
+The following code:
 
-Is the behaviour of class autoloading changed?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
 
-No. At least, not intentionally other than deprecating the magic
-behaviour of autoload_unregister_class when it is passed a special
-value, to unregister all class loaders, everything should work the same.
-If you see a change, please report a bug.
+   class T {
+       public int $p;
+   }
 
-Why the separate autoloader callbacks?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   $o = new T();
+   $a = new ArrayObject();
 
-Performance
-^^^^^^^^^^^
+   $a = new ArrayObject($o);
+   var_dump(isset($a['p']));
+   var_dump($a['p']);
 
-By having separate autoloader callbacks for functions and classes, there
-is a tiny performance gain in not having to check what the type is
-inside the callback.
+results in the following behaviour:
 
-Although this is trivial per application, as it would benefit every PHP
-application that uses autoloading this is probably a non-trivial amount
-of energy saved.
+::
 
-Future proof internally
+   bool(true)
+
+   Warning: Undefined array key "p" in %s on line %d
+   NULL
+
+while keeping the typed property in an uninitialized state.
+
+Ideal semantics
+---------------
+
+In this section we present semantics for containers and how offsets
+should behave for this sort of container, that are easy to reason about
+and remember.
+
+Valid container types are:
+
+-  ``array``
+-  ``string``
+-  ``object`` that implement an interface indicating it can be used as a
+   container
+
+.. _arrays-1:
+
+Arrays
+~~~~~~
+
+The semantics of arrays are mostly unchanged, except in regard to the
+handling of offset types.
+
+Valid offset types for array are ``int`` and ``string``, all other
+offset types throw a ``TypeError``; regardless of the operation being
+performed.
+
+.. _strings-1:
+
+Strings
+~~~~~~~
+
+The semantics of strings are mostly unchanged, except in regard to the
+handling of offset types.
+
+The only valid offset type for strings is ``int``, all other offset
+types throw a ``TypeError``; regardless of the operation being
+performed.
+
+null
+~~~~
+
+The semantics of ``null`` are mostly unchanged. It continues to support
+auto-vivification to ``array``, except for read, and read-write
+operations; in which case a ``TypeError`` is thrown about invalid access
+of an offset on ``null``. Meaning that auto-vivification to ``array`` is
+supported for write, append, fetch, and fetch-append operations.
+
+Moreover, it continues to short-cut nested dimension checks with
+existence check operations.
+
+Objects
+~~~~~~~
+
+Objects should be able to implement an interface for each corresponding
+operation they support:
+
+-  Read and existence checks
+-  Write
+-  Appending
+-  Unsetting
+-  Fetching
+-  Fetch appending
+
+If an object is used in a container operation and does not implement the
+corresponding interface, a ``TypeError`` is thrown.
+
+Existence checks for ``isset()``/``empty()`` and the null coalesce
+operator ``??`` should follow the following algorithm:
+
+-  Call method to verify the offset exists:
+-  If it does not exist: return ``false`` (``true`` for ``empty()``)
+-  Otherwise: call method to get value of offset:
+
+   #. If the value is ``null`` (or falsy for ``empty()``) return
+      ``false`` (``true`` for ``empty()``)
+   #. Otherwise: return ``true`` (``false`` for ``empty()``)
+
+The following algorithm is easily understood and means general
+assumptions about the existence check method are valid.
+
+.. _invalid-container-types-1:
+
+Invalid container types
+~~~~~~~~~~~~~~~~~~~~~~~
+
+This corresponds to all other types and objects that do not implement an
+interface indicating it can be used as a container.
+
+This should throw a ``TypeError`` for every single operation, regardless
+of the type of the offset.
+
+Ideally, the error message is standardized to be consistent and
+descriptive for all types.
+
+One possibility is ``Cannot use value of type TYPE as an array``.
+
+Motivations
+-----------
+
+We think that the proposed ideal semantics would make it obvious and
+intuitive for what would happen when using offsets and containers in
+PHP.
+
+We will slightly expand on the motivation for certain changes.
+
+Throwing Errors for invalid container types for all operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This should be self-explanatory, attempting to use a type which is not a
+container as a container is a programming error.
+
+This is applicable even when checking for the existence of an offset.
+
+Throwing Errors for invalid offset types for all operations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Similarly, using invalid offset types on a container is a programming
+error, regardless of checking for the existence of an offset or not.
+
+Moreover, ``array`` offsets already behaves this way.
+
+Change requirements for the has_dimension handler
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The current requirements are very confusing and unintuitive.
+
+As show-cased the requirement to return ``false`` if the offset exist
+but is ``null`` is largely misunderstood and affects userland by
+requiring them to propagate this behaviour to their implementation of
+``offsetExists()``. Handling this correctly adds implementation
+complexity as the ``has_dimension`` handler needs to effectively be able
+to perform read operations, and if it doesn't it can lead to unintuitive
+semantics if the handler considers ``null`` to be set. These semantics
+also preventing the widening of the ``$array`` parameter type of
+``array_key_exists()`` to accept objects that support accessing offsets,
+something that has been requested by userland.  [6]_
+
+Needing to handle ``empty()`` suffers most of the same implementation
+pitfalls and unintuitive semantics if the handler considers non-falsy
+things empty. Moreover, if we ever want to make ``empty()`` a simple
+function an object handler cannot influence on its behaviour.
+
+Migration path
+--------------
+
+To go from the current semantics and behaviour to the desired semantics
+we propose the following changes for PHP 8.4, and PHP 9.0:
+
+Changes in PHP 8.4
+~~~~~~~~~~~~~~~~~~
+
+Changes to objects
+^^^^^^^^^^^^^^^^^^
+
+Add granular interfaces
+'''''''''''''''''''''''
+
+Introduce new, more granular, interfaces:
+
+-  ``DimensionReadable``: which would have the equivalent of
+   ``offsetGet()`` and ``offsetExists()``
+-  ``DimensionWritable``: which would have the equivalent of
+   ``offsetSet()``
+-  ``DimensionUnsetable``: which would have the equivalent of
+   ``offsetUnset()``
+-  ``Appendable``: which would have a single method
+   ``append(mixed $value): mixed`` that is called when appending
+-  ``DimensionFetchable``: which would extend ``DimensionReadable`` and
+   have a method that returns by-reference
+-  ``FetchAppendable``: which would extend ``Appendable`` and have a
+   method that returns by-reference the appended value
+
+.. code:: php
+
+   interface DimensionReadable
+   {
+       public function offsetGet(mixed $offset): mixed;
+
+       public function offsetExists(mixed $offset): bool;
+   }
+
+   interface DimensionFetchable extends DimensionReadable
+   {
+       public function &offsetFetch(mixed $offset): mixed;
+   }
+
+   interface DimensionWritable
+   {
+       public function offsetSet(mixed $offset, mixed $value): void;
+   }
+
+   interface DimensionUnsetable
+   {
+       public function offsetUnset(mixed $offset): void;
+   }
+
+   interface Appendable
+   {
+       public function append(mixed $value): void;
+   }
+
+   interface FetchAppendable extends Appendable
+   {
+       public function &fetchAppend(): mixed;
+   }
+
+Ideally, we would want the interfaces to have generic types, as this
+would allow ``TypeErrors`` to be thrown by the engine without needing to
+manually handle the type of the offset and/or value.
+
+However, ``mixed`` allows us to migrate to generic types if we ever get
+them.
+
+Intersection and DNF types makes the addition and usage of more granular
+interfaces possible.
+
+Those new interfaces and methods provide clearer semantics and behaviour
+that is known to be supported or not by the class, while simplifying the
+implementation of said classes.
+
+Cross-version compatible code can use DNF types to type their input
+arguments, e.g:
+
+.. code:: php
+
+   function foo(ArrayAccess|(DimensionReadable&DimensionWritable)) {
+       /* Do something useful */
+   }
+
+Changes to internal objects
+'''''''''''''''''''''''''''
+
+Currently, the dimension handlers have a default handler which makes it
+difficult to know if an object supports certain dimension handlers.
+
+Therefore, we move the handlers out of the ``zend_object_handlers``
+structure and into the ``zend_class_entry`` structure. We add new
+handlers which correspond to the above interfaces which are all defined
+in a new struct:
+
+::
+
+   typedef struct _zend_class_dimensions_functions {
+       /* rv is a slot provided by the callee that is returned */
+       zval *(*read_dimension)(zend_object *object, zval *offset, zval *rv);
+       bool  (*has_dimension)(zend_object *object, zval *offset);
+       zval *(*fetch_dimension)(zend_object *object, zval *offset, zval *rv);
+       void  (*write_dimension)(zend_object *object, zval *offset, zval *value);
+       void  (*append)(zend_object *object, zval *value);
+       zval *(*fetch_append)(zend_object *object, zval *rv);
+       void  (*unset_dimension)(zend_object *object, zval *offset);
+   } zend_class_dimensions_functions;
+
+If the object does not support being used as a container then the
+pointer for the ``zend_class_dimensions_functions`` should be the
+``NULL`` pointer. Otherwise, it should be allocated and be populated
+with function pointers for the operations that are supported, and the
+``NULL`` pointer for operations that are not.
+
+Moreover, the object should implement the relevant interfaces for the
+capabilities that it supports. This is relatively straight forward for
+all bundled extensions except for ext/ffi as the ``CData`` class is used
+to represent scalar data but also arrays and pointer types, which do
+overload the dimension handlers.
+
+The new handlers are slightly different from the existing one, as it is
+designed to reduce implementation complexity of the handlers. The
+``has_dimension`` handler does not know if it is being called with
+``empty()``, as this is meaningless with the algorithm that is
+implemented. Its only duty is to indicate if the offset exists or not,
+not check if the backed value is ``null`` or ``falsy``. Moreover, it is
+also called with the null coalesce operator.
+
+This change means that the ``read_dimension`` doesn't need to know in
+what context it is called, as it will only ever be called in a read
+context. Because the fetch and fetch append handlers would be called
+during fetching operations instead of the read handler.
+
+Another consequence of using the new algorithm is that some
+idiosyncratic code that produces side effects in the ``has_dimension``
+handler might not work as before, this also applies to userland classes
+implementing ``ArrayAccess``. For example, the following code:
+
+.. code:: php
+
+   class Test implements ArrayAccess {
+       public function offsetExists($x): bool { $GLOBALS["name"] = 24; return true; }
+       public function offsetGet($x): mixed { var_dump($x); return 42; }
+       public function offsetSet($x, $y): void { }
+       public function offsetUnset($x): void { }
+   }
+
+   $obj = new Test;
+   $name = "foo";
+   var_dump($obj[$name] ?? 12);
+   var_dump($name);
+
+currently produces the following output:
+
+::
+
+   string(3) "foo"
+   int(42)
+   int(24)
+
+however, with the new algorithm, would produce this output:
+
+::
+
+   int(24)
+   int(42)
+   int(24)
+
+As the ``offsetExists()`` wasn't called before, but now is.
+
+Removal of the zend_class_arrayaccess_funcs struct and CE pointer
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+As the ``zend_class_arrayaccess_funcs`` struct was only used by SPL, and
+it cannot fulfill its role anymore with the new dimension handlers, the
+struct is removed and alongside it the pointer to such a struct on the
+``zend_class_entry``.
+
+Changes to ArrayObject
+''''''''''''''''''''''
+
+The introduction of the new interfaces and handlers allows us to fix
+part of the implementation of ``ArrayObject`` to follow the usual
+semantics of ``array`` and not break assumptions around objects:
+
+-  Implement the new interfaces
+-  Call ``append()`` for the appending operation (following from the new
+   ``Appendable`` interface)
+-  Fix ``null`` offset handling (following from the proper support of
+   the appending operation)
+-  When using an object as a backing value:
+-  Throw ``Error`` on appending
+-  Emit dynamic properties warning when using an object as a backing
+   value that does not allow dynamic properties
+-  Throw ``Error`` on writing to ``readonly`` properties
+-  Throw ``Error`` on writing a value of the wrong type to a typed
+   property
+-  Continue to ignore any ``__set()``/``__get()`` magic methods
+
+Most of these changes are implemented as
+`PR-12037 <https://github.com/php/php-src/pull/12037>`__.
+
+Changes to ArrayAccess
+''''''''''''''''''''''
+
+Supporting ``ArrayAccess`` in a backwards compatibility way is slightly
+tricky. It is effectively extending ``DimensionReadable``,
+``DimensioWriteable``, and ``DimensionUnsettable``, but it also
+"supports" appending, fetching, and fetch-appending.
+
+Our solution is to add legacy dimension handlers to classes that
+implement ``ArrayAccess`` reproducing the current behaviour for
+appending, fetching and fetch-appending. However, if one of the new
+interfaces is implemented for dedicated support to appending, fetching,
+and fetch-appending, then the new behaviour is used.
+
+Changes to SplObjectStorage
+'''''''''''''''''''''''''''
+
+As mentioned previously, the current implementation of
+``SplObjectStorage::offsetExists()`` violates the expectations of
+``isset()``, however with the implementation of the new algorithm this
+is fixed, which leads to a behavioural change.
+
+Moreover, ``SplObjectStorage`` defines the following methods which are
+aliases to the dimension handler methods:
+
+-  ``SplObjectStorage::contains()`` for
+   ``SplObjectStorage::offsetExists()``
+-  ``SplObjectStorage::detatch()`` for
+   ``SplObjectStorage::offsetUnset()``
+-  ``SplObjectStorage::attach()`` for ``SplObjectStorage::offsetSet()``
+
+However, extending ``SplObjectStorage`` and overwriting one of the alias
+methods does \_not\_ modify the behaviour of using the offset access
+operators. As such we propose to deprecate the aliases in favour of the
+normal offset methods.
+
+Changes to MultipleIterator
+'''''''''''''''''''''''''''
+
+The implementation of ``MultipleIterator`` shares the same internal
+object handlers as ``SplObjectStorage``. This means it also supported
+the various offset access operators as a consequence. As the dimension
+handlers would no longer be part of the object handlers, this results in
+``MultipleIterator`` not supporting them any longer.
+
+As it does not implement ``ArrayAccess`` and there are no tests covering
+this behaviour, it seems to us that this iterator was never designed to
+be accessed with the offset access operators.
+
+As such we do not intend to formally implement any interfaces and
+support for using offset access operators with ``MultipleIterator``
+objects would be removed.
+
+Changes to array offset handling
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Disallow resources to be used as array offsets
+''''''''''''''''''''''''''''''''''''''''''''''
+
+Considering the phasing out of resources, resources being generally
+considered equivalent as objects, and a warning having been emitted for
+using resources as offset, we propose to promote this warning to a
+TypeError in PHP 8.4.
+
+This removes variations and a lot of complexity to the engine.
+
+The ``array_key_exists()`` function, and any objects mimicking array
+offsets, is also affected and would have the ``resource`` type removed
+from the union type for the ``$key`` parameter.
+
+Emit warnings for invalid offset types on arrays
+''''''''''''''''''''''''''''''''''''''''''''''''
+
+Emit the following warnings when using invalid offsets on an array, this
+includes ``null``, ``bool``, and ``float`` types:
+
+::
+
+   Warning: offset of type TYPE has been cast to (int|string)
+
+Changes to string offset handling
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Disallow leading numeric strings to be used as string offsets
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Considering the prolonged existence of notice/warnings when using
+numeric strings, and the fact ``isset()/empty()`` is completely broken
+with such offsets, we propose to promote this warning to the usual
+``Cannot access offset of type %s on string`` error.
+
+Normalize the behaviour of invalid string offsets
+'''''''''''''''''''''''''''''''''''''''''''''''''
+
+This effectively means that non integer-numeric strings used as an
+offset for strings with the null coalesce operator ``??`` would throw
+the following error:
+
+::
+
+   Cannot access offset of type %s on string
+
+Emit warning for checking existence of string offset with invalid offset types
+''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+Emit a warning when using invalid offsets on a string during existence
+check operations:
+
+::
+
+   Cannot access offset of type TYPE on string in isset or empty
+
+Emit warning on read-write operations on null container
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Emit the same warning as a simple read operation when using ``null`` as
+a container:
+
+::
+
+   Warning: Trying to access array offset on null
+
+Emit warnings for checking existence of offsets on invalid container types
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Emit a warning when using invalid offsets on an invalid container during
+existence check operations as it is a programming error.
+
+Note: this does *not* include ``null`` as a container, which will
+continue to short-cut existence checks.
+
+Improved error messages
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Currently the two autoloaders (class and function) have the same
-signature.
+Part of this RFC will be to improve error messages and indicate if the
+value cannot be used as an array:
 
-It is possible to imagine that an autoloader for a different feature,
-might require a different signature for the autoloader.
+::
 
-One example would be a hypothetical implementation for supporting
-generics;
+   Cannot use value of type TYPE as an array
 
-.. code:: php
+And if the specific operation is not supported the error would resemble:
 
+::
 
-   function my_generic_autoloader(string $name, string ...$types) {
-       // generate code for generic class on the fly from a template
-   }
+   Cannot OPERATION offset of type TYPE on value of type TYPE
 
-   autoload_register_generic_generator(my_generic_autoloader(...));
+Changes in a future version of PHP 8
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Internal objects must implement the relevant interfaces
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-   $intStack = new GenericStack<int>();
-   // This calls my_generic_autoloader with the parameters 'GenericStack' and 'int'
+This requirement would be checked in DEBUG builds of PHP.
 
-Having the different autoloader by separate callbacks avoids the future
-problem of trying to hack around the parameters having different
-values/meanings depending on the feature being loaded.
+The main reason for not making this a hard requirement with the other
+proposed changes for PHP 8.4 is that the ``CData`` class from the FFI
+extension is an opaque class that interfaces with different C data
+types, such as scalars, C arrays, and pointers.
 
-Future proof for users
-^^^^^^^^^^^^^^^^^^^^^^
+However, blindly adding the new dimension interfaces to indicate that
+offsets can always be accessed would be a lie, as CData backing scalar
+data types can not be accessed in this manner.
 
-As there would be two features that are autoloadable, some people would
-write their code like this:
+To properly support this, it requires refactoring the ``CData`` class
+into a sealed interface and have concrete class implementation for the
+different sorts of C data types, e.g. ``CScalar``, ``CArray``,
+``CPointer``.
 
-.. code:: php
+Changes in PHP 9.0
+~~~~~~~~~~~~~~~~~~
 
-   function my_autoloader(string $name, Type $type)
-   {
-       if ($type === Type::function) {
-           // do your function autoloading here..
-       } else {
-           // Well it must be a class!
-       }
-   }
+Promote all warnings to ``Error``
 
-This code would need updating when a new feature was autoloadable. By
-having the separate callbacks, each of those callbacks will only ever
-receive the feature it is designed to work with.
+Version
+-------
 
-Designing the API to be safer from accidental misuse, is probably a good
-idea.
+Next minor version, PHP 8.4, and next major version PHP 9.0.
 
-What if I really would prefer an API that went through a single function?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-That can be done in userland like this:
-
-.. code:: php
-
-   enum Type {
-       case Class;
-       case Function;
-   }
-
-   function my_autoloader(string $name, Type $type)
-   {
-       if ($type === Type::function) {
-           // do your function autoloading here..
-       } else if ($type === Type::class) {
-           // do your class autoloading here..
-       } else {
-           // Unknown type, throw error...
-       }
-   }
-
-   function my_function_loader(string $function_name) {
-       return my_autoloader(function_name, Type::function)
-   }
-
-
-   function my_class_loader(string $class_name) {
-       return my_autoloader(function_name, Type::class)
-   }
-
-   autoload_register_function(my_function_loader(...));
-   autoload_register_class(my_class_loader(...));
-
-What is the change in performance overhead for function autoloading?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-For programs that do not have a function autoloader registered, there
-will be no autoloader to dispatch, so there will be almost no
-performance change.
-
-Whether or not a function autoloader is registered, resolving the
-function is only done once per function per namespace, assuming the
-function is either loaded or resolved through the global fallback.
-
-As the code example shows, after a successful attempt to autoload a
-function in a namespace, or the global function fallback occurs, the
-function is 'pinned' to that function, and subsequent use doesn't
-trigger autoloading.
-
-It is possible to trigger the autoloader multiple times for the same
-class/function if you catch the Error for class/function not found, and
-repeat the attempt to use the class/function that doesn't exist, but
-that is outside of most normal coding practices.
-
-Proposed Voting Choices
------------------------
+Vote
+----
 
 As per the voting RFC a yes/no vote with a 2/3 majority is needed for
 this proposal to be accepted.
 
-Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+Voting started on 2024-XX-XX and will end on 2024-XX-XX.
 
-Question: Accept New core autoloading mechanism with support for function autoloading RFC?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Improve language coherence for the behaviour of offsets and containers RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -583,26 +1324,53 @@ Voting Choices
 -  Yes
 -  No
 
-Implementation
---------------
+Future scope
+------------
 
-GitHub pull request: https://github.com/php/php-src/pull/8294
+Ideas proposed in this section are not part of the RFC and may be
+something to do as a follow-up to this RFC.
 
-After the project is implemented, this section should contain
-
--  the version(s) it was merged into
--  a link to the git commit(s)
--  a link to the PHP manual entry for the feature
+-  Phase out ``ArrayAccess``, c.f.
+   https://wiki.php.net/rfc/phase_out_serializable
+-  Deprecate ``ArrayObject``
 
 References
 ----------
 
+Current behaviour has been mostly discovered and documented by adding
+behavioural tests in https://github.com/php/php-src/pull/12723
+
+Behaviour for ArrayObject mostly comes out of attempting to fix various
+bugs in https://github.com/php/php-src/pull/12037
+
+.. [1]
+   https://github.com/php/php-src/pull/13512
+
+.. [2]
+   https://github.com/php/php-src/pull/13512
+
+.. [3]
+   https://github.com/php/php-src/pull/13511
+
+.. [4]
+   https://github.com/php/php-src/pull/13503
+
+.. [5]
+   https://github.com/php/php-src/pull/13512
+
+.. [6]
+   https://externals.io/message/122435
+
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/8294
-:Original Authors: George Peter Banyard, girgias@php.net, Dan Ackroyd, danack@basereality.com
-:Original PHP Version: PHP 8.3
+:Arrayobject: <https://github.com/php/php-src/pull/12037>
+:Extra: , Implementations:
+:Markdown Source: <https://github.com/Girgias/php-rfcs/blob/master/container-offset-behaviour.md>
+:New Handler Api: <https://github.com/Girgias/php-src/pull/19>
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
 :Original Status: Under Discussion
-:Slug: core-autoloading
-:Wiki URL: https://wiki.php.net/rfc/core-autoloading
+:Original String Offset Clean-up Pr: <https://github.com/php/php-src/pull/7173>
+:Slug: container-offset-behaviour
+:Wiki URL: https://wiki.php.net/rfc/container-offset-behaviour
