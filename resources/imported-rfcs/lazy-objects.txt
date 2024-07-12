@@ -12,7 +12,7 @@ Transparent lazy-initialization of objects is an important part of many PHP appl
 
 Martin Fowler identifies [[https://martinfowler.com/eaaCatalog/lazyLoad.html|four strategies]] to implement lazy loading using OOP: lazy initialization, value holders, virtual proxies (hereafter referred to as just "proxies"), and ghost objects. This RFC focuses on proxies and ghost objects, which provide transparent lazy-loading. Unlike lazy initialization and value holders, proxies and ghost objects do not require a class to be written with the lazy-loading concept in mind. Instead, the lazy-loading behavior can be attached externally.
 
-In both strategies, we start with empty objects typically created with <php>ReflectionClass::newInstanceWithoutConstructor()</php>, attaching an initializer or factory that is called automatically when these objects are used. From an abstraction point of view, lazy ghost objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy. This is a core design principle of this RFC.
+In both strategies, the lazy object is attached to an initializer or factory that is called automatically when these objects are used. From an abstraction point of view, lazy ghost objects from this RFC are indistinguishable from non-lazy ones: they can be used without knowing they are lazy. This is a core design principle of this RFC.
 
 Lazy-loading of objects in PHP is already used in business-critical situations. For example, Symfony uses them in its dependency injection component to provide lazy services that are fully initialized only if needed. The Doctrine ORM makes its entities lazy, allowing objects to hydrate themselves from the database only when accessed. Other use cases include e.g. a JSON parser that uses lazy objects to defer parsing unless those objects are accessed.
 
@@ -22,7 +22,7 @@ Unless specified otherwise, this RFC will refer to "virtual proxies" and "state-
 
 ===== Implementation =====
 
-Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed (dynamic or declared ones). This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. No performance overhead is thus added to non-lazy use cases. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
+Lazy objects are standard ''zend_object'' whose initialization is deferred until one of their properties is accessed (including non-existing ones). This is implemented using the same fallback mechanism as ''%%__get%%'' and ''%%__set%%'' magic methods, triggered when an uninitialized property is accessed. No performance overhead is thus added to non-lazy use cases. Execution of methods or property hooks does not trigger initialization until one of them accesses a backed property.
 
 A lazy object can be created via the Reflection API, with the user specifying an initializer function that is called when initialization is required.
 
@@ -163,15 +163,15 @@ There are three ways to make a lazy object non-lazy:
   - Using <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> on all its properties.
   - Calling the <php>ReflectionClass::initialize()</php> or <php>markAsInitialized()</php> methods with the instance as argument.
 
-The <php>markAsInitialized()</php> method allows marking a lazy object as non-lazy without running the initializer, leaving uninitialized properties. This is useful for managed entity objects. Accessing a property before it is set throws an "uninitialized property" error.
+The <php>markAsInitialized()</php> method allows marking a lazy object as non-lazy without running the initializer, leaving uninitialized properties. This is useful for managed entity objects. Accessing a typed property before it is set throws an "uninitialized property" error.
 
 ==== Initialization Triggers ====
 
-Except for the special cases listed below, any attempt to observe the state of a lazy object will trigger its initialization. This ensures that the result of the observation is the same as if the object were already initialized, maintaining full transparency. These triggers include:
+Except for the special cases listed below, any attempt to observe the state of a lazy object will trigger its initialization. This ensures that the result of the observation is the same as if the object were already initialized, maintaining full transparency. These triggers include, but are not limited to: 
 
   * Reading or writing a property
   * Testing if a property is set or unsetting it
-  * Calling <php>ReflectionProperty::getValue()</php> and <php>set[Raw]Value()</php>
+  * Calling <php>ReflectionProperty::get[Raw]Value()</php> and <php>set[Raw]Value()</php>
   * Calling <php>ReflectionObject::getProperties()</php> or <php>ReflectionObject::getProperty()</php>
 
 This behavior makes lazy objects fully transparent to their consumers.
@@ -180,9 +180,9 @@ The following special cases do not trigger initialization of a lazy object:
 
   * Calls to <php>ReflectionProperty::skipLazyInitialization()</php>, <php>setRawValueWithoutLazyInitialization()</php>, or accesses to properties on which these methods were called.
   * Calls to <php>get_mangled_object_vars()</php>.
+  * Casting to array using the <php>(array)</php> operator.
   * Calls to <php>serialize()</php> when <php>ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE</php> is set, unless a property is accessed in ''%%__serialize()%%'' or ''%%__sleep()%%'' methods.
   * Calls to <php>ReflectionObject::__toString()</php>.
-  * Casting to array using the <php>(array)</php> operator.
   * Calls to <php>var_dump($lazyObject)</php>, unless ''%%__debugInfo()%%'' is implemented and accesses a property.
   * Cloning, unless ''%%__clone()%%'' is implemented and accesses a property.
 
@@ -222,6 +222,8 @@ $init = function ($object) use (&$originalObject) {
 };
 $originalObject = $reflector->newLazyProxy($init);
 </PHP>
+
+<php>get_class()</php> or the <php>::class</php> evaluate to the class name of the proxy, regardless of the actual instance.
 
 === Common Behavior ===
 
@@ -524,11 +526,10 @@ class A {
     public readonly int $prop;
 }
 class B extends A {
+    public readonly int $prop;
     public int $counter = 0;
     public function __construct() {
-        (function () {
-            unset($this->prop);
-        })->bindTo($this, A::class)();
+        unset($this->prop);
     }
     public function __get($name) {
         return ++$this->counter;
