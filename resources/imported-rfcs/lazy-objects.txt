@@ -53,13 +53,13 @@ class ReflectionClass
 
     public function resetAsLazyProxy(object $object, callable $factory, int $options = 0): void {}
 
-    public function initialize(object $object): object {}
+    public function initializeLazyObject(object $object): object {}
 
-    public function markAsInitialized(object $object): object {}
+    public function markLazyObjectAsInitialized(object $object): object {}
 
     public function getLazyInitializer(object $object): ?callable
 
-    public function isInitialized(object $object): bool {}
+    public function isLazyObject(object $object): bool {}
 
     // existing methods
 }
@@ -161,9 +161,9 @@ There are three ways to make a lazy object non-lazy:
 
   - Interacting with it in a way that triggers its initializer (more on this below).
   - Using <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> on all its properties.
-  - Calling the <php>ReflectionClass::initialize()</php> or <php>markAsInitialized()</php> methods with the instance as argument.
+  - Calling the <php>ReflectionClass::initializeLazyObject()</php> or <php>markLazyObjectAsInitialized()</php> methods with the instance as argument.
 
-The <php>markAsInitialized()</php> method allows marking a lazy object as non-lazy without running the initializer, with uninitialized properties set to their default values (if any). This is useful for managed entity objects. Accessing a typed property before it is set throws an "uninitialized property" error if it has no default value.
+The <php>markLazyObjectAsInitialized()</php> method allows marking a lazy object as non-lazy without running the initializer, with uninitialized properties set to their default values (if any). This is useful for managed entity objects. Accessing a typed property before it is set throws an "uninitialized property" error if it has no default value.
 
 ==== Initialization Triggers ====
 
@@ -394,7 +394,7 @@ $reflector->resetAsLazyGhost($object, function () {});
 var_dump($id === spl_object_id($object)); // bool(true)
 var_dump($ref->get() === $object);        // bool(true)
 
-$reflector->initialize($object);
+$reflector->initializeLazyObject($object);
 var_dump($id === spl_object_id($object)); // bool(true)
 var_dump($ref->get() === $object);        // bool(true)
 </PHP>
@@ -415,31 +415,31 @@ The behavior of the <php>resetAsLazyProxy()</php> method is the same as <php>res
 
 The object itself becomes the proxy. Similarly to <php>resetAsLazyGhost()</php>, the object is not replaced by an other one, and its identity does not change, even after initialization. The proxy and the real instance are distinct objects, with distinct identities.
 
-=== ReflectionClass::isInitialized() ===
+=== ReflectionClass::isLazyObject() ===
 
 <PHP>
-    public function isInitialized(object $object): bool;
+    public function isLazyObject(object $object): bool;
 </PHP>
 
-The <php>isInitialized</php> method returns <php>true</php> if the object was initialized. It also returns <php>true</php> if the object has never been lazy, since an initialized lazy object is indistinguishable from an object that was never lazy.
+The <php>isLazyObject</php> method returns <php>true</php> if the object is not yet initialized. It returns <php>false</php> if the object was initialized, or if it has never been lazy, since an initialized lazy object is indistinguishable from an object that was never lazy.
 
-=== ReflectionClass::initialize() ===
+=== ReflectionClass::initializeLazyObject() ===
 
 <PHP>
-    public function initialize(object $object): object;
+    public function initializeLazyObject(object $object): object;
 </PHP>
 
-The <php>initialize()</php> method can be used to force initialization of a lazy object. It has no effect if the object is already initialized.
+The <php>initializeLazyObject()</php> method can be used to force initialization of a lazy object. It has no effect if the object is already initialized.
 
 The return value is the object itself for ghost objects, or the real instance for proxy objects.
 
-=== ReflectionClass::markAsInitialized() ===
+=== ReflectionClass::markLazyObjectAsInitialized() ===
 
 <PHP>
-    public function markAsInitialized(object $object): object;
+    public function markLazyObjectAsInitialized(object $object): object;
 </PHP>
 
-The <php>markAsInitialized()</php> method can be used to mark an object as initialized without calling the initializer. It has no effect if the object is already initialized.
+The <php>markLazyObjectAsInitialized()</php> method can be used to mark an object as initialized without calling the initializer. It has no effect if the object is already initialized.
 
 Its behavior is the same as described for Ghost Objects in the Initialization Sequence section, except that the initializer is not called.
 
@@ -707,7 +707,7 @@ There are several reasons for that:
   - These strategies benefit the most from being in the engine: userland implementation relies on complex magic accessors, is difficult to maintain as new PHP versions are released, and is slower than what can be achieved with engine support.
   - It's unclear if the engine would significantly help with inheritance-proxies: implementing or generating code to decorate methods is simpler.
 
-<php>ReflectionClass::initialize()</php> returns the backing object to aid in implementing inheritance-proxies in userland. The previous description was simplified: inheritance-proxies should also proxy public property accesses in addition to method calls.
+<php>ReflectionClass::initializeLazyObject()</php> returns the backing object to aid in implementing inheritance-proxies in userland. The previous description was simplified: inheritance-proxies should also proxy public property accesses in addition to method calls.
 
 Here is an example of a (non-optimized) lazy-loading inheritance-proxy using this RFC:
 
@@ -731,7 +731,7 @@ class LazyConnection extends Connection
 
     public function send(string $data): void
     {
-        new ReflectionClass($this)->initialize($this)->send($data);
+        new ReflectionClass($this)->initializeLazyObject($this)->send($data);
     }
 
     private function initialize(): parent
