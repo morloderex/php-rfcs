@@ -1,6 +1,6 @@
 ====== PHP RFC: Improve language coherence for the behaviour of offsets and containers ======
 
-  * Version: 0.2
+  * Version: 0.3
   * Date: 2023-12-07
   * Author: Gina Peter Banyard <girgias@php.net>
   * Status: Under Discussion
@@ -31,7 +31,7 @@ To explain the current language semantics we will describe and explain the diffe
 
 ==== Operations ====
 
-We consider there to be nine (9) different operations that relate to containers and offsets,
+We consider there to be ten (10) different operations that relate to containers and offsets,
 which are the following:
 
   * Read
@@ -43,6 +43,7 @@ which are the following:
   * Existence checks via the null coalesce operator <php>??</php>
   * Fetch
   * Fetch-Append
+  * Incrementing/Decrementing the offset of a container
 
 The read, write, read-write, appending, and unsetting operations are what one would expect.
 
@@ -59,6 +60,9 @@ For example <php>$r = &$container[];</php>, or a more common use <php>$container
 
 In general, a nested operation will perform all the necessary fetch/read operations,
 interpreting the returned value as a container, until it reaches the final dimension.
+
+Finally, we mention incrementing/decrementing because in general it should behave like <php>+= 1</php>,
+but as it works on a "reference" of the value, the behaviour is slightly tricky.
 
 ==== Container types ====
 
@@ -118,7 +122,7 @@ as the engine treats those container types identically.
 
   * For read operations, <php>null</php> is returned and the following warning is emitted: <code>Warning: Trying to access array offset on TYPE</code>
 
-  * For write, read-write, appending, fetch, and fetch-append operations, the following error is thrown:<code>Cannot use a scalar value as an array</code>
+  * For write, read-write, appending, fetch, fetch-append, and increment/decrement operations, the following error is thrown:<code>Cannot use a scalar value as an array</code>
 
   * For the unset operation, the following error is thrown:<code>Cannot unset offset in a non-array variable</code>
 
@@ -142,7 +146,7 @@ Therefore, the behaviour depending on the operator is as follows:
 
   * For write, append, fetch, and fetch-append operations the container is converted to array. And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
 
-  * For read-write operations, the container is converted to array, before the read operation. And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
+  * For read-write and increment/decrement operations, the container is converted to array, before the read operation. And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
 
   * For the unset operation, the container continues to be <php>null</php> and no warning or error is emitted/thrown.
 
@@ -159,7 +163,7 @@ Therefore, the behaviour depending on the operator is as follows:
 
   * For write, append, fetch, and fetch-append operations the container is converted to array, Emitting the following deprecation notice:<code>Deprecated: Automatic conversion of false to array is deprecated</code> And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type. Please see the <php>array</php> section for details.
 
-  * For read-write operations, the container is converted to array, before the read operation,
+  * For read-write and increment/decrement operations, the container is converted to array, before the read operation,
   Emitting the following deprecation notice: <code>Deprecated: Automatic conversion of false to array is deprecated</code> And thus behave like an <php>array</php>, meaning the behaviour depends on the offset type.  Please see the <php>array</php> section for details.
 
   * For the unset operation, the container continues to be <php>false</php> and the following deprecation notice is emitted: <code>Deprecated: Automatic conversion of false to array is deprecated</code>
@@ -511,6 +515,8 @@ The interface methods are called in the following way for the different operatio
 
   * Fetch Append: the <php>ArrayAccess::offsetGet($offset)</php> method is called with <php>$offset</php> being equal to <php>null</php>
 
+  * Increment/Decrement: behaves like a fetch operation
+
 Because <php>ArrayAccess::offsetGet($offset)</php> is called for fetching operations, if it does not return an object or by-reference,
 the following notice is emitted:
 <code>
@@ -795,7 +801,7 @@ to be supported or not by the class, while simplifying the implementation of sai
 
 Cross-version compatible code can use DNF types to type their input arguments, e.g:
 <PHP>
-function foo(ArrayAccess|(DimensionReadable&DimensionWritable)) {
+function foo(ArrayAccess|(DimensionFetchable&DimensionWritable)) {
     /* Do something useful */
 }
 </PHP>
@@ -879,6 +885,16 @@ As the <php>zend_class_arrayaccess_funcs</php> struct was only used by SPL,
 and it cannot fulfill its role anymore with the new dimension handlers,
 the struct is removed and alongside it the pointer to such a struct on the <php>zend_class_entry</php>.
 
+== Throw an Error when trying to increment or decrement an object offset ==
+
+Incrementing/decrementing an object offset results in fetch operation,
+whereas using <php>+=</php>/<php>-=</php> uses a Read-Write sequence,
+and usually when acting on object properties this is what happens.
+
+The current limitation is because we do not have sufficient specialized VM opcodes for this specific case.
+Therefore, we propose to hard error, like we do for string offsets, so that if we do add the relevant opcodes we can
+properly support the Read-Write behaviour.
+
 == Changes to ArrayObject ==
 
 The introduction of the new interfaces and handlers allows us to fix part of the implementation of <php>ArrayObject</php>
@@ -892,6 +908,7 @@ to follow the usual semantics of <php>array</php> and not break assumptions arou
     * Emit dynamic properties warning when using an object as a backing value that does not allow dynamic properties
     * Throw <php>Error</php> on writing to <php>readonly</php> properties
     * Throw <php>Error</php> on writing a value of the wrong type to a typed property
+    * Throw <php>Error</php> when using an <php>int</php> as a property
   * Continue to ignore any <php>__set()</php>/<php>__get()</php> magic methods
 
 Most of these changes are implemented as [[https://github.com/php/php-src/pull/12037|PR-12037]].
@@ -902,8 +919,10 @@ Supporting <php>ArrayAccess</php> in a backwards compatibility way is slightly t
 It is effectively extending <php>DimensionReadable</php>, <php>DimensioWriteable</php>, and <php>DimensionUnsettable</php>,
 but it also "supports" appending, fetching, and fetch-appending.
 
-Our solution is to add legacy dimension handlers to classes that implement <php>ArrayAccess</php>
-reproducing the current behaviour for appending, fetching and fetch-appending.
+The solution we came up with is for <php>ArrayAccess</php> to formally extend
+<php>DimensionReadable</php>, <php>DimensioWriteable</php>, and <php>DimensionUnsettable</php>;
+but also add legacy dimension handlers reproducing the current behaviour when appending, fetching, and fetch-appending
+such an object.
 However, if one of the new interfaces is implemented for dedicated support to appending, fetching,
 and fetch-appending, then the new behaviour is used.
 
@@ -949,6 +968,8 @@ This removes variations and a lot of complexity to the engine.
 
 The <php>array_key_exists()</php> function, and any objects mimicking array offsets, is also affected and would have the <php>resource</php>
 type removed from the union type for the <php>$key</php> parameter.
+
+Moreover, most code that expects resources as offsets already use an explicit <php>(int)</php> cast to suppress the warnings.
 
 == Emit warnings for invalid offset types on arrays ==
 
@@ -1030,6 +1051,32 @@ e.g. <php>CScalar</php>, <php>CArray</php>, <php>CPointer</php>.
 ==== Changes in PHP 9.0 ====
 
 Promote all warnings to <php>Error</php>
+
+===== Backward Incompatible Changes =====
+
+A recap of the BC breaking changes being introduced in PHP 8.4:
+
+  * New algorithm when calling <php>isset()</php>
+  * <php>resource</php> as an offset type for arrays would throw an <php>Error</php> as of PHP 8.4
+  * Trying to read offsets of a <php>MultipleIterator</php> object would throw an <php>Error</php> as of PHP 8.4
+  * Leading numeric string used as an offset for strings would throw an <php>Error</php> as of PHP 8.4
+  * Float numeric strings (i.e. non integer-numeric strings) used as an offset for strings would now throw an <php>Error</php> with the null coalesce operator <php>??</php> (in line with <php>isset()</php>)
+  * <php>ArrayObject</php> would behave more sensibly and in line with every other PHP object, rather than being weird
+
+A recap of the new warnings being introduced in PHP 8.4:
+
+  * A warning when checking the existence of an offset on invalid container types (except for <php>null</php>)
+  * A warning prior to reading an undefined offset when it is part of a read-write operation
+  * A warning is emitted when trying to use a value of type <php>null</php>, <php>bool</php>, or <php>float</php> as an array offset
+  * A warning is emitted when trying to check the existence of string offset with invalid offset types
+
+A recap of the deprecations being introduced in PHP 8.4:
+
+  * The <php>SplObjectStorage::contains()</php> method is deprecated in favour of <php>SplObjectStorage::offsetExists()</php>
+  * The <php>SplObjectStorage::detatch()</php> method is deprecated in favour of <php>SplObjectStorage::offsetUnset()</php>
+  * The <php>SplObjectStorage::attach()</php> method is deprecated in favour of <php>SplObjectStorage::offsetSet()</php>
+
+For details on each of those, refer to their relevant sections.
 
 ===== Version =====
 
