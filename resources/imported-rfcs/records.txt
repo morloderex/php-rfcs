@@ -1,0 +1,209 @@
+====== PHP RFC: Records ======
+  * Version: 0.9
+  * Date: 2024-07-19
+  * Author: Robert Landers, landers.robert@gmail.com
+  * Status: Draft (or Under Discussion or Accepted or Declined)
+  * First Published at: http://wiki.php.net/rfc/records
+
+===== Introduction =====
+
+In modern PHP development, the need for concise and immutable data structures is increasingly recognized. Inspired by the concept of "records" in other languages, this RFC proposes the addition of ''record'' objects in PHP. These records will provide a concise and immutable data structure, distinct from ''readonly'' classes, enabling developers to define immutable objects with less boilerplate code.
+
+===== Proposal =====
+
+This RFC proposes the introduction of a new record keyword in PHP to define immutable data objects. These objects will allow properties to be initialized concisely and will provide built-in methods for common operations such as modifying properties and equality checks using a function-like instantiation syntax. Records can implement interfaces and use traits but cannot extend other records or classes.
+
+=== Syntax and semantics ===
+
+== Definition ==
+
+<code php>
+namespace Geometry;
+
+interface Shape {
+  public function area(): float;
+}
+
+trait Dimension {
+  public function dimensions(): array {
+    return [$this->width, $this->height];
+  }
+}
+
+record Vector2(int $x, int $y);
+
+record Rectangle(Vector2 $leftTop, Vector2 $rightBottom) {
+  use Dimension;
+
+  public int $width { get => $this->rightBottom->x - $this->topLeft->x; }
+  public int $height { get => $this->rightBottom->y - $this->topLeft->y; }
+}
+</code>
+
+== Usage ==
+
+<code php>
+$rect1 = Rectangle(Point(0, 0), Point(1, -1));
+$rect2 = $rect1->with(topLeft: Point(0, 1));
+
+var_dump($rect2->dimensions());
+</code>
+
+== Optional parameters and default values ==
+
+<code php>
+record Rectangle(int $x, int $y = 10);
+var_dump(Rectangle(10)); // output a record with x: 10 and y: 10
+</code>
+
+== Auto-generated ''with'' method ==
+
+To enhance the usability of records, the RFC proposes automatically generating a with method for each record. This method allows for partial updates of properties, creating a new instance of the record with the specified properties updated.
+
+<code php>
+$point1 = Point(3, 4);
+$point2 = $point1->with(x: 5);
+
+echo $point1->x; // Outputs: 3
+echo $point2->x; // Outputs: 5
+</code>
+
+The auto-generated ''with'' method accepts named parameters corresponding to the properties of the record. It returns a new instance of the record with the specified properties updated.
+
+=== Performance considerations ===
+
+To ensure that records are both performant and memory-efficient, the RFC proposes leveraging PHP's copy-on-write (COW) semantics (similar to arrays) and interning values. Unlike interned strings, the garbage collector will be allowed to clean up these interned records when they are no longer needed.
+
+To optimize memory usage, unique instances of records will be stored in an interned pool. Weak references will be used to allow the garbage collector to clean up records when they are no longer in use.
+
+<code php>
+$point1 = Point(3, 4);
+$point2 = $point1; // No data duplication, $point2 references the same data as $point1
+$point3 = Point(3, 4); // No data duplication here either, it is pointing the the same memory as $point1
+
+$point4 = $point1->with(x: 5); // Data duplication occurs here, creating a new instance with modified data
+</code>
+
+==== Array keys ====
+
+Records can be used as keys in PHP arrays, leveraging their immutability and value-based equality semantics.
+
+=== Equality and hashing ===
+
+  * **Equality Check**: Records with the same properties and values are considered equal.
+  * **Hashing Mechanism**: A unique hash is generated based on the record's properties and values, ensuring efficient use as array keys.
+
+==== Reflection ====
+
+Records in PHP will be fully supported by the reflection API, providing access to their properties and methods just like regular classes. However, immutability and special instantiation rules will be enforced.
+
+=== ReflectionClass support ===
+
+''ReflectionClass'' can be used to inspect records, their properties, and methods. Any attempt to modify record properties via reflection will throw an exception, maintaining immutability. Attempting to create a new instance without calling the constructor will also raise an exception. 
+
+<code php>
+$point = Point(3, 4);
+$reflection = new \ReflectionClass($point);
+
+foreach ($reflection->getProperties() as $property) {
+    echo $property->getName() . ': ' . $property->getValue($point) . PHP_EOL;
+}
+</code>
+
+=== Immutability enforcement ===
+
+Attempts to modify record properties via reflection will throw an exception.
+
+<code php>
+try {
+    $property = $reflection->getProperty('x');
+    $property->setValue($point, 10); // This will throw an exception
+} catch (\ReflectionException $e) {
+    echo 'Exception: ' . $e->getMessage() . PHP_EOL; // "Cannot modify a record property"
+}
+</code>
+
+=== ReflectionFunction for implicit constructor ===
+
+Using ''ReflectionFunction'' on a record will reflect the implicit constructor, showing how properties are initialized.
+
+<code php>
+$constructor = new \ReflectionFunction('Geometry\Point');
+echo 'Constructor Parameters: ';
+foreach ($constructor->getParameters() as $param) {
+    echo $param->getName() . ' ';
+}
+</code>
+
+=== Forbidden Custom Constructors ===
+
+Records cannot have custom instantiation logic beyond the implicit constructor defined by their properties. Any attempt to define a custom constructor will result in an error.
+
+<code php>
+record Point(int $x, int $y) {
+    // No custom constructor allowed
+    // public function __construct(int $x, int $y) {
+    //     $this->x = $x;
+    //     $this->y = $y;
+    // }
+}
+</code>
+
+==== Considerations for implementations ====
+
+A ''record'' cannot be named after an existing ''record'', ''class'' or ''function''. This is because defining a ''record'' creates both a ''class'' and a ''function'' with the same name from the perspective of a developer. 
+
+===== Backward Incompatible Changes =====
+No backward incompatible changes.
+
+===== Proposed PHP Version(s) =====
+PHP 8.5
+
+===== RFC Impact =====
+==== To SAPIs ====
+N/A
+
+==== To Existing Extensions ====
+N/A
+
+==== To Opcache ====
+Unknown.
+
+==== New Constants ====
+None
+
+==== php.ini Defaults ====
+None
+
+===== Open Issues =====
+Todo
+
+===== Unaffected PHP Functionality =====
+
+None.
+
+===== Future Scope =====
+
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+
+TBD
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
+
+
+
