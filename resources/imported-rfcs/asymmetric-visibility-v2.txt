@@ -324,44 +324,17 @@ If a class is marked ''readonly'', then by design its impact is identical to if 
 
 ==== Interaction with __set and __unset ====
 
-The behavior of <php>__set</php> in PHP today is rather inconsistent.
+The behavior of <php>__set</php> in PHP today is rather inconsistent.  When accessing a property, if <php>__set</php> is defined, it will be called if:
 
-  * If a property is undefined, <php>__set</php> is triggered.
-  * If a property is defined but not visible, <php>__set</php> is triggered.
-  * If a property is defined but readonly, <php>__set</php>  is NOT triggered.
-  * But if a property is defined but readonly, //and// it has been explicitly <php>unset()</php>, then <php>__set</php> will be triggered.
-  * As of PHP 8.4, if a virtual property has no ''set'' hook, then <php>__set</php> is NOT triggered.
+  - The accessed property does not exist.
+  - The accessed property's visibility is tighter than the calling scope.
+  - The property has been explicitly <php>unset()</php>
 
-This creates a problem, especially for ''public protected(set) readonly'' properties.  If "it's not visible" wins, then <php>__set</php> should trigger.  If ''readonly'' wins, then <php>__set</php> will sometimes trigger.  Either way, it will be inconsistent with something else in the language.
+The introduction of asymmetric visibility affects the second case, as it's possible now for a property to be visible but not writeable.  For the time being, we have opted to not modify the logic; that is, it is only the "overall" (get) visibility that can trigger calling <php>__set</php>.  A <php>public protected(set)</php> property will not trigger a <php>__set</php> method if written to publicly; it will simply error, as though <php>__set</php> were not defined.  A <php>protected private(set)</php> will, however, to be consistent with current behavior.
 
-The same question applies for non-readonly asymmetric properties.  If they can trigger <php>__set</php> like symmetric properties, that's inconsistent with ''readonly'', which as discussed is asymmetric-ish.  If they do not trigger <php>__set</php>, they're inconsistent with symmetric properties.
+This approach has the least impact on existing behavior, including zero BC breaks for existing code.
 
-After some consideration, we have determined that a property with asymmetric visibility will //not// trigger <php>__set</php> if accessed from a disallowed scope.  The reasoning is as follows:
-
-  * This option involves no BC break.
-  * This option is easier to revisit in the future if desired.
-  * The use cases for triggering <php>__set</php> on a defined-but-invisible property are limited, and many are of dubious value or safety.
-  * Most of those use cases now have better alternatives anyway.  Namely, hooks and asymmetric visibility can cover nearly all the reasonable use cases for that behavior in a more robust and self-documenting way.  That is, we do not believe this behavior is useful in the first place with asymmetric properties.
-
-In particular, the ''readonly''/<php>unset()</php> trick exists primarily to support a [[https://peakd.com/hive-168588/@crell/php-tricks-lazy-public-readonly-properties|work-around lazy-instantiation technique]].  However, in 8.4 that technique will be fully replicable far more easily with hooks and asymmetric visibility, like so:
-
-<code php>
-class Person 
-{
-    public private(set) string $full { get => $this->full ??= "$this->first $this->last" };
-
-    public function __construct(
-        private string $first,
-        private string $last,
-    ) {}
-}
-</code>
-
-Which achieves the same effect in far less code and far more specificity.
-
-For now, a ''readonly'' property will continue to have the <php>unset()</php>-sensitive behavior, regardless of its ''set'' visibility.  That ensures there is no BC break.
-
-However, it is worth revisiting in the future if that behavior even makes sense anymore, or if the <php>__set</php> triggering behavior for defined-but-invisible properties still makes sense.  Changing either of those would require a deprecation period and could only change in a major version.  This RFC makes no moves in that direction, but it is something to consider in the future.
+A good argument can be made that, with the advent of property types, property hooks, and asymmetric visibility, the use cases for the fallback to <php>__set</php> on a defined property are now better covered by dedicated, more self-descriptive functionality.  We believe it would be prudent to revisit that behavior in the future, and consider removing cases 2 and 3 above entirely.  That is left for a future deprecation RFC, however, and this RFC makes no changes in that direction.
 
 ==== Typed properties ====
 
