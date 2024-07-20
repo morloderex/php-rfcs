@@ -280,65 +280,9 @@ class ExampleE implements Aged
 }
 </code>
 
-==== Interaction with __set and __unset ====
-
-In PHP 8.3, when a property is read or written and it is not defined and visible from the calling scope, the <php>__get</php> and <php>__set</php> magic methods are called instead, if defined.
-
-Asymmetric visibility does not change that logic; it only allows the read and write sides to behave separately.  That is, if a property is publicly readable but only private or protected writeable, and <php>__set</php> is defined, then <php>__set</php> will be called for that but <php>__get</php> will never be called for that property.  For example:
-
-<code php>
-class Example
-{
-    public private(set) bool $open = true;
-
-    public private(set) string $name;
-    
-    public function setOpen(bool $open): void
-    {
-        $this->open = $open;
-    }
-    
-    public function __set($var, $val): void
-    {
-        if ($var === 'name') {
-            if ($this->open) {
-                $this->name = $val;
-            } else {
-                throw new LockedException('I cannot do that, Dave.');
-            }
-        }
-    }
-    
-    public function forceName(string $name): void
-    {
-      $this->name = $name . ' (forced)';
-    }
-}
-
-$e = new Example();
-
-// This triggers __set, and since the object
-// is $open, writes the property from private scope.
-$e->name = 'Larry';
-
-$e->setOpen(false);
-
-// This triggers __set, and since the object is not $open
-// __set throws an exception.
-$e->name = 'Ilija';
-
-// This calls a normal method, which has private write
-// to the property, so runs fine and sets "Ilija (forced)"
-$e->forceName('Ilija');
-</code>
-
-If <php>__set()</php> is not defined, the write will fail with an error regardless.
-
-The logic for calling ''unset()'' externally (and thus triggering <php>__unset()</php>) is the same.
-
 ==== Relationship with readonly ====
 
-The ''readonly'' flag, introduced in PHP 8.1, is, really two flags in one: write-once and ''private(set)''.  While that is sometimes sufficient, there are cases where protected-set is desired, and while few, there are use cases for public-set-once.  However, it also has special case handling to allow a ''readonly'' property to be overridden by a child class without creating an entirely new property.  This effectively sidesteps the whole point of private anyway.  It also would create an inconsistency with an explicit ''private(set)'', which as noted above is necessarily also ''final''.
+The ''readonly'' flag, introduced in PHP 8.1, is really two flags in one: write-once and ''private(set)''.  While that is sometimes sufficient, there are cases where protected-set is desired, and while few, there are use cases for public-set-once.  However, it also has special case handling to allow a ''readonly'' property to be overridden by a child class without creating an entirely new property.  This effectively sidesteps the whole point of private anyway.  It also would create an inconsistency with an explicit ''private(set)'', which as noted above is necessarily also ''final''.
 
 We have decided the best way forward is to change the behavior of ''readonly'' to imply ''protected(set)'', not ''private(set)''.  That eliminates the inconsistency in ''readonly'''s existing behavior, as well as eliminating an inconsistency with ''private(set)''.
 
@@ -377,6 +321,47 @@ protected public(set) readonly string $foo;
 </code>
 
 If a class is marked ''readonly'', then by design its impact is identical to if every property was individually marked ''readonly''.  There is no special logic there.
+
+==== Interaction with __set and __unset ====
+
+The behavior of <php>__set</php> in PHP today is rather inconsistent.
+
+  * If a property is undefined, <php>__set</php> is triggered.
+  * If a property is defined but not visible, <php>__set</php> is triggered.
+  * If a property is defined but readonly, <php>__set</php>  is NOT triggered.
+  * But if a property is defined but readonly, //and// it has been explicitly <php>unset()</php>, then <php>__set</php> will be triggered.
+  * As of PHP 8.4, if a virtual property has no ''set'' hook, then <php>__set</php> is NOT triggered.
+
+This creates a problem, especially for ''public protected(set) readonly'' properties.  If "it's not visible" wins, then <php>__set</php> should trigger.  If ''readonly'' wins, then <php>__set</php> will sometimes trigger.  Either way, it will be inconsistent with something else in the language.
+
+The same question applies for non-readonly asymmetric properties.  If they can trigger <php>__set</php> like symmetric properties, that's inconsistent with ''readonly'', which as discussed is asymmetric-ish.  If they do not trigger <php>__set</php>, they're inconsistent with symmetric properties.
+
+After some consideration, we have determined that a property with asymmetric visibility will //not// trigger <php>__set</php> if accessed from a disallowed scope.  The reasoning is as follows:
+
+  * This option involves no BC break.
+  * This option is easier to revisit in the future if desired.
+  * The use cases for triggering <php>__set</php> on a defined-but-invisible property are limited, and many are of dubious value or safety.
+  * Most of those use cases now have better alternatives anyway.  Namely, hooks and asymmetric visibility can cover nearly all the reasonable use cases for that behavior in a more robust and self-documenting way.  That is, we do not believe this behavior is useful in the first place with asymmetric properties.
+
+In particular, the ''readonly''/<php>unset()</php> trick exists primarily to support a [[https://peakd.com/hive-168588/@crell/php-tricks-lazy-public-readonly-properties|work-around lazy-instantiation technique]].  However, in 8.4 that technique will be fully replicable far more easily with hooks and asymmetric visibility, like so:
+
+<code php>
+class Person 
+{
+    public private(set) string $full { get => $this->full ??= "$this->first $this->last" };
+
+    public function __construct(
+        private string $first,
+        private string $last,
+    ) {}
+}
+</code>
+
+Which achieves the same effect in far less code and far more specificity.
+
+For now, a ''readonly'' property will continue to have the <php>unset()</php>-sensitive behavior, regardless of its ''set'' visibility.  That ensures there is no BC break.
+
+However, it is worth revisiting in the future if that behavior even makes sense anymore, or if the <php>__set</php> triggering behavior for defined-but-invisible properties still makes sense.  Changing either of those would require a deprecation period and could only change in a major version.  This RFC makes no moves in that direction, but it is something to consider in the future.
 
 ==== Typed properties ====
 
