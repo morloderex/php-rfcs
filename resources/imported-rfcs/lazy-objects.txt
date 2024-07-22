@@ -506,15 +506,27 @@ The property is marked as non-lazy just before updating its value. If any other 
 
 ==== Cloning ====
 
-The result of cloning an uninitialized lazy object is a new lazy object with the same initializer, and the same initialized properties (if <php>ReflectionProperty::setRawValueWithoutLazyInitialization()</php> or <php>skipLazyInitialization()</php> were used).
+The result of cloning an uninitialized lazy object is a new lazy object with the same initialized properties (if <php>ReflectionProperty::setRawValueWithoutLazyInitialization()</php> or <php>skipLazyInitialization()</php> were used). If any, the <php>__clone()</php> method is called synchronously with the <php>clone</php> operator, which may trigger lazy-initialization or not depending on the implementation of the method. For proxy objects, the <php>__clone()</php> method is called on the proxy itself (not the real instance).
 
-The initializer itself is not cloned (the original object and its clone have the same initializer). If necessary, an initializer can detect being called on a clone by comparing the initializer argument with the original lazy object. See the example in the Initialization Sequence section.
+Clones remain connected to the lazy object they are cloned from (the original object) until they are initialized. Initialization differs between ghosts and proxies, but can be described conceptually as follows: After the original object is initialized, a snapshot of it is created. Whenever a clone is initialized, its properties are initialized to the value of the snapshot properties. The exact behavior is specified below.
 
-For uninitialized ghost objects: if the object implements the <php>__clone()</php> magic method, and it accesses properties, initialization may be triggered before the object is returned by the <php>clone</php> operator.
+For ghost clones: Whenever initialization of any of the connected objects is triggered, all of them are initialized as follows:
 
-For uninitialized lazy proxies, cloning of the real instance (which does not exist yet) is postponed to the moment where the proxy clone is initialized, just after calling the factory function. This cloning might trigger the <php>__clone()</php> method on the real instance if any (not on the proxy).
+  * The original object is initialized first by calling the initializer.
+  * The clones are marked as initialized (without calling the initializer) and then all the properties that are still marked as lazy are copied from the original object to the clone as if the ``=`` operator was used.
 
-Cloning an initialized lazy proxy clones the real instance into the proxy clone. If any, the <php>__clone()</php> method is called on the real instance (not on the proxy).
+For proxy clones: Whenever initialization of any of the connected objects is triggered, it is initialized as follows:
+
+  * If the original object still is uninitialized:
+    * The original object is initialized by calling the initializer.
+    * A snapshot of the real instance is created by cloning it, without calling <php>__clone()</php> 
+  * If a clone is being initialized:
+    * The snapshot is used as real instance
+    * A new snapshot is created by cloning it again, unless this was the last uninitialized clone
+
+From a reflection point of view, <php>ReflectionClass::getLazyInitializer()</php> on an uninitialized clone shall return an internal closure that implements the described logic.
+
+Cloning an initialized lazy proxy clones the proxy itself and its real instance into the proxy clone. If any, the <php>__clone()</php> method is called on the proxy.
 
 ==== Readonly properties ====
 
