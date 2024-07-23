@@ -175,7 +175,7 @@ PHP already allows child classes to redeclare parent class properties, if and on
 
 One caveat, however, is that, currently, a ''private'' field is "shadowed" if redeclared in a child class; it's visibility is not widened, it's a completely different property.  If a property is ''protected private(set)'' only, then it's not clear if a reimplementation should create a new property (following the private rule) or not (following the protected rule).  Neither one makes sense.
 
-For that reason, a ''private(set)'' property is automatically ''final'' and may not be redeclared at all.
+For that reason, a ''private(set)'' property is automatically ''final'' and may not be redeclared at all.  (Explicitly declaring such a property final is still allowed, just redundant.)
 
 That means, for instance, the following is legal:
 
@@ -209,6 +209,17 @@ class B extends A {
     // This is an error.
     public protected(set) string $foo;
 }
+</code>
+
+Note that, for the purposes of visibility inheritance, the absence of an operation is treated as "never" (or narrower than ''private'').  That means the following is allowed, because in the parent class there is no set operation at all, so child visibility on set will be wider than that.
+
+<code php>
+   class P {
+       public $answer { get => 42; }
+   }
+   class C extends P {
+       public protected(set) $answer { get => 42; set => print "Why?"; }
+   }
 </code>
 
 ==== Interaction with property hooks ====
@@ -330,11 +341,11 @@ The behavior of <php>__set</php> in PHP today is rather inconsistent.  When acce
   - The accessed property's visibility is tighter than the calling scope.
   - The property has been explicitly <php>unset()</php>
 
-The introduction of asymmetric visibility affects the second case, as it's possible now for a property to be visible but not writeable.  For the time being, we have opted to not modify the logic; that is, it is only the "overall" (get) visibility that can trigger calling <php>__set</php>.  A <php>public protected(set)</php> property will not trigger a <php>__set</php> method if written to publicly; it will simply error, as though <php>__set</php> were not defined.  A <php>protected private(set)</php> will, however, to be consistent with current behavior.
+The introduction of asymmetric visibility affects the second case, as it's possible now for a property to be visible but not writeable.  We have opted to not modify the logic; that is, it is only the "overall" (get) visibility that can trigger calling <php>__set</php>.  A <php>public protected(set)</php> property will not trigger a <php>__set</php> method if written to publicly; it will simply error, as though <php>__set</php> were not defined.  A <php>protected private(set)</php> will, however, to be consistent with current behavior.
 
-This approach has the least impact on existing behavior, including zero BC breaks for existing code.
+This approach has the least impact on existing behavior, including zero BC breaks for existing code.  While we do not believe it would be appropriate to expand case 2 to be triggered by set-scope specifically, it would be possible to do in the future without a BC break (as it would change a fatal-error pathway to a functional pathway) if there is a consensus to do so.
 
-A good argument can be made that, with the advent of property types, property hooks, and asymmetric visibility, the use cases for the fallback to <php>__set</php> on a defined property are now better covered by dedicated, more self-descriptive functionality, and cases 2 and 3 above are no longer necessary.  Conversely, it would also be possible to expand it such that case 2 is triggered by the set-scope specifically.  For now, we are doing neither, as that topic warrants its own discussion in the future.
+Conversely, a good argument can be made that, with the advent of property types, property hooks, and asymmetric visibility, the use cases for the fallback to <php>__set</php> on a defined property are now better covered by dedicated, more self-descriptive functionality, and cases 2 and 3 above are no longer necessary.  (That's one of the reasons to not expand case 2 now.)  That would be a larger discussion that is out of scope for this RFC, so it makes no changes to that logic at this time.
 
 ==== Typed properties ====
 
