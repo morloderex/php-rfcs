@@ -214,15 +214,12 @@ The proxy object is _not_ replaced or substituted for the real instance. After i
 
 The real instance is allowed to escape the proxy and to create direct references to itself. This is demonstrated in the section named "About Proxies". The proxy may be released independently of the real instance when it's not referenced anymore. The proxy and real instance have distinct identities. 
 
-Although the initializer receives the proxy object as first parameter, it is not expected to make changes to it (this is allowed, but any changes will be lost during the last step of the initialization). However, the proxy object can be used to make decisions based on the value of some initialized field, or on the class or the object, or on its identity. For example, we can use the object identity to detect clones:
+Although the initializer receives the proxy object as first parameter, it is not expected to make changes to it (this is allowed, but any changes will be lost during the last step of the initialization). However, the proxy object can be used to make decisions based on the value of some initialized property, or on the class or the object, or on its identity. For example, the initializer may use the value of an initialized property:
 
 <PHP>
-$init = function ($object) use (&$originalObject) {
-    if ($object !== $originalObject) {
-        // we are initializing a clone
-    }
-};
-$originalObject = $reflector->newLazyProxy($init);
+$proxy = $reflector->newLazyProxy(function ($proxy) {
+    return new MyClass($proxy->id);
+});
 </PHP>
 
 <php>get_class()</php> or the <php>::class</php> constant evaluate to the class name of the proxy, regardless of the actual instance.
@@ -493,6 +490,8 @@ If the property is not lazy, this method has no effect.
 
 The primary use-case of <php>skipLazyInitialization()</php> and <php>setRawValueWithoutLazyInitialization()</php> is to initialize properties whose value is already known and whose access should not trigger initialization. For example, an ORM may initialize the properties representing the identity of an entity.
 
+We expect that code using this method cooperates with the initializer, or that the initializer is aware of skipped properties.
+
 === ReflectionProperty::setRawValueWithoutLazyInitialization() ===
 
 <PHP>
@@ -505,29 +504,17 @@ The method does not call hooks, if any, when setting the property value.
 
 The property is marked as non-lazy just before updating its value. If any other property is accessed as a side-effect the update, initialization of the object may be triggered. Such side-effects can be triggered by <php>__toString()</php> on the new value, or <php>__destruct()</php> on the previous value, for example. If an exception prevents updating the update, and the object has not been initialized, the property is marked as lazy again.
 
+We expect that code using this method cooperates with the initializer, or that the initializer is aware of initialized properties.
+
 ==== Cloning ====
 
-The result of cloning an uninitialized lazy object is a new lazy object with the same initialized properties (if <php>ReflectionProperty::setRawValueWithoutLazyInitialization()</php> or <php>skipLazyInitialization()</php> were used). If any, the <php>__clone()</php> method is called synchronously with the <php>clone</php> operator, which may trigger lazy-initialization or not depending on the implementation of the method. For proxy objects, the <php>__clone()</php> method is called on the proxy itself (not the real instance).
+Cloning a lazy object triggers its initialization. After that, the result depend on the strategy being used:
 
-Clones remain connected to the lazy object they are cloned from (the original object) until they are initialized. Initialization differs between ghosts and proxies, but can be described conceptually as follows: After the original object is initialized, a snapshot of it is created. Whenever a clone is initialized, its properties are initialized to the value of the snapshot properties. The exact behavior is specified below.
+For ghost objects: The object is cloned and the clone is returned.
 
-For ghost clones: Whenever initialization of any of the connected objects is triggered, all of them are initialized as follows:
+For proxy objects: The proxy object and its real instance are cloned. The <php>__clone()</php> method is called on the real instance and not on the proxy.
 
-  * The original object is initialized first by calling the initializer.
-  * The clones are marked as initialized (without calling the initializer) and then all the properties that are still marked as lazy are copied from the original object to the clone as if the <php>=</php> operator was used.
-
-For proxy clones: Whenever initialization of any of the connected objects is triggered, it is initialized as follows:
-
-  * If the original object still is uninitialized:
-    * The original object is initialized by calling the initializer.
-    * A snapshot of the real instance is created by cloning it, without calling <php>__clone()</php> 
-  * If a clone is being initialized:
-    * The snapshot is used as real instance
-    * A new snapshot is created by cloning it again (without calling <php>__clone()</php>), unless this was the last uninitialized clone
-
-From a reflection point of view, <php>ReflectionClass::getLazyInitializer()</php> on an uninitialized clone shall return an internal closure that implements the described logic.
-
-Cloning an initialized lazy proxy clones the proxy itself and its real instance into the proxy clone. If any, the <php>__clone()</php> method is called on the proxy.
+Rationale: Initialization before cloning ensures that a clone and the original object have separate states. That is, updating the original object or the state of its initializer after cloning should not have an impact on the clone.
 
 ==== Readonly properties ====
 
@@ -783,6 +770,8 @@ In use-cases where the proxy and the real instance are not instances of the same
 
 ===== Future scope =====
 
+==== Higher level syntax ====
+
 Lazy objects are an advanced feature that most users will not use directly. This feature is primarily targeted at library and framework authors.
 
 FFI and Fibers are examples of features recently added to PHP that most users may not use directly, but can benefit from greatly within libraries they use.
@@ -791,7 +780,15 @@ As such, the authors do not plan to add higher-level syntax for creating lazy ob
 
 Furthermore, it is not intended to add class-centric constructs based on attributes or magic methods, as this approach is orthogonal to the objective of this RFC, which is to create lazy objects without requiring cooperation from the class.
 
-However, it is possible to introduce a higher-level syntax or class-centric constructs in a future RFC. 
+However, it is possible to introduce a higher-level syntax or class-centric constructs in a future RFC.
+
+==== Lazy cloning ====
+
+The RFC proposes that the <php>clone</php> operator initialize the object before cloning it. This ensures that the state of the clone is independent from the object is was cloned for and avoids inconsistencies when properties are initialized with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>.
+
+Although it may be possible to implement lazy cloning while preserving <php>clone</php> semantics, numerous edge cases with non-lazy properties make this very complex. Furthermore, we expect that in practice, most clone operations will be closely followed by an initialization of either the clone or the original object, so the extra complexity may not be worth it.
+
+However, it may be possible to make cloning lazy in the future by introducing a new flag (e.g. <php>DEFER_CLONE</php>).
 
 ===== Backward Incompatible Changes =====
 
