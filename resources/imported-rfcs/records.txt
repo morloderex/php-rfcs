@@ -7,7 +7,7 @@
 
 ===== Introduction =====
 
-In modern PHP development, the need for concise and immutable data structures is increasingly recognized. Inspired by the concept of "records" in other languages, this RFC proposes the addition of ''record'' objects in PHP. These records will provide a concise and immutable data structure, distinct from ''readonly'' classes, enabling developers to define immutable objects with less boilerplate code.
+In modern PHP development, the need for concise and immutable data structures is increasingly recognized. Inspired by the concept of "records", "data objects", or "structs" in other languages, this RFC proposes the addition of ''record'' objects in PHP. These records will provide a concise and immutable data structure, distinct from ''readonly'' classes, enabling developers to define immutable objects with less boilerplate code.
 
 ===== Proposal =====
 
@@ -16,6 +16,14 @@ This RFC proposes the introduction of a new record keyword in PHP to define immu
 === Syntax and semantics ===
 
 == Definition ==
+
+A ''record'' is defined by the word "record", followed by the name of its type, an open parenthesis containing zero or more typed parameters that become public properties. They may optionally implement an interface using the ''implements'' keyword.
+
+A ''record'' may NOT contain a constructor; instead of defining initial values, property hooks should be used to produce computable values on-demand.
+
+A ''record'' body may contain property hooks, methods, and use traits. Regular properties may also be defined, but they are immutable by default and are no different than ''const''.
+
+Static properties and methods are forbidden in a ''record'' (this includes ''const'', a regular property may be used instead).
 
 <code php>
 namespace Geometry;
@@ -34,6 +42,8 @@ record Vector2(int $x, int $y);
 
 record Rectangle(Vector2 $leftTop, Vector2 $rightBottom) implements Shape {
   use Dimension;
+  
+  public int $height = 1; // this will always and forever be "1", it is immutable.
 
   public int $width { get => $this->rightBottom->x - $this->topLeft->x; }
   public int $height { get => $this->rightBottom->y - $this->topLeft->y; }
@@ -46,6 +56,8 @@ record Rectangle(Vector2 $leftTop, Vector2 $rightBottom) implements Shape {
 
 == Usage ==
 
+A ''record'' may be used as a ''readonly class'', as the behavior of it is very similar with no key differences. This is important for migration from a readonly class to a record.
+
 <code php>
 $rect1 = Rectangle(Point(0, 0), Point(1, -1));
 $rect2 = $rect1->with(topLeft: Point(0, 1));
@@ -55,6 +67,8 @@ var_dump($rect2->dimensions());
 
 == Optional parameters and default values ==
 
+A ''record'' can also be defined with optional parameters that are set if left out during instantiation.
+
 <code php>
 record Rectangle(int $x, int $y = 10);
 var_dump(Rectangle(10)); // output a record with x: 10 and y: 10
@@ -62,23 +76,22 @@ var_dump(Rectangle(10)); // output a record with x: 10 and y: 10
 
 == Auto-generated ''with'' method ==
 
-To enhance the usability of records, the RFC proposes automatically generating a with method for each record. This method allows for partial updates of properties, creating a new instance of the record with the specified properties updated.
+To enhance the usability of records, the RFC proposes automatically generating a ''with'' method for each record. This method allows for partial updates of properties, creating a new instance of the record with the specified properties updated.
+
+The auto-generated ''with'' method accepts only named arguments defined in the constructor. No other property names can be used and it returns a new record object with the given values.
 
 <code php>
 $point1 = Point(3, 4);
 $point2 = $point1->with(x: 5);
+$point3 = $point1->with(null, 10); // must use named arguments
 
 echo $point1->x; // Outputs: 3
 echo $point2->x; // Outputs: 5
 </code>
 
-The auto-generated ''with'' method accepts named parameters corresponding to the properties of the record. It returns a new instance of the record with the specified properties updated.
-
 === Performance considerations ===
 
 To ensure that records are both performant and memory-efficient, the RFC proposes leveraging PHP's copy-on-write (COW) semantics (similar to arrays) and interning values. Unlike interned strings, the garbage collector will be allowed to clean up these interned records when they are no longer needed.
-
-To optimize memory usage, unique instances of records will be stored in an interned pool. Weak references will be used to allow the garbage collector to clean up records when they are no longer in use.
 
 <code php>
 $point1 = Point(3, 4);
@@ -88,14 +101,21 @@ $point3 = Point(3, 4); // No data duplication here either, it is pointing the th
 $point4 = $point1->with(x: 5); // Data duplication occurs here, creating a new instance with modified data
 </code>
 
+== Cloning and with() ===
+
+Calling ''clone'' on a ''record'' results in the exact same record object being returned. As it is a "value" object, it represents a value and is the same thing as saying ''clone 3''—you expect to get back a ''3''.
+
+''with'' may be called with no arguments, and it is the same behavior as ''clone''. This is an important consideration because a developer may call ''$new = $record->with(...$array)'' and we don't want to crash. If a developer wants to crash, they can do by ''assert($new !== $record)''.
+
 ==== Array keys ====
 
-Records can be used as keys in PHP arrays, leveraging their immutability and value-based equality semantics.
+In implementation, there are two "types" of ''records'': constant records and dynamic records. Constant records are made up of other records and/or scalar values, and dynamic records contain regular objects that may have a dynamic state. In the future, we may consider adding support for using constant records as array keys.
 
-=== Equality and hashing ===
+=== Equality ===
 
-  * **Equality Check**: Records with the same properties and values are considered equal.
-  * **Hashing Mechanism**: A unique hash is generated based on the record's properties and values, ensuring efficient use as array keys.
+A ''record'' is always strongly equal (''==='') to another record with the same value in the properties, much like an ''array'' is strongly equal to another array containing the same elements. For all intents, ''$recordA === $recordB'' is the same as ''$recordA == $recordB''.
+
+Comparison operations will behave exactly like they do for classes currently.
 
 ==== Reflection ====
 
