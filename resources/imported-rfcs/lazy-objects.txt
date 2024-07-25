@@ -173,6 +173,7 @@ Except for the special cases listed below, any attempt to observe the state of a
   * Testing if a property is set or unsetting it
   * Calling <php>ReflectionProperty::get[Raw]Value()</php> and <php>set[Raw]Value()</php>
   * Calling <php>ReflectionObject::getProperties()</php> or <php>ReflectionObject::getProperty()</php>
+  * Cloning (see the "Cloning" section)
 
 This behavior makes lazy objects fully transparent to their consumers.
 
@@ -185,7 +186,6 @@ The following special cases do not trigger initialization of a lazy object:
   * Calls to <php>ReflectionObject::__toString()</php>.
   * Calls to <php>var_dump($lazyObject)</php>, unless ''%%__debugInfo()%%'' is implemented and accesses a property.
   * Calls to <php>debug_zval_dump($lazyObject)</php>
-  * Cloning, unless ''%%__clone()%%'' is implemented and accesses a property.
 
 By excluding these cases from triggering initialization, developers can perform certain operations on lazy objects without causing them to initialize, providing finer control over the initialization process.
 
@@ -205,9 +205,9 @@ After initialization, the object is indistinguishable from an object that was ne
 
   - Before calling the initializer, the object is marked as non-lazy by detaching it from its initializer. Unlike ghost objects, non-skipped properties are not set to their default value as this would cost some CPU cycles for no practical reasons.
   - The initializer is called with the lazy proxy as first parameter.
-  - The return value of the initializer has to be an instance the same class as the lazy-object, or a parent as long as the proxy does not declare additional properties and doesn't override the <php>__destructor</php> or <php>__clone</php> methods. If these conditions are not true, a <php>TypeError</php> is thrown. See the "Notes" section.
+  - The return value of the initializer has to be an instance the same class as the lazy-object, or a parent as long as the proxy does not declare additional properties and doesn't override the <php>__destruct()</php> or <php>__clone()</php> methods. If these conditions are not true, a <php>TypeError</php> is thrown. See the "Notes" section.
   - The real instance is set to the return value.
-  - The value of properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> is discarded.
+  - The value of properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php> is discarded as if <php>unset()</php> was called.
   - After that, any property access on the proxy is forwarded to the real instance. This includes declared, dynamic, non-existing, or properties used with <php>ReflectionProperty::skipLazyInitialization()</php> or <php>setRawValueWithoutLazyInitialization()</php>.
 
 The proxy object is _not_ replaced or substituted for the real instance. After initialization, property accesses on the proxy are forwarded to the real instance. Observing properties of the real instance has the same result as observing the corresponding properties of the proxy.
@@ -221,8 +221,6 @@ $proxy = $reflector->newLazyProxy(function ($proxy) {
     return new MyClass($proxy->id);
 });
 </PHP>
-
-<php>get_class()</php> or the <php>::class</php> constant evaluate to the class name of the proxy, regardless of the actual instance.
 
 === Common Behavior ===
 
@@ -766,9 +764,11 @@ Returning an instance of a sub-class is not allowed as it would lead to [[https:
 
 Returning an instance of a parent class is not allowed if the proxy class declares additional properties. It would imply that the proxy has a state of its own, which is far-reaching in the implementation. This would impact the behavior of <php>get_object_vars()</php>, <php>foreach</php>, <php>json_encode()</php>, <php>serialize()</php>, etc. Most importantly it would lead to inconsistencies when dynamic properties are involved, as demonstrated in [[https://gist.github.com/arnaud-lb/ef41cdb33c304da9d5839b720804f225|this example]].
 
-Furthermore, the proxy can not override the instance's <php>__destructor</php> or <php>__clone</php> methods. This makes it more obvious which implementation is called, and also opens the possibility of revisiting this without BC breaks in the future.
+Furthermore, the proxy can not override the instance's <php>__destruct()</php> or <php>__clone()</php> methods. This makes it more obvious which implementation is called, and also opens the possibility of revisiting this without BC breaks in the future.
 
 In use-cases where the proxy and the real instance are not instances of the same class, the proxy is considered to be aware of laziness, so it can adhere to these constraints.
+
+The externally visible type of a lazy proxy is the type of the proxy object, even if the real object is of a parent type. This includes the get_class() function, the ::class constant, the instanceof operator and type checking in parameter, return and property types.
 
 ===== Future scope =====
 
