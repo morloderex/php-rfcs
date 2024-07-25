@@ -17,13 +17,13 @@ This RFC proposes the introduction of a new record keyword in PHP to define immu
 
 == Definition ==
 
-A ''record'' is defined by the word "record", followed by the name of its type, an open parenthesis containing zero or more typed parameters that become public properties. They may optionally implement an interface using the ''implements'' keyword.
+A ''record'' is defined by the word "record", followed by the name of its type, an open parenthesis containing zero or more typed parameters that become public, immutable, properties. They may optionally implement an interface using the ''implements'' keyword.
 
-A ''record'' may NOT contain a constructor; instead of defining initial values, property hooks should be used to produce computable values on-demand.
+A ''record'' may NOT contain a constructor; instead of defining initial values, property hooks should be used to produce computable values on-demand. Defining a constructor emits a compilation error.
 
 A ''record'' body may contain property hooks, methods, and use traits. Regular properties may also be defined, but they are immutable by default and are no different than ''const''.
 
-Static properties and methods are forbidden in a ''record'' (this includes ''const'', a regular property may be used instead).
+Static properties and methods are forbidden in a ''record'' (this includes ''const'', a regular property may be used instead). Attempting to define static properties, methods or compilation error.
 
 <code php>
 namespace Geometry;
@@ -56,7 +56,7 @@ record Rectangle(Vector2 $leftTop, Vector2 $rightBottom) implements Shape {
 
 == Usage ==
 
-A ''record'' may be used as a ''readonly class'', as the behavior of it is very similar with no key differences. This is important for migration from a readonly class to a record.
+A ''record'' may be used as a ''readonly class'', as the behavior of it is very similar with no key differences to assist in migration from ''readonly class''.
 
 <code php>
 $rect1 = Rectangle(Point(0, 0), Point(1, -1));
@@ -78,7 +78,7 @@ var_dump(Rectangle(10)); // output a record with x: 10 and y: 10
 
 To enhance the usability of records, the RFC proposes automatically generating a ''with'' method for each record. This method allows for partial updates of properties, creating a new instance of the record with the specified properties updated.
 
-The auto-generated ''with'' method accepts only named arguments defined in the constructor. No other property names can be used and it returns a new record object with the given values.
+The auto-generated ''with'' method accepts only named arguments defined in the constructor. No other property names can be used, and it returns a new record object with the given values.
 
 <code php>
 $point1 = Point(3, 4);
@@ -88,6 +88,8 @@ $point3 = $point1->with(null, 10); // must use named arguments
 echo $point1->x; // Outputs: 3
 echo $point2->x; // Outputs: 5
 </code>
+
+A developer may define their own ''with'' method if they so choose. This is similar to overriding a ''__construct'' method in a regular class definition.
 
 === Performance considerations ===
 
@@ -107,15 +109,11 @@ Calling ''clone'' on a ''record'' results in the exact same record object being 
 
 ''with'' may be called with no arguments, and it is the same behavior as ''clone''. This is an important consideration because a developer may call ''$new = $record->with(...$array)'' and we don't want to crash. If a developer wants to crash, they can do by ''assert($new !== $record)''.
 
-==== Array keys ====
-
-In implementation, there are two "types" of ''records'': constant records and dynamic records. Constant records are made up of other records and/or scalar values, and dynamic records contain regular objects that may have a dynamic state. In the future, we may consider adding support for using constant records as array keys.
-
 === Equality ===
 
 A ''record'' is always strongly equal (''==='') to another record with the same value in the properties, much like an ''array'' is strongly equal to another array containing the same elements. For all intents, ''$recordA === $recordB'' is the same as ''$recordA == $recordB''.
 
-Comparison operations will behave exactly like they do for classes currently.
+Comparison operations will behave exactly like they do for classes.
 
 ==== Reflection ====
 
@@ -123,7 +121,7 @@ Records in PHP will be fully supported by the reflection API, providing access t
 
 === ReflectionClass support ===
 
-''ReflectionClass'' can be used to inspect records, their properties, and methods. Any attempt to modify record properties via reflection will throw an exception, maintaining immutability. Attempting to create a new instance without calling the constructor will also raise an exception. 
+''ReflectionClass'' can be used to inspect records, their properties, and methods. Any attempt to modify record properties via reflection will throw an exception, maintaining immutability. Attempting to create a new instance via ''ReflectionClass'' will cause a ''ReflectionException'' to be thrown.
 
 <code php>
 $point = Point(3, 4);
@@ -149,7 +147,7 @@ try {
 
 === ReflectionFunction for implicit constructor ===
 
-Using ''ReflectionFunction'' on a record will reflect the implicit constructor, showing how properties are initialized.
+Using ''ReflectionFunction'' on a record will reflect the implicit constructor.
 
 <code php>
 $constructor = new \ReflectionFunction('Geometry\Point');
@@ -159,23 +157,28 @@ foreach ($constructor->getParameters() as $param) {
 }
 </code>
 
-=== Forbidden Custom Constructors ===
+=== New functions and methods ===
 
-Records cannot have custom instantiation logic beyond the implicit constructor defined by their properties. Any attempt to define a custom constructor will result in an error.
+  * Calling ''is_object($record)'' will return ''true''.
+  * A new function, ''is_record($record)'', will return ''true'' for records, and ''false'' otherwise
+  * Calling ''get_class($record)'' will return the record name
 
-<code php>
-record Point(int $x, int $y) {
-    // No custom constructor allowed
-    // public function __construct(int $x, int $y) {
-    //     $this->x = $x;
-    //     $this->y = $y;
-    // }
+=== var_dump ===
+
+Calling ''var_dump'' will look much like it does for objects, but instead of ''object'' it will say ''record''.
+
+<code>
+record(Point)#1 (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
 }
 </code>
 
 ==== Considerations for implementations ====
 
-A ''record'' cannot be named after an existing ''record'', ''class'' or ''function''. This is because defining a ''record'' creates both a ''class'' and a ''function'' with the same name from the perspective of a developer. 
+A ''record'' cannot be named after an existing ''record'', ''class'' or ''function''. This is because defining a ''record'' creates both a ''class'' and a ''function'' with the same name. 
 
 ===== Backward Incompatible Changes =====
 No backward incompatible changes.
@@ -228,6 +231,4 @@ Links to external references, discussions or RFCs
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
-
-
 
