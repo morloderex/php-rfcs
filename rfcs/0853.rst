@@ -1,435 +1,129 @@
-Improve Unserialize() Error Handling
-====================================
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0853
-:Title: Improve Unserialize() Error Handling
-:Author: Tim Düsterhus <timwolla@php.net>
-:Status: Implemented
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Draft
 :Type: Standards Track
-:Created: 2022-09-01
-:PHP-Version: 8.3
-:Version: 1.4
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-PHP's current error reporting in ``unserialize()`` is very inconsistent,
-making it hard to reliably handle errors that occur during
-unserialization.
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-Depending on how exactly the input string is malformed, PHP will emit an
-``E_NOTICE``, an ``E_WARNING``, or throw an arbitrary ``\Exception`` or
-``\Error`` (or even a combination of the 3 options):
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
 
-.. code:: php
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
 
-   <?php
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
 
-   unserialize('foo'); // Notice: unserialize(): Error at offset 0 of 3 bytes in php-src/test.php on line 3
-   unserialize('i:12345678901234567890;'); // Warning: unserialize(): Numerical result out of range in php-src/test.php on line 4
-   unserialize('E:3:"foo";'); // Warning: unserialize(): Invalid enum name 'foo' (missing colon) in php-src/test.php on line 5
-                              // Notice: unserialize(): Error at offset 0 of 10 bytes in php-src/test.php on line 5
-   unserialize('E:3:"fo:";'); // Warning: unserialize(): Class 'fo' not found in php-src/test.php on line 7
-                              // Notice: unserialize(): Error at offset 0 of 10 bytes in php-src/test.php on line 7
-
-   try {
-       unserialize('O:19:"SplDoublyLinkedList":3:{i:0;i:0;i:1;N;i:2;a:0:{}}');
-   } catch (UnexpectedValueException $e) {
-       echo $e->getMessage(), PHP_EOL; // Incomplete or ill-typed serialization data
-   }
-
-   try {
-       unserialize(
-           'a:2:{i:12345678901234567890;O:19:"SplDoublyLinkedList":3:{i:0;i:0;i:1;N;i:2;a:0:{}}}'
-       ); // Warning: unserialize(): Numerical result out of range in /tmp/php-src/test.php on line 17
-          // Notice: unserialize(): Unexpected end of serialized data in /tmp/php-src/test.php on line 17
-          // Notice: unserialize(): Error at offset 83 of 84 bytes in /tmp/php-src/test.php on line 17
-   } catch (UnexpectedValueException $e) {
-       echo $e->getMessage(), PHP_EOL; // Incomplete or ill-typed serialization data
-   }
-
-   ?>
-
-To reliably handle these currently, the following code is required:
-
-.. code:: php
-
-   try {
-       set_error_handler(static function ($severity, $message, $file, $line) {
-           throw new \ErrorException($message, 0, $severity, $file, $line);
-       });
-       $result = unserialize($serialized);
-   } catch (\Throwable $e) {
-       // Unserialization failed. Catch block optional if the error should not be handled.
-   } finally {
-       restore_error_handler();
-   }
-
-   var_dump($result); // Do something with the $result. Must not appear
-                      // in the 'try' to not 'catch' unrelated errors.
-
-In fact adding a custom error handler before calling ``unserialize()``
-is the example used in the documentation page for
-``restore_error_handler()``
-(https://www.php.net/manual/en/function.restore-error-handler.php).
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-The proposed solution to the described problem consists of two parts:
-
-Add wrapper Exception 'UnserializationFailedException'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A new ``\UnserializationFailedException`` will be added. Whenever a
-``\Throwable`` is thrown during ``unserialize`` (e.g. within an
-``__unserialize()`` handler or because a throwing error handler converts
-``E_NOTICE``/``E_WARNING`` into an ``Exception``), this ``\Throwable``
-will be wrapped in a new instance of
-``\UnserializationFailedException``.
-
-This enables a developer to use a single
-``catch(\UnserializationFailedException $e)`` to:
-
-#. Catch all possible ``\Throwable``\ s happening during
-   unserialization, reliably handling all possible unserialization error
-   cases.
-#. Reliably include more than just the call ``unserialize()`` in the
-   ``try``, as unrelated ``\Throwable``\ s will not be caught. This can
-   improve readability, because the ``try``-``catch`` to handle
-   unserialization failures does not need to be mixed with the regular
-   “happy path” logic. It also allows to handle multiple calls to
-   ``unserialize()`` with a single ``try``-``catch``, without
-   accidentally suppressing ``\Throwable``\ s thrown by unrelated logic
-   in-between the calls to ``unserialize()``.
-
-The original ``\Throwable`` will be accessible through the ``$previous``
-property of ``\UnserializationFailedException``, allowing the developer
-to learn about the actual cause of the unserialization failure by
-inspecting ``->getPrevious()``.
-
-Translated into simplified PHP code, the ``unserialize()``
-implementation could look roughly like this with the proposal
-implemented:
-
-.. code:: php
-
-   function unserialize(string $data, array $options = []): mixed
-   {
-       try {
-           // The existing unserialization logic happens here.
-       } catch (\Throwable $e) {
-           throw new \UnserializationFailedException(previous: $e);
-       }
-   }
-
-The implementation of the ``\UnserializationFailedException`` looks like
-this:
-
-.. code:: php
-
-   /**
-    * @strict-properties
-    */
-   class UnserializationFailedException extends \Exception
-   {
-   }
-
-Increase the error reporting severity in the unserialize() parser
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Apart from unserialize handlers (e.g. ``__unserialize()``) throwing,
-unserialization can also fail because of a syntax error in the input
-string, out-of-range integers and similar issues.
-
-Currently these cases will not throw. Instead an ``E_NOTICE`` or an
-``E_WARNING`` (or both!) are emitted depending on the type of error.
-
-The severity of these should be unified, because the cases that emit an
-``E_NOTICE`` are not any more or less actionable by the developer than
-the cases that emit ``E_WARNING``.
-
-Specifically the severity should be increased, because unserialization
-failing outside of an object's unserialize handler commonly implies that
-an fundamentally unsafe operation is performed:
-
-#. Storing or transmitting the output of ``serialize()`` with a medium
-   that is not binary-safe and truncates at NUL bytes. This will break
-   the unserialization of payloads that include classes that contain
-   ``protected`` or ``private`` properties.
-#. Storing the output of ``serialize()`` in a storage that will
-   transcode between charsets (e.g. a MySQL TEXT column and setting
-   different connection charsets). This will break the unserialization
-   of payloads that include non-ASCII strings, because the byte length
-   might change.
-#. Passing an untrusted input string into ``unserialize()``. Apart from
-   allowing an attacker to emit arbitrary errors, this might also allow
-   for remote code execution unless ``allowed_classes`` is configured to
-   something safe.
-
-All of these cases have in common that the application will no longer be
-operating on the original data that itself serialized. In the best case
-unserialization will outright fail, thus returning ``false`` from
-``unserialize()``, in the worst case the information will be silently
-modified (e.g. when attempting to unserialize 64 Bit integers with a 32
-Bit binary).
-
-At the very least the ``E_NOTICE`` cases should be adjusted to emit an
-``E_WARNING`` to consistently emit an ``E_WARNING`` in all cases.
-
-However changing both the existing ``E_NOTICE`` and the existing
-``E_WARNING`` to throw the new ``\UnserializationFailedException`` might
-be a better solution. For applications that use a throwing error
-handler, the ``\Throwable`` thrown by the error handler for the
-``E_NOTICE`` or ``E_WARNING`` will be handled by the mechanisms
-described in the previous section and thus will be wrapped into
-``\UnserializationFailedException``.
-
-In other words: This would only affect applications that do not use a
-throwing error handler.
-
-For these applications without a throwing error handler throwing an
-``\UnserializationFailedException`` might be a steep increase in
-severity, however these applications already need to be prepared to
-handle ``\Throwable``\ s thrown from an unserialize handler. The facts
-that an unserialization failure commonly indicates something inherently
-unsafe and that ``unserialize()`` currently might return bogus data
-without completely failing (e.g. for out-of-range integers) also
-warrants that the operation fails “loudly”, instead of silently
-continuing. Furthermore consistently throwing the proposed
-``\UnserializationFailedException`` allows the developer to take
-advantage of the benefits of the unified error handling as described in
-the previous section, even when they are not yet ready to use a throwing
-error handler.
-
-Resulting code
-~~~~~~~~~~~~~~
-
-The example in the introduction can be simplified to:
-
-.. code:: php
-
-   try {
-       $result = unserialize($serialized);
-       var_dump($result); // Do something with the $result. Can appear in the 'try' right
-                          // beside the unserialize(), because the 'catch' block is specific
-                          // to unserialization and will not catch anything unrelated.
-   } catch (\UnserializationFailureException $e) {
-       // unserialization failed.
-   }
-
-… if both the ``\UnserializationFailureException`` is introduced and the
-severity is raised to ``\UnserializationFailureException`` from
-``E_WARNING``/``E_NOTICE``.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-Addition of a new exception class
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-The UnserializationFailedException will no longer be available. The
-query ``symbol:UnserializationFailedException language:php`` in GitHub's
-Code Search did not return any non-namespaced results, making this a
-theoretical issue.
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
-Existing error handling for unserialize() might need to be updated
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Further Motivation
+------------------
 
-This is not considered an issue, because due to the inconsistency in
-error handling, the only safe solution to handle all possible errors
-during ``unserialize()`` is to ``catch(\Throwable)``. This is documented
-in the `manual page for
-unserialize() <https://www.php.net/manual/en/function.unserialize.php>`__
-("Objects may throw ``Throwable``\ s in their unserialization handlers")
-and this continues to work as-is.
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-Every other solution is already broken in the face of untrusted input
-data, because (internal) classes can and will throw various types of
-``Exception`` and ``Error``. Examples of unsafe code includes:
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
--  ``@unserialize()`` (will fail if a class throws).
--  ``catch(Exception)`` (will fail for ext/date which throws
-   ``Error``\ s, will fail for readonly classes that remove properties
-   in a later version).
--  ``catch(Error)`` (will fail for various extensions which throw
-   ``Exception`` or ``UnexpectedValueException``).
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
-Nothing will change for unserializing trusted, well-formed input
-strings, because unserialization will not fail for them by definition.
+Version
+-------
 
-Proposed PHP Version(s)
------------------------
+Next minor version, which is PHP 8.4.
 
-Next PHP 8.x.
+Vote
+----
 
-RFC Impact
-----------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-To SAPIs
-~~~~~~~~
+Voting started on 2024-XX-XX and will end on 2024-XX-XX.
 
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-Existing extensions may update their error handling in the unserialize
-handlers to throw ``\Exception``\ s that best describe the type of error
-in the serialized data without needing to concern themselves with
-compatibility, because anything that is thrown will automatically be
-wrapped in the unified ``\UnserializationFailedException``.
-
-If an extension uses ``unserialize()`` internally then the same
-backwards compatibility concerns as with userland code applies.
-
-Extensions replacing the serializer by a custom serializer (e.g.
-igbinary) may need to be adjusted to ensure their behavior is consistent
-with the behavior of the default serializer.
-
-To Opcache
-~~~~~~~~~~
-
-None.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
-
-Open Issues
------------
-
-None.
-
-Unaffected PHP Functionality
-----------------------------
-
-Anything that does not interact with ``unserialize()``. Developers who
-interact with ``__unserialize()``, ``__wakeup()``, and
-``Serializable::unserialize()`` might be affected depending on what
-exactly they are doing with those.
-
-Future Scope
-------------
-
--  A new ``throw_for_unknown_classes`` option to throw instead of
-   unserializing to ``__PHP_Incomplete_Class``:
-   https://externals.io/message/118566#118613
--  A ``unserialize_callback_func`` option as replacement for the ini
-   setting with the same name:
-   https://externals.io/message/118566#118672
--  Make trailing data emit an error:
-   https://github.com/php/php-src/pull/9630
-
-Proposed Voting Choices
------------------------
-
-.. _add-wrapper-exception-unserializationfailedexception-1:
-
-Add wrapper Exception 'UnserializationFailedException'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-2/3 required to implement ``\UnserializationFailedException`` that wraps
-any other ``\Throwable``.
-
-Question: Add the \\UnserializationFailedException and wrap any Throwables in PHP 8.x?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
 -  Yes
 -  No
-
-.. _increase-the-error-reporting-severity-in-the-unserialize-parser-1:
-
-Increase the error reporting severity in the unserialize() parser
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Increase E_NOTICE to E_WARNING
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-2/3 required to increase the severity of the emitted notices to warning.
-
-Question: Increase the severity of emitted E_NOTICE to E_WARNING in PHP 8.x?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Throw Exception instead of emitting warning / notice
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Independently of whether the E_NOTICE will be increased to E_WARNING
-(the previous vote), the following vote will decide whether
-``unserialize()`` will throw ``\UnserializationFailedException`` for all
-types of error/warning/notice in PHP 9.0. The vote will only be valid if
-the first vote ("Add the \\UnserializationFailedException") passes, as
-it depends on that.
-
-2/3 required to make E_\* an \\UnserializationFailedException in 9.0.
-
-Question: Throw \\UnserializationFailedException instead of emitting E_NOTICE/E_WARNING in PHP 9.0?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Patches and Tests
------------------
-
-PoC:
-
--  Wrap Exceptions: https://github.com/php/php-src/pull/9425
--  Notice to warning: https://github.com/php/php-src/pull/9629
-
-Implementation
---------------
-
-https://github.com/php/php-src/pull/9629
 
 References
 ----------
 
--  https://externals.io/message/118311
--  Wrap Exceptions: https://github.com/php/php-src/pull/9425
--  Notice to warning: https://github.com/php/php-src/pull/9629
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-Rejected Features
------------------
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-n/a
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
 
-Changelog
----------
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
 
--  1.4: Drop secondary vote.
--  1.3: Ranked Choice Voting.
--  1.2: The third vote now is a three-way vote.
--  1.1: Add two options to "Future Scope".
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
+
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/9629
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Original PHP Version: PHP 8.3
-:Original Status: Implemented (Partly Accepted)
-:Slug: improve_unserialize_error_handling
-:Wiki URL: https://wiki.php.net/rfc/improve_unserialize_error_handling
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Under Discussion
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final
