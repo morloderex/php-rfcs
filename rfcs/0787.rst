@@ -1,119 +1,1041 @@
-Fsync() Function
-================
+Asymmetric Visibility V2
+========================
 
 :PHP-RFC: 0787
-:Title: Fsync() Function
-:Author: David Gebler <me@davegebler.com>
-:Status: Implemented
-:Type: Standards Track
-:Created: 2021-01-30
-:PHP-Version: 8.1
-:Version: 1.0
+:Title: Asymmetric Visibility V2
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>, Larry Garfield <larry@garfieldtech.com>
+:Status: Draft
+:Type: Unknown
+:Created: 2024-05-09
+:Version: 2.0
 
 Introduction
 ------------
 
-fsync() is a function similar to fflush(), however where fflush() only
-instructs the application to flush its internal buffers out to the OS,
-fsync() further instructs the OS to flush its buffers to physical
-storage, ensuring a completed and persisted write before returning any
-success. PHP provides plain stream wrappers for most common file system
-functions inherited from C and is indeed one of few major languages to
-not provide any interface to fsync. This RFC proposes implementing fsync
-in core.
+PHP has long had the ability to control the visibility of object
+properties -- ``public``, ``private``, or ``protected``. However, that
+control is always the same for both ``get`` and ``set`` operations. That
+is, they are "symmetric." This RFC proposes to allow properties to have
+separate ("asymmetric") visibility, with separate visibility for read
+and write operations. The syntax is mostly borrowed from Swift.
 
 Proposal
 --------
 
-This RFC would add an fsync() function accepting a single parameter of a
-stream resource. The implementation of this function would be a thin
-wrapper around the standard C fsync (or equivalent \_commit on Windows
-API, which uses an identical signature).
-
-The related function fdatasync() which syncs data but not necessarily
-metadata would also be added, however this is not supported on Windows
-and the proposal there is to still provide fdatasync() but merely as an
-alias of fsync(). On POSIX, fdatasync() is properly implemented.
+This RFC provides a new syntax for declaring the "set" operation
+visibility of an object property. Specifically:
 
 .. code:: php
 
-   $fp = fopen('file.txt', 'w');
-   fwrite($fp, 'string');
-   var_dump(fsync($fp));
+   class Foo
+   {
+       public private(set) string $bar = 'baz';
+   }
 
-   bool(true)
+   $foo = new Foo();
+   var_dump($foo->bar); // prints "baz"
+   $foo->bar = 'beep'; // Visibility error
 
-   $fp = fopen('php://memory','w+');
-   fwrite($fp,"Test line 1\nLine 2\n");
-   var_dump(fsync($fp));
+This code declares a property ``$bar`` that may be read from ``public``
+scope but may only be modified from ``private`` scope. It may also be
+declared ``protected(set)`` to allow the property to be set from any
+``protected`` scope (that is, child classes).
 
-   Warning: fsync(): Can't fsync this stream in php shell code on line 1
-   bool(false)
+The behavior of the property is otherwise unchanged, aside from the
+restricted visibility.
 
-   $fp = fopen('php://stdin', 'w');
-   var_dump(fsync($fp));
-   bool(false)
+Asymmetric visibility properties may also be used with constructor
+property promotion:
 
-======== Sample documentation ========
+.. code:: php
 
-fsync() - synchronize changes to a file
+   class Foo
+   {
+       public function __construct(
+           public private(set) string $bar,
+       ) {}
+   }
 
-fdatasync() - synchronize the data of a file
+Abbreviated form
+~~~~~~~~~~~~~~~~
 
-fsync ( resource $stream ) : bool
+One of the most common use cases, we expect, will be a property that is
+publicly readable but has a reduced set-visibility. PHP properties are
+already implicitly publicly readable if not otherwise specified. To
+support this case, if a set visibility is specified then a ``public``
+get visibility may be omitted.
 
-Request that all data for the open file pointer $stream is to be
-transferred to the storage device. The manner of synchronization is OS
-dependent. The fsync() function shall not return until the system has
-completed that action or until an error is detected.
+That is, the following pairs are equivalent:
 
-Returns true on success or false on failure.
+.. code:: php
 
-If the resource indicated by $stream is not a file pointer, an E_WARNING
-is emitted.
+   public private(set) string $foo;
+   private(set) string $foo;
+
+   public protected(set) string $foo;
+   protected(set) string $foo;
+
+In practice, this means a "limited mutability" struct class could be
+implemented as follows:
+
+.. code:: php
+
+   class Book
+   {
+       public function __construct(
+           private(set) string $title,
+           private(set) Author $author,
+           private(set) int $pubYear,
+       ) {}
+   }
+
+Which is very similar to the common pattern of all-``readonly``
+properties, but does allow for controlled mutation within the class's
+own methods.
+
+References
+~~~~~~~~~~
+
+While a reference to a property with restricted ``set`` visibility may
+still be obtained, it may only be obtained from a scope that would allow
+writing. Put another way, obtaining a reference to a property follows
+the ``set`` visibility, not the ``get`` visibility. Trying to obtain a
+reference to a property with a more restrictive scope will result in an
+error.
+
+For example:
+
+.. code:: php
+
+   class Foo
+   {
+       public protected(set) int $bar = 0;
+
+       public function test() {
+           // This is allowed, because it's private scope.
+           $bar = &$this->bar;
+           $bar++;
+       }
+   }
+
+   class Baz extends Foo
+   {
+       public function stuff() {
+           // This is allowed, because it's protected scope.
+           $bar = &$this->bar;
+           $bar++;
+       }
+   }
+
+   $foo = new Foo();
+
+   // This is fine, because the update via reference is 
+   // inside the method, thus private scope.
+   $foo->test();
+
+   // This is also fine.
+   $baz = new Baz();
+   $baz->stuff();
+
+   // Getting this reference is not allowed here, because this is public
+   // scope but the property is only settable from protected scope.
+   $bar = &$foo->bar;
+
+Array properties
+~~~~~~~~~~~~~~~~
+
+As with property hooks, arrays require special consideration with
+asymmetric visibility, and for the same reason: writing to an array
+property technically involves obtaining a reference to it first, which
+as noted in the previous section means it will follow ``set``
+visibility, not ``get`` visibility. That means an array property may not
+be appended or written to unless it's public-set.
+
+.. code:: php
+
+   class Test
+   {
+       public function __construct(public private(set) array $arr = []) {}
+       
+       public function addItem(string $v): void
+       {
+           // This is in private scope, so fully legal.
+           $this->arr[] = $v;
+       }
+   }
+
+   $t = new Test();
+
+   $t->addItem('beep'); // Legal
+   var_dump($t->arr);   // Legal
+   $t->arr[] = 'boop';  // Not allowed.
+
+This behavior should be less surprising than with hooks, since writing
+to an array with private set-visibility is already self-evidently wrong.
+
+Object properties
+~~~~~~~~~~~~~~~~~
+
+If the property is an object, the restricted visibility applies only to
+changing the object referenced by the property. It does not impact the
+object itself. That is consistent with the behavior of the ``readonly``
+marker.
+
+Example:
+
+.. code:: php
+
+   class Bar
+   {
+       public string $name = 'beep';
+   }
+
+   class Foo
+   {
+       public private(set) Bar $bar;
+   }
+
+   $f = new Foo();
+
+   // This is allowed
+   $f->bar->name = 'boop';
+
+   // This is NOT allowed
+   $f->bar = new Bar();
+
+Permitted visibility
+~~~~~~~~~~~~~~~~~~~~
+
+The ``set`` visibility, if specified explicitly, MUST be equal to or
+lesser than the main (``get``) visibility. That is,
+``protected public(set) string $foo`` is not allowed.
+
+Explicitly setting the get and set visibilities to the same scope is
+redundant, but not harmful. However, it is sometimes necessary with
+``readonly`` properties. (See the section below on ``readonly``.)
+
+Inheritance
+~~~~~~~~~~~
+
+PHP already allows child classes to redeclare parent class properties,
+if and only if they have the same type and their visibility is the same
+or wider. That is, a ``protected string $foo`` can be overridden with
+``public string $foo`` but not ``private string $foo``. This RFC
+continues that rule, but independently for ``get`` and ``set``
+operations.
+
+One caveat, however, is that, currently, a ``private`` field is
+"shadowed" if redeclared in a child class; it's visibility is not
+widened, it's a completely different property. If a property is
+``protected private(set)`` only, then it's not clear if a
+reimplementation should create a new property (following the private
+rule) or not (following the protected rule). Neither one makes sense.
+Additionally, a ``private`` field implies the developer doesn't want to
+allow others to modify it, even if they extend it, and that intent
+should be respected.
+
+For that reason, a ``private(set)`` property is automatically ``final``
+and may not be redeclared at all. (Explicitly declaring such a property
+final is still allowed, just redundant.)
+
+In code:
+
+.. code:: php
+
+   class A {
+       private string $foo;
+   }
+   class B extends A {
+       public private(set) string $foo; // Implicitly final
+   }
+
+   class C extends A {
+       public protected(set) string $foo;
+   }
+
+   class D extends C {
+      public string $foo;
+   }
+
+   class E extends B {
+       public protected(set) $foo; // Illegal, as it's widening a private/final property.
+   }
+
+In this case, ``B::$foo`` is a new variable that shadows ``A::$foo``.
+(That is existing PHP behavior.) So is ``C::$foo``. ``D::$foo`` is the
+same property as ``C::$foo``, just with a wider visibility. ``B`` itself
+can be extended, but the ``$foo`` property cannot be redeclared in a
+child of ``B``.
+
+Narrowing the visibility is not allowed.
+
+.. code:: php
+
+   class A {
+       public string $foo;
+   }
+
+   class B extends A {
+       // This is an error, as it's narrowing the visibility.
+       public protected(set) string $foo;
+   }
+
+Note that, for the purposes of visibility inheritance, the absence of an
+operation is treated as "never" (or narrower than ``private``). That
+means the following is allowed, because in the parent class there is no
+set operation at all, so child visibility on set will be wider than
+that.
+
+.. code:: php
+
+      class P {
+          public $answer { get => 42; }
+      }
+      class C extends P {
+          public protected(set) $answer { get => 42; set => print "Why?"; }
+      }
+
+Interaction with property hooks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `Property Hooks </rfc/property-hooks>`__ RFC introduced the ability
+to insert arbitrary behavior into the ``get`` or ``set`` behavior of a
+property. Hooks have no impact on who may access a property, just on
+what happens when they do.
+
+In contrast, asymmetric visibility allows varying who may read and who
+may write a property independently, but has no impact on what happens
+when they are accessed legally.
+
+In short, the behavior of asymmetric visibility and property hooks do
+not interact at all, and both are fully independent of each other.
+
+There is one caveat regarding virtual properties that have no ``set``
+operation. If there is no ``set`` operation defined on a property, then
+it is nonsensical to specify a visibility for it. That case will trigger
+a compile error. For example:
+
+.. code:: php
+
+   // This will generate a compile error, as there is 
+   // no set operation on which to specify visibility.
+   class Universe
+   {
+       public private(set) $answer { get => 42; }
+   }
+
+Interaction with interface properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `Property Hooks </rfc/property-hooks>`__ RFC also introduced the
+ability for interfaces and abstract classes to declare a requirement for
+a public or protected (for abstract classes only) property, with ``get``
+and ``set`` operations separate. It is a deliberately "lightweight"
+requirement. As noted in that RFC, it may be satisfied by either a hook
+or a traditional property, as long as the operation is available in the
+relevant scope. One reason for the separation of ``get`` and ``set``
+requirements was to enable asymmetric visibility to satisfy the
+requirement as well.
+
+For example, the following is fully legal:
+
+.. code:: php
+
+   interface Named
+   {
+       public string $name { get; }
+   }
+
+   class ExampleA implements Named
+   {
+       public protected(set) string $name;
+   }
+
+   class ExampleB implements Named
+   {
+       public string $name { get => 'Larry'; }
+   }
+
+   class ExampleC implements Named
+   {
+       public string $name;
+   }
+
+   class ExampleD implements Named
+   {
+       public readonly string $name;
+   }
+
+In each case, ``ExampleX::$name`` can be read from public scope, so the
+interface is satisfied.
+
+If a property on an interface requires public ``set``, however, then
+specifying asymmetric visibility is not permitted, except in the special
+case of ``readonly`` (below). (Hooks, of course, are.)
+
+.. code:: php
+
+   interface Aged
+   {
+       public string $age { get; set; }
+   }
+
+   class ExampleE implements Aged
+   {
+       // Error, because it is not publicly settable.
+       public protected(set) $age;
+   }
+
+Relationship with readonly
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``readonly`` flag, introduced in PHP 8.1, is really two flags in
+one: write-once and ``private(set)``. While that is sometimes
+sufficient, there are cases where protected-set is desired, and while
+few, there are use cases for public-set-once. However, it also has
+special case handling to allow a ``readonly`` property to be overridden
+by a child class without creating an entirely new property. This
+effectively sidesteps the whole point of private anyway. It also would
+create an inconsistency with an explicit ``private(set)``, which as
+noted above is necessarily also ``final``.
+
+We have decided the best way forward is to change the behavior of
+``readonly`` to imply ``protected(set)``, not ``private(set)``. That
+eliminates the inconsistency in ``readonly``'s existing behavior, as
+well as eliminating an inconsistency with ``private(set)``.
+
+A ``readonly`` property may still be explicitly declared
+``private(set)``, in which case it will also be implicitly ``final``.
+That is closer to what the intended behavior would have been without the
+odd workaround.
+
+If a ``readonly`` property is declared ``private`` generally, with no
+qualifier, then it will also be ``private(set)``, and thus ``final``.
+
+In code:
+
+.. code:: php
+
+   // These create a public-read, protected-write, write-once property.
+   public protected(set) readonly string $foo;
+   public readonly string $foo;
+   readonly string $foo;
+
+   // These creates a public-read, private-set, write-once, final property.
+   public private(set) readonly string $foo;
+   private(set) readonly string $foo;
+
+   // These create a public-read, public-write, write-once property.
+   // While use cases for this configuration are likely few, 
+   // there's no intrinsic reason it should be forbidden.
+   public public(set) readonly string $foo;
+   public(set) readonly string $foo;
+
+   // These create a private-read, private-write, write-once, final property.
+   private private(set) readonly string $foo;
+   private readonly string $foo;
+
+   // These create a protected-read, protected-write, write-once property.
+   protected protected(set) readonly string $foo;
+   protected readonly string $foo;
+
+   // This is illegal - set cannot be wider than get.
+   protected public(set) readonly string $foo;
+
+If a class is marked ``readonly``, then by design its impact is
+identical to if every property was individually marked ``readonly``.
+There is no special logic there.
+
+Interaction with \__set and \__unset
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The behavior of ``__set`` in PHP today is rather inconsistent. When
+accessing a property, if ``__set`` is defined, it will be called if:
+
+#. The accessed property does not exist.
+#. The accessed property's visibility is tighter than the calling scope.
+#. The property has been explicitly ``unset()``
+
+The introduction of asymmetric visibility affects the second case, as
+it's possible now for a property to be visible but not writeable. We
+have opted to not modify the logic; that is, it is only the "overall"
+(get) visibility that can trigger calling ``__set``. A
+``public protected(set)`` property will not trigger a ``__set`` method
+if written to publicly; it will simply error, as though ``__set`` were
+not defined. A ``protected private(set)`` will, however, to be
+consistent with current behavior.
+
+This approach has the least impact on existing behavior, including zero
+BC breaks for existing code. While we do not believe it would be
+appropriate to expand case 2 to be triggered by set-scope specifically,
+it would be possible to do in the future without a BC break (as it would
+change an error pathway to a functional pathway) if there is a consensus
+to do so.
+
+Conversely, an argument can be made that, with the advent of property
+types, property hooks, and asymmetric visibility, the use cases for the
+fallback to ``__set`` on a defined property are now better covered by
+dedicated, more self-descriptive functionality, and case 3 above is no
+longer necessary. (That's one of the reasons to not expand case 2 now.)
+That would be a larger discussion that is out of scope for this RFC, so
+it makes no changes to that logic at this time.
+
+Typed properties
+~~~~~~~~~~~~~~~~
+
+Asymmetric visibility is only compatible with properties that have an
+explicit type specified. This is mainly due to implementation
+complexity. However, as any property may now be typed ``mixed`` and
+defaulted to ``null``, that is not a significant limitation.
+
+Static properties
+~~~~~~~~~~~~~~~~~
+
+This functionality applies only to object properties. It does not apply
+to static properties. For various implementation reasons that is far
+harder, and also far less useful. It has therefore been omitted from
+this RFC.
+
+Reflection
+~~~~~~~~~~
+
+The ``ReflectionProperty`` object is given two new methods:
+``isProtectedSet(): bool`` and ``isPrivateSet(): bool``. Their meaning
+should be self-evident.
+
+.. code:: php
+
+   class Test
+   {
+       public string $open;
+       public protected(set) string $restricted;
+   }
+
+   $rClass = new ReflectionClass(Test::class);
+
+   $rOpen = $rClass->getProperty('open');
+   print $rOpen->isProtectedSet() ? 'Yep' : 'Nope'; // prints Nope
+
+   $rRestricted = $rClass->getProperty('restricted');
+   print $rRestricted->isProtectedSet() ? 'Yep' : 'Nope'; // prints Yep
+
+Additionally, the two constants ``ReflectionProperty::IS_PROTECTED_SET``
+and ``ReflectionProperty::IS_PRIVATE_SET`` are added. They are returned
+from ``ReflectionProperty::getModifiers()``, analogous to the other
+visibility modifiers.
+
+Modifying asymmetric properties via ``ReflectionProperty::setValue()``
+is allowed, just as it is for ``protected`` or ``private`` properties,
+even outside of the classes scope.
+
+Similarly, other techniques that bypass visibility controls, such as
+binding a closure to an object, will also work as expected: Once bound,
+the closure will have access to private variables.
+
+Syntax discussion
+-----------------
+
+Asymmetric visibility exists as a feature in several languages, most
+notably Swift, C#, and Kotlin. The syntactic structure varies, however.
+Translated to PHP, the two models would look like:
+
+.. code:: php
+
+   // Prefix-style:
+   class A
+   {
+       public private(set) string $name;
+   }
+
+   // Hook-embedded-style:
+   class A
+   {
+       public string $name { private set; }
+   }
+
+In Prefix style, the visibility is an aspect of the property itself. In
+Hook-embedded style, the visibility is an aspect of the property's
+``set`` hook. We believe that, for PHP, Prefix-style (presented here) is
+the superior approach, for a number of reasons.
+
+Prefix-style is more visually scannable
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With Prefix-style, reading a property definition from left to right, one
+is presented with all visibility options together. By the time the user
+has reached the ``$``, they know all visibility information. With
+Hook-embedded style, ``set`` visibility may or may not be known. It
+would appear at the end of the line, whereas ``get`` visibility is at
+the start of the line.
+
+Worse, if there are actual hook implementations, the ``set`` visibility
+may be several lines later!
+
+.. code:: php
+
+   class PrefixStyle
+   {
+       // All visibility is together in one obvious place.
+       public private(set) string $phone {
+           get {
+               if (!$this->phone) {
+                   return '';
+               }
+               if ($this->phone[0] === 1) {
+                   return 'US ' . $this->phone;
+               }
+               return 'Intl +' . $this->phone;
+           }
+
+          set {
+               $this->phone = implode('', array_filter(fn($c) => is_numeric($c), explode($value)))
+           }
+       }
+   }
+
+   class HookEmbeddedStyle
+   {
+       public string $phone {
+           get {
+               if (!$this->phone) {
+                   return '';
+               }
+               if ($this->phone[0] === 1) {
+                   return 'US ' . $this->phone;
+               }
+               return 'Intl +' . $this->phone;
+           }
+         
+           // The set visibility is 10 lines away from the get visibility!
+           private set {
+               $this->phone = implode('', array_filter(fn($c) => is_numeric($c), explode($value)))
+           }
+       }
+   }
+
+Prefix-style is shorter
+~~~~~~~~~~~~~~~~~~~~~~~
+
+While not the most critical distinction, in the past, brevity of syntax
+has often been a consideration. In this case, the prefix-style is
+somewhat shorter:
+
+.. code:: php
+
+   public private(set) string $name;
+   public string $name { private set; }
+
+This is more apparent in the abbreviated form, which is only viable on
+the prefix-style:
+
+.. code:: php
+
+   private(set) string $name;
+   public string $name { private set; }
+   var string $name { private set; }
+
+Note that if both set-visibility and a set hook are implemented, it's
+possible that the hook-style version would be slightly shorter, but only
+when the overall code including hook body is long enough that 1-2
+characters wouldn't matter.
+
+Prefix-style doesn't presume a connection with hooks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As noted above in "Interaction with hooks", visibility controls exist
+independently hooks. In fact, as implemented they do not interact at
+all. Using hook syntax for visibility controls, therefore, is surprising
+and confusing.
+
+There is a mental model in which it is logical; that is, if the ``{}``
+after the property is considered not the "hook block" but the
+"operations configuration" block. The "hook block" is then only the
+``=>`` or ``{}`` on the right of the operation name, whereas modifiers
+are on the left. That implementation would be straightforward.
+
+However, that mental model is non-obvious, and the alternative mental
+model (that the ``{}`` block on a property indicates the presence of
+hooks) is equally valid. As someone reading the code for the first time,
+it is not at all obvious which interpretation of the syntax should be
+correct.
+
+With the Prefix-style syntax, this problem does not exist and the code's
+meaning is self-evident. There is only one reasonable mental model:
+visibility modifiers go on the left, hooks go on the right.
+
+It's non-obvious in Hook-embedded style what hook behavior should be implied
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One of the caveats of hooks is that, sometimes, references on properties
+must be prevented. (The reasons for that are explained at length in the
+hooks RFC.) For example, this would be illegal:
+
+.. code:: php
+
+   class A
+   {
+       public array $arr {
+           set {
+             if (array_filter(is_int(...), $value) === $value) {
+               $this->arr = $value;
+             }
+             throw new \Exception();
+           }
+       }
+   }
+
+   $a = new A();
+
+   // This is illegal, as it would bypass the set hook.
+   $a->arr[] = 5;
+
+So "arrays with hooks can do less" is already an established fact of the
+language. However, if the hook-style syntax is used for visibility:
+
+.. code:: php
+
+   class A
+   {
+       public array $arr { protected set; }
+   }
+
+   class B extends A
+   {
+       public function add(int $val)
+       {
+           // Should this be legal?
+           $this->arr[] = $val;
+       }
+   }
+
+   $b = new B();
+
+   $b->add(5);
+
+The syntax suggests that there is a set hook, and thus the assignment
+should not be allowed. However, there isn't really a set hook, and thus
+assignment should be allowed. Or maybe it shouldn't be, because there is
+a hook defined, even if it's the default.
+
+As noted above, there are mental models in which it's reasonable to
+assume there's no hook. However, that mental model is non-obvious, and
+there are equally valid mental models where it's reasonable to assume
+there is a hook. With the Prefix-style, there is only one mental model,
+and it's self-evident that references and array assignment are legal.
+There is no confusion.
+
+Summary
+~~~~~~~
+
+For all of the above reasons, we believe that the proposed syntax,
+Prefix-style, is the objectively better approach for PHP.
+
+Use cases and examples
+----------------------
+
+Between ``readonly`` and property hooks, PHP already has a number of
+ways to do "advanced things" with properties. However, there are still
+gaps in capability, which this RFC aims to fill.
+
+Readonly is limited
+~~~~~~~~~~~~~~~~~~~
+
+``readonly`` offered the potential to have public properties that are
+guaranteed to not change unexpectedly. This has been a major benefit,
+and allowed the removal of a lot of needless boilerplate code. However,
+it also somewhat over-shoots: It prevents a property from changing *at
+all*, rather than just "unexpectedly." While fully immutable objects
+have their place, they are not always the answer. It is still often
+desireable to have a public property (for ease of read) without making
+it write-once.
+
+For example:
+
+.. code:: php
+
+   class Record
+   {
+       private bool $dirty = false;
+       
+       private array $data = [];
+       
+       public function set($key, $val): void
+       {
+           $this->data[$key] = $val;
+           $this->dirty = true;
+       }
+       
+       public function isDirty(): bool
+       {
+           return $this->dirty;
+       }
+       
+       public function save(): void
+       {
+           if ($this->dirty) {
+               // Do something to save the object.
+               $this->dirty = false;
+           }
+       }
+   }
+
+It's very tempting to make ``$dirty`` a public property, as the dirty
+status of the object is a "property" of it. Especially with hooks, such
+a desire will become more common. However, that cannot be done with
+``public`` or ``readonly``. Making the property ``public`` would open it
+up to modification from anyone at any time, whereas making it
+``readonly`` would make it impossible to unset in ``save()``, and
+require using "uninitialized or true" as a quasi-boolean state. Both
+options are bad.
+
+With asymmetric visibility, it can be easily simplified to:
+
+.. code:: php
+
+   class Record
+   {
+       public private(set) bool $dirty = false;
+       
+       private array $data = [];
+       
+       public function set($key, $val): void
+       {
+           $this->data[$key] = $val;
+           $this->dirty = true;
+       }
+       
+       public function save(): void
+       {
+           if ($this->dirty) {
+               // Do something to save the object.
+               $this->dirty = false;
+           }
+       }
+   }
+
+Which now offers a publicly-readable marker, internally modifiable, with
+no opportunity for it to change in an uncontrolled way, without any need
+for odd code contortions.
+
+Readonly cannot use a custom sentinel
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A common technique in many languages is to have sentinel values to
+indicate that a value is unset, invalid, or otherwise not a real value.
+Using a value within the scope of the property's type (eg, 0, empty
+string, etc.) has a host of issues, discussed elsewhere. ``null`` has
+historically been used for that in PHP, although that has its share of
+problems, as discussed in `Much Ado about
+Null <https://peakd.com/hive-168588/@crell/much-ado-about-null>`__. More
+recently, it has become increasingly popular to use a custom
+single-value enum as a sentinel value instead, to provide more
+contextual information.
+
+.. code:: php
+
+   public ?int $val = null;
+
+   enum Missing
+   {
+       case Missing;
+   }
+
+   public int|Missing $val = Missing::Missing;
+
+However, neither of those techniques is usable on a ``readonly``
+property. Rather, ``readonly`` relies on the implicit and rather weird
+"uninitialized" state, available only to typed properties, to indicate
+that it is not yet populated with a valid value. Assigning either null
+or a custom sentinel to a ``readonly`` property would disallow it from
+being correctly set in the future. However, as of PHP 8.3, ``readonly``
+is the only way to have a public-read, private-write property. That
+means either relying on uninitialized as a sentinel (the tooling support
+for which is quite lacking) or foregoing a public-read property just to
+be able to assign and re-assign a sentinel value.
+
+Asymmetric visibility completely solves that issue, as properties can
+then be defaulted to a sentinel value (``null`` or custom) while
+allowing only the object itself to fully-initialize the value later.
+
+.. code:: php
+
+   class A
+   {
+       public private(set) int|Missing $value = Missing::Missing;
+   }
+
+Tooling make using readonly outside of constructors hard
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+There is a common but not universal belief that ``readonly`` properties,
+because of the weird "uninitialized" state described above, MUST always
+be set in the constructor, and not doing so is always an error. The
+language does not enforce this, but many static analyzer tools do. While
+there is validity to that argument usually, there are ample exceptions
+where that is not possible. (Eg, objects that necessarily require
+multi-stage construction, such as if you want to provide reflection
+information to an attribute.) That means, currently, a public-read,
+not-public-write property that needs to be set post-constructor is
+actively fighting against the language and tooling. Instead, the
+property must be left uninitialized, care must be taken when trying to
+read from it later to avoid uninitialized values, and you're fighting
+against common tooling.
+
+A ``public private(set)`` property has none of these issues. As noted
+above, it can happily use a sentinel value (``null`` or otherwise) to
+indicate that it is not yet set, or have a reasonable default, and still
+allow a "second set" when a real value is available. That is, it has all
+the benefits of ``readonly`` that we actually care about (the value
+cannot change externally) with none of the limitations (we can still
+control when it gets set ourselves within the class).
+
+Readonly is incompatible with inheritance
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As noted previously, the ``readonly`` flag is, on its own, two flags in
+one: write-once and ``private(set)``. While both have their use cases,
+there are ample times where only one or the other is desired. For
+instance, the following code from Crell/Serde (slightly simplified for
+this example) wants to use ``readonly``, but because of the implied
+``private(set)`` it causes issues:
+
+.. code:: php
+
+   abstract class Serde
+   {
+       // ...
+       protected readonly TypeMapper $typeMapper;
+
+       protected readonly ClassAnalyzer $analyzer;
+   }
+
+   class SerdeCommon extends Serde
+   {
+       // This must be redefined here so that it 
+       // can be set from the constructor.
+       protected readonly TypeMapper $typeMapper;
+
+       public function __construct(
+           // Normally repeating a property as a promoted
+           // argument is an error, BUT because the property
+           // is in the parent, this overrides it with a
+           // new property definition that is now local
+           // to this class.
+           protected readonly ClassAnalyzer $analyzer = new Analyzer(),
+           array $handlers = [],
+           array $formatters = [],
+           array $typeMaps = [],
+       ) {
+           // We just want to do this...
+           $this->typeMapper = new TypeMapper($typeMaps, $this->analyzer);
+           
+           // ...
+       }
+   }
+
+With asymmetric visibility, the ``readonly`` usage here can be replaced
+with ``protected protected(set)`` or
+``readonly protected protected(set)``, avoiding the need to
+double-declare properties. (There's actually about 6 such properties in
+practice, so the simplification is larger than shown here.)
+
+.. code:: php
+
+   abstract class Serde
+   {
+       // ...
+       protected protected(set) readonly TypeMapper $typeMapper;
+
+       protected protected(set) readonly ClassAnalyzer $analyzer;
+   }
+
+Hooks can be verbose
+~~~~~~~~~~~~~~~~~~~~
+
+While every effort has been made to make hooks as compact as reasonable,
+there are some use cases that are still more clumsy than they need to
+be. For example, asymmetric visibility can be emulated with hooks like
+so:
+
+.. code:: php
+
+   class NamedThing
+   {
+       private string $_name;
+       
+       public string $name { get => $this->_name; }
+
+       public function __construct(string $name)
+       {
+           $this->_name = $name;
+       }
+   }
+
+But that's a lot of non-obvious work, and does have a small performance
+impact. It is much more straightforward to do this:
+
+.. code:: php
+
+   class NamedThing
+   {
+       public function __construct(public private(set) string $name) {}
+   }
 
 Backward Incompatible Changes
 -----------------------------
 
-None.
+None. This syntax would have been a parse error before.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.1
+PHP 8.4
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
+Future Scope
+------------
 
-None, this function would be available in all SAPIs supporting plain
-stream wrappers.
+This RFC is kept very simple. However, it does allow for future
+expansion.
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+Alternate operations
+~~~~~~~~~~~~~~~~~~~~
 
-No.
+At this time, there are only two possible operations to scope: read and
+write. In concept, additional operations could be added with their own
+visibility controls. Possible examples include:
 
-Open Issues
------------
+-  ``protected(&get)`` - Vary whether a reference to a property can be
+   obtained independently of getting the value. (Would override the
+   ``set`` visibility if used.)
+-  ``private(setref)`` - Allows a property to be set by reference only
+   from certain scopes.
+
+This RFC does NOT include any of the above examples; they are listed
+only to show that this syntax supports future expansion should a use be
+found.
+
+Additional visibility
+~~~~~~~~~~~~~~~~~~~~~
+
+Should PHP ever adopt packages and package-level visibility, this syntax
+would be fully compatible with it. For example, ``public package(set)``
+would be a natural syntax to use.
+
+This RFC does NOT include any discussion of such expanded visibility
+definition, just notes that it in no way precludes such future
+developments.
 
 Proposed Voting Choices
 -----------------------
 
-Accept RFC as proposed.
+This is a simple yes-or-no vote to include this feature. 2/3 majority
+required to pass.
 
-Implementation
---------------
-
-`PR here <https://github.com/php/php-src/pull/6650>`__
-
-Vote
-----
-
-Question: fsync Function
-~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Include this RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -121,15 +1043,23 @@ Voting Choices
 -  Yes
 -  No
 
+.. _references-1:
+
 References
 ----------
 
-https://man7.org/linux/man-pages/man2/fsync.2.html
+This syntax is borrowed directly from `Swift's access control
+system <https://docs.swift.org/swift-book/LanguageGuide/AccessControl.html>`__.
+
+Syntax decisions in this RFC are supported by a poll conducted in
+September 2022. The results were `posted to the Internals
+list <https://externals.io/message/118557#118628>`__.
 
 Additional Metadata
 -------------------
 
-:Original Authors: David Gebler, me@davegebler.com
-:Original Status: Implemented (in PHP 8.1)
-:Slug: fsync_function
-:Wiki URL: https://wiki.php.net/rfc/fsync_function
+:Implementation: https://github.com/php/php-src/pull/15063
+:Original Authors: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+:Original Status: Under Discussion
+:Slug: asymmetric-visibility-v2
+:Wiki URL: https://wiki.php.net/rfc/asymmetric-visibility-v2
