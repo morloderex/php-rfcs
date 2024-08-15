@@ -1,257 +1,95 @@
-Interface Default Methods
-=========================
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0855
-:Title: Interface Default Methods
-:Author: Levi Morrison <levim@php.net>
-:Status: Declined
-:Type: Unknown
-:Created: 2022-06-27
-:Version: 2.0
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
+:Type: Standards Track
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-Over time, authors sometimes want to add methods to an interface. Today,
-this causes large breakages to every implementor. This RFC proposes a
-way to reduce the scale of breakage.
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-Additionally, sometimes interfaces can implement some functionality of
-their interface in terms of other parts of their interface. For example,
-the interface ``Countable`` could implement ``function isEmpty(): bool``
-by using ``$this->count() == 0``. Today, traits are often used to
-accomplish this, but a default interface implementation could be used
-instead, and would be simpler. When interfaces are designed with this
-technique in mind, it can enable productivity of the interface over
-time.
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
 
-For example, see `Rust's Iterator
-trait <https://doc.rust-lang.org/std/iter/trait.Iterator.html>`__ which
-has more than 40 functions with default implementations and the
-implementor mostly needs to implement a single function,
-``next(): Option<T>``. These functions with default behaviors have been
-stabilized over time with little to no breakage in practice. For
-example, ``for_each`` was added in v1.21 and ``map_while`` was added in
-v1.57.
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
+
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
+
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-Interface methods can now provide a method body. This implementation
-will be used if the implementer does not otherwise provide an
-implementation. Default implementations are available for both instance
-and static methods.
-
-.. code:: php
-
-   interface Example {
-     // Today, you cannot specify an implementation, only a
-     // signature.
-     function method1(): void;
-
-     // With this RFC, you can provide an implementation:
-     function method2(): void {
-       echo __METHOD__, "\n";
-     } 
-   }
-
-Interface methods can also now be ``private`` if they a have method
-body. The purpose here is to allow helper routines if the default
-implementations of the ``public`` methods need them.
-
-The methods with default implementations are inherited similarly to
-abstract base classes, as opposed to how traits behave. For instance, a
-private method on the interface is not accessible to the class which
-implements the interface; with a trait it would be.
-
-Default Method Resolution
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Default methods for interfaces introduce a form of multiple inheritance.
-How is a method selected?
-
-Java's resolution algorithm looks like this:
-
-#. Class definitions always win. If a class, or a parent class, defines
-   a concrete method, then this will always win over all possible
-   default methods.
-#. More specific interfaces take priority over less specific ones. If
-   interfaces ``A`` and ``B`` exist and ``B`` extends ``A``, and both
-   have a default method for the same method, then when a class
-   implements B directly or indirectly the method from ``B`` will take
-   precedence over the method from ``A``.
-#. If the above rules fail, then the class needs to implement the method
-   itself, possibly delegating to one of the interfaces.
-
-This RFC proposes the same. However, rule 2 is only partially
-implemented at this time.
-
-Here's an example of a class delegating to another method:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   interface Interface2 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   class Class1 implements Interface1, Interface2 {
-       function method1() {
-           Interface1::method1();
-       }
-   }
-
-   (new Class1())->method1(); // Interface1::method1
-
-Parent Scoping
-~~~~~~~~~~~~~~
-
-In interface default methods, you cannot use the ``parent::`` scoping
-mechanism. The following does not work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1() { parent::method1(); }
-   }
-
-The reason is that interfaces can extend multiple other interfaces e.g.
-
-.. code:: php
-
-   interface Interface3 extends Interface1, Interface2 {}
-
-The name of the interface should be used instead:
-
-.. code:: php
-
-   interface Interface2 extends Interface1 {
-       function method1() { Interface1::method1(); }
-   }
-
-However, if a sub-class of the inheriting class calls
-``parent::method1()``, it will work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   class Class1 implements Interface1 {
-       // Inherits Interface1::method1() here.
-   }
-
-   class Class2 extends Class1 {
-       function method1() { parent::method1(); }
-   }
-
-   (new Class2())->method1);
-   // output:
-   // Interface1::method1
-
-Cancelling Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If an interface method extends a parent interface method which has a
-default, this prevents using the default method for classes which
-implement the child interface but do not directly implement the parent
-one:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, "\n"; }
-   }
-
-   interface Interface2 extends Interface1 {
-       function method1();
-   }
-
-   /* Would be an error because method1 has not been implemented.
-   class Class1 implements Interface2 {
-       // error: method1 has not been implemented.
-   }
-    */
-
-   // This is subtly different, but valid:
-   class Class1 implements Interface1, Interface2 {}
-
-The behavior could go either way. I picked this behavior because if it's
-wrong, it's easier to correct than the other way around.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as long as you do not use the feature.
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-If you do use the feature:
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
--  Adding a default implementation to an existing interface method will
-   not break existing code, because every existing usage has a higher
-   priority than the default.
--  If you add a new method to an interface, there is a compatibility
-   break. The impact of the break is limited to places where the
-   implementor/inheritor of the interface has a method of the same name.
+Further Motivation
+------------------
 
-Proposed PHP Version(s)
------------------------
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-PHP 8.3.
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
-RFC Impact
-----------
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
-To Extensions
-~~~~~~~~~~~~~
+Version
+-------
 
-Modules can specify an interface implementation as well. These internal
-default methods should not be marked with ``ZEND_ACC_ABSTRACT`` and
-should be instead marked with ``ZEND_ACC_DEFAULT_METHOD``.
+Next minor version, which is PHP 8.4.
 
-To Opcache
-~~~~~~~~~~
+Vote
+----
 
-Opcache should also work with this feature. The proof of concept
-implementation has not triggered any issues so far in CI.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-To the Ecosystem
-~~~~~~~~~~~~~~~~
+Voting started on 2024-07-13 and will end on 2024-07-27.
 
-Previously, interface methods were not allowed to have method bodies.
-These tools such as parsers, code analyzers, etc will need to be
-updated.
-
-Open Issues
------------
-
-Make sure there are no open issues when the vote starts!
-
-Future Scope
-------------
-
-This feature may be used to enhance existing interfaces in PHP.
-
--  ``Countable`` could add
-   ``function isEmpty(): bool { return $this->count() == 0; }``.
--  ``Iterator`` could add methods like ``map``, ``filter``, and
-   ``reduce`` which behave similarly to ``array_map``, ``array_filter``,
-   and ``array_reduce``.
-
-Voting
-------
-
-The vote will be a simple yes/no vote on whether to include the feature.
-
-Question: Interface Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -259,35 +97,33 @@ Voting Choices
 -  Yes
 -  No
 
-Patches and Tests
------------------
-
-Here is a work-in-progress pull request:
-https://github.com/php/php-src/pull/11467.
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
 References
 ----------
 
-Links to external references, discussions or RFCs
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-Rejected Features
------------------
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-Keep this updated with features that were discussed on the mail lists.
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
+
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
+
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
+
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Original Authors: Levi Morrison, levim@php.net
-:Slug: interface-default-methods
-:Wiki URL: https://wiki.php.net/rfc/interface-default-methods
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final

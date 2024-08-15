@@ -1,99 +1,348 @@
-Structural Typing For Closures
-==============================
+Static Class
+============
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
-:Version: 1.0
+:Title: Static Class
+:Author: Paul Morris <bilge@scriptfusion.com>
+:Status: Declined
+:Type: Standards Track
+:Created: 2024-06-23
+:PHP-Version: 8.4
+:Version: 1.4
 
 Introduction
 ------------
 
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
+A static class is a class that cannot be instantiated, and whose members
+(properties and methods) are all static. Implicit static classes can be
+created today, by simply only including static members. However,
+explicitly marking a class as static has several advantages:
+
+-  Clear expression of developer intent.
+-  Language-level compile-time checks to verify no instance members are
+   included anywhere in the inheritance chain.
+-  Language-level runtime checks to verify the class is never
+   instantiated by any mechanism.
+
+Of these advantages, the first can be somewhat mitigated with a
+`userland
+trait <https://github.com/ScriptFUSION/StaticClass/blob/master/src/StaticClass.php>`__,
+but as such traits are non-standard, there is no consistent way to
+identify them between projects. The ``static`` keyword is a consistent
+way to identify static classes that could also be leveraged by static
+analysis and code-completion tooling. Equally importantly, the
+language-level checks cannot be replicated in userland, thus are better
+suited for inclusion in PHP. In particular, classes with a private
+constructor can still be instantiated via reflection and
+faux-deserialization hacks.
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
-
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
-
-Example
-~~~~~~~
+A *static class* is so marked with the existing ``static`` keyword,
+adjacent to the class declaration.
 
 .. code:: php
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
-   }
+   static class Foo {}
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
-   }
+We introduce the ``static`` keyword at the class level to preclude the
+need to create a private constructor. That is,
+``function __construct()`` is a compile-time error in a static class.
+Furthermore, attempting to instantiate a static by any means, whether
+with the ``new`` keyword, ``ReflectionClass::newInstance*`` methods or
+``unserialize()`` hacks, is strictly forbidden and will result in a
+runtime error.
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+Whilst the goals of this RFC so expressed are fairly straightforward, we
+acknowledge there are many finer points to consider. In particular:
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+#. Should a static class imply ``final`` (as in C#)?
+#. Should a static class prohibit inheritance (as in C#)?
+#. Should a static class permit state?
+#. Should traits be permitted in a static class?
+#. Can a static class be marked abstract?
+#. Which magic methods should be supported?
+
+To answer these questions, we consider the principal reason to mark a
+class static is to move from an implicit declaration to the explicit.
+Ergo, any decision precluding the developer from doing so is invalid,
+since it coerces them to avoid explicit static, defeating its purpose.
+Thus we derive the following razor:
+
+   We cannot remove features from a static class that would otherwise be
+   present in a standard class.
+
+Following this razor we arrive at the following design.
+
+#. A static class may be marked ``final``, but in the absence of such a
+   mark, may still be extended.
+#. A static class may extend other static classes, provided the parents
+   are also marked ``static``.
+#. A static class may have static properties.
+#. A static class may use traits, provided they introduce no instance
+   members.
+#. A static class may be marked abstract, since abstract static
+   functions already exist in PHP.
+#. All static magic methods must be supported, i.e. just
+   ``__callStatic()``.
+
+Static keyword for class members
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One question our razor cannot answer is whether static member
+declarations still require the ``static`` keyword in a static class.
+
+Marking a class ``readonly`` makes marking properties with the same
+*optional*, thus one might argue ``static`` should follow suit. However,
+I opine it should not. Unlike ``readonly``, which typically applies to
+properties declared near the head of the class (by convention) where the
+same modifier is also applied, static members appear throughout the full
+length of the class body. That is, it should be apparent when jumping
+anywhere into a static class that its members are static, without having
+to check the class declaration. Therefore this RFC still requires the
+``static`` modifier for all members regardless of whether the class is
+also marked ``static``, to prevent them appearing as instance members.
+Aside, this is commensurate with the C# approach.
+
+Mutually exclusive modifiers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``static`` is applied to a class, the following other class-level
+modifiers become invalid and will raise compile-time errors.
+
+-  ``readonly`` — Read-only properties are only supported for instance
+   properties, but instance properties are forbidden by ``static``.
+
+Inheritance
+~~~~~~~~~~~
+
+-  A static class only permits extending a parent class that is also
+   marked ``static``.
+-  A non-static class cannot extend a static class.
+-  A static class can inherit from an abstract class, provided it is
+   also marked ``static``.
+
+Anonymous classes
+~~~~~~~~~~~~~~~~~
+
+Anonymous classes are always instantiated and thus at odds with the
+concept of a static class. That is, the notion of an *anonymous static
+class* is inherently invalid and not supported.
+
+Dynamic properties
+~~~~~~~~~~~~~~~~~~
+
+Undeclared object properties can be added *dynamically* to object
+instances, but since static classes cannot be instantiated, there is
+nothing to attach such properties to. Static properties must always be
+declared explicitly.
+
+Reflection extensions
+~~~~~~~~~~~~~~~~~~~~~
+
+A new ``ReflectionClass::isStatic`` method will be added, returning
+``true`` when the class is so marked, otherwise ``false``.
 
 Backward Incompatible Changes
 -----------------------------
 
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
-
-Open Questions
---------------
-
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
+None known.
 
 Future Scope
 ------------
 
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+These are some possible future extensions, but we don't necessarily
+endorse them.
 
-Proposed Voting Choices
------------------------
+#. As noted in `Readonly properties
+   2.0 <readonly_properties_v2#restrictions>`__, read-only static
+   properties are not supported due to a technical limitation. If that
+   limitation should ever be lifted, we could revisit lifting the
+   restriction on mutual exclusivity with the ``readonly`` modifier.
+#. Static interfaces may be introduced later if there is such a demand.
+#. Static traits may be introduced later if there is such a demand.
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+Vote
+----
+
+As per the `voting RFC <RFC/voting#required_majority>`__ a yes/no vote
+with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2024-07-15 and ended on 2024-08-09 at 21:00 UTC.
+
+Question: Implement static classes as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Discussion
+----------
+
+Though this is a fairly straightforward RFC, it is not without its
+detractors. Some view static classes as an anti-pattern; a namespace
+cheat that should instead be presented as namespaced functions
+(sans-class wrapper). That goes double for static classes including
+state, where static properties can be viewed as equivalent to global
+state, which is widely regarded as an anti-pattern. However, this RFC is
+*not* encouraging any particular patterns. On the contrary, we are
+merely returning a small but nevertheless useful tool to the developer's
+toolkit that could have been available since classes were introduced. In
+this humble author's opinion, static classes *should* just be a
+collection of pure functions, but as defined by our opening razor, we
+will *not* remove features from a static class that exist in a
+non-static class because we do not have the liberty of designing a new
+language, we're designing PHP, with all the weight of its past carried
+forward. Anyone wishing to remove features from PHP can submit a
+separate RFC, or perhaps more practically, just add a check to their
+favourite code style tool.
+
+Some regard namespaced functions as the correct way to implement static
+classes. That is, a file of floating functions under a namespace, as in
+`Amp <https://github.com/amphp/amp/blob/138801fb68cfc9c329da8a7b39d01ce7291ee4b0/src/functions.php>`__.
+This author requested comments that would speak to any technical or
+philosophical reason for why this would be strictly better than a static
+class, but the only technical argument fielded was that classes can be
+autoloaded and functions cannot. Curiously, this fact only speaks *in
+favour* of static classes. One might argue this difference is negligible
+thanks to Composer; files of functions can be loaded by Composer, but in
+this case the file is *always* loaded, not *auto*\ loaded. Still, this
+could be splitting hairs since opcache presumably trivializes this
+difference. Interestingly, the current Amp maintainers commented that
+namespaced functions were something they inherited, and if they had to
+do it all over again, would probably elect for static classes. Thus we
+conclude those preferring one style over the other do so purely out of
+personal preference and not because one is technically nor even
+philosophically superior.
+
+Most importantly, this proposal does nothing to promote any patterns or
+practices not already possible, nor does it block or inhibit development
+of orthogonal approaches, such as autoloading of namespaced functions,
+which some may regard as equivalent.
+
+In the wild
+-----------
+
+Today, implicit static classes are all around us, in proprietary
+projects and some of the largest open source projects in the world,
+often called *utils* or *helpers*, all of these classes would benefit
+from being explicitly marked static. To name a few:
+
+-  PHPUnit
+
+   -  Almost everything under
+      `Util <https://github.com/sebastianbergmann/phpunit/tree/10.5/src/Util>`__
+      including:
+
+      -  `Color <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Color.php>`__
+      -  `Exporter <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Exporter.php>`__
+      -  `Filesystem <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Filesystem.php>`__
+      -  `GlobalState <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/GlobalState.php>`__
+      -  `Json <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Json.php>`__
+      -  `Reflection <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Reflection.php>`__
+
+   -  Interestingly,
+      `Assert <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Framework/Assert.php>`__
+      would *not* be a static class because, despite being filled
+      entirely with static methods, is intended to be extended by test
+      class instances. In a (future) static class world, the absence of
+      the ``static`` modifier would more clearly communicate this
+      intent.
+
+-  Symfony
+
+   -  `BinaryUtil <https://github.com/symfony/symfony/blob/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/Uid/BinaryUtil.php#L47>`__
+   -  `FormUtil <https://github.com/symfony/symfony/blob/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/Form/Util/FormUtil.php#L33>`__
+   -  Almost everything under
+      `VarDumper/Caster <https://github.com/symfony/symfony/tree/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/VarDumper/Caster>`__
+
+-  Laravel – half this framework appears to be static, though fewer
+   classes qualify as pure static, including:
+
+   -  Several classes under
+      `Support <https://github.com/laravel/framework/tree/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support>`__
+      including:
+
+      -  `Env <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Env.php>`__
+      -  `Pluralizer <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Pluralizer.php>`__
+      -  `Reflector <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Reflector.php>`__
+
+   -  Literally everything under
+      `Facades <https://github.com/laravel/framework/tree/11.x/src/Illuminate/Support/Facades>`__
+
+References
+----------
+
+-  Discussion threads
+
+   -  `This RFC <https://externals.io/message/123769>`__ (Bilge, June
+      23, 2024).
+   -  `Initial proposal <https://externals.io/message/123611>`__ (Bilge,
+      June 15, 2024).
+   -  `Prior proposal <https://externals.io/message/121717>`__ (Lanre
+      Waju, November 19, 2023).
+
+-  Archaic discussion threads
+
+   -  `[VOTE] Abstract final / Static
+      classes <https://externals.io/message/79601>`__ (Guilherme Blanco,
+      December 12, 2014)
+   -  `[RFC] Static classes (Was Abstract final
+      classes) <https://externals.io/message/79338>`__ (Robert Stoll,
+      December 1, 2014)
+   -  `[RFC] Abstract final
+      classes <https://externals.io/message/79211>`__ (Guilherme Blanco,
+      November 27, 2014)
+
+-  Similar RFCs
+
+   -  `RFC: Static classes <rfc/abstract_final_class>`__ (Guilherme
+      Blanco, November 26, 2014)
+   -  `RFC: Static classes for PHP <rfc/static-classes>`__ (Lars
+      Strojny, May 3, 2008)
+
+-  `Static Classes and Static Class Members (C# Programming
+   Guide) <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-classes-and-static-class-members>`__
+
+Rejected Features
+-----------------
+
+Forbidding static class type declarations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It should be regarded as an error to use a static class as a type
+declaration, since they cannot be instantiated and thus the requirement
+can never be fulfilled by a matching instance. However, it is not
+technically possible to forbid such declarations within PHP itself
+because type checking is done when an instance is passed at runtime (and
+we can never have such an instance). The engine does not support type
+checking at compile time for function/method signatures. Such a check
+would be a good candidate for third party static analysers instead.
+
+Special thanks
+--------------
+
+I would feel remiss not to give thanks to the following list
+contributors whose high quality feedback made significant contributions
+to this RFC.
+
+-  Mike Schinkel
+-  Alexandru Pătrănescu
+-  Claude Pache
+-  Everyone else who engaged with this proposal.
+
+Thank you!
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Implementation: https://github.com/php/php-src/pull/14861
+:Original Authors: Paul Morris bilge@scriptfusion.com
+:Original PHP Version: PHP 8.4
+:Original Status: Voting
+:Slug: static_class
+:Wiki URL: https://wiki.php.net/rfc/static_class
