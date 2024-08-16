@@ -1,0 +1,193 @@
+====== PHP RFC: HTML5 Text Decoder ======
+  * Version: 0.1
+  * Date: 2024-08-15
+  * Author: Dennis Snell, dennis.snell@automattic.com
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/decode_html
+
+===== Introduction =====
+
+The ''html_entity_decode()'' function is a convenient way to replace //HTML character references// in a string with their replacement values.
+Unfortunately, there are several issues with this function:
+
+   * its default arguments are almost always wrong
+   * it's confusing to know how to call it properly.
+   * when called //correctly// for ''ENT_HTML5'' it's //still wrong//.
+   * the interface doesn't provide a way to properly decode HTML text.
+
+Regardless, this is still a useful utility serving a very common need, and PHP would benefit from a function that can decode HTML text properly with safe defaults, and in a way that educates callers on what they are doing instead of confusing them.
+
+==== HTML text parsing nuances ====
+
+=== Named character references ===
+
+HTML defines 2,231 named character referenced, such as ''&hellip;''. Of these, ''html_entity_decode()'' is aware of 1,511. It's purely [[https://gist.github.com/dmsnell/6a75af63590d93ccb028b606c0915785#file-unknown-names-with-semicolon-txt|unaware of 614]] of them, while [[https://gist.github.com/dmsnell/6a75af63590d93ccb028b606c0915785#file-unknown-names-missing-semicolon-txt|106 of the missing names]] appear because //some// named character references are not required to end in a semicolon.
+
+The list of named character references is published alongside the HTML5 living specification. [[https://html.spec.whatwg.org/entities.json|entities.json]] It states:
+
+> This list is static and [[https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references|will not be expanded or changed in the future]].
+
+For the sake of reliability and security, an HTML text decoder should decode only the specified character references, and all of them. This involves decoding the 106 names that don't require a trailing semicolon.
+
+=== Ambiguous ampersand ===
+
+The 106 named character references that don't require a trailing semicolon are governed by special rules. In an attribute value they must be followed by an unambiguous character (unambiguous characters are matched by the PCRE pattern ''^[A-Za-z0-9=]''), while in a text node they may appear anywhere. This legacy behavior was added to the specification to account for misuse in URL attribute values where the ampersand is both a character reference introducer and a query string argument separator.
+
+<code php>
+$html = '<a href="/?search=creatures&not=ogre">Search for creatures &not=ogre</a>';
+echo parser_get_href( $html ); // /?search=creatures&not=ogre
+echo parser_get_text( $html ); // Search for creatures ¬=ogre
+</code>
+
+The end of an attribute's value is not an ambiguous follower, meaning that these references are also decoded when missing their semicolon and found at the end of an attribute.
+
+=== Invalid numeric character references ===
+
+HTML not only specifies normative behavior, but it also specifies how to handle failure modes. For example, if a numeric character reference references an invalid Unicode character. It does not give allowance for handling errors differently per parser. Notably, most invalid numeric character references decode to the replacement character U+FFFD ''�'', //not// to plaintext.
+
+=== Context-based parsing ===
+
+There are a few minor rules related to where in an HTML document a span of text is found.
+
+  * NULL bytes are //removed// when found inside text nodes deep inside a BODY element, but if found within and SVG or MathML context, they are //replaced// with the replacement symbol U+FFFD ''�''.
+  * No character references are decoded when inside comments, doctype declarations, CDATA sections (which are themselves only found within SVG or MathML elements), or within any of the elements which cannot contain other markup (''IFRAME'', ''NOEMBED'', ''NOFRAMES'', ''SCRIPT'', ''STYLE'', or ''XMP'').
+  * The first newline following a ''LISTING'', ''PRE'', or ''TEXTAREA'' opening tag is ignored to allow for friendlier HTML syntax formatting. This newline includes those which are encoded as ''&#x0A;'', for example.
+
+==== Character encodings and UTF-8 ====
+
+Properly handling text encoding in web applications can be an incredibly complicated task. One confusing aspect is sorting through which encoding context is important:
+
+  * PHP maintains its own default encoding.
+  * Text read from a file is likely to be in a different encoding than the PHP character set, unless both are UTF-8.
+  * ''$_POST'' values appear encoded based on the submitting HTML page's ''<meta>'' tags, the default encoding for the system submitting the page, and the user-preference override for the submitting page, unless ''accept-charset=utf8'' is set as an attribute on the submitting form.
+  * ''$_GET'' values come percent-encoded as bytes from an unspecified character set.
+  * Database query results come in whatever character set is active for the current connection.
+
+The only commonality in handling text encodings is that in a web application there are usually many possible sources of data being read from and written to together, and the running PHP code has limited control over the data' character encoding.
+
+To this end, UTF-8 is the one universal standard recommended for interchange of data. Code attempting to properly handle mixed character encodings may:
+
+  * Track the encoding of every string variable, which is often unavailable, and combine or split texts carefully, keeping track of encoding boundaries.
+  * Convert everything into UTF-8 at the edge of the system so that internally, all text is identical in this regard.
+
+UTF-8-only functions encourage a many-to-one-to-many architecture while exposing an ''$encoding'' parameter to lower-level string functions encourages a many-to-many-to-many design where accounting mistakes might lead to security exploits and/or data corruption.
+
+===== Proposal =====
+
+This proposal introduces the ''decode_html()'' function, an updated interface that leaves behind the legacy challenges of properly using ''html_entity_decode()''.
+
+<code php>
+/**
+ * Decodes raw UTF-8 HTML text sourced from an HTML attribute value or text node.
+ *
+ * Convert input HTML to UTF-8 if not already encoded. Returns UTF-8 encoded text.
+ * Do not send the contents of a SCRIPT or STYLE element to this function.
+ *
+ * Example:
+ *
+ *     "Cats & dogs etc…" === html_decode( HTML_TEXT, "Cats &amp dogs etc&hellip;" );
+ *
+ * @param int $context HTML_ATTRIBUTE if sourced from within an HTML attribute, or
+ *                     HTML_TEXT if sourced from a text node.
+ * @return string Decoded form of input HTML.
+ */
+function decode_html( int $context, string $html ): string {}
+</code>
+
+In brief:
+
+  * All input to this function must be UTF-8.
+  * The replaced values for character references are UTF-8.
+  * The list of named character references is non-configurable.
+  * Calling code //must// indicate whether the text originates from an attribute value or "data" (which is text content outside of tags and other syntax).
+  * The passed input is assumed to be the entire contents of the attribute value or text node - not a truncation thereof.
+
+This RFC does not propose solving the problem of HTML tag-dependent decoding, for example, inside a ''SCRIPT'' element. For cases where HTML character references should not be decoded, this function leaves the responsibility with the caller.
+
+===== Backward Incompatible Changes =====
+
+There is no need for backward incompatible changes, as this proposes a new interface. A note should be added to ''html_entity_decode()'' pointing to ''decode_html()'' instead for more accurate results.
+
+===== Proposed PHP Version(s) =====
+
+next PHP 8.x
+
+===== RFC Impact =====
+
+As a new built-in function, `decode_html()` provides an efficient way to accurately decode HTML text, replacing character references and normalizing input according to the HTML5 rules.
+
+==== To Opcache ====
+
+''[NEEDS FURTHER ANALYSIS]]''
+
+==== New Constants ====
+
+  * ''HTML_ATTRIBUTE'' - refers to an HTML attribute. Used in the proposed function to indicate that the input string value was an HTML attribute value.
+  * ''HTML_TEXT'' - refers to an HTML text node/data/markup. Used in the proposed function to indicate that the input string value was an HTML text node.
+
+===== Open Issues =====
+
+''[NEEDS FURTHER ANALYSIS]''
+
+===== Unaffected PHP Functionality =====
+
+This RFC does not propose changing any existing PHP functions, classes, or other interfaces.
+Namely, it leaves unaddressed the use of other HTML parsing facilities.
+
+==== Why not use DOMDocument or HTMLDocument? ====
+
+''DOMDocument'' is plagued by a number of issues related to its legacy as an XML parser attempting to parse HTML document, which XML parsers cannot do. These issues are addressed in [[rfc/domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]].
+
+With the introduction of ''HTMLDocument'' it's finally possible in PHP to properly decode HTML text content, if the extension is provided, but doing so requires more setup that's //not right by default// and easy to misuse.
+
+<code php>
+function decode_attribute( $value ) {
+	$value = str_replace( "'", '&apos;', $value );
+	$dom = \Dom\HTMLDocument::createFromString( "<!DOCTYPE html><meta charset=utf8><div attribute='{$value}'></div>" );
+	return $dom->getElementsByTagName('div')->item(0)->getAttribute('attribute');
+}
+
+function decode_text( $value ) {
+	$value = htmlspecialchars( $value );
+	$dom = \Dom\HTMLDocument::createFromString( "<!DOCTYPE html><meta charset=utf8><div>{$value}</div>" );
+	return $dom->getElementsByTagName('div')->item(0)->textContent;
+}
+</code>
+
+These snippets demonstrate how cumbersome it can be to properly setup the text decoding domain, and shortcuts are frequently taken because of this.
+
+==== A note on reuse of the recent lexbor additions ====
+
+It may be possible to reuse the logic inside the ''lexbor'' parser to provide this functionality, however, there may be some strong challenges to doing so:
+
+  * It's unclear to the RFC author if the ''lexbor'' text parsing can be easily extracted from the generalized HTML tree-building algorithm and if reuse would imply a significant runtime overhead, vs. the use of a custom text parser.
+  * It would be important that PHP itself ships with this new built-in function so that it's readily and simply available to application developers. Relying on having an extension installed would be a major obstacle to appealing to folks wanting to eliminate corruption and security issues while decoding HTML text.
+
+===== Future Scope =====
+
+This proposal entertains a related function, ''decode_html_ref( int $context, string $html, int $offset, &$matched_byte_length = null ): ?string'' which examines a string at a given offset and returns a replacement character if there is a character reference at the given offset, otherwise `NULL`. This function is a useful component in building a variety of features that allow for partial decoding of an HTML string.
+
+For example, a suite of functions could be provided to efficiently perform string operations in the encoded domain:
+
+  * ''html_attribute_starts_with( string $haystack, string $needle )'' provides an efficient way to detect a prefix for an encoded string that doesn't require decoding and storing in memory what could be megabytes of content. This is useful for sanitization and security-related functions examining HTML attribute values.
+  * There are useful visualizations which highlight character references within HTML, such as for syntax-highlighters. With only a full decoding function it's not possible to detect where the character references are found, but with this new system this becomes trivial.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+
+Because of the need to reliably and securely and conveniently decode HTML text, a custom decoder was implemented in WordPress in user-space PHP code. The algorithm has been ported from PHP into PHP's C code to evaluate for the sake of this RFC in [[https://github.com/php/php-src/pull/14927|#14927]].
+
+While this patch proposes a working HTML decoder meant for inclusion in PHP itself, it represents one of many possible implementations of a new interface. The interface is the most important part of this proposal, as it's the function signature and behavior which dictates whether this new method would lead to more reliable parsing on the web or not.
+
+===== Implementation =====
+
+''[YET TO COME]''
+
+===== References =====
+
+This proposal originally discussed on the PHP internals mailing list.
+https://news-web.php.net/php.internals/124326
+
+===== Rejected Features =====
