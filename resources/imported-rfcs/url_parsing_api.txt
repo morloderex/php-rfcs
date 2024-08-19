@@ -1,4 +1,4 @@
-====== PHP RFC: Add WHATWG compliant URL parsing API ======
+====== PHP RFC: Add RFC3986 and WHATWG compliant URI parsing support ======
   * Version: 1.0
   * Date: 2024-06-11
   * Author: Máté Kocsis, kocsismate@php.net
@@ -8,19 +8,17 @@
 
 ===== Introduction =====
 
-URLs are one of the most fundamental concepts of the web because they make it possible to reference specific resources on a network. URLs were originally defined by Tim Berners-Lee in [[https://datatracker.ietf.org/doc/html/rfc1738|RFC 1738]], but since then other specifications have also emerged, out of which [[https://url.spec.whatwg.org/#title|WHATWG URL]] is the most notable one, because it's implemented by most browsers nowadays.
+URIs and URLs are one of the most fundamental concepts of the web because they make it possible to reference specific resources on a network. URLs were originally defined by Tim Berners-Lee in [[https://datatracker.ietf.org/doc/html/rfc1738|RFC 1738]], but since then other specifications have also emerged, out of which [[https://datatracker.ietf.org/doc/html/rfc3986|RFC 3986]] and [[https://url.spec.whatwg.org/#title|WHATWG URL]] are the most notable ones. The former one updates the original RFC 1738 and defines URIs, while the latter one specifies how browsers should treat URLs.
 
-Despite the ubiquitous nature of URLs, they are not so unequivocal as people may think, because different clients treat and parse them differently by either following one of the standards, or even worse, not following any at all. Unfortunately, PHP falls into the latter category: the ''parse_url()'' function is offered for parsing URLs, however, it isn't compliant with any standards. Even the PHP manual contains the following warning:
+Despite the ubiquitous nature of URLs and URIs, they are not so unequivocal as people may think, because different clients treat and parse them differently by either following one of the standards, or even worse, not following any at all. Unfortunately, PHP falls into the latter category: the ''parse_url()'' function is offered for parsing URLs, however, it isn't compliant with any standards. Even the PHP manual contains the following warning:
 
 <blockquote>This function may not give correct results for relative or invalid URLs, and the results may not even match common behavior of HTTP clients. ...</blockquote>
 
-Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in bugs which are difficult to notice.
+Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in bugs which are difficult to notice. For example, cURL's URL parsing implementation is based on RFC3986, that's why URLs validated by [[https://www.php.net/manual/en/filter.constants.php#constant.filter-validate-url|FILTER_VALIDATE_URL]] may not necessarily be accepted when passed to cURL.
 
 ===== Proposal =====
 
-In order to address the above mentioned problems, a new, always available ''URL'' extension is to be added to the standard library.  Initially, it would only support the WHATWG URL specification, with the explicit intention of adding support for other standards when the need arises.
-
-The extension would support parsing, as well as manipulating URLs. For this purpose, the following internal classes and methods are added:
+In order to address the above mentioned problems, a new, always available ''URI'' extension is to be added to the standard library. The extension would support parsing, validating, as well as recomposing (converting the parsed structures back to strings) URIs based on both RFC 3986 and the WHATWG URL specifications. For this purpose, the following internal classes and methods are added:
 
 <code php>
 namespace Uri;
@@ -114,19 +112,23 @@ final readonly class WhatWgError
 
 Adding a WHATWG compliant URL parser to the standard library [[https://github.com/php/php-src/pull/11315|was originally attempted in 2023]]. The implementation used [[https://www.ada-url.com|ADA URL parser]] as its parser backend which is known for its ultimate performance. At last, the proof of concept was abandoned due to some technical limitations that weren't possible to resolve.
 
-Specifically, ADA is written in C++, and requires a compiler supporting C++17 at least. Despite the fact that it has a C wrapper,   its tight compiler requirements would make it unprecedented, and practically impossible to add the ''URL'' extension to PHP as a required extension, because PHP has never had a C++ compiler dependency for the always enabled extensions, only optional extensions (like ''Intl'') can be written in C++.
+Specifically, ADA is written in C++, and requires a compiler supporting C++17 at least. Despite the fact that it has a C wrapper,   its tight compiler requirements would make it unprecedented, and practically impossible to add the ''URI'' extension to PHP as a required extension, because PHP has never had a C++ compiler dependency for the always enabled extensions, only optional extensions (like ''Intl'') can be written in C++.
 
-The firm position of this RFC is that a WHATWG compliant URL parser extension should be always available, therefore a different parser backend written in pure C should be found. Fortunately, Niels Dossche proposed [[rfc:domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]] not long after the experiment with ADA, and his work required bundling the [[https://lexbor.com/|Lexbor]] browser engine. This library is written in C, and coincidentally contains a WHATWG compliant URL parsing submodule, therefore it makes it suitable to be used as the library of choice.
+The firm position of this RFC is that a WHATWG compliant URL parser extension should always be available, therefore a different parser backend written in pure C should be found. Fortunately, Niels Dossche proposed [[rfc:domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]] not long after the experiment with ADA, and his work required bundling parts of the [[https://lexbor.com/|Lexbor]] browser engine. This library is written in C, and coincidentally contains a WHATWG compliant URL parsing submodule, therefore it makes it suitable to be used as the library of choice.
+
+For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uriparser/|URIParser]] library was chosen. It is a feature rich and lightweight library which is relatively fast and has no dependencies. It uses the "new BSD license", which is compatible with the current PHP license as well as the [[https://wiki.php.net/rfc/php_license_update|PHP License Update RFC]].
 
 ===== Plugability =====
 
 The capability provided by ''parse_url()'' is used for multiple purposes in the internal PHP source:
 
-  * ''SoapClient::__doRequest()'': the ''$location'' parameter as well as the value of the ''Location'' header are parsed
+  * ''SoapClient::__doRequest()'': parsing the ''$location'' parameter as well as the value of the ''Location'' header
   * FTP/FTPS stream wrapper: ''parse_url()'' is used for connecting to an URL, renaming a file, following the ''Location'' header
-  * ''FILTER_VALIDATE_URL'': Validating URLs
-  * SSL/TLS socket communication: The URL is parsed
-  * GET/POST session: Sending the session ID as a query string ([[rfc:deprecate-get-post-sessions|PHP RFC: Deprecate GET/POST sessions]]
+  * ''FILTER_VALIDATE_URL'': validating URLs
+  * SSL/TLS socket communication: parsing the URL
+  * GET/POST session: accepting the session ID from the query string, manipulating the output URL to automatically include the session ID ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]]
+
+It would cause an inconsistency if PHP supported parsing URIs based on the two specifications referred above, but kept using the legacy behavior in its core without the possibility to use the new features. That's why the current RFC was designed with plugability in mind: the two built-in implementations as well as any custom URI parsing implementations (i.e. a 3rd party extension leveraging [[https://www.ada-url.com/|ADA URL]]) can be registered by using a similar method how Argon2 is password hashing algorithm can be registered by the Sodium extension.
 
 ===== Performance Considerations =====
 
