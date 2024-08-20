@@ -14,7 +14,7 @@ Despite the ubiquitous nature of URLs and URIs, they are not so unequivocal as p
 
 <blockquote>This function may not give correct results for relative or invalid URLs, and the results may not even match common behavior of HTTP clients. ...</blockquote>
 
-Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in bugs which are difficult to notice. For example, cURL's URL parsing implementation is based on RFC3986, that's why URLs validated by [[https://www.php.net/manual/en/filter.constants.php#constant.filter-validate-url|FILTER_VALIDATE_URL]] may not necessarily be accepted when passed to cURL.
+Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in bugs which are difficult to notice. For example, cURL's URL parsing implementation is based on RFC 3986, that's why URLs validated by [[https://www.php.net/manual/en/filter.constants.php#constant.filter-validate-url|FILTER_VALIDATE_URL]] may not necessarily be accepted when passed to cURL.
 
 ===== Proposal =====
 
@@ -116,7 +116,7 @@ Specifically, ADA is written in C++, and requires a compiler supporting C++17 at
 
 The firm position of this RFC is that a WHATWG compliant URL parser extension should always be available, therefore a different parser backend written in pure C should be found. Fortunately, Niels Dossche proposed [[rfc:domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]] not long after the experiment with ADA, and his work required bundling parts of the [[https://lexbor.com/|Lexbor]] browser engine. This library is written in C, and coincidentally contains a WHATWG compliant URL parsing submodule, therefore it makes it suitable to be used as the library of choice.
 
-For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uriparser/|URIParser]] library was chosen. It is a feature rich and lightweight library which is relatively fast and has no dependencies. It uses the "new BSD license", which is compatible with the current PHP license as well as the [[https://wiki.php.net/rfc/php_license_update|PHP License Update RFC]].
+For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uriparser/|URIParser]] library was chosen. It is a lightweight and relatively fast library with no dependencies. It uses the "new BSD license" which is compatible with the current PHP license as well as the [[https://wiki.php.net/rfc/php_license_update|PHP License Update RFC]].
 
 ===== Plugability =====
 
@@ -125,24 +125,70 @@ The capability provided by ''parse_url()'' is used for multiple purposes in the 
   * ''SoapClient::__doRequest()'': parsing the ''$location'' parameter as well as the value of the ''Location'' header
   * FTP/FTPS stream wrapper: ''parse_url()'' is used for connecting to an URL, renaming a file, following the ''Location'' header
   * ''FILTER_VALIDATE_URL'': validating URLs
-  * SSL/TLS socket communication: parsing the URL
+  * SSL/TLS socket communication: parsing the target URL
   * GET/POST session: accepting the session ID from the query string, manipulating the output URL to automatically include the session ID ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]]
 
-It would cause an inconsistency if PHP supported parsing URIs based on the two specifications referred above, but kept using the legacy behavior in its core without the possibility to use the new features. That's why the current RFC was designed with plugability in mind: the two built-in implementations as well as any custom URI parsing implementations (i.e. a 3rd party extension leveraging [[https://www.ada-url.com/|ADA URL]]) can be registered by using a similar method how Argon2 is password hashing algorithm can be registered by the Sodium extension.
+It would cause an inconsistency if parsing of URIs based on the two specifications referred above was supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
+
+Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. One one hand, this approach would make it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure how URIs should be parsed throughout PHP's codebase:
+
+For this purpose, a ''uri.default_handler'' PHP INI option is added with the following valid values:
+
+  * **''rfc3986'':** URL parsing based on the RFC 3986 standard via the uriparser library
+  * **''whatwg'':** URL parsing based on the WHATWG spcification via the Lexbor library
+  * **''parse_url'':** URL parsing based on the legacy ''parse_url()'' based method (default value)
+
+<code php>
+ini_set("uri.default_handler", "rfc3986");
+
+filter_var("https://example.com", FILTER_VALIDATE_URL);
+</code>
+
+The above piece of code validates ''https://example.com'' based on the RFC 3986 standard, while the below piece of code validates it based on the WHATWG specification:
+
+<code php>
+ini_set("uri.default_handler", "whatwg");
+
+filter_var("https://example.com", FILTER_VALIDATE_URL);
+</code>
 
 ===== Performance Considerations =====
 
-The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A WHATWG compliant parser will always be slower than ''parse_url()'', because it has to execute more code. According to the initial benchmarks, ''Url\UrlParser::parseUrl()'' is ~3.6x, while ''Url\UrlParser::parseUrlToArray()'' is ~3x slower than ''parse_url()''. The new functions still have some room for performance optimizations, but we shouldn't expect a significant performance improvement.
+The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A fully standard compliant parser will generally be slower than ''parse_url()'', because it has to execute more code.
+
+According to the rough initial benchmarks, the following relative results were measured:
+
+==== Time of parsing of a basic URL (smaller % is faster) ====
+
+  * ''parse_url()'': 100%
+  * ''Uri\Uri::fromRfc3986()'': 150%
+  * ''Uri\Uri::fromWhatwg()'': 300%
+
+==== Time of parsing of a complex URL (smaller % is faster) ====
+
+  * ''parse_url()'': 100%
+  * ''Uri\Uri::fromRfc3986()'': 50%
+  * ''Uri\Uri::fromWhatwg()'': 100%
+
+More accurate benchmarks are to be performed later.
 
 ===== API Design =====
 
-The new URL parsing API consists of two classes: ''Url\UrlParser'' and ''Url\Url''. It's a deliberate design decision to separate parsing from representation: this way URLs can be parsed into multiple representations (class, array, scalar values). However, it's still to be decided which representations are really necessary to have.
+The new URL parsing API consists of multiple classes where ''Uri\Uri'' is the (abstract) base class containing two factory methods: ''Uri\Uri::fromRfc3986()'' and ''Uri\Uri::fromWhatwg()''. These methods are generally expected to be used for instantiating the concrete implementations: ''Uri\Rfc3986Uri'' and ''Uri\WhatwgUri''.
 
-Additionally, this design makes it easier to support custom parser backends. For example, one can then create an extension which uses the [[https://www.ada-url.com|ADA URL parser]] library to parse URLs.
+Having separate classes for the separate URI implementations makes it possible to refer to a specific implementation, or require one at the type level via type declarations. Doing so is important when one has to work only with one of the URI implementations. However, for use-cases where it is not important which implementation is passed, the non-instantiable ''Uri\Uri'' base class is at hand.
+
+Currently, the ''Uri\Uri'' class does not support mutation. It is because the underlying libraries do not support changing the individual URI components once the input URI is parsed. Support for the missing features may be added to uriparser and lexbor in the future though.
 
 ===== Relation to PSR-7 =====
 
-The ''Url\Url'' class is intentionally compatible with the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]]. This makes it possible for a next iteration of the PSR-7 standard to use ''Url\Url'' directly instead of requiring implementations to provide their own ''Psr\Http\Message\UriInterface'' implementation.
+[[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface in userland for representing URIs. That's why it seems a good candidate for adoption. However, the current RFC does not purse this for the following reasons:
+
+  * PSR-7's ''UriInterface'' supports mutation of the URI objects via "wither" methods (i.e. ''UriInterface::withScheme()''). This is not currently possible to achieve for the ''URI'' extension due to technical limitations mentioned above.
+  * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WhatWG specification.
+  * PSR-7's ''UriInterface'' have non-nullable method return types expect for ''UriInterface::getPort()'' whereas WhatWG specifically allows ''null'' values.
+
+Due to its immutability, The ''Uri\Uri'' class is not compatible with the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]].
 
 ===== Examples in Other Languages =====
 
@@ -164,7 +210,7 @@ NodeJS recently added support for a decent WHATWG URL compliant [[https://nodejs
 
 ==== Python ====
 
-Python also comes with built-in support for parsing URLs, made available by the [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlparse|urllib.parse.urlparse]] and [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlsplit|urllib.parse.urlsplit]] functions. According to the documentation, "these functions incorporate some aspects of both, but cannot be claimed compliant with either [the WHATWG URL or the RFC 3986 specifications]".
+Python also comes with built-in support for parsing URLs, made available by the [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlparse|urllib.parse.urlparse]] and [[https://docs.python.org/3/library/urllib.parse.html#urllib.parse.urlsplit|urllib.parse.urlsplit]] functions. According to the documentation, "these functions incorporate some aspects of both [the WHATWG URL and the RFC 3986 specifications], but cannot be claimed compliant with either".
 
 ===== Backward Incompatible Changes =====
 
@@ -172,13 +218,15 @@ None.
 
 ===== Proposed PHP Version(s) =====
 
-Either PHP 8.5 or 9.0.
+The next minor PHP version (either PHP 8.5 or 9.0, whichever comes first).
 
 ===== Future Scope =====
 
-Support for other parser backends may be added so that other libraries (like [[https://www.ada-url.com/|Ada URL]]) could be also used in addition to Lexbor.
-
-The ''parse_url()'' function can be deprecated at some distant point of time.
+  * Support for new parser backends so that other libraries (like [[https://www.ada-url.com/|Ada URL]], or [[https://curl.se/libcurl/c/libcurl-url.html|cURL]]) could also be used in addition to uriparser and Lexbor.
+  * In addition to the configuration of the globally used URI parser via the ''uri.default_handler'' INI option, the URI parser could also be set at the individual feature level
+  * Support for mutation of the URI components could be added, similarly to the PSR-7 ''UriInterface'' (i.e. ''UriInterface::withScheme()''.
+  * Support for an abstraction for manipulating query parameters, like [[https://url.spec.whatwg.org/#urlsearchparams|URLSearchParams]] defined by WhatWg
+  * The ''parse_url()'' function can be deprecated at some distant point of time
 
 ===== References =====
 
@@ -188,7 +236,7 @@ Discussion thread: https://externals.io/message/123997
 
 The vote requires 2/3 majority in order to be accepted.
 
-<doodle title="Add the WHATWG compliant URL API described above?" auth="kocsismate" voteType="single" closed="yes" closeon="2024-05-30T10:00:00Z">
+<doodle title="Add the RFC 3986 and the WHATWG compliant URI API described above?" auth="kocsismate" voteType="single" closed="yes" closeon="2024-05-30T10:00:00Z">
    * yes
    * no
 </doodle>
