@@ -1,0 +1,299 @@
+====== PHP RFC: Add get_declared_enums() function ======
+  * Version: 0.1
+  * Date: 2024-08-19
+  * Author: Juliette Reinders Folmer (php.net_nospam@adviesenzo.nl), Ayesh Karunaratne (ayesh@php.watch)
+  * Status: Draft
+  * Implementation: https://github.com/php/php-src/pull/15443
+  * First Published at: http://wiki.php.net/rfc/get_declared_enums
+
+
+===== Introduction =====
+
+This RFC proposes to add a new ''get_declared_enums()'' function in the next PHP 8.x release and to make the behaviour of the related functions consistent by:
+  * Deprecating support for enums in the <php>class_exists()</php> function in the next PHP 8.x and removing support for enum from <php>class_exists()</php> in PHP 9.0.
+  * Soft deprecating retrieving enums via the <php>get_declared_classes()</php> function and to remove enums from the return value of <php>get_declared_classes()</php> in PHP 9.0.
+
+===== Proposal =====
+
+There are four different <abbr title="Object-Oriented">OO</abbr> structures in PHP:
+  * Classes
+  * Interfaces
+  * Traits
+  * Enums
+
+For all four, a ''*_exists()'' function is available, i.e. <php>class_exists()</php>, <php>interface_exists()</php>, <php>trait_exists()</php> and <php>enum_exists()</php>.
+
+But only for three out of the four, a ''get_declared_*()'' function exists.
+There is <php>get_declared_classes()</php>, <php>get_declared_interfaces()</php>, <php>get_declared_traits()</php>, but no ''get_declared_enums()''.
+
+This proposal intends to remedy this by adding a ''get_declared_enums()'' function in the next PHP 8.x release.
+
+Furthermore, the behaviour of the <php>get_declared_classes()</php> and <php>class_exists()</php> functions is inconsistent, as <php>get_declared_classes()</php> currently //also// returns the names of enums and <php>class_exists()</php> returns ''true'' for both classes as well as enums.
+
+To illustrate:
+
+^ Function/Given  ^  Class  ^  Interface  ^  Trait  ^  Enum  ^
+^ <php>class_exists()</php>  |  **true/false**  |  false  |  false  |  **true/false**  |
+^ <php>interface_exists()</php>  |  false  |  **true/false**  |  false  |  false  |
+^ <php>trait_exists()</php>  |  false  |  false  |  **true/false**  |  false  |
+^ <php>enum_exists()</php>  |  false  |  false  |  false  |  **true/false**  |
+
+Demo: https://3v4l.org/1PWFo
+
+^ Function/Returns  ^  Classes  ^  Interfaces  ^  Traits  ^  Enums  ^
+^ <php>get_declared_classes()</php>  |  **yes**  |  no  |  no  |  **yes**  |
+^ <php>get_declared_interfaces()</php>  |  no  |  **yes**  |  no  |  no  |
+^ <php>get_declared_traits()</php>  |  no  |  no  |  **yes**  |  no  |
+^ ''get_declared_enums()'' (proposed)  |  no  |  no  |  no  |  **yes**  |
+
+Demo: https://3v4l.org/0ub6I
+
+This means that these functions do not act as the "silos" they appear to be, which can be a cause of bugs and other surprises.
+
+To remedy this, a deprecation notice will be added when <php>class_exists()</php> is used with an enum name.
+As of PHP 9.0, <php>class_exists()</php> will no longer act on enum names and return ''false'' for those.
+
+As for <php>get_declared_classes()</php>, the proposal is to //soft// deprecate the return value including enum names, and to change the return value to no longer include enum names as of PHP 9.0.
+
+===== Discussion =====
+
+==== Why was get_declared_enums() not added when enums were added in PHP 8.1 ? ====
+
+[[https://externals.io/message/124937#124941|According to Larry Garfield]] (one of the authors of the [[enumerations|enumerations RFC]]):
+
+> I can't remember the last time I used ''get_declared_classes()'' [...], so when we were working on enums it never occurred to us to think about it. It wasn't a deliberate decision to omit, as far as I recall.
+
+In other words: it appears to have been just an oversight. Not an intentional design choice.
+
+
+==== Enums are a sub-set of classes, why should the behaviour of get_declared_classes() be changed ? ====
+
+For the lack of a ''get_declared_enums()'' function, it is fortunate that <php>get_declared_classes()</php> includes enums in its return value, as otherwise there would be no way, at this time, to retrieve the list of enum symbols.
+
+However, once the ''get_declared_enums()'' function would be introduced, this behaviour becomes inconsistent and surprising.
+
+After all, internally, classes, interfaces, traits and enums are all considered classes, so why should <php>get_declared_classes()</php> include enums, but not interfaces and traits ?
+
+Changing the return value of <php>get_declared_classes()</php>, however, constitutes a BC-break for the (limited) set of users consciously using <php>get_declared_classes()</php> to //also// retrieve the names of declared enum symbols.
+With that in mind, changing the return value of <php>get_declared_classes()</php> is proposed for PHP 9.0.
+
+
+==== Enums are a sub-set of classes, why should the behaviour of class_exists() be changed ? ====
+
+Along the same lines as the above: interface and traits are also classes internally, but calling <php>class_exists()</php> on an interface or trait name will return ''false'', while calling it on an enum name will return ''true''.
+
+This is inconsistent and surprising behaviour which this RFC intends to fix.
+
+
+==== Why only soft deprecate the change to the return value for get_declared_classes() ? ====
+
+The function itself is not deprecated, but the return value will change to not include enums.
+
+As, when the function is called, there is no way to know how the return value will be used, it seems inappropriate to throw a deprecation notice.
+
+
+==== What does soft deprecate even mean in this context ? ====
+
+A warning about the upcoming change in the return value of <php>get_declared_classes()</php> in both the ''UPGRADING'' document, the migration guide, and on the manual page for <php>get_declared_classes()</php>.
+
+
+==== Were any alternative approaches considered ? ====
+
+[[https://externals.io/message/124937#125028|Claude Pache]] brought up the following alternative approach on the mailing list:
+<code php>
+const SIMPLE_CLASS = 1;
+const ABSTRACT_CLASS = 2;
+const ANONYMOUS_CLASS = 4;
+const ENUM = 8;
+
+function get_declared_classes(int $type = SIMPLE_CLASS | ABSTRACT_CLASS | ANONYMOUS_CLASS | ENUM): array { /* ... */ }
+</code>
+
+This approach could even be extrapolated to the following:
+<code php>
+const SIMPLE_CLASSES = 1;
+const ABSTRACT_CLASSES = 2;
+const ANONYMOUS_CLASSES = 4;
+const INTERFACES = 8;
+const TRAITS = 16;
+const ENUMS = 32;
+
+function get_declared_symbols(?int $type = null, bool $categorize = false): array { /* ... */ }
+</code>
+
+This would then allow for deprecating - and eventually removing - the <php>get_declared_classes()</php>, <php>get_declared_interfaces()</php> and <php>get_declared_traits()</php> methods in favour of the unified ''get_declared_symbols()'' method.
+
+Deprecating and removing the <php>get_declared_classes()</php>, <php>get_declared_interfaces()</php> and <php>get_declared_traits()</php> methods would, however, be more disruptive to userland than the current proposal, which is why the current proposal prevailed.
+
+
+
+===== Backward Incompatible Changes =====
+
+==== Introduction of the new function ====
+
+The introduction of the new function means the name can no longer be used in userland code (without a <php>function_exists()</php> wrapper).
+
+A GitHub code search yielded [[https://github.com/search?q=get_declared_enums+language%3APHP+&type=code|zero matches]] on public GitHub repositories that define a function with the same name.
+
+If so desired, it is possible to polyfill the new ''get_declared_enums()'' function (props [[https://externals.io/message/124937#124973|Christoph M. Becker]] and [[https://externals.io/message/124937#124980|Nicolas Grekas]]):
+<code php>
+function get_declared_enums(): array {
+    $enums = [];
+    $exts = get_loaded_extensions(false);
+    foreach ($exts as $ext) {
+        $re = new ReflectionExtension($ext);
+        $classes = $re->getClasses();
+        foreach ($classes as $class) {
+            if ($class->isEnum()) {
+                $enums[] = $class->name;
+            }
+        }
+    }
+    return $enums;
+}
+</code>
+
+<code php>
+function get_declared_enums(): array {
+     return array_filter(get_declared_classes(), 'enum_exists');
+}
+</code>
+
+==== Deprecation of using class_exists() on enum names ====
+
+The <php>enum_exists()</php> function has been included in PHP since PHP 8.1, when enums were introduced.
+Code specifically intended to check whether an enum exists, will (or should) be using the <php>enum_exists()</php> function already.
+
+There may be some code, which intentionally uses <php>class_exists()</php> as a convenient catch-all to check for both classes as well as enums, such code could be adjusted per the below to be cross-version compatible (and avoid the deprecation notice):
+<code diff>
+-if (class_exists($name)) {}
++if (enum_exists($name) || class_exists($name)) {}
+</code>
+
+
+==== Change of the return value of get_declared_classes() ====
+
+As of PHP 9.0, existing code which explicitly relies on <php>get_declared_classes()</php> to retrieve both class, as well as enum symbol names, will break.
+
+If so desired, this can be worked around as follows in a cross-version compatible manner to maintain the old behaviour:
+<code php>
+$classes = get_declared_classes();
+if (function_exists('get_declared_enums')) {
+    $enums   = get_declared_enums();
+    $classes = array_values(array_unique(array_merge($classes, $enums)));
+}
+</code>
+
+Alternatively, the new (PHP 9.0) behaviour could be emulated in a cross-version compatible manner, like so:
+<code php>
+$classes = get_declared_classes();
+$enums   = [];
+if (function_exists('get_declared_enums')) {
+    $enums = get_declared_enums();
+}
+
+if (PHP_VERSION_ID < 90000) {
+    if (!empty($enums)) {
+        // PHP 8.5 < 9.0: only remove enums from $classes.
+        $classes = array_diff($classes, $enums);
+    } elseif (function_exists('enum_exists')) {
+        // PHP 8.1 - 8.4: remove enums from $classes and add to $enums.
+        $classes = array_values(array_filter(
+            $classes,
+            function ($name) use (&$enums) {
+                if (enum_exists($name, false)) {
+                    $enums[] = $name;
+                    return false;
+                }
+
+                return true;
+            }
+        ));
+    }
+}
+</code>
+
+Tools like [[https://github.com/PHPCompatibility/PHPCompatibility|PHPCompatibility]], [[http://phpstan.org/|PHPStan]] and [[http://exakat.io/|Exakat]], could possibly/probably flag up code which would potentially be affected by the PHP 9.0 removal of enums from the return value of <php>get_declared_classes()</php>.
+
+
+===== Proposed PHP Version(s) =====
+
+  * Next PHP 8.x for introducing the ''get_declared_enums()'' function.
+  * Next PHP 8.x for deprecating the use of <php>class_exists()</php> on enum symbols.
+  * PHP 9.0 for the change to the return value of <php>get_declared_classes()</php> (to not include enums).
+  * PHP 9.0 for the change to the return value of <php>class_exists()</php> (to return ''false'' for enums instead of ''true'').
+
+===== RFC Impact =====
+
+==== To SAPIs ====
+
+None
+
+==== To Existing Extensions ====
+
+None
+
+==== To Opcache ====
+
+None
+
+==== New Constants ====
+
+None
+
+==== php.ini Defaults ====
+
+None
+
+
+===== Unaffected PHP Functionality =====
+
+The behaviour of the <php>get_declared_interfaces()</php> and <php>get_declared_traits()</php> functions remains unchanged.\\
+The behaviour of the <php>interface_exists()</php>, <php>trait_exists()</php> and <php>enum_exists()</php> functions remains unchanged.
+
+The Reflection API for enums also remains unchanged.
+
+===== Future Scope =====
+
+  * The pre-RFC discussion yielded some interesting ideas regarding potentially new functionality to retrieve the symbols loaded by a specific file ''include''/''require''. These are not addressed in this RFC and are left as a potential future language enhancement.
+  * The pre-RFC discussion also highlighted that the ''get_declared_*()'' functions are not terribly memory efficient. Cutting down on memory fragmentation/garbage collector churn caused by these functions is outside the scope of the current proposal.
+
+
+===== Proposed Voting Choices =====
+
+Each vote would need a 2/3 majority.
+
+### Add a new get_declared_enums() function in the next PHP 8.x
+
+### Deprecate using class_exists() for enums in PHP 8.x and change class_exists() to return false for enums in PHP 9.0
+
+### Remove enums from the return value of get_declared_classes() in PHP 9.0
+
+ * The third vote is conditional on the first vote passing.
+
+
+===== Patches and Tests =====
+
+  * Patch introducing ''get_declared_enums()'' for 8.x: https://github.com/php/php-src/pull/15443
+  * [WIP] Patch to deprecate using <php>class_exists()</php> with enums: https://github.com/Ayesh/php-src/pull/14
+  * No patch for the changes proposed for PHP 9.0 is available at this time.
+
+
+===== Implementation =====
+
+After the project is implemented, this section should contain
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+  * [[enumerations|RFC which introduced enumurations]]
+  * [[https://www.php.net/manual/en/ref.classobj.php|Class/Object functions in the manual]]
+  * [[https://externals.io/message/124937|Initial pre-RFC discussion]]
+
+
+===== Rejected Features =====
+
+None at this time.
