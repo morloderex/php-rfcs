@@ -122,7 +122,7 @@ For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uripa
 
 The capability provided by ''parse_url()'' is used for multiple purposes in the internal PHP source:
 
-  * ''SoapClient::__doRequest()'': parsing the ''$location'' parameter as well as the value of the ''Location'' header
+  * ''SoapClient::_doRequest()'': parsing the ''$location'' parameter as well as the value of the ''Location'' header
   * FTP/FTPS stream wrapper: ''parse_url()'' is used for connecting to an URL, renaming a file, following the ''Location'' header
   * ''FILTER_VALIDATE_URL'': validating URLs
   * SSL/TLS socket communication: parsing the target URL
@@ -130,13 +130,15 @@ The capability provided by ''parse_url()'' is used for multiple purposes in the 
 
 It would cause an inconsistency if parsing of URIs based on the two specifications referred above was supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
 
-Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. One one hand, this approach would make it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure how URIs should be parsed throughout PHP's codebase:
+Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. One one hand, this approach would make it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure how URIs should be parsed throughout PHP's codebase.
 
-For this purpose, a ''uri.default_handler'' PHP INI option is added with the following valid values:
+For this purpose, a ''uri.default_handler'' PHP INI option is added with the following possible values:
 
-  * **''rfc3986'':** URL parsing based on the RFC 3986 standard via the uriparser library
-  * **''whatwg'':** URL parsing based on the WHATWG spcification via the Lexbor library
-  * **''parse_url'':** URL parsing based on the legacy ''parse_url()'' based method (default value)
+  * **''rfc3986'':** parsing based on the RFC 3986 standard via the uriparser library
+  * **''whatwg'':** parsing based on the WHATWG specification via the Lexbor library
+  * **''parse_url'':** parsing based on the behavior of the legacy ''parse_url()'' function (default value)
+
+Please note that setting the ''uri.default_handler'' PHP INI option does not affect the behavior of the ''parse_url()'' internal function itself, since the new URI parsing API is expected to be used from now on instead of this function.
 
 <code php>
 ini_set("uri.default_handler", "rfc3986");
@@ -174,9 +176,9 @@ More accurate benchmarks are to be performed later.
 
 ===== API Design =====
 
-The new URI parsing API consists of multiple classes where ''Uri\Uri'' is the (abstract) base class containing two factory methods: ''Uri\Uri::fromRfc3986()'' and ''Uri\Uri::fromWhatwg()''. These methods are generally expected to be used for instantiating the concrete implementations: ''Uri\Rfc3986Uri'' and ''Uri\WhatwgUri''.
+The new URI parsing API consists of multiple classes ''Uri\Uri'' being the (abstract) base class. Besides getters for accessing the individual URI components and a ''__toString()'' method, it contains two factory methods: ''Uri\Uri::fromRfc3986()'' and ''Uri\Uri::fromWhatwg()''. These methods are generally expected to be used for instantiating the two concrete implementations: ''Uri\Rfc3986Uri'' and ''Uri\WhatwgUri''.
 
-Having separate classes for the separate URI implementations makes it possible to refer to a specific implementation, or require one at the type level via type declarations. Doing so is important when one has to work only with one of the URI implementations. However, for use-cases where it is not important which implementation is passed, the non-instantiable ''Uri\Uri'' base class is at hand.
+Having separate classes for the separate URI implementations makes it possible to refer to a specific implementation, or require one at the type level via type declarations. Doing so is important when one needs to work with only one of the URI implementations. However, for use-cases where it is not important which implementation is passed, the non-instantiable ''Uri\Uri'' base class is at hand.
 
 Currently, the ''Uri\Uri'' class does not support mutation. It is because the underlying libraries do not support changing the individual URI components once the input URI is parsed. Support for the missing features may be added to uriparser and lexbor in the future though.
 
@@ -189,6 +191,8 @@ Currently, the ''Uri\Uri'' class does not support mutation. It is because the un
   * PSR-7's ''UriInterface'' have non-nullable method return types expect for ''UriInterface::getPort()'' whereas WhatWG specifically allows ''null'' values.
 
 Due to its immutability, The ''Uri\Uri'' class is not compatible with the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]].
+
+The ''Uri\Uri'' class is purposefully extendible in userland code as well.
 
 ===== Examples in Other Languages =====
 
