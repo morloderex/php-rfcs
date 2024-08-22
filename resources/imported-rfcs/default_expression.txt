@@ -9,9 +9,53 @@
 
 ===== Introduction =====
 
-The only way to pass the default value to a function or method parameter is to not pass anything. This can be particularly difficult in some circumstances, because the language does not offer a way to pass //nothing//. This RFC proposes to make the existing keyword, <php>default</php>, the canonical way to pass the default value. Moreover, ''default'' becomes a valid expression in the function argument context, meaning it can be creatively combined with any and all existing PHP expression grammars to augment the default value as it is passed, including assigning it to variables (see appendix for a comprehensive list of examples).
+The only way to pass the default value to a function or method parameter is to not pass anything. This can be particularly difficult in some circumstances, because the language does not offer an intuitive way to pass //nothing//. This RFC proposes to make the existing keyword, <php>default</php>, the canonical way to pass the default value. Moreover, ''default'' becomes a valid expression in the function argument context, meaning it can be creatively combined with any and all existing PHP expression grammars to augment the default value as it is passed, including assigning it to variables (see appendix for a comprehensive list of examples).
 
-[[named_params|Named arguments]] provides one way of implicitly passing //nothing//, by skipping over parameters we don't want to pass. A consequence of named arguments is that parameter names suddenly became part of our APIs, and changing names would suddenly constitute a BC break, whether libraries wanted to adopt this behaviour or not. Although it is neither the principal aim nor benefit of this RFC, it does provide an alternative syntax for passing defaults that does not rely on named arguments, and as such relinquishes the burden on libraries to consider parameter names part of their API. That is, libraries can now elect to declare parameter names not part of their backwards-compatibility promise and offer passing ''default'' as the alternative.
+[[named_params|Named arguments]] provides a familiar way of implicitly passing //nothing//, by skipping over parameters we don't want to pass. But a consequence of named arguments is parameter names suddenly became part of our APIs, and changing names now suddenly constitutes a BC break, whether libraries wanted to adopt this contract or not. Although it is neither the principal aim nor benefit of this RFC, it does provide an alternative syntax for passing defaults that does not rely on named arguments, and as such relinquishes the burden on libraries to affirm parameter names part of their API. That is, libraries can now elect to declare parameter names not part of their backwards-compatibility promise and offer passing ''default'' as the alternative.
+
+<code php>
+// Skipping JSON depth parameter with named parameters.
+json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+
+// Skipping JSON depth parameter with default.
+json_decode($json, true, default, JSON_THROW_ON_ERROR);
+</code>
+
+However, the principal benefit of ''default'' is in its employ within **expressions**, the most common case being **conditional defaults**, which named arguments cannot solve. Consider the following example: 
+
+<code php>
+class Config {
+    public function __construct(Theme $theme = new CuteTheme()) {}
+}
+</code>
+
+By default, the configuration is constructed with a new ''CuteTheme''. We want to allow users to specify a different theme, but if they do not specify anything, we should still use the default, which for the purposes of this example should be considered third-party code we cannot change. That is, we want to conditionally apply the user's custom theme. We have a few options here, none of them good:
+
+  - Copy the current default from ''Config''. This should be considered an invalid option, because we want to allow the upstream library to change the default without having to update our code.
+  - Filter and splat the theme argument. This is a viable but unintuitive way to conditionally pass ''nothing'' as an argument.
+  - Use reflection. This is a verbose option with performance overhead.
+
+<code php>
+// Filter and splat.
+function applyTheme(?string $theme = null) {
+    return new Config(...array_filter([isset($theme) ? new $theme : null]));
+}
+
+// Reflect.
+function applyTheme(?string $theme = null) {
+    $param = new ReflectionParameter(['Config', '__construct'], 'theme');
+    return new Config(isset($theme) ? new $theme : $param->getDefaultValue());
+}
+</code>
+
+Filter and splat only works if we're willing to sacrifice ''null'' as a placeholder for //nothing//, and only works with one argument; as soon as two or more nullable arguments are involved, collapsing them in this manner risks passing the arguments in incorrect order. However, ''default'' provides an elegant and intuitive solution to this problem.
+
+<code php>
+// Conditional default.
+function applyTheme(?string $theme = null) {
+    return new Config(isset($theme) ? new $theme : default);
+}
+</code>
 
 ===== Proposal =====
 
@@ -25,7 +69,7 @@ None known.
 
 Nothing planned.
 
-===== Proposed Voting Choices =====
+===== Voting =====
 
 As per the [[RFC/voting#required_majority|voting RFC]] a yes/no vote with a 2/3 majority is needed for this proposal to be accepted.
 
