@@ -76,7 +76,7 @@ This is somewhat similar to reflection, but PHP knows which class, method and ar
 
 ===== Default as a single token =====
 
-Default as a single token was [[skipparams|proposed]] a decade ago as a mechanism for skipping some parameters, but was declined. Since then, [[named_params|named arguments]] has provided a way to implicitly pass //nothing//, by skipping over parameters we don't want to pass. Named arguments mostly preclude the usefulness of skipping parameters with <php>default</php>, but a curious consequence of named arguments is parameter names suddenly became part of our APIs. That is, changing parameter names now constitutes a compatibility break, whether libraries want to adopt this contract or not. Although it is neither the principal aim nor benefit of this RFC, it does provide an alternative syntax for passing defaults that does not rely on named arguments, and as such relinquishes the burden on libraries to affirm parameter names part of their API. That is, libraries could now elect to declare parameter names not part of their backwards-compatibility promise by offering passing ''default'' as an alternative.
+Default as a single token was [[skipparams|proposed]] a decade ago as a mechanism for skipping some parameters, but was declined. Since then, [[named_params|named arguments]] has provided a way to implicitly pass //nothing//, by skipping over parameters we don't want to pass. Named arguments mostly preclude the usefulness of skipping parameters with <php>default</php>, but a curious consequence of named arguments is parameter names suddenly became part of our APIs. That is, changing parameter names now constitutes a compatibility break, whether libraries want to adopt this contract or not. Although it is neither the principal aim nor benefit of this RFC, it does provide an alternative syntax for passing defaults that does not rely on named arguments, and as such relinquishes the burden on libraries to affirm parameter names part of their API. That is, libraries could now elect to declare parameter names not part of their backwards-compatibility promise by offering passing <php>default</php> as an alternative.
 
 <code php>
 // Skipping JSON depth parameter with named parameters.
@@ -88,7 +88,11 @@ json_decode($json, true, default, JSON_THROW_ON_ERROR);
 
 ===== Proposal =====
 
-<php>default</php> is now a valid expression, but only in argument-passing contexts. In all other contexts it is invalid, save for those in which it was valid previously, namely ''switch'' statements and ''match'' expressions.
+<php>default</php> is now a valid expression, but only in argument-passing contexts. In all other contexts it is invalid, save for those in which it was valid previously, namely ''switch'' statements and ''match'' expressions. That is, <php>default</php> may be used when calling global or namespaced functions, static or instance class methods (including anonymous classes), any callable (including closures and arrow functions), whether they are defined internally or in userland. Outside these contexts, where expressions would otherwise be accepted, attempting to use <php>default</php> will raise a compile-time error.
+
+Attempting to pass <php>default</php> to a function with no parameters, or as an argument beyond the callee's defined parameter limit, will result in a runtime exception. Similarly, attempting to pass <php>default</php> to a required parameter, with no default defined, results in a runtime exception.
+
+Internally, <php>default</php> is treated as a new opcode that causes the VM to perform a parameter default value lookup using reflection. If this lookup fails for any reason, a runtime exception will be thrown. Currently the only known cause of this is trampoline functions, which can be created by calling <php>__invoke</php> on a closure, as in <php>(fn ($P = 1) => $P)->__invoke(default);</php>. Considering this is not the intended, nor even a documented way of invoking a closure, it is supposed this limitation is very minor.
 
 ===== Backward Incompatible Changes =====
 
@@ -96,7 +100,7 @@ None known.
 
 ===== Future Scope =====
 
-Nothing planned.
+It may be possible to overcome the limitation regarding trampoline functions. It is unclear whether there is a practical need to do so, but if the need should arise, this should be possible to implement without any BC break.
 
 ===== Voting =====
 
