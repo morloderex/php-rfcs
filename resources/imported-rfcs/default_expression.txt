@@ -1,6 +1,6 @@
 ====== PHP RFC: Default expression ======
 
-  * Version: 1.0
+  * Version: 1.1
   * Date: 2024-08-24
   * Author: Paul Morris <bilge@scriptfusion.com>
   * Status: Under Discussion
@@ -10,7 +10,7 @@
 
 ===== Introduction =====
 
-The only way to pass the default value to a function or method parameter is to not pass anything. This can be particularly difficult in some circumstances, because the language does not offer an intuitive way to pass //nothing//. This RFC proposes to make the existing keyword, <php>default</php>, the canonical way to pass the default value. Moreover, ''default'' becomes a valid expression in the function argument context, meaning it can be creatively combined with any and all existing PHP expression grammars to augment the default value as it is passed, including assigning it to variables (see [[#appendixdefault_expressions|appendix]] for a comprehensive list).
+The only way to pass the default value to a function or method parameter is to not pass anything. This can be particularly difficult in some circumstances, because the language does not offer an intuitive way to pass //nothing//. This RFC proposes to make the existing keyword, <php>default</php>, the canonical way to pass the default value. Moreover, ''default'' becomes a valid expression in the function argument context, meaning it can be creatively combined with any and all existing PHP expression grammars to augment the default value as it is passed, including assigning it to variables (see [[#appendix_iidefault_expressions|appendix II]] for a comprehensive list).
 
 In its simplest form, <php>default</php> can be used as a single token.
 
@@ -92,16 +92,51 @@ json_decode($json, true, default, JSON_THROW_ON_ERROR);
 
 Attempting to pass <php>default</php> to a function with no parameters, or as an argument beyond the callee's defined parameter limit, will result in a runtime exception. Similarly, attempting to pass <php>default</php> to a required parameter, with no default defined, results in a runtime exception.
 
-Named arguments and default expressions can be used together, as in the following example.
+==== Variadics ====
+
+Variadic arguments do not permit a default expression. Internally, the variadic argument does not even count towards a function's formal argument count, so attempting to pass <php>default</php> to it results in the same runtime error you receive when passing an argument beyond the callee's limit.
+
+==== Named arguments ====
+
+Named arguments and default expressions can be composed together, as in the following example.
 
 <code php>
 $f = fn ($v = 1, $default = 2) => $v + $default;
 var_dump($f(default: default + 1)); // int(4)
 </code>
 
-Internally, <php>default</php> is treated as a new opcode that causes the VM to perform a parameter default value lookup using reflection, albeit via an internal call that is more efficient than routing through the typical public interface. When <php>default</php> appears multiple times for the same argument, it is evaluated each time, causing each occurrence to point to a unique instance if the default is an object.
+==== Match expression ====
 
-If the lookup fails for any reason, a runtime exception will be thrown. Currently the only known cause of failure is lookup of trampoline functions, which can be created by calling <php>__invoke</php> on a closure, as in <php>(fn ($P = 1) => $P)->__invoke(default);</php>. Considering this is not the intended, nor even a documented way of invoking a closure, it is supposed this limitation is very minor.
+Since [[match_expression_v2|match expressions]] also makes use of the <php>default</php> token, the grammar for the default match arm had to be migrated from the language parser to the compiler to prevent conflicts. The existing semantics were perfectly preserved, so the only difference one might notice is a slightly different error message when attempting something invalid like trying to share conditions with the default match arm.
+
+In the context of a function argument, match expressions may contain <php>default</php>, ergo the following is legal (albeit contrived).
+
+<code php>
+F(match (default) {
+    default => default
+});
+</code>
+
+In the above example, the match expression and the match body (right of <php>=></php>) are the default //expression//, while the default in the match condition (left of <php>=></php>) is the special token denoting the default match arm to use when no other arm matches, the same as it was before this RFC. However, it is possible to use the default expression as a condition also, simply by combining it with any other expression syntax.
+
+Although there is no identity expression that works for all types, if you know the type of ''default'', casting it to the same type is one way to convert it to an expression.
+
+<code php>
+$f = fn ($v = 1) => $v;
+$f(match (1) {
+    0 => 10,
+    (int) default => 20,
+    default => 30,
+}); // int(20)
+</code>
+
+Note that whilst multiple default arms are still prohibited, since we converted one of them to an expression, it is not acting as the default and does not count against this restriction.
+
+==== Internals ====
+
+Internally, <php>default</php> is treated as a new opcode that causes the VM to perform a parameter default value lookup using reflection, albeit via an internal call that is more efficient than routing through the typical public interface. When <php>default</php> appears multiple times for the same argument, it is evaluated each time, causing each occurrence to point to a unique instance if the default is an object. If the lookup fails for any reason, a runtime exception will be thrown.
+
+Currently the only known failure case is lookup of trampoline functions, which can be created by calling <php>__invoke</php> on a closure, as in <php>(fn ($P = 1) => $P)->__invoke(default);</php>. Considering this is not the intended, nor even a documented way of invoking a closure, it is supposed this limitation is very minor.
 
 ===== Backward Incompatible Changes =====
 
@@ -120,9 +155,9 @@ As per the [[RFC/voting#required_majority|voting RFC]] a yes/no vote with a 2/3 
    * No
 </doodle>
 
-===== Appendix: Default expressions =====
+===== Appendix I: Further examples =====
 
-Throughout this RFC we have referred to default as an //expression//, but the only concrete examples of expressions have been the conditional expressions using the null coalesce (<php>??</php>) and ternary (<php>?:</php>) operators. This appendix lists all the ways <php>default</php> can be combined with other tokens and operators to form valid expressions, but before getting to that list, let's look at one more non-conditional example using the binary pipe operator (<php>|</php>) to augment flags.
+The main examples of default expressions so far have been conditional expressions using the null coalesce (<php>??</php>) and ternary (<php>?:</php>) operators. Let's look at one more non-conditional example using the binary pipe operator (<php>|</php>) to augment flags.
 
 <code php>
 class Json {
@@ -135,7 +170,9 @@ class Json {
 
 This static class wraps the internal function, <php>json_encode</php> to provide saner defaults for JSON encoding. In particular, it sets the <php>JSON_THROW_ON_ERROR</php> flag so our return type is guaranteed to be string, eliminating the possibility we have to deal with <php>false</php> as a return type. For the purposes of this contrived example, it is required to ignore the fact that the flag should be specified in the function body rather than the parameter default, to ensure the caller doesn't break this contract. Supposing we want to pretty-print our encoded JSON, we could call: <code php>Json::encode([], JSON_PRETTY_PRINT);</code> However, this will override the throw on error flag, which we want to keep. Calling the function as: <code php>Json::encode([], default | JSON_PRETTY_PRINT);</code> allows us to keep the default and append our pretty-print flag, which continues to work even if the ''Json'' class should elect to update its defaults later.
 
-Following is the full expression list involving <php>default</php>. Not all of these examples will make much (or any) sense in practical terms, particularly those towards the end of the list, but many may have uses depending on your requirements and creativity.
+===== Appendix II: Default expressions =====
+
+Throughout this RFC we have referred to default as an //expression//. This appendix lists all the ways <php>default</php> as an expression can be composed with other expressions. Not all of these examples will make much (or any) sense in practical terms, particularly those towards the end of the list, yet many may have uses depending on your requirements and creativity.
 
 <code php>
 // Numeric binary operators
@@ -227,6 +264,10 @@ F(clone default)
 F(throw default)
 F(print default)
 </code>
+
+===== Discussion =====
+
+
 
 ===== References =====
 
