@@ -1,147 +1,263 @@
-Deprecate Partially Supported Callables
-=======================================
+Default Expression
+==================
 
 :PHP-RFC: 0835
-:Title: Deprecate Partially Supported Callables
-:Author: Nikita Popov <nikic@php.net>
-:Status: Implemented
+:Title: Default Expression
+:Author: Paul Morris <bilge@scriptfusion.com>
+:Status: Draft
 :Type: Standards Track
-:Created: 2021-09-02
-:PHP-Version: 8.2
-:Version: 1.0
+:Created: 2024-08-24
+:PHP-Version: 8.5
+:Version: 1.1
 
 Introduction
 ------------
 
-This RFC proposes to deprecate callables that are supported by
-``call_user_func($callable)``, but not by ``$callable()``.
+The only way to pass the default value to a function or method parameter
+is to not pass anything. This can be particularly difficult in some
+circumstances, because the language does not offer an intuitive way to
+pass *nothing*. This RFC proposes to make the existing keyword,
+``default``, the canonical way to pass the default value. Moreover,
+``default`` becomes a valid expression in the function argument context,
+meaning it can be creatively combined with any and all existing PHP
+expression grammars to augment the default value as it is passed,
+including assigning it to variables (see `appendix
+II <#appendix_iidefault_expressions>`__ for a comprehensive list).
+
+In its simplest form, ``default`` can be used as a single token.
+
+.. code:: php
+
+   f(default)
+
+However, this is of limited usefulness. The main benefit comes from
+using ``default`` in expression contexts, the most common case being
+**conditional expressions**.
+
+.. code:: php
+
+   function g($p = null) {
+       f($p ?? default);
+   }
+
+In this example, function ``f`` will receive whatever its default value
+is for its first argument only when ``$p`` is ``null``, otherwise it
+receives the value of ``$p``.
+
+Default as an expression
+------------------------
+
+The principal benefit of ``default`` is in its employ within
+**expressions**. Consider the following example:
+
+.. code:: php
+
+   class Config {
+       public function __construct(Theme $theme = new CuteTheme()) {}
+   }
+
+By default, the configuration is constructed with a new ``CuteTheme``.
+We want to allow users to specify a different theme, but if they do not
+specify anything, we should still use the default. For the purposes of
+this example, ``Config`` should be considered third-party code we cannot
+change. Given we want to conditionally apply the user's custom theme,
+traditionally we have a few options here, none of them good:
+
+#. Copy the current default from ``Config``. This should be considered
+   an invalid option, because we want to allow the upstream library to
+   change the default without having to update our code.
+#. Filter and splat the theme argument.
+#. Reflection.
+
+.. code:: php
+
+   // Filter and splat.
+   function applyTheme(?string $theme = null) {
+       return new Config(...array_filter([isset($theme) ? new $theme : null]));
+   }
+
+Filter and splat is a viable but unintuitive way to conditionally pass
+*nothing* as an argument and only works if we're willing to sacrifice
+``null`` as a placeholder for *nothing*. Moreover, it only works with a
+single argument when not specifying keys; as soon as two or more
+nullable arguments are involved, collapsing them in this manner risks
+passing the arguments in the wrong order. However, we could specify
+parameter names as keys to mitigate this.
+
+.. code:: php
+
+   // Reflect.
+   function applyTheme(?string $theme = null) {
+       $param = new ReflectionParameter(['Config', '__construct'], 'theme');
+       return new Config(isset($theme) ? new $theme : $param->getDefaultValue());
+   }
+
+Reflection is a verbose option with performance overhead. It requires us
+to duplicate the class and method name we're calling and be explicit
+about the name or number of the argument, in order to obtain its default
+value.
+
+``default`` provides an elegant and intuitive solution to this problem.
+
+.. code:: php
+
+   // Conditional default.
+   function applyTheme(?string $theme = null) {
+       return new Config(isset($theme) ? new $theme : default);
+   }
+
+This is somewhat similar to reflection, but PHP knows which class,
+method and argument we're calling just from context.
+
+Default as a single token
+-------------------------
+
+Default as a single token was `proposed <skipparams>`__ a decade ago as
+a mechanism for skipping some parameters, but was declined. Since then,
+`named arguments <named_params>`__ has provided a way to implicitly pass
+*nothing*, by skipping over parameters we don't want to pass. Named
+arguments mostly preclude the usefulness of skipping parameters with
+``default``, but a curious consequence of named arguments is parameter
+names suddenly became part of our APIs. That is, changing parameter
+names now constitutes a compatibility break, whether libraries want to
+adopt this contract or not. Although it is neither the principal aim nor
+benefit of this RFC, it does provide an alternative syntax for passing
+defaults that does not rely on named arguments, and as such relinquishes
+the burden on libraries to affirm parameter names part of their API.
+That is, libraries could now elect to declare parameter names not part
+of their backwards-compatibility promise by offering passing ``default``
+as an alternative.
+
+.. code:: php
+
+   // Skipping JSON depth parameter with named parameters.
+   json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+
+   // Skipping JSON depth parameter with default.
+   json_decode($json, true, default, JSON_THROW_ON_ERROR);
 
 Proposal
 --------
 
-The following callables are currently accepted by the ``callable`` type,
-the ``is_callable()`` function and ``call_user_func()``, but are not
-supported by ``$callable()``:
+``default`` is now a valid expression, but only in argument-passing
+contexts. In all other contexts it is invalid, save for those in which
+it was valid previously, namely ``switch`` statements and ``match``
+expressions. That is, ``default`` may be used when calling global or
+namespaced functions, static or instance class methods (including
+anonymous classes), any callable (including closures and arrow
+functions), whether they are defined internally or in userland. Outside
+these contexts, where expressions would otherwise be accepted,
+attempting to use ``default`` will raise a compile-time error.
+
+Attempting to pass ``default`` to a function with no parameters, or as
+an argument beyond the callee's defined parameter limit, will result in
+a runtime exception. Similarly, attempting to pass ``default`` to a
+required parameter, with no default defined, results in a runtime
+exception.
+
+Variadics
+~~~~~~~~~
+
+Variadic arguments do not permit a default expression. Internally, the
+variadic argument does not even count towards a function's formal
+argument count, so attempting to pass ``default`` to it results in the
+same runtime error you receive when passing an argument beyond the
+callee's limit.
+
+Named arguments
+~~~~~~~~~~~~~~~
+
+Named arguments and default expressions can be composed together, as in
+the following example.
 
 .. code:: php
 
-   "self::method"
-   "parent::method"
-   "static::method"
-   ["self", "method"]
-   ["parent", "method"]
-   ["static", "method"]
-   ["Foo", "Bar::method"]
-   [new Foo, "Bar::method"]
+   $f = fn ($v = 1, $default = 2) => $v + $default;
+   var_dump($f(default: default + 1)); // int(4)
 
-This RFC proposes to deprecate in PHP 8.2 and remove in PHP 9.0 support
-for these callables. A deprecation warning will be thrown by all
-attempts to invoke such a callable, such as via ``call_user_func()``,
-but also ``array_map()``.
+Match expression
+~~~~~~~~~~~~~~~~
 
-The ``is_callable()`` function and ``callable`` type remain side-effect
-free and do not throw a deprecation warning. They will continue to
-accept these callables until support is removed entirely.
+Since `match expressions <match_expression_v2>`__ also makes use of the
+``default`` token, the grammar for the default match arm had to be
+migrated from the language parser to the compiler to prevent conflicts.
+The existing semantics were perfectly preserved, so the only difference
+one might notice is a slightly different error message when attempting
+something invalid like trying to share conditions with the default match
+arm.
 
-Normal ``"function"``, ``"Foo::method"``, ``["Foo", "method"]`` and
-``[new Foo, "method"]`` style callables are unaffected by this change.
+In the context of a function argument, match expressions may contain
+``default``, ergo the following is legal (albeit contrived).
 
-Discussion
-----------
+.. code:: php
 
-This RFC tries to address two issues. The first is the inconsistency in
-what PHP considers a "callable". Nowadays, the recommended way to invoke
-a calllable is the ``$callable()`` syntax. However, some arguments that
-pass a ``callable`` type are not actually "callable" with this syntax.
+   F(match (default) {
+       default => default
+   });
 
-There are principally two ways to resolve this inconsistency: Drop
-support for these callables entirely, or add support for them to
-``$callable()``. Both outcomes are generally viable.
+In the above example, the match expression and the match body
+(right of ``=>``) are the default *expression*, while the default in the
+match condition (left of ``=>``) is the special token denoting the
+default match arm to use when no other arm matches, the same as it was
+before this RFC. However, it is possible to use the default expression
+as a condition also, simply by combining it with any other expression
+syntax.
 
-This is where the second issue comes in: Apart from the last two cases,
-all of these callables are context-dependent. The method that
-``"self::method"`` refers to depends on which class the call or
-callability check is performed from. In practice, this usually also
-holds for the last two cases, when used in the form of
-``[new Foo, "parent::method"]``.
+Although there is no identity expression that works for all types, if
+you know the type of ``default``, casting it to the same type is one way
+to convert it to an expression.
 
-Reducing the context-dependence of callables is the secondary goal of
-this RFC. After this RFC, the only scope-dependence still left is method
-visibility: ``"Foo::bar"`` may be visible in one scope, but not another.
-If callables were to be limited to public methods in the future (while
-private methods would have to use `first-class
-callables </rfc/first_class_callable_syntax>`__ or
-``Closure::fromCallable()`` to be made scope-independent), then the
-``callable`` type would become well-defined and could be used as a
-property type. However, changes to visibility handling are not proposed
-as part of this RFC.
+.. code:: php
+
+   $f = fn ($v = 1) => $v;
+   $f(match (1) {
+       0 => 10,
+       (int) default => 20,
+       default => 30,
+   }); // int(20)
+
+Note that whilst multiple default arms are still prohibited, since we
+converted one of them to an expression, it is not acting as the default
+and does not count against this restriction.
+
+Internals
+~~~~~~~~~
+
+Internally, ``default`` is treated as a new opcode that causes the VM to
+perform a parameter default value lookup using reflection, albeit via an
+internal call that is more efficient than routing through the typical
+public interface. When ``default`` appears multiple times for the same
+argument, it is evaluated each time, causing each occurrence to point to
+a unique instance if the default is an object. If the lookup fails for
+any reason, a runtime exception will be thrown.
+
+Currently the only known failure case is lookup of trampoline functions,
+which can be created by calling ``__invoke`` on a closure, as in
+``(fn ($P = 1) => $P)->__invoke(default);``. Considering this is not the
+intended, nor even a documented way of invoking a closure, it is
+supposed this limitation is very minor.
 
 Backward Incompatible Changes
 -----------------------------
 
-Most of the callables deprecated here have a straightforward
-replacement: ``"self"`` should be replaced with ``self::class``, and so
-on:
+None known.
 
-.. code:: php
+Future Scope
+------------
 
-   "self::method"       -> self::class . "::method"
-   "parent::method"     -> parent::class . "::method"
-   "static::method"     -> static::class . "::method"
-   ["self", "method"]   -> [self::class, "method"]
-   ["parent", "method"] -> [parent::class, "method"]
-   ["static", "method"] -> [static::class, "method"]
+It may be possible to overcome the limitation regarding trampoline
+functions. It is unclear whether there is a practical need to do so, but
+if the need should arise, this should be possible to implement without
+any BC break.
 
-The new form of these callables is no longer context-dependent. It will
-refer to the self/parent/static scope of where the callable has been
-created, rather than where is will be called.
+Voting
+------
 
-If compatibility with PHP < 8.1 is not desired, use of the first-class
-callable syntax ``self::method(...)`` is also possible.
+As per the `voting RFC <RFC/voting#required_majority>`__ a yes/no vote
+with a 2/3 majority is needed for this proposal to be accepted.
 
-The ``[$objOrClass, "Bar::method"]`` callable form deserves some
-additional explanation, as most people will not have encountered it.
-Given this kind of inheritance hierarchy...
-
-.. code:: php
-
-   class Bar {
-       public function method() {}
-   }
-   class Foo extends Bar {
-       public function method() {}
-   }
-
-...the basic idea behind this callable syntax is that
-``[new Foo, "method"]`` will refer to the method ``Foo::method()``,
-which overrides ``Bar::method()``. The ``[new Foo, "Bar::method"]`` or
-``[new Foo, "parent::method"]`` syntax provides a way to call the
-overridden method instead.
-
-Inside the scope of ``Foo``, the same can be achieved with a call to
-``["Bar", "method"]`` or more intuitively written as
-``[parent::class, "method"]``. This is not a static method call, but a
-scoped instance call, the same as the familiar ``parent::method()``.
-
-PHP does not provide any straightforward facilities to call an overriden
-method outside its inheritance hierarchy, as this is generally not a
-meaningful operation. If need be, this can still be achieved by using
-either reflection or closure rebinding:
-
-.. code:: php
-
-   // Using reflection:
-   (new ReflectionMethod("Bar", "method"))->invoke(new Foo);
-   // Using closure rebinding:
-   Closure::fromCallable([new Bar, "method"])->bindTo(new Foo)();
-
-Vote
-----
-
-Voting opened on 2021-10-08 and closed on 2021-10-22.
-
-Question: Deprecate partially supported callables?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Implement default expressions as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -149,11 +265,173 @@ Voting Choices
 -  Yes
 -  No
 
+Appendix I: Further examples
+----------------------------
+
+The main examples of default expressions so far have been conditional
+expressions using the null coalesce (``??``) and ternary (``?:``)
+operators. Let's look at one more non-conditional example using the
+binary pipe operator (``|``) to augment flags.
+
+.. code:: php
+
+   class Json {
+       static function encode(mixed $value, int $flags = JSON_THROW_ON_ERROR): string
+       {
+           return json_encode($value, $flags);
+       }
+   }
+
+This static class wraps the internal function, ``json_encode`` to
+provide saner defaults for JSON encoding. In particular, it sets the
+``JSON_THROW_ON_ERROR`` flag so our return type is guaranteed to be
+string, eliminating the possibility we have to deal with ``false`` as a
+return type. For the purposes of this contrived example, it is required
+to ignore the fact that the flag should be specified in the function
+body rather than the parameter default, to ensure the caller doesn't
+break this contract. Supposing we want to pretty-print our encoded JSON,
+we could call: ``Json::encode([], JSON_PRETTY_PRINT);`` However, this
+will override the throw on error flag, which we want to keep. Calling
+the function as: ``Json::encode([], default | JSON_PRETTY_PRINT);``
+allows us to keep the default and append our pretty-print flag, which
+continues to work even if the ``Json`` class should elect to update its
+defaults later.
+
+Appendix II: Default expressions
+--------------------------------
+
+Throughout this RFC we have referred to default as an *expression*. This
+appendix lists all the ways ``default`` as an expression can be composed
+with other expressions. Not all of these examples will make much (or
+any) sense in practical terms, particularly those towards the end of the
+list, yet many may have uses depending on your requirements and
+creativity.
+
+.. code:: php
+
+   // Numeric binary operators
+   F(default + 1)
+   F(default - 1)
+   F(default * 2)
+   F(default / 2)
+   F(default % 2)
+   F(default & 1)
+   F(default | 1)
+   F(default ^ 2)
+   F(default << 1)
+   F(default >> 1)
+   F(default ** 2)
+   F(default <=> 2)
+
+   // Boolean binary operators
+   F(default === 2)
+   F(default !== 2)
+   F(default == '2')
+   F(default != '2')
+   F(default >= 1)
+   F(default <= 1)
+   F(default > 1)
+   F(default < 1)
+   F(default && 0)
+   F(default || 0)
+   F(default and 0)
+   F(default or 0)
+   F(default xor 0)
+
+   // Unary operators
+   F(+default)
+   F(-default)
+   F(!default)
+   F(~default)
+
+   // Conditional expressions
+   F(default ? 1 : 0)
+   F(1 ? default : 0)
+   F(1 ? 1 : default)
+   F(default ?: 0)
+   F(0 ?: default)
+   F(default ?? 0)
+   F(null ?? default)
+
+   // Variable assignments
+   F($V = default)
+   F($V += default)
+   F($V -= default)
+   F($V *= default)
+   F($V **= default)
+   F($V /= default)
+   F($V <<= default)
+   F($V >>= default)
+   F($V %= default)
+   F($V &= default)
+   F($V |= default)
+   F($V ^= default)
+   F($V .= default)
+   F($V ??= default)
+   F(list($V) = default)
+   F([, $V] = default)
+
+   // Casts
+   F((int)default)
+   F((double)default)
+   F((string)default)
+   F((array)default)
+   F((object)default)
+   F((bool)default)
+
+   // Match
+   F(match(default) { default => default })
+
+   // Parens
+   F((((default))))
+
+   // Internal functions
+   F(empty(default))
+   F(include default)
+   F(include_once default)
+   F(require default)
+   F(require_once default)
+
+   // Misc
+   F(default instanceof C)
+   F(clone default)
+   F(throw default)
+   F(print default)
+
+Discussion
+----------
+
+References
+----------
+
+-  Discussion threads
+
+   -  `This RFC <https://externals.io/message/125183>`__ (Bilge, August
+      24, 2024).
+   -  `Initial proposal <https://externals.io/message/124629>`__ (Bilge,
+      July 26, 2024).
+
+-  Similar RFCs
+
+   -  `Skipping optional parameters for functions <skipparams>`__ (Stas
+      Malyshev, January 1, 2015)
+
+Special thanks
+--------------
+
+The implementation for this feature was heavily subsidised by invaluable
+input from Ilija and Bob Weinand. In particular, Ilija assessed the
+feasibility and guided the implementation path, and Bob submitted the
+entire Bison grammar patch! Without them, this feature would either have
+been impossible or highly scuffed. They, along with everyone else whom
+supported me from R11, have my utmost thanks! ❤
+
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/7446
-:Original Authors: Nikita Popov nikic@php.net
-:Original PHP Version: PHP 8.2
-:Slug: deprecate_partially_supported_callables
-:Wiki URL: https://wiki.php.net/rfc/deprecate_partially_supported_callables
+:Implementation: https://github.com/php/php-src/pull/15437
+:Original Authors: Paul Morris bilge@scriptfusion.com
+:Original PHP Version: PHP 8.5
+:Original Status: Under Discussion
+:Slug: default_expression
+:Wiki URL: https://wiki.php.net/rfc/default_expression
