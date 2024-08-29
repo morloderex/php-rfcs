@@ -138,6 +138,46 @@ Internally, <php>default</php> is treated as a new opcode that causes the VM to 
 
 Currently the only known failure case is lookup of trampoline functions, which can be created by calling <php>__invoke</php> on a closure, as in <php>(fn ($P = 1) => $P)->__invoke(default);</php>. Considering this is not the intended, nor even a documented way of invoking a closure, it is supposed this limitation is very minor.
 
+===== Discussion =====
+
+The greatest concern is the proposed grammar is too permissive and has drawbacks. A secondary concern is default values are now part of an object's public API. We will examine each of these issues in detail.
+
+==== Limiting grammar ====
+
+The most common request is to constrain the allowed expression list. As already noted, some expressions don't make much sense because they probably don't have any practical application, and some are not comfortable allowing expressions that don't make sense into the language. This implies coming up with an [[https://externals.io/message/125183#125218|arbitrary exclusion list]] for certain expressions. Some proposed taking this a step further by [[https://externals.io/message/125183#125321|disallowing default as expression input]], which effectively rules out all operator classes except conditionals and invocations of <php>match()</php> that use <php>default</php> as a stand-alone output token.
+
+<code php>
+// Expressions with default as output only.
+F(1 ? default : 0)
+F(1 ? 1 : default)
+F(0 ?: default)
+F(null ?? default)
+F(match(1) { 1 => default })
+</code>
+
+Further, some even expressed concerns about allowing any expressions at all and would only be comfortable allowing <php>default</php> as an isolated token, as in [[skipparams]].
+
+Critics converged on a [[https://externals.io/message/125183#125274|valid counter-point]] that permitting expressions changing the default's type breaks LSP, as demonstrated in the following example (code courtesy of Ilija). Some have suggested this might be solved by disallowing <php>default</php> to be passed to union types (including <php>mixed</php>).
+
+<code php>
+class C {
+    public function F(int $V = 1) {}
+}
+
+class D extends C {
+    public function F(int|string $V = 's') {}
+}
+
+function test(C $C) {
+    $C->F(default + 1);
+}
+
+test(new C); // OK.
+test(new D); // Fatal error: Uncaught TypeError: Unsupported operand types: string + int.
+</code>
+
+==== Defaults as a contract ====
+
 ===== Backward Incompatible Changes =====
 
 None known.
@@ -275,48 +315,6 @@ F(clone default)
 F(throw default)
 F(print default)
 </code>
-
-===== Discussion =====
-
-The biggest concern is the proposed grammar is too permissive and has drawbacks. A secondary concern is default values are now part of an object's public API. We will examine each of these issues in detail.
-
-==== Limiting grammar ====
-
-The most common request is to constrain the allowed expression list. As already noted, some expressions don't make much sense because they probably don't have any practical application, and some are not comfortable allowing expressions that don't make sense into the language. This implies coming up with an [[https://externals.io/message/125183#125218|arbitrary exclusion list]] for certain expressions. Some proposed taking this a step further by [[https://externals.io/message/125183#125321|disallowing default as expression input]], which effectively rules out all operator classes except conditionals and invocations of <php>match()</php> that use <php>default</php> as a stand-alone output token.
-
-<code php>
-// Expressions with default as output only.
-F(1 ? default : 0)
-F(1 ? 1 : default)
-F(0 ?: default)
-F(null ?? default)
-F(match(1) { 1 => default })
-</code>
-
-Further, some even expressed concerns about allowing any expressions at all and would only be comfortable allowing <php>default</php> as an isolated token, as in [[skipparams]].
-
-Critics converged on a [[https://externals.io/message/125183#125274|valid counter-point]] that permitting expressions changing the default's type breaks LSP, as demonstrated in the following example (code courtesy of Ilija). Some have suggested this might be solved by disallowing <php>default</php> to be passed to union types (including <php>mixed</php>).
-
-<code php>
-class C {
-    public function F(int $V = 1) {}
-}
-
-class D extends C {
-    public function F(int|string $V = 's') {}
-}
-
-function test(C $C) {
-    $C->F(default + 1);
-}
-
-test(new C); // OK.
-test(new D); // Fatal error: Uncaught TypeError: Unsupported operand types: string + int.
-</code>
-
-==== Defaults as a contract ====
-
-
 
 ===== References =====
 
