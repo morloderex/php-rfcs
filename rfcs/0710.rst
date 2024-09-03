@@ -20,23 +20,23 @@ and takes up less space and is also more ubiquitous with JSON notation.
 Proposal
 --------
 
-This change proposes adding a third optional argument for
-``var_export()`` and 3 new bit-wise flags as follows:
+This change proposes 3 new bit-wise optional flags for ``var_export()``
+and adding a third optional argument as follows:
 
 #. VAR_EXPORT_SHORT_ARRAY
 #. VAR_EXPORT_NO_INDEX
 #. VAR_EXPORT_COMPACT
 
 ``VAR_EXPORT_SHORT_ARRAY`` triggers the short-hand syntax for arrays
-which affects all 3 cases (arrays, stdClass objects, other classes
-objects). ``VAR_EXPORT_NO_INDEX`` will discard sequential numbered
-indexes starting from 0, which is currently the default behavior to
-include them. ``VAR_EXPORT_COMPACT`` will compact the output to one line
-rather than adding the additional new line characters at each stage.
+which affects all 3 cases (arrays, object casting, stdclass casting).
+``VAR_EXPORT_NO_INDEX`` will discard sequential numbered indexes
+starting from 0, which is currently the default behavior to include
+them. ``VAR_EXPORT_COMPACT`` will compact the output to one line rather
+than adding the additional new line characters at each stage. The last
+two options can be used without ``VAR_EXPORT_SHORT_ARRAY`` so they will
+have an affect on the output even without short hand array syntax.
 
-Each option can be used alone, and can also be combined with other(s).
-
-For example, ``var_export([1, 2, 3]);`` produces
+Instead of
 
 .. code:: php
 
@@ -46,22 +46,22 @@ For example, ``var_export([1, 2, 3]);`` produces
      2 => 3,
    )
 
-and the new ``var_export([1, 2, 3], false, VAR_EXPORT_SHORT_ARRAY);``
-would produce
+``var_export([1, 2, 3], false, VAR_EXPORT_SHORT_ARRAY)`` would now
+produce
 
 .. code:: php
 
    [
      0 => 1,
-     1 => 2,
-     2 => 3,
+     0 => 2,
+     3 => 3,
    ]
 
-This would affect ``stdClass`` and other classes objects as well since
-they are exported using array literals (for ``(object)`` casting or
-``__set_state()`` call) and they use the long-form array syntax above.
+This will effect things like ``stdClass`` and ``set_state`` as well
+since they are cast to objects from array literals and they use the
+long-form array syntax above.
 
-So the following changes would also be in effect:
+So the following changes are also in effect:
 
 .. code:: php
 
@@ -70,14 +70,19 @@ So the following changes would also be in effect:
    $obj->baz = "quix";
 
    var_export($obj);
+
    /*
+   Gives us:
    (object) array(
       'foo' => 'bar',
       'baz' => 'quix',
    )
    */
 
+   //With the new change it would be
+
    var_export($obj, false, VAR_EXPORT_SHORT_ARRAY);
+
    /*
    (object) [
       'foo' => 'bar',
@@ -85,7 +90,7 @@ So the following changes would also be in effect:
    ]
    */
 
-Same for other classes:
+The same happens for classes:
 
 .. code:: php
 
@@ -94,63 +99,55 @@ Same for other classes:
    }
 
    var_export(new Foo);
+
    /*
+   Gives us:
    Foo::__set_state(array(
       'bar' => 'baz',
    ))
    */
 
+
+   //With the changes it would be:
+
    var_export(new Foo, false, VAR_EXPORT_SHORT_ARRAY);
+
    /*
    Foo::__set_state([
       'bar' => 'baz',
    ])
    */
 
-Using the other bitwise flags you could also do things like...
+Using the other bitwise flags you can also do things like...
 
 .. code:: php
 
-   var_export([1, 2, 3], false, VAR_EXPORT_NO_INDEX);
+   var_export([1,2,3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_NO_INDEX | VAR_EXPORT_COMPACT);
+
    /*
-   array (
-     1,
-     2,
-     3,
-   )
+     outputs:
+     
+     [1, 2, 3]
    */
 
-   var_export([1, 2, 3], false, VAR_EXPORT_COMPACT);
+   var_export([1,2,3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_COMPACT);
+
    /*
-   array (0 => 1, 1 => 2, 2 => 3)
+     outputs:
+     
+     [0 => 1, 1 => 2, 2 => 3]
    */
 
-and combine them...
+   var_export([1,2,3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_NO_INDEX);
 
-.. code:: php
-
-   var_export([1, 2, 3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_NO_INDEX);
    /*
-   [
-     1,
-     2,
-     3,
-   ]
-   */
-
-   var_export([1, 2, 3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_COMPACT);
-   /*
-   [0 => 1, 1 => 2, 2 => 3]
-   */
-
-   var_export([1, 2, 3], false, VAR_EXPORT_NO_INDEX | VAR_EXPORT_COMPACT);
-   /*
-   array (1, 2, 3)
-   */
-
-   var_export([1, 2, 3], false, VAR_EXPORT_SHORT_ARRAY | VAR_EXPORT_NO_INDEX | VAR_EXPORT_COMPACT);
-   /*
-   [1, 2, 3]
+     outputs:
+     
+     [
+       1,
+       2,
+       3
+     ]
    */
 
 Backward Incompatible Changes
