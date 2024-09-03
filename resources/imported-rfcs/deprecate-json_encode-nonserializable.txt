@@ -1,0 +1,78 @@
+====== PHP RFC: Deprecate json_encode() on classes marked as non-serializable ======
+  * Version: 0.9
+  * Date: 2024-09-03
+  * Author: Philip Hofstetter, phofstetter@sensational.ch
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/deprecate-json_encode-nonserializable
+
+===== Introduction =====
+PHP internally marks some classes as not fit for serialization using a flag ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' which prevents instances of such classes from being serialized using <php>serialize()</php>.
+
+However, this flag is currently not respected by <php>json_encode()</php> which is another serialization method built into PHP and which has special support by the language for userland through [[https://www.php.net/manual/en/class.jsonserializable.php|JsonSerializable]]. <php>json_encode()</php> will encode all instances of internal classes as ''%%{}%%'' regardless of serializabiliy.
+
+Especially for <php>Generator</php> this is harmful because converting a pre-computed ''%%array%%'' into a lazy iterator using <php>Generator</php> is a useful and relatively common refactoring which can otherwise be done transparently to a code-base. At that point it's inconvenient that <php>json_encode()</php> silently encodes <php>Generator</php> instances as ''%%{}%%'', changing its shame and contents.
+
+===== Proposal =====
+
+This RFC proposes to mark calling <php>json_encode()</php> on instances of classes marked with ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' as deprecated with the longer-term option of throwing an error in the next major version of PHP wich will follow the one this RFC is implemented in.
+
+The flag ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' was intended to mark classes as non-serializable because they either represent a temporary local resource (like a file or database handle) which could not possibly be unserialized later on or because serializing them could have large side-effects (in case of <php>Generator</php> and <php>Iterator</php>).
+
+The same reasoning applies to <php>json_encode()</php> which right now doesn't invoke any of the side-effects (good) but also silently encodes any such object instance as ''%%{}%%''.
+
+For temporary resources (file handles, etc.) this is potentially an acceptable behavior, albeit a bit inconsistent to how serialization is handled, but for <php>Generator</php>, doing this silently is very inconvenient for a developer in the process of converting a code-base from pre-built arrays to generators for either performance or memory consumption reasons.
+
+This can be done mostly transparently to the rest of the code-base, but will require special handling for a potential <php>json_encode()</php> which will currently silently do the wrong thing and not just skip iterating the generator but will also silently change the shape of the output, potentially breaking API contracts without any notification to the user.
+
+
+==== Other options considered ====
+
+This RFC proposes a solution that handles all classes block-listed for serialization to create a consistent behavior beteween the two built-into PHP serialization mechanisms.
+
+Other options considered concern themselves with handling just the <php>Generator</php> case:
+
+  - Add a special case to deprecate/disallow JSON encoding of <php>Generator</php>, but otherwise not look at ''%%ZEND_ACC_NOT_SERIALIZABLE%%''. This would be a proposed fallback option if the backwards compatility concerns are too large to consider. It would complicate the implementation consierably.
+  - Have <php>json_encode()</php> consume the generator and recurse as if it was encoding an <php>array</php>. While this would probably be the most ergonomic solution for the refactoring case outlined above, given the unforeseeable side-effects generator consumption can have, including endless loops, this is a dangerous operations and whas thus discarded as an option.
+  - Have <php>json_encode()</php> encode generators as ''%%[]%%'': This would help the refactoring case by upholding possible API contracts and would more cleanly match the shape of a generator (which is a list after all), but it would also be lying to the calling code because the generator likely won't be empty.
+
+===== Backward Incompatible Changes =====
+Code which accidentally runs <php>json_encode()</php> over instances of classes marked as non-serializable or over larger structures which contain such instances will cause a deprecation warning to be thrown when before there wasn't.
+
+Given that the encoded output was mostly useless for any consumer of such JSON and given that producing the previous output manually is not hard, it's the belief of this RFC that the deprecation warning provides more value than the current behavior because current invocations of <php>json_encode()</php> over unserialized classes is likely unintentional (given the current output of <php>json_encode()</php>).
+
+===== Proposed PHP Version(s) =====
+next PHP 8.x
+
+===== RFC Impact =====
+==== To SAPIs ====
+The deprecation warning will bre raised in all SAPIs
+
+==== To Existing Extensions ====
+None
+
+==== To Opcache ====
+None
+
+Ran the included test-case in the PR with Opcache enabled and got the expected result.
+
+==== New Constants ====
+None
+
+===== Open Issues =====
+None
+
+===== Unaffected PHP Functionality =====
+Any other argument to <php>json_encode()</php> is unaffected
+
+===== Future Scope =====
+In the next major version after this RFC passes, the deprecation warning can be changed to an <php>Error</php>, though this will be part of a separate RFC.
+
+===== Proposed Voting Choices =====
+Should calling <php>json_encode()</php> on instances of classes marked with ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' be marked as deprecated? Yes, No?
+
+===== Patches and Tests =====
+
+===== Implementation =====
+
+===== References =====
+https://github.com/php/php-src/pull/15724
