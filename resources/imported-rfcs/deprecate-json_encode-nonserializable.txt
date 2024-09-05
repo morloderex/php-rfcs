@@ -1,6 +1,6 @@
 ====== PHP RFC: Deprecate json_encode() on classes marked as non-serializable ======
-  * Version: 0.9
-  * Date: 2024-09-03
+  * Version: 0.10
+  * Date: 2024-09-05
   * Author: Philip Hofstetter, phofstetter@sensational.ch
   * Status: Under Discussion
   * First Published at: http://wiki.php.net/rfc/deprecate-json_encode-nonserializable
@@ -14,7 +14,7 @@ Especially for <php>Generator</php> this is harmful because converting a pre-com
 
 ===== Proposal =====
 
-This RFC proposes to mark calling <php>json_encode()</php> on instances of classes marked with ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' as deprecated with the longer-term option of throwing an error in the next major version of PHP wich will follow the one this RFC is implemented in.
+This RFC proposes to mark calling <php>json_encode()</php> on most instances of classes marked with ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' as deprecated with the longer-term option of throwing an error in the next major version of PHP wich will follow the one this RFC is implemented in.
 
 The flag ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' was intended to mark classes as non-serializable because they either represent a temporary local resource (like a file or database handle) which could not possibly be unserialized later on or because serializing them could have large side-effects (in case of <php>Generator</php> and <php>Iterator</php>).
 
@@ -24,6 +24,11 @@ For temporary resources (file handles, etc.) this is potentially an acceptable b
 
 This can be done mostly transparently to the rest of the code-base, but will require special handling for a potential <php>json_encode()</php> which will currently silently does the wrong thing and not just skip iterating the generator but will also silently change the shape of the output, potentially breaking API contracts without any notification to the user.
 
+One exception to the rule is anonymous classes which are all marked as ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' because then unserializing, their definition will not be present, so they cannot possibly be unserialized again.
+
+In case of <php>json_encode()</php> though, where no generic unserialize operation is defined anyways, there's no reason for deprecating or forbidding to <php>json_encode()</php> anonymous classes, unless their parent class is marked as ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' where the above reasoning applies again.
+
+Thus, this RFC proposes to continue to permit <php>json_encode()</php> on anonymous classes unless they extend a class marked as ''%%ZEND_ACC_NOT_SERIALIZABLE%%''.
 
 ==== Other options considered ====
 
@@ -34,6 +39,110 @@ Other options considered concern themselves with handling just the <php>Generato
   - Add a special case to deprecate/disallow JSON encoding of <php>Generator</php>, but otherwise not look at ''%%ZEND_ACC_NOT_SERIALIZABLE%%''. This would be a proposed fallback option if the backwards compatility concerns are too large to consider. It would complicate the implementation consierably.
   - Have <php>json_encode()</php> consume the generator and recurse as if it was encoding an <php>array</php>. While this would probably be the most ergonomic solution for the refactoring case outlined above, given the unforeseeable side-effects generator consumption can have, including endless loops, this is a dangerous operations and whas thus discarded as an option.
   - Have <php>json_encode()</php> encode generators as ''%%[]%%'': This would help the refactoring case by upholding possible API contracts and would more cleanly match the shape of a generator (which is a list after all), but it would also be lying to the calling code because the generator likely won't be empty.
+
+==== Impacted internal classes ====
+
+At the time of writing this RFC, the following list of classes (and their subclasses) are affected by this RFC  and calling <php>json_encode()</php> on them will throw a deprecation warning in the future.
+
+All of them are currently json-encoded as ''%%{}%%'', no matter what they represent internally. Some of those are containers of a sort, where this encoding is especially misleading (aside of <php>Generator</php> which was the motivator for this RFC, <php>WeakMap</php> stands out specifically)
+
+=== Backed by temporary resources ===
+  * AddressInfo
+  * CURLFile
+  * Collator
+  * CurlHandle
+  * CurlMultiHandle
+  * CurlShareHandle
+  * DOMXPath
+  * DOMXPath
+  * Dba\Connection
+  * DeflateContext
+  * Dom\Implementation
+  * Dom\NamespaceInfo
+  * Dom\TokenList
+  * Dom\XPath
+  * EnchantBroker
+  * EnchantDictionary
+  * FFI
+  * FFI\CData
+  * FFI\CType
+  * FTP\Connection
+  * GdFont
+  * GdImage
+  * InflateContext
+  * IntlBreakIterator
+  * IntlCalendar
+  * IntlCodePointBreakIterator
+  * IntlDateFormatter
+  * IntlDatePatternGenerator
+  * IntlIterator
+  * IntlPartsIterator
+  * IntlRuleBasedBreakIterator
+  * IntlTimeZone
+  * LDAP\Connection
+  * LDAP\Result
+  * LDAP\ResultEntry
+  * MessageFormatter
+  * NumberFormatter
+  * Odbc\Connection
+  * Odbc\Result
+  * OpenSSLAsymmetricKey
+  * OpenSSLCertificate
+  * OpenSSLCertificateSigningRequest
+  * PDO
+  * PDORow
+  * PDOStatement
+  * Pdo\Dblib
+  * Pdo\Firebird
+  * Pdo\Mysql
+  * Pdo\Odbc
+  * Pdo\Pgsql
+  * Pdo\Sqlite
+  * PgSql\Connection
+  * PgSql\Lob
+  * PgSql\Result
+  * Random\Engine\Secure
+  * ResourceBundle
+  * SQLite3
+  * SQLite3Result
+  * SQLite3Stmt
+  * Shmop
+  * SimpleXMLElement
+  * Soap\Sdl
+  * Soap\Url
+  * Socket
+  * SplFileInfo
+  * Spoofchecker
+  * SysvMessageQueue
+  * SysvSemaphore
+  * SysvSharedMemory
+  * Transliterator
+  * UConverter
+  * XMLParser
+  * finfo
+  * variant
+
+=== Other ===
+  * Closure
+  * Fiber
+  * Generator
+  * InternalIterator
+  * ReflectionAttribute
+  * ReflectionClass
+  * ReflectionClassConstant
+  * ReflectionConstant
+  * ReflectionExtension
+  * ReflectionFiber
+  * ReflectionFunctionAbstract
+  * ReflectionGenerator
+  * ReflectionParameter
+  * ReflectionProperty
+  * ReflectionReference
+  * ReflectionType
+  * ReflectionZendExtension
+  * SensitiveParameterValue
+  * WeakMap
+  * WeakReference
 
 ===== Backward Incompatible Changes =====
 Code which accidentally runs <php>json_encode()</php> over instances of classes marked as non-serializable or over larger structures which contain such instances will cause a deprecation warning to be thrown when before there wasn't.
@@ -71,6 +180,7 @@ In the next major version after this RFC passes, the deprecation warning can be 
 Should calling <php>json_encode()</php> on instances of classes marked with ''%%ZEND_ACC_NOT_SERIALIZABLE%%'' be marked as deprecated? Yes, No?
 
 ===== Patches and Tests =====
+https://github.com/php/php-src/pull/15724
 
 ===== Implementation =====
 
