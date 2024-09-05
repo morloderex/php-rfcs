@@ -1,5 +1,5 @@
 ====== PHP RFC: Deprecate json_encode() on classes marked as non-serializable ======
-  * Version: 0.10
+  * Version: 0.11
   * Date: 2024-09-05
   * Author: Philip Hofstetter, phofstetter@sensational.ch
   * Status: Under Discussion
@@ -44,18 +44,44 @@ Other options considered concern themselves with handling just the <php>Generato
 
 At the time of writing this RFC, the following list of classes (and their subclasses) are affected by this RFC  and calling <php>json_encode()</php> on them will throw a deprecation warning in the future.
 
-Most of them are currently json-encoded as ''%%{}%%'', no matter what they represent internally (some of these, like <php>PDOStatement</php> have public properties which are present in the output of <php>json_encode()</php>).
+Some of those are containers of a sort, where this encoding is especially misleading (aside of <php>Generator</php> which was the motivator for this RFC, <php>WeakMap</php> stands out specifically).
 
-Some of those are containers of a sort, where this encoding is especially misleading (aside of <php>Generator</php> which was the motivator for this RFC, <php>WeakMap</php> stands out specifically)
+Most of the non-serializable classes have no public properties and thus encode as ''%%{}%%''.
+
+Those which currently do have public properties are still mostly meant for internal usage and thus not ideal candidates to <php>json_encode()</php> them. However, if code wants to explicitly turn any such instances into JSON in light of the deprecation currently proposed, casting such instances into <php>array</php> before JSON encoding them is a valid workaround.
+
+<code php>
+$a = new SimpleXmlElement('<a><b>3</b><c>foo</c></a>');
+echo json_encode($a); // {"b":"3","c":"foo"}, with deprecation warning
+echo json_enode((array) $a); // {"b":"3","c":"foo"}, no deprecation warning
+</code>
+
+=== Classes with public fields appearing in json_encode() output ===
+  * CURLFile (has three public properties)
+  * PDORow (has one public property, queryString)
+  * PDOStatement (has one public property, queryString)
+  * SimpleXMLElement (might be useful)
+  * ReflectionAttribute
+  * ReflectionClass
+  * ReflectionClassConstant
+  * ReflectionConstant
+  * ReflectionExtension
+  * ReflectionFiber
+  * ReflectionFunctionAbstract
+  * ReflectionGenerator
+  * ReflectionParameter
+  * ReflectionProperty
+  * ReflectionReference
+  * ReflectionType
+  * ReflectionZendExtension
+
 
 === Backed by temporary resources ===
   * AddressInfo
-  * CURLFile
   * Collator
   * CurlHandle
   * CurlMultiHandle
   * CurlShareHandle
-  * DOMXPath
   * DOMXPath
   * Dba\Connection
   * DeflateContext
@@ -63,6 +89,7 @@ Some of those are containers of a sort, where this encoding is especially mislea
   * Dom\NamespaceInfo
   * Dom\TokenList
   * Dom\XPath
+  * Dom\XMLDocument
   * EnchantBroker
   * EnchantDictionary
   * FFI
@@ -92,8 +119,6 @@ Some of those are containers of a sort, where this encoding is especially mislea
   * OpenSSLCertificate
   * OpenSSLCertificateSigningRequest
   * PDO
-  * PDORow
-  * PDOStatement
   * Pdo\Dblib
   * Pdo\Firebird
   * Pdo\Mysql
@@ -109,7 +134,6 @@ Some of those are containers of a sort, where this encoding is especially mislea
   * SQLite3Result
   * SQLite3Stmt
   * Shmop
-  * SimpleXMLElement
   * Soap\Sdl
   * Soap\Url
   * Socket
@@ -129,22 +153,10 @@ Some of those are containers of a sort, where this encoding is especially mislea
   * Fiber
   * Generator
   * InternalIterator
-  * ReflectionAttribute
-  * ReflectionClass
-  * ReflectionClassConstant
-  * ReflectionConstant
-  * ReflectionExtension
-  * ReflectionFiber
-  * ReflectionFunctionAbstract
-  * ReflectionGenerator
-  * ReflectionParameter
-  * ReflectionProperty
-  * ReflectionReference
-  * ReflectionType
-  * ReflectionZendExtension
   * SensitiveParameterValue
   * WeakMap
   * WeakReference
+
 
 ===== Backward Incompatible Changes =====
 Code which accidentally runs <php>json_encode()</php> over instances of classes marked as non-serializable or over larger structures which contain such instances will cause a deprecation warning to be thrown when before there wasn't.
