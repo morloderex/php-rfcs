@@ -119,10 +119,40 @@ In brief:
   * All input to this function must be UTF-8.
   * The replaced values for character references are UTF-8.
   * The list of named character references is non-configurable.
-  * Calling code //must// indicate whether the text originates from an attribute value or "data" (which is text content outside of tags and other syntax).
+  * Calling code //must// indicate where the input came from, whether from an attribute value or "data," or somewhere else special.
   * The passed input is assumed to be the entire contents of the attribute value or text node - not a truncation thereof.
 
-This RFC does not propose solving the problem of HTML tag-dependent decoding, for example, inside a ''SCRIPT'' element. For cases where HTML character references should not be decoded, this function leaves the responsibility with the caller.
+A new enum specifies supported HTML contexts. For the most part the enum specifies three internal properties:
+
+ - Are character references decoded?
+ - Are ambiguous ampersand references interpreted?
+ - Are NULL bytes replace or removed?
+
+While these could be handled via three boolean flags, that would require developers to understand the nuances involved in the different situations where they imply. By focusing the API on the kind of situations developers work in, the burden is removed to know the internal details of HTML parsing. For this reason there is overlap in ''Script'', ''Style'', and ''Comment'' contexts, because the parsing rules are identical.
+
+<code php>
+enum HtmlContext {
+	// A complete attribute value, single-quoted, double-quoted, or unquoted.
+	case Attribute;
+
+	// DATA content between tags: normal HTML text inside a BODY element.
+	case BodyText;
+
+	// Like BodyText, but found inside an SVG or MathML element where NULL bytes are treated differently.
+	case ForeignText;
+
+	// Text content inside of a SCRIPT element; nothing is escaped other than NULL bytes.
+	case Script;
+
+	// Identical to Script but left as a convenience/education tool.
+	case Style;
+
+	// Identical to Script but left as a convenience/education tool.
+	case Comment;
+}
+</code>
+
+A few more contexts //could// exist, namely for elements where text content is not allowed (''IFRAME'', ''NOEMBED'', and ''NOFRAMES'') and the deprecated ''XMP'' element. For the sake of avoiding unnecessary complexity they are left out of this proposal, but their inclusion would not bloat the implementation in any way.
 
 ===== Backward Incompatible Changes =====
 
