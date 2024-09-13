@@ -20,11 +20,10 @@ not.**
 
 With the introduction of typed properties in PHP 7.4, properties have
 become far more powerful. However it is currently not possible to
-specify disconnected write vs read visibility for properties, such as
-readonly, without having to resort to magic methods (getters and
-setters). For immutable semantic it's even more cumbersome. This
-requires unnecessary boilerplate, makes usage less ergonomic and hurts
-performance.
+specify disconnected write vs read visibility for properties without
+having to resort to magic methods (getters and setters), for immutable
+semantic it's even more cumbersome. This requires unnecessary
+boilerplate, makes usage less ergonomic and hurts performance.
 
 This RFC resolves this issue by proposing a few options:
 
@@ -39,10 +38,15 @@ This RFC resolves this issue by proposing a few options:
 
 #. Attribute approach:
 
-   #. Readonly attribute for properties, if #1.1/1.2 is accepted this is
-      merely syntax sugar.
-   #. Immutable attribute for properties, if #1.3 is accepted this is
-      merely syntax sugar
+   #. Readonly attribute for properties, if #1.1 is accepted this is
+      merely syntax sugar that adds possibility to set readonly on
+      classes (implicit all properties).
+   #. Immutable attribute for properties, if #1.2 is accepted this is
+      merely syntax sugar that adds possibility to set immutability on
+      classes (implicit all properties).
+
+*One of the options here are intended to be ruled out during early
+discussions*
 
 Under this RFC, code like
 
@@ -125,12 +129,15 @@ Readonly
 ~~~~~~~~
 
 This RFC aligns with `Readonly properties </rfc/readonly_properties>`__
-(2014, Withdrawn).
+(2014, Withdrawn), however also proposing a more granular way of
+defining readonly access rules.
 
 Immutability
 ~~~~~~~~~~~~
 
-This RFC aligns with `Immutability </rfc/immutability>`__ (2018, Stale).
+This RFC aligns with `Immutability </rfc/immutability>`__ (2018, Stale),
+however also proposing a more granular way of defining immutable access
+rules.
 
 This RFC does *not* align with the semantics of the recent `Write once
 properties </rfc/write_once_properties>`__ (2020, Declined), which is
@@ -139,16 +146,21 @@ targeting a different problem.
 Property Accessors Syntax
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This RFC does not try to solve as wide use case as the different
+This RFC does not try to solve as wider use case as the different
 iterations of `Property Accessors
-Syntax </rfc/propertygetsetsyntax-v1.2>`__ does.
+Syntax </rfc/propertygetsetsyntax-v1.2>`__.
 
-However: - Accessors overcomplicates readonly, and does not offer
-solutions to immutability - There seems to be a higher need in the
-community for readonly and immutable semantics - Everything Accessors
-offers beyond disconnected read and write visibility for properties, can
-easily be done with plain methods. The same is not true for readonly and
-immutable semantics as shown in the introduction.
+It's of this author's opinion that property type hinting and accessors
+where the two main obstacles to previous attempts at adding readonly
+semantics to PHP properties back in 2012-2014. And while readonly is
+rather hard to do in a clean way in PHP today, most other use cases
+offered by Accessors can be accomplished by plain PHP methods. Finally,
+Accessors overcomplicates readonly use case, and does not solve the
+needs for immutable property semantics.
+
+Thus the author of this RFC believes what is proposed here should be
+done before any proposal for Accessors is re-considered, as anything
+here can be made syntax sugar for Accessors, if it ever gets accepted.
 
 Proposal
 --------
@@ -180,7 +192,7 @@ declared properties. The following example illustrates the basic syntax:
        // Property is readonly in public scope
        public:protected string $name;
        
-       // Property is write-only in public and protected scope
+       // Property is writeonly in public and protected scope
        private:public string $newName;
 
        public function __construct(int $id, string $name) {
@@ -198,27 +210,24 @@ Reflection
 ''''''''''
 
 When using reflection, methods such as
-``ReflectionProperty::setAccessible()`` will work as before, it will
+"ReflectionProperty::setAccessible()" will work as before, it will
 implicit set visibility for both read and write.
 
 However with this proposal the following existing methods will represent
 read visibility for cases where it differs: -
-``ReflectionProperty::isPrivate()`` -
-``ReflectionProperty::isProtected()`` -
-``ReflectionProperty::isPublic()``
+ReflectionProperty::isPrivate - ReflectionProperty::isProtected -
+ReflectionProperty::isPublic
 
 And for checking separate write visibility the following methods may be
-used: - ``ReflectionProperty::isWritePrivate`` — Checks if property is
-writable in private - ``ReflectionProperty::isWriteProtected`` — Checks
-if property is writable in protected -
-``ReflectionProperty::isWritePublic`` — Checks if property is writable
-in public
+used: - ReflectionProperty::isWritePrivate — Checks if property is
+writable in private - ReflectionProperty::isWriteProtected — Checks if
+property is writable in protected - ReflectionProperty::isWritePublic —
+Checks if property is writable in public
 
-``Reflection::getModifiers()`` and ``Reflection::getModifierNames()``
-will need adaption too, and proposal is to adapt it so
-``getModifierNames()`` continues to return the visibility as specified,
-meaning it may now return for instance ``public:protected`` as one of
-the strings returned.
+"Reflection::getModifiers()" and "Reflection::getModifierNames()" will
+need adaption too, and proposal is to adapt it so "getModifierNames()"
+continues to return the visibility as specified, meaning it may now
+return for instance "public:protected" as one of the strings returned.
 
 *TODO: Expand this with modifier ints representing all variations and
 their names*
@@ -282,16 +291,16 @@ Reflection
 ''''''''''
 
 When using reflection, methods such as
-``ReflectionProperty::setAccessible()`` will work as before, it will
-implicit disable readonly flag.
+"ReflectionProperty::setAccessible()" will work as before, it will
+implicit disable immutable flag.
 
 Furthermore the following method is proposed added to be able to detect
-readonly properties: - ``ReflectionProperty::isReadonly()``
+immutable properties: - ReflectionProperty::isImmutable
 
-``Reflection::getModifiers()`` and ``Reflection::getModifierNames()``
-will need adaption too to add int and keywords for "readonly".
+"Reflection::getModifiers()" and "Reflection::getModifierNames()" will
+need adaption too to add int and keywords for "immutable".
 
-*TODO: Expand this with specific modifier int for "readonly"*
+*TODO: Expand this with specific modifier int for "immutable"*
 
 1.3 immutable keyword
 ^^^^^^^^^^^^^^^^^^^^^
@@ -349,11 +358,11 @@ Reflection
 ''''''''''
 
 When using reflection, methods such as
-``ReflectionProperty::setAccessible()`` will work as before, it will
+"ReflectionProperty::setAccessible()" will work as before, it will
 implicit disable immutable flag.
 
 Furthermore the following method is proposed added to be able to detect
-immutable properties: - ``ReflectionProperty::isImmutable()``
+immutable properties: - ReflectionProperty::isImmutable
 
 "Reflection::getModifiers()" and "Reflection::getModifierNames()" will
 need adaption too to add int and keywords for "immutable".
@@ -364,7 +373,7 @@ need adaption too to add int and keywords for "immutable".
 ~~~~~~~~~~~~~
 
 With the recently accepted `Attribute v2 RFC </rfc/attributes_v2>`__,
-another option here, or a supplemental one, would be to use attributes
+another option here, or an supplemental one , would be to use attributes
 for introducing Readonly and Immutable semantics. Similar to how Rust
 does with its `readonly
 create <https://docs.rs/readonly/0.1.6/readonly/>`__.
@@ -480,7 +489,7 @@ Reflection
 ''''''''''
 
 *TODO: show example on reading /setting attribute via reflection, and
-how this relates to ``ReflectionProperty::setAccessible()``.*
+how this relates to "ReflectionProperty::setAccessible()".*
 
 Backward Incompatible Changes
 -----------------------------
@@ -488,12 +497,12 @@ Backward Incompatible Changes
 Code that expects to be able to make properties writeable via reflection
 will have to adapt for new code taking advantage of this.
 
-While ``ReflectionProperty::setAccessible()`` will still work like
-before, checks using ``isProtected()`` or ``isPrivate()`` won't detect
-if class has other visibility for write (proposal #1), or take into
-account specific attributes affecting write (assuming proposal #1 is
-voted down and Readonly and Immutable becomes own attribute logic
-instead of merely syntax sugar for #1.x)
+While ReflectionProperty::setAccessible() will still work like before,
+checks using isProtected() or isPrivate() won't detect if class has
+other visibility for write (proposal #1), or take into account specific
+attributes affecting write (assuming proposal #1 is voted down and
+Readonly and Immutable becomes own attribute logic instead of merely
+syntax sugar for #1)
 
 Proposed PHP Version(s)
 -----------------------
@@ -510,14 +519,15 @@ instead. This is in-line with other features already accepted for PHP
 Performance
 -----------
 
-*Performance tests will need to be done once there is an implementation
+*Performance tests will need to be done once there is a implementation
 of this. Then overhead on properties, as well as measuring benefit over
 using magic methods.*
 
 Vote
 ----
 
-As this is a language change, a 2/3 majority is required.
+As this is a language change, a 2/3 majority is required. *RFC is in
+draft, and will undergo discussion phase before it is put for a vote.*
 
 .. _references-1:
 
@@ -527,7 +537,6 @@ References
 -  `C# readonly
    fields <https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes#readonly-fields>`__,
    semantically similar to what is proposed as "immutable" here.
--  `Rust readonly create <https://docs.rs/readonly/0.1.6/readonly/>`__
 
 Errata
 ------
