@@ -1,591 +1,459 @@
-Property Capture For Anonymous Classes
-======================================
+PDO Driver Specific SQL Parsers
+===============================
 
 :PHP-RFC: 0877
-:Title: Property Capture For Anonymous Classes
-:Author: Rowan Tommins <imsop@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-04-23
-:Version: 0.3
+:Title: PDO Driver Specific SQL Parsers
+:Author: Matteo Beccati <mbeccati@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-04-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-This RFC proposes the addition of an inline syntax for lexical
-(captured) variables when declaring anonymous classes in PHP. The goal
-is to simplify anonymous class declarations and make them more concise
-by allowing developers to capture variables from the outer scope
-directly.
+The PDO extension contains a SQL parser, whose main purpose is to
+recognise parameter placeholders inside queries (i.e. ``"?"`` and
+``":paramName"``), so that it knows how many and what parameters to
+expect for a query, and pass the information to the PDO driver in use.
 
-Anonymous classes were introduced in PHP 7.0, using a syntax that allows
-declaring a class definition and constructing an instance in a single
-statement. However, unlike anonymous functions, it is not easy to
-"capture" values from the parent scope for use inside the class; they
-can only be passed in via an explicit constructor or other method.
+This parser had historically been modelled to work with the de-facto SQL
+standard in the PHP ecosystem at that time: MySQL. However, the SQL
+dialect used by MySQL is different when handling string literals from
+standard SQL, followed by other database vendors, such as PostgreSQL and
+SQLite.
 
-This RFC proposes a "property capture" syntax, where a property can be
-declared and initialised with
-``$instance = new class use($captured) {};`` Optional access modifiers,
-type, and renaming are also supported, e.g.
-``$instance = new class use($localName as private readonly int $propertyName) {};``
+Specifically, MySQL treats the backslash character as an escape
+character: ``'This \'word\' is a single quoted'`` Whereas the SQL
+standard uses double single quotes:
+``'This ''word'' is a single quoted'``
 
-Semantics
----------
-
-Capturing variables into an anonymous class instance requires two
-things:
-
-#. A way to refer to the captured variables inside the *class
-   definition*, which is compiled once, when the statement is first run
-#. A way to associate values with these variables for *a particular
-   instance*, which will vary each time the statement is run
-
-Rather than inventing new syntax and semantics for these, this proposal
-reuses existing object properties and constructor parameters, as
-follows:
-
-#. If a ``use`` clause is present, generate an empty constructor which
-   will be added to the anonymous class.
-#. For each captured variable in the ``use`` clause, add it as a
-   parameter to the constructor.
-#. Declare a property with the same name as the captured variable in the
-   anonymous class, unless renamed in the ``use`` clause (see below).
-#. Set the default visibility of the property to ``public`` and the
-   default type to ``mixed`` if not specified in the ``use`` clause (see
-   below).
-#. In the constructor body, assign the captured variable to the
-   corresponding property.
-#. When creating an *instance* of the anonymous class, pass the
-   variables listed as parameters to the constructor.
-
-The implementation reuses a lot of mechanics from the existing
-Constructor Property Promotion mechanism, but this is considered an
-implementation detail, not a functional guarantee.
-
-Syntax
-------
-
-A new *``use`` clause* is introduced, immediately after the keywords
-"new class", with the syntax
-``use ([&]<var-name> as <modifiers> <type> <property-name>, ...)``. The
-``<modifiers>``, ``<type>``, and ``<property-name>`` are all optional;
-if none is specified, the "as" keyword must be omitted.
-
-Basic Form
-~~~~~~~~~~
-
-The simplest form of property capture resembles the capture list of
-anonymous functions:
-
-.. code:: php
-
-   $foo = 1;
-   $bar = 2;
-   $anon = new class use ($foo, $bar) {};
-
-This declares a class with public untyped properties ``$foo`` and
-``$bar``, and creates an instance populating them from the outer
-variables ``$foo`` and ``$bar``. In other words, it is equivalent to
-this:
-
-.. code:: php
-
-   $foo = 1;
-   $bar = 2;
-   $anon = new class($foo, $bar) {
-       var $foo;
-       var $bar;
-       
-       public function __construct($foo, $bar) {
-           $this->foo = $foo;
-           $this->bar = $bar;
-       }
-   };
-
-Renaming
-~~~~~~~~
-
-By default, the property takes the same name as the outer variable, but
-this can be over-ridden using the syntax ``$varName as $propName``. This
-also allows the same local variable to be captured as the initial value
-for more than one property. For example:
-
-.. code:: php
-
-   $foo = 1;
-   $bar = 2;
-   $anon = new class use ($foo as $one, $bar as $two, $bar as $three) {};
-
-Is equivalent to:
-
-.. code:: php
-
-   $foo = 1;
-   $bar = 2;
-   $anon = new class($foo, $bar, $bar) {
-       var $one;
-       var $two;
-       vat $three;
-       
-       public function __construct($one, $two, $three) {
-           $this->one = $one;
-           $this->two = $two;
-           $this->three = $three;
-       }
-   };
-
-Modifiers and Type
-~~~~~~~~~~~~~~~~~~
-
-The ``as`` keyword can also be used to modify the visibility and/or type
-of the declared property, either instead of or as well as renaming the
-property.
-
-The modifiers allowed are the same as for Constructor Property
-Promotion, which is used internally to declare the properties; that is
-currently:
-
--  One of ``public``, ``protected``, or ``private``
--  Optional ``readonly``, which must be combined with a type
-   specification
--  A type specification
+When using databases other than MySQL with PDO, valid queries having
+string literals ending with a backslash character are throwing off the
+parser and causing apparently inexplicable bugs.
 
 For example:
 
-.. code:: php
+.. code:: sql
 
-   $foo = 1;
-   $bar = 2;
-   $anon = new class use ($foo as private, $bar as protected readonly int, $bar as ?int $alsoBar) {};
+   SELECT 'foo\' AS a, '?' AS b
 
-Is equivalent to:
+will make PDO consider ``"'foo\' AS a, '"`` to be a string literal and
+will parse the following "?" as a positional parameter placeholder. In
+fact, if you pay close attention, even the DocuWiki SQL code formatter
+is thrown off by this very example.
 
-.. code:: php
+We have several reports of similar bugs
+`[1 <https://bugs.php.net/bug.php?id=78534>`__],
+`[2 <https://bugs.php.net/bug.php?id=79276>`__],
+`[3 <https://bugs.php.net/bug.php?id=80340>`__], and possibly other
+duplicates\ `[7 <https://github.com/php/php-src/issues/13958>`__].
 
-   $foo = 1;
-   $bar = 2;
-   $anon = new class($foo, $bar, $bar) {
-       private $foo;
-       protected readonly int $bar;
-       var ?int $alsoBar;
-       
-       public function __construct($foo, $bar, $alsoBar) {
-           $this->foo = $foo;
-           $this->bar = $bar;
-           $this->alsoBar = $alsoBar;
-       }
-   };
+In a nutshell, the PDO SQL scanner function doesn't need to completely
+parse the SQL dialect in use. **It is sufficient to properly recognise
+quoted string literals, quoted identifier literals, and comments to skip
+placeholder detection inside them**.
 
-Capture by Reference
-~~~~~~~~~~~~~~~~~~~~
+Bonus improvement
+~~~~~~~~~~~~~~~~~
 
-It is possible to capture a variable by reference, by prefixing it with
-``&``. For example:
+The limitation of a global SQL parser in PDO meant that my previous `RFC
+to support the PostgreSQL-only "?"
+operator </rfc/pdo_escape_placeholders>`__\ [4] had to apply the parser
+change to all database types. The change had no known side effects, but
+I feel this RFC could improve by keeping this peculiarity inside the
+pdo_pgsql scanner only.
 
-.. code:: php
-
-   $foo = 1;
-   $anon = new class use (&$foo as $fooProp) {};
-   $foo = 2;
-   echo $anon->fooProp;
-
-Will print ``2``. It is equivalent to:
-
-.. code:: php
-
-   $foo = 1;
-   $anon = new class($foo) {
-       var $one;
-       
-       public function __construct(&$one) {
-           $this->one =& $one;
-       }
-   };
-   $foo = 2;
-   echo $anon->fooProp;
-
-Examples
+Proposal
 --------
 
-**TODO - expand**
+Following a detailed research (see below) for each of the databases
+currently supported by PDO in core, the proposal is to allow drivers to
+optionally provide a custom scanner function to handle their specific
+SQL dialect and:
 
-Create a struct-like object with readonly public properties:
+#. Change the `default PDO
+   scanner <https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42>`__
+   to expect standard SQL only:
 
-.. code:: php
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. two-dashes and C-style comments (non-nested, as that seems to be
+      the most common format, already implemented in PDO)
 
-   $id = get_next_id();
-   $name = get_name();
-   $user = new readonly class use ($id, $name) {};
-   echo "{$user->id}: {$user->name}";
-   $user->id = 42; // ERROR: Cannot modify readonly property $id
+#. Add a MySQL-specific scanner function:
 
-Decorate a `PSR-3 <https://www.php-fig.org/psr/psr-3/>`__ logger, adding
-some context to all entries logged:
+   #. single and double quoted literals with both doubling and backslash
+      as escaping mechanisms (MySQL default)
+   #. backtick literals with doubling as escaping mechanism (I also
+      tested and it seems MySQL doesn't accept backslashes as escapes)
+   #. two-dashes (if followed by 1 whitespace), C-style comments, and
+      Hash-comments
+   #. Tests, as necessary
 
-.. code:: php
+#. Add a PgSQL-specific scanner function:
 
-   use Psr\Log\{LoggerInterface,LoggerTrait};
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. C-style "escape" string literals
+   #. Dollar-quoted string literals
+   #. two-dashes and C-style comments (non-nested, as nesting would
+      require unwanted changes to the common parser functionality)
+   #. Support for "??" as escape sequence for the "?" operator
+   #. Tests, as necessary
 
-   function decorate_logger(LoggerInterface $logger, string $contextKey, mixed $contextValue): LoggerInterface {
-      return new class 
-           use ($logger as private $innerLogger, $contextKey as private, $contextValue as private) 
-           implements LoggerInterface
-      {
-           public function log($level, string|\Stringable $message, array $context = []): void {
-               $context[$this->contextKey] = $this->contextValue;
-               $this->innerLogger->log($level, $message, $context);
-           }
-      };
+#. Add a SqLite-specific scanner function:
+
+   #. single, double quoted, and backtick literals, with doubling as
+      escaping mechanism
+   #. square brackets quoting for identifiers
+   #. two-dashes and C-style comments (non-nested)
+   #. Tests, as necessary
+
+To keep the change as simple as possible, the proposal tries to cover
+the default SQL syntax for each database as closely as possible, without
+heavy changes to the common parser code.
+
+One important thing to mention is that the proposed changes are only
+targeting the part of PDO that scans the SQL query for parameter
+placeholders. Quoting literals or using parameters in queries is **not
+going to be affected**.
+
+Detailed Proposal
+-----------------
+
+To execute the plan, a new member will be appended to:
+
+.. code:: c
+
+   struct pdo_dbh_methods {
+       pdo_dbh_close_func      closer;
+       pdo_dbh_prepare_func        preparer;
+       pdo_dbh_do_func         doer;
+       pdo_dbh_quote_func      quoter;
+       // ...
+       pdo_dbh_sql_scanner     scanner;
    }
 
-Reflection
-----------
+Each PDO driver defines already `their own
+struct <https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code>`__.
+Leaving the new member to NULL will make the driver use the default PDO
+scanner function. Otherwise, a pointer to a custom scanner function will
+override the default when parsing queries. It's really as simple as
+that.
 
-The constructor, its parameters, and the properties, all appear as
-normal if the anonymous class is reflected, but can be detected with two
-new methods:
+The rest of the implementation is the actual re2c scanner code,
+config.*, Makefile changes, etc. required to incorporate the
+driver-specific scanner into the build.
 
--  ``ReflectionParameter::isCaptured(): bool``
--  ``ReflectionProperty::isCaptured(): bool``
+To support dollar-quoted strings on Postgres, the functionality of
+custom quoting has been added to the common PDO parser function. The
+change has no side effects for other database drivers.
 
-Although internally they are declared using Constructor Property
-Promotion, the parameters and properties return ``false`` from
-``ReflectionParameter::isPromoted`` and
-``ReflectionProperty::isPromoted``, as they are not written that way by
-the user.
+One minor potential BC-break was reported while researching bug
+`#14244 <https://github.com/php/php-src/issues/14244>`__, which
+basically describes lack of support for dollar quoting in pdo_pgsql. One
+of the currently viable workarounds is to use escaped question marks
+inside dollar-quoted strings to avoid unexpected placeholder detection.
+The last version of the implementation still allows that, while raising
+the following deprecation notice:
 
-The generated constructor itself is not marked, partly due to
-implementation concerns that a limited number of bits remain available
-in the ``fn_flags`` bitmask.
+``Escaping question marks inside dollar quoted strings is not required anymore and is deprecated``.
 
-Restrictions
-------------
+Such BC-compatibility can be removed in the next major version.
 
-The following new errors follow from the use of properties, rather than
-a new mechanism, to access the captured values:
+Research on String Literals, Identifiers, and Comments
+------------------------------------------------------
 
--  "Redefinition of captured property", e.g.
-   ``new class use($foo, $foo) {}`` or
-   ``new class use($foo as $a, $bar as $a) {}``
--  "Captured property $a conflicts with existing property", e.g.
-   ``new class use($foo) { public $foo; }``
+MySQL
+~~~~~
 
-The following new errors follow from the current implementation's use of
-a generated constructor:
+MySQL by default accepts both backslash escaped quotes and SQL standard.
+String literals can use single or double quotes. See `the
+documentation <https://dev.mysql.com/doc/refman/8.0/en/string-literals.html>`__
+(8.0 current is linked here, but 5.7 and 8.3 behave the same).
 
--  "Cannot declare custom constructor for anonymous class with captured
-   properties", e.g.
-   ``new class use($foo) { public function __construct() {} }``
--  "Cannot pass constructor arguments to anonymous class with captured
-   properties", e.g. ``new class($foo) use($bar) {}``
+The
+`NO_BACKSLASH_ESCAPE <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>`__
+SQL mode will disable recognition of the backslash as escape character.
+If set it will break SQL scanning regardless of this RFC.
 
-Various alternatives to this restriction exist, discussed below.
-Throwing an Error now does not rule out any of these alternatives being
-implemented in future versions.
+The
+`ANSI_QUOTES <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes>`__
+SQL mode switches from backtick to SQL standard double quotes for
+identifier literals.
 
-Current Workaround
-~~~~~~~~~~~~~~~~~~
+Several `comment
+types <https://dev.mysql.com/doc/refman/8.0/en/comments.html>`__
+supported: ''-- '', ``#``, and ``/* */`` (not nested).
 
-The restrictions on custom constructors can be worked around by adding a
-normal instance method, and calling it immediately.
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults. All
+comment types will be supported.
 
-That is, given a current definition like this:
+PostgreSQL
+~~~~~~~~~~
 
-.. code:: php
+Escaping has evolved over the years. Historically accepted "\'", but
+started gradually transitioning to the SQL standard around 2005, going
+from memory. Since 9.1 (2011+) it accepts only single-quoted string
+literals by default according to the SQL standard. See `the
+documentation <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS>`__.
 
-   $anon = new class($a, $b, $c) extends SomeOtherClass {
-       private $a;
-       public function __construct($a, $b, $c) {
-           $this->a = $a;
-           do_something($b);
-           parent::__construct($c);
-       }
-   };
+Postgres also supports `String Constants with Unicode
+Escapes <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE>`__,
+which follow the same conventions as standard strings and are parsed by
+PDO as regular strings.
 
-You could instead write this:
-
-.. code:: php
-
-   $anon = new class use($a) extends SomeOtherClass {
-       public function init($b, $c) {
-           do_something($b);
-           parent::__construct($c);
-       }
-   };
-   $anon->init($b, $c);
-
-Alternative 1: Merging Constructors
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-It would be possible in principle to detect an existing constructor, and
-merge both its argument list and body with the generated code. That is,
-the above example could be written as:
+It also accepts `“escape” string
+constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE>`__,
+e.g.
 
 .. code:: php
 
-   # NOT supported in current proposal
-   $anon = new class($b, $c) use($a) extends SomeOtherClass {
-       public function __construct($b, $c) {
-           do_something($b);
-           parent::__construct($c);
-       }
-   };
+   E'This \'word\' is a single quoted'
 
-The principle difficulty here is finding a point in the compilation
-process where the explicit constructor can be easily detected but still
-modified.
+Lastly, `Dollar-Quoted String
+Constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING>`__
+are very common, especially when defining functions.
 
-It also leads to additional error conditions, which would give confusing
-errors if not specifically checked for:
+The behaviour of strings can also be manipulated in multiple ways
+through configuration variables, such as:
+`standard_conforming_strings <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>`__,
+`backslash_quote <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE>`__,
+and
+`escape_string_warning <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING>`__.
 
--  If too few or too many parameters are passed in the
-   ``new class(...)`` list, they would interact with the generated
-   parameters for captured properties.
--  If the captured properties are added to the end of the parameter
-   list, constructor parameters with default values would be disallowed.
+About
+`comments <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS>`__,
+it follows the standard with ``--`` and ``/* */`` (w/ nested comments
+allowed)
 
-Alternative 2: Automatically Calling Parent Constructor
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults.
+Dollar-quoting support requires minimal changes to the common PDO parser
+function. All comment types are already supported, albeit support for
+nested comments will not be introduced.
 
-Another possibility is that any parameters passed to the ``new class``
-statement could be automatically passed to the parent constructor; so
-this:
+SQLite
+~~~~~~
 
-.. code:: php
+Follows the SQL standard, and requires double single quotes to represent
+the single quote in a string literal. See
+`documentation <https://www.sqlite.org/lang_expr.html#literal_values_constants_>`__.
 
-   # NOT supported in current proposal
-   $anon = new class($foo) use($bar) extends SomeOtherClass {};
+It will however accept double-quoted strings as string literals under
+`some
+circumstances <https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted>`__.
 
-would be equivalent to this:
+Double quoted identifiers, but also `backticks and square
+brackets <https://sqlite.org/lang_keywords.html>`__.
 
-.. code:: php
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
 
-   $anon = new class($foo, $bar) extends SomeOtherClass {
-       var $bar;
-       public function __construct($foo, $bar) {
-           $this->bar = $bar;
-           parent::__construct($foo);
-       }
-   };
+The RFC aims to support single-quoted, double-quoted, backtick, and
+square-bracketed literals. All comment types are already supported.
 
-This seems to avoid the need to look up and manipulate the existing
-constructor definition, but discovering a parent constructor is actually
-even more difficult, as inheritance is only resolved after compilation.
-That leads to a few difficulties:
+SQL Server
+~~~~~~~~~~
 
--  It would be possible for the parent class to have a constructor with
-   an incompatible signature, or no constructor at all
--  The above example uses the input ``$foo`` to name the constructor
-   parameter, but this could be any expression, e.g.
-   ``$anon = new class(42 + some_function()) use ($bar) extends SomeOtherClass {};``.
-   As such, the parameters would actually have to use generated names of
-   some sort.
+SQL standard string literals, according to the
+`documentation <https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql?view=sql-server-ver16#character-string-constants>`__.
 
-Again, this leads to new error conditions which may be hard to
-understand to a user who doesn't know the details of the implementation.
+Depending on the QUOTED_IDENTIFIER setting, double quotes are either
+used for strings or identifiers.
 
-It would also not be very consistent with the rest of the language,
-which neither generates nor requires calls to parent constructors.
+Almost SQL standard
+`comments <https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16>`__:
+``--`` and ``/* */`` (non nested).
 
-Alternative 3: Generating a Different Method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
 
-Similar to the workaround above, the logic for setting captured property
-values could be generated in a method other than the constructor, e.g.
-``__capture``.
+Firebird
+~~~~~~~~
 
-That is, compile ``$anon = new class use ($foo) {};`` to this:
+SQL standard string literals, according to the
+`documentation <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants>`__.
+It also support hexadecimal (binary) strings, e.g. ``x'50444F``', and,
+similarly to Oracle, quoted strings (out of scope).
 
-.. code:: php
+The documentation mentions "Double quotes are NOT VALID for quoting
+strings. The SQL standard reserves double quotes for a different
+purpose: quoting identifiers."
 
-   $anon = new class {
-       var $foo;
-       public function __capture($foo) {
-           $this->foo = $foo;
-       }
-   };
-   $anon->__capture($foo);
+Almost SQL standard
+`comments <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html>`__:
+``--`` and ``/* */`` (non nested).
 
-That would allow this:
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
 
-.. code:: php
+ODBC
+~~~~
 
-   # NOT supported in current proposal
-   $anon = new class($b, $c) use($a) extends SomeOtherClass {
-       public function __construct($b, $c) {
-           do_something($b);
-           parent::__construct($c);
-       }
-   };
+Since ODBC can connect to various types of databases, the SQL standard
+parser hopefully will suffice.
 
-To be equivalent to this:
+Oracle
+~~~~~~
 
-.. code:: php
+SQL standard string literals, according to the
+`documentation <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html>`__.
+It also supports alternative quoting, e.g. q'<literal>' and many other
+variants, which is out of scope for this RFC.
 
-   $anon = new class($b, $c) extends SomeOtherClass {
-       var $a;
-       public function __construct($b, $c) {
-           do_something($b);
-           parent::__construct($c);
-       }
-       public function __capture($a) {
-           $this->a = $a;
-       }
-   };
-   $anon->__capture($a);
+`Double quoted
+identifiers <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA>`__.
 
-The main complexity here is generating the additional method call - in
-the above example, it is shown as called on the local variable
-``$anon``, but in practice, it could happen anywhere in an expression,
-e.g. ``some_function(new class($a) use($b) { ... });``.
+Almost SQL standard
+`comments <https://docs.oracle.com/en/database/oracle/oracle-database/12.2/sqlrf/Comments.html#SQLRF-GUID-5C84C344-CEB3-4DBF-B748-337DE11CCE2A>`__:
+``--`` and ``/* */`` (not nested).
 
-Alternative 3b: Initialising Before the Constructor Call
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The OCI driver lives in PECL: the default scanner will be used by
+default, bringing compatibility for SQL standard string literals,
+identifiers, and comments.
 
-A variation on the above would be to inject the extra method call (or
-the assignments themselves) immediately *before* the constructor is
-called.
+Historical Background
+---------------------
 
-Although it would give slightly nicer semantics, this would likely be
-even more challenging to implement, since the object creation and
-constructor call are both part of the ``NEW`` opcode handler, so the
-additional logic would need to be added there, or in variant with a new
-opcode.
-
-Alternative 4: Calling an Additional Magic Method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Another variation would be to have the constructor generated as in the
-current implementation, but call out to another magic method for the
-user to define additional constructor behaviour, effectively:
-
-.. code:: php
-
-   public function __construct($foo) {
-       $this->foo = $foo;
-       if ( method_exists($this, '__afterConstruct') ) {
-           $this->__afterConstruct();
-       }
-   }
-
-If arguments are not supported, the advantage of this over existing
-workarounds is very slight. If they are supported, it would run into
-many of the same difficulties outlined in previous sections.
+A few years back I attempted to fix a bug and came up with a `pull
+request <https://github.com/php/php-src/pull/6852>`__ that could be
+considered a proof of concept for this RFC. The same topic was also
+brought up `by others on
+internals <https://externals.io/message/114016>`__, but no one had time
+to follow up with a proper RFC.
 
 Backward Incompatible Changes
 -----------------------------
 
-None. The new syntax is not currently valid PHP, and the behaviour of
-existing anonymous class declarations is unchanged.
+No BC breaks, but a deprecation notice will be raised when using the
+"escaped question marks inside dollar quoted string" workaround
+described before.
+
+Users having applications that can work with multiple database engines
+should still be very careful and write portable queries, possibly using
+the ``PDO::quote()`` method when necessary instead of hardcoding strings
+containing escape characters.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x (hopefully 8.3)
+Next PHP 8.x, hopefully, 8.4.
 
 RFC Impact
 ----------
 
+To SAPIs
+~~~~~~~~
+
+No impact
+
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Extensions manipulating the AST may encounter the new node kinds
-``ZEND_AST_PROP_CAPTURE_LIST`` and ``ZEND_AST_PROP_CAPTURE``,
-representing the list of properties and constructor parameters which are
-generated in the compiler.
+Drivers outside of php-src might have to be modified if they make
+assumptions about the structure of the enum pdo_param_type. They would
+have to be rebuilt since the PDO_DRIVER_API macro would be updated.
+
+That has historically been allowed/expected in minor versions. The last
+time it happened was for PHP 7.2 with `PHP RFC: Extended String Types
+For PDO </rfc/extended-string-types-for-pdo>`__.
 
 To Opcache
 ~~~~~~~~~~
 
-None anticipated, but expert review on this point would be welcomed.
+No impact to opcache.
 
-Unaffected Functionality
-------------------------
+New Constants
+~~~~~~~~~~~~~
 
-All existing features of anonymous classes are retained, and can be
-combined with the new ``use`` clause, apart from the restrictions
-mentioned above. That includes:
+No new constant.
 
--  Inheriting parent classes
--  Implementing interfaces
--  Using traits
--  Implementing any method other than ``__construct``
--  Declaring the entire class ``readonly``
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No php.ini changes
+
+Open Issues
+-----------
+
+No open issues ATM.
+
+Unaffected PHP Functionality
+----------------------------
+
+Anything not related to PDO scanning the SQL query for parameter
+placeholders.
+
+Out Of Scope
+------------
+
+Dynamic changes to the scanner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The scanners are generated when PHP is compiled and, currently, cannot
+be modified at runtime. However, some databases allow configuration
+directives or ``SET`` queries to change the accepted syntax for
+literals, identifiers, etc.
+
+Being able to understand all possible combinations would require
+tracking what directives are different from the expected default and
+having several scanners inside each driver for each possible permutation
+of such configuration directives.
 
 Future Scope
 ------------
 
-Arbitrary Expressions
-~~~~~~~~~~~~~~~~~~~~~
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or
+add other custom scanner functionality.
 
-When a renamed property is indicated with the ``$variable as $property``
-syntax, there is no technical need to name a local variable, rather than
-an arbitrary expression. In other words, it would be possible to allow
-this:
+Voting
+------
 
-.. code:: php
+Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As
+usual, 2/3 majority is needed for this proposal to be accepted.
 
-   $anon = new class use (self::ID as $id, get_some_value() * 2 as private $something) {};
+Question: Implement PDO Driver specific SQL parsers?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Which would be equivalent to this:
+Voting Choices
+^^^^^^^^^^^^^^
 
-.. code:: php
-
-   $anon = new class(self::ID, get_some_value() * 2) {
-       public function __construct(
-           public $id,
-           private $something
-       ) {}
-   }
-
-Extension to Anonymous Functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Taking the above a step further, the ``use`` clause on anonymous
-functions could be extended in the same way, producing locally-scoped
-variables based on the captured values:
-
-.. code:: php
-
-   $callback = function() use (self::ID as $id, get_some_value() * 2 as $something) {
-       do_something($id, $something);
-   };
-
-Proposed Voting Choices
------------------------
-
-Add property capture to anonymous classes, with the syntax and semantics
-proposed, in PHP 8.3 (Yes / No, two-thirds majority required for
-acceptance)
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-https://github.com/php/php-src/pull/11123
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+`Implementation Pull
+Request <https://github.com/php/php-src/pull/14035>`__
 
 References
 ----------
 
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
+-  [1] `https:bugs.php.net/bug.php?id=78534]] \* [2]
+   [[https:\ bugs.php.net/bug.php?id=79276|https:bugs.php.net/bug.php?id=79276]]
+   \* [3]
+   [[https:\ bugs.php.net/bug.php?id=80340|https:bugs.php.net/bug.php?id=80340]]
+   \* [4] [[rfc:pdo_escape_placeholders|PHP RFC: Escape PDO "?"
+   parameter placeholder]] \* [5]
+   [[https:\ github.com/php/php-src/pull/6852|PoC implementation of a
+   custom pdo_pgsql scanner <https://bugs.php.net/bug.php?id=78534>`__
+-  [6] `Previous discussion of the topic on
+   internals <https://externals.io/message/114016>`__
+-  [7] `More recent bug <https://github.com/php/php-src/issues/13958>`__
 
 Additional Metadata
 -------------------
 
-:Original Authors: Rowan Tommins (imsop@php.net)
-:Slug: property-capture
-:Thanks: Nicolas Grekas (nicolasgrekas@php.net), Ilija Tovilo (tovilo.ilija@gmail.com)
-:Wiki URL: https://wiki.php.net/rfc/property-capture
+:Discussion: https://externals.io/message/123141
+:Implementation: https://github.com/php/php-src/pull/14035
+:Original Authors: Matteo Beccati, mbeccati@php.net
+:Slug: pdo_driver_specific_parsers
+:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_parsers
