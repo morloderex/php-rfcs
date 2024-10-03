@@ -1,119 +1,106 @@
-Types For Local Variables
-=========================
+Change How JIT Is Disabled By Default
+=====================================
 
 :PHP-RFC: 0863
-:Title: Types For Local Variables
-:Author: Wendell Adriel <wendelladriel.ti@gmail.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-02-08
+:Title: Change How JIT Is Disabled By Default
+:Author: Daniil Gentili <daniil@daniil.it>
+:Status: Voting
+:Type: Standards Track
+:Created: 2023-11-15
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-During the last releases of the language the support for types is
-increasing. We can already add types in a lot of contexts:
-
--  Function arguments
--  Function return
--  Class properties
-
-Types can bring more confidence when writing code, they can shield
-applications from unexpected bugs and issues and improve the readability
-and maintainability of the codebase.
-
-Adding the support for declaring types on local variables is a new step
-towards the direction that the language has been adding support for
-types and it's one step closer to adding support for generics later on.
+This RFC proposes to change *how* JIT is disabled by default.
 
 Proposal
 --------
 
-This RFC proposes to add a straightforward way of declaring types for
-local variables:
+Currently, JIT is disabled by default using the
+``opcache.jit_buffer_size=0`` default, instead of
+``opcache.jit=disable``.
 
-.. code:: PHP
+For example, here are the defaults for these two configuration entries:
 
-   function foo() {
-       $myString = 'foo'; // Current syntax
-   }
+::
 
-   function foo() {
-       string $myString = 'foo'; // Proposed syntax
-   }
+     opcache.jit=tracing
+     opcache.jit_buffer_size=0
 
-When typing local variables, if a new assignment to it results in a
-different type, then a **TypeError** should be thrown:
+This effectively disables JIT not because ``jit=disable``, but rather
+because the buffer size is set to 0.
 
-.. code:: php
+This RFC proposes to change these defaults to:
 
-   function foo() {
-       $myString = 'foo';
-       $myString = false; // Currently is ok
-   }
+::
 
-   function foo() {
-       string $myString = 'foo';
-       $myString = false; // Proposed - Throw a TypeError
-   }
+     opcache.jit=disable
+     opcache.jit_buffer_size=64m
 
-When working with arrays, we can also type the elements of the array:
+The chosen JIT buffer size default is 64 mb, a reasonable default, given
+that any smaller multiple of 2 causes the buffer to fill up when running
+moderately sized projects like Psalm or PHPStan.
 
-.. code:: php
-
-   function foo() {
-       $myArray = ['foo', 'bar']; // Current syntax
-   }
-
-   function foo() {
-       array<string> $myArray = ['foo', 'bar']; // Proposed syntax
-       // The above would be the same as defining it as array<int, string>
-   }
-
-Associate arrays can also have the type for the keys and the elements:
-
-.. code:: php
-
-   function foo() {
-       $myArray = ['foo' => 'bar', 'test' => 'testing']; // Current syntax
-   }
-
-   function foo() {
-       array<string, string> $myArray = ['foo' => 'bar', 'test' => 'testing']; // Proposed syntax
-   }
-
-**P.S.:The support for adding types to array elements and keys can also
-be extended to Function Arguments, Function Return and Class properties
-since currently, it's not possible to do that.**
-
-Implicitly, all variables that don't have a type declared should be
-considered to have the type mixed:
-
-.. code:: PHP
-
-   function foo() {
-       $myString = 'foo'; // Should be interpreted as: mixed $myString = 'foo';
-   }
+Another possible option for the default is 128 mb, which is incidentally
+also the maximum allowed JIT buffer size on the aarch64 architecture.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, since this would be optional.
+This RFC does not change the default behavior, JIT was and still is
+disabled by default, however now it is now disabled by default using the
+``opcache.jit`` setting, not the ``opcache.jit_buffer_size`` setting.
+
+This may affect users who enabled JIT by only setting a different
+``opcache.jit_buffer_size``, without specifying a JIT mode with
+``opcache.jit``.
+
+To enable JIT, users will also be required to populate the
+``opcache.jit`` config value.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.3 if possible or 9.0.
+Next PHP 8.4.
 
-Impact on extensions
---------------------
+RFC Impact
+----------
 
-None so far.
+To SAPIs
+~~~~~~~~
+
+See Backwards Incompatible Changes section.
+
+Proposed Voting Choices
+-----------------------
+
+2/3 required to accept. Voting started on 2023-12-03 and will end on
+2023-12-18 00:00 GMT.
+
+Question: Change how JIT is disabled by default?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Patches and Tests
+-----------------
+
+Pull request: https://github.com/php/php-src/pull/12678
+
+References
+----------
+
+Reference internals discussion: https://externals.io/message/121359
 
 Additional Metadata
 -------------------
 
-:Original Authors: Wendell Adriel, wendelladriel.ti@gmail.com
-:Slug: local_variable_types
-:Wiki URL: https://wiki.php.net/rfc/local_variable_types
+:Original Authors: Daniil Gentili daniil@daniil.it
+:Slug: jit_config_defaults
+:Wiki URL: https://wiki.php.net/rfc/jit_config_defaults
