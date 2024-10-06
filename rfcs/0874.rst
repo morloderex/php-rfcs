@@ -1,302 +1,302 @@
-PDO Driver Specific Sub-classes
-===============================
+Operator Overrides -- Lite Edition
+==================================
 
 :PHP-RFC: 0874
-:Title: PDO Driver Specific Sub-classes
-:Author: Danack
-:Status: Accepted
+:Title: Operator Overrides -- Lite Edition
+:Author: Robert Landers <landers.robert@gmail.com>
+:Status: Draft
 :Type: Unknown
-:Created: 2022-06-20
-:Version: 1.0
+:Created: 2024-06-28
+:Version: 0.1
 
 Introduction
 ------------
 
-PDO is a generic database class. Some of the databases it supports have
-functionality that is specific to that database. For example, when
-connected to an SQLite database, the sqlite specific function
-PDO::sqliteCreateFunction is available.
+Nearly three years ago, `PHP RFC: User Defined Operator
+Overloads </rfc/user_defined_operator_overloads>`__ was declined due to
+scope and new syntax concerns. However, the GMP class, which represents
+integer numbers in the GMP extension, was (accidentally) left non-final.
+This RFC explores the potential of extending GMP with a limited form of
+operator overriding, providing cleaner expressions for mathematical
+constructs and allowing new types of numerical representations such as
+units, complex numbers, and more.
 
-Having methods exist on a class depending on how the program was
-compiled and/or what database it is connecting to is quite surprising.
-It would make the code be easier to reason about if there were
-subclasses of the PDO class, specific to each database that has specific
-functionality available.
+This is to integers as ArrayAccess is to arrays, and Stringable is to
+strings, providing a simplified framework for defining integer
+mathematics, such as units.
+
+What this is not
+----------------
+
+This is not a full operator overrides implementation; it is much simpler
+and it does not stop us from implementing that in the future. It, does,
+however seek to be a polar opposite of the `PHP RFC: User Defined
+Operator Overloads </rfc/user_defined_operator_overloads>`__ RFC.
+
+Why the GMP extension?
+----------------------
+
+Several curious people have wondered why this is focused on the GMP
+extension. The reasons are quite simple:
+
+#. Numbers are surprisingly hard to implement "from scratch" (which is
+   required if implemented in another extension) and libraries like
+   GMP/BCMath are great libraries that make this simple.
+#. GMP has a practically infinite numerical range, meaning if you wanted
+   to write a "Duration" library that counted in nanoseconds, you could
+   have a range larger than 292 years (the limit for 64 bit machines
+   using PHP_INT_MAX).
+#. People using the GMP extension are already familiar with the way
+   overloading works in the engine.
+#. The extension already has all the plumbing in-place to handle
+   casting, operator overloads, and all in an OOP oriented way.
 
 Proposal
 --------
 
-The proposal has two parts:
-
--  Add new subclasses of PDO with driver specific methods.
--  Add PDO::connect to be able to create the specific subclasses.
-
-Add new subclasses of PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-All of the PDO extensions that are part of the PHP src repository will
-have subclasses created for them.
-
-Some of these subclasses will expose functionality that exists that is
-peculiar to that DB, and not present in the generic PDO class. e.g.
-PdoSqlite::createFunction() should be there rather than on the generic
-PDO class PDO::sqliteCreateFunction.
+The \\GMP class will be changed to the following signature:
 
 .. code:: php
 
-   class PdoDblib extends PDO
+   readonly class GMP
    {
+       public function __construct(int|string|GMP $num = 0, int $base = 0) {}
 
+       public function __serialize(): array {}
+
+       public function __unserialize(array $data): void {}
+
+       protected function add(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {}
+
+       protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {}
    }
 
-.. code:: php
+The changes are listed below:
 
-   class PdoFirebird extends PDO
-   {
-    
-   }
+#. The class is made ``readonly`` to prevent developers from using state
+   in inherited types.
+#. The constructor accepts another GMP instance instead of only
+   ``string|int``
+#. Mathematical methods are added to the class as protected. It is
+   expected that developers wanting to support an operation make the
+   associated operation ``public``.
 
-.. code:: php
+For any existing GMP code, absolutely nothing changes. The extension's
+behavior ONLY changes when the developer extends the GMP class and uses
+it mathematically. To be usable, the developer must override the desired
+operations and make them public. This ensures the class can be used even
+if the GMP extension is unavailable. A polyfill is included in the
+example below, which can be included in libraries that use this
+functionality.
 
-   class PdoMySql extends PDO
-   {
-       public function getWarningCount(): int {}
-   }
+Note the lack of equals, less-than, and greater-than operators. These
+are deliberately left out and replaced by a "comparable" method where
+the developer can indicate whether the two objects are compatible. They
+are left out for several reasons:
 
-.. code:: php
+#. PHP reorders comparables as needed
+#. The core tenant here is that these objects should represent types of
+   integers, and it is expected that they are internally comparable but
+   possibly not comparable to other types. For example, the number of
+   goats on a farm may not be comparable to the speed of a car.
 
-   class PdoOci extends PDO
-   {
-     
-   }
+Shift and bitwise operations are also left out of the class because it
+is expected that these behaviors won't change for any type of number
+that could be implemented here.
 
-.. code:: php
-
-   class PdoOdbc extends PDO
-   {
-
-   }
-
-.. code:: php
-
-   class PdoPgsql extends PDO
-   {
-       /**
-        * @var int
-        * @cname PDO_PGSQL_ATTR_DISABLE_PREPARES
-        */
-       public const ATTR_DISABLE_PREPARES = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_IDLE
-        */
-       public const TRANSACTION_IDLE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_ACTIVE
-        */
-       public const TRANSACTION_ACTIVE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INTRANS
-        */
-       public const TRANSACTION_INTRANS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INERROR
-        */
-       public const TRANSACTION_INERROR = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_UNKNOWN
-        */
-       public const TRANSACTION_UNKNOWN = UNKNOWN;
-
-       public function escapeIdentifier(string $input): string {}
-
-       public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): array|false {}
-
-       public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function lobCreate(): string|false {}
-
-       // Opens an existing large object stream.  Must be called inside a transaction.
-       /** @return resource|false */
-       public function lobOpen(string $oid, string $mode = "rb"){}
-
-       public function lobUnlink(string $oid): bool {}
-
-       public function getNotify(int $fetchMode = PDO::FETCH_USE_DEFAULT, int $timeoutMilliseconds = 0): array|false {}
-
-       public function getPid(): int {}
-   }
+Below is a listing showing a polyfill, a Duration class that only allows
+adding, multiplying, and exponentiation with scalars and is only
+comparable to Durations. Further, it cannot be negative.
 
 .. code:: php
 
-   class PdoSqlite extends PDO
-   {
-       /**
-        * @var int
-        * @cname SQLITE_DETERMINISTIC
-        */
-       public const DETERMINISTIC = UNKNOWN;
+   <?php
 
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_OPEN_FLAGS
-        */
-       public const ATTR_OPEN_FLAGS = UNKNOWN;
+   if(!class_exists('GMP')) {
+       // polyfill for completion
+       readonly class GMP {
+           public function __construct(private int|string|GMP $num) {}
 
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READONLY
-        */
-       public const OPEN_READONLY = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READWRITE
-        */
-       public const OPEN_READWRITE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_CREATE
-        */
-       public const OPEN_CREATE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_READONLY_STATEMENT
-        */
-       public const ATTR_READONLY_STATEMENT = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname
-        */
-       public const ATTR_EXTENDED_RESULT_CODES = UNKNOWN;
-
-       // Registers an aggregating User Defined Function for use in SQL statements
-       public function createAggregate(
-           string $name,
-           callable $step,
-           callable $finalize,
-           int $numArgs = -1
-       ): bool {}
-
-       // Registers a User Defined Function for use as a collating function in SQL statements
-       public function createCollation(string $name, callable $callback): bool {}
-
-       public function createFunction(
-           string $function_name,
-           callable $callback,
-           int $num_args = -1,
-           int $flags = 0
-       ): bool {}
-
-   // Whether SQLITE_OMIT_LOAD_EXTENSION is defined or not depends on how
-   // SQLite was compiled: https://www.sqlite.org/compile.html
-   #ifndef SQLITE_OMIT_LOAD_EXTENSION
-       public function loadExtension(string $name): bool {}
-   #endif
-
-       public function openBlob(
-           string $table,
-           string $column,
-           int $rowid,
-           ?string $dbname = "main", //null,
-           int $flags = PdoSqlite::OPEN_READONLY
-       ): mixed /* resource|false */ {}
-   }
-
-Although there may be DB specific functionality that could be exposed
-for the other database types that PDO supports, this RFC does not intend
-to expose them.
-
-Add a way of creating them through PDO static factory method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Add a static factory method to PDO called connect. During the connect
-process, the exact type of database being connected to will be checked,
-and if it is a DB that has a specific sub-class (i.e. all of those
-extension that ship with PHP core), return that sub-class instead of a
-generic PDO object
-
-.. code:: php
-
-   class PDO
-   {
-       public static function connect(string $dsn [, string $username [, string $password [, array $options ]]]) {
-
-           if (connecting to SQLite DB) {
-               return new PdoSqlite(...);
+           protected function add(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num + $right?->num);
            }
 
+           protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num * $right?->num);
+           }
 
-           return new PDO(...);
+           protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num - $right?->num);
+           }
+
+           protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num / $right?->num);
+           }
+
+           protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num % $right?->num);
+           }
+
+           protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {
+               return new self($base?->num ** $exp?->num);
+           }
+
+           protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {
+               return is_numeric($op1) && is_numeric($op2);
+           }
        }
    }
 
-PDO::connect will return the appropriate sub-class when connecting to
-specific type of DB.
+   readonly class Duration extends GMP {
+       public function __construct(int|string|GMP $num = 0)
+       {
+           if($num < 0) {
+               throw new ArithmeticError('Duration cannot be negative.');
+           }
 
-Users will also be able to create the DB specific classes directly,
-through the appropriate constructor e.g.
+           parent::__construct($num);
+       }
 
-.. code:: php
+       private function assertValidScalar(mixed $maybeScalar, string $operation): void {
+           if(is_numeric($maybeScalar)) {
+               return;
+           }
 
-   $db = new PdoSqlite($dsn, $username, $password, $options);
+           if(get_class($maybeScalar) === 'GMP') {
+               return;
+           }
 
-The code will throw an exception if the type of database being connected
-to isn't of the correct type for the class.
+           throw new ValueError("Can only perform $operation on GMP or int. Got " . get_debug_type($maybeScalar) . " instead.");
+       }
 
-Sqlite Extension directory ini setting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+       private function guardScalars(GMP|int|string $left, GMP|int|string $right, string $operation): void
+       {
+           if($left === $this) {
+               $this->assertValidScalar($right, $operation);
+               return;
+           }
 
-The Sqlite3 extension requires users to set an ini setting to allow
-SQLite extensions to be loaded, presumably from a desire to keep things
-'secure'. However, as this appears to only be a vulnerability if someone
-is able to upload and execute PHP code on a server, in which case the
-box is completely compromised any way, it doesn't seem to be necessary.
+           if($right === $this) {
+               $this->assertValidScalar($left, $operation);
+               return;
+           }
 
-Additionally, in the proposed PdoSqlite class this code:
+           throw new LogicException('$left or $right must be the same instance as $this.');
+       }
 
-.. code:: c
+       private function getResult(GMP $result): self {
+           return new self($result);
+       }
 
-   sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1);
+       public function add(GMP|int|string $left, GMP|int|string $right): static
+       {
+           $this->guardScalars($left, $right, 'addition');
 
-is used to temporarily enable extension loading, before loading the
-extension, which only enables it through the C api, whereas the Sqlite3
-extension uses the code:
+           return $this->getResult(parent::add($left, $right));
+       }
 
-.. code:: c
+       public function multiply(GMP|int|string $left, GMP|int|string $right): GMP
+       {
+           $this->guardScalars($left, $right, 'multiplication');
 
-   sqlite3_enable_load_extension(sqlite_handle, 1);
+           return $this->getResult(parent::multiply($left, $right));
+       }
 
-which affects both the C api and loading extensions through SQL code.
+       public function pow(GMP|int|string $base, GMP|int|string $exp): GMP
+       {
+           $this->assertValidScalar($exp, 'exponentiation');
+
+           if($base !== $this) {
+               throw new LogicException('$base must be the same instance as $this.');
+           }
+
+           return $this->getResult(parent::pow($base, $exp));
+       }
+
+       public function comparable(GMP|int|string $op1, GMP|int|string $op2): bool
+       {
+           return $op1 instanceof self && $op2 instanceof self;
+       }
+   }
+
+   $duration = new Duration(10);
+   $other = new Duration(200);
+   $regular = new GMP(10);
+
+   function do_op($description, $op): void {
+       global $duration, $other, $regular;
+       try {
+           $result = eval('return ' . $op . ';');
+           echo "$description: $op = $result" . PHP_EOL;
+       } catch (Throwable $exception) {
+           echo "$description: $op = [" . get_class($exception) . ': ' . $exception->getMessage() . ']' . PHP_EOL;
+       }
+   }
+
+   do_op('Duration', '$duration');
+   do_op('Regular', '$regular');
+   do_op('Other', '$other');
+
+   do_op('Regular', '$regular + 10');
+   do_op('Duration', '$duration + 10');
+   do_op('Duration + Duration', '$duration + $other');
+   do_op('Duration + Regular', '$duration + $regular');
+   do_op('Division not allowed', '$duration / 10');
+   do_op('Multiplication', '$regular * 10');
+   do_op('No negatives', '$duration + -20');
+   do_op('Comparison', '$duration < $other');
+   do_op('Comparison failure', '$duration < 20');
+
+   /**
+    * Output:
+    * Duration: $duration = 10
+    * Regular: $regular = 10
+    * Other: $other = 200
+    * Regular: $regular + 10 = 20
+    * Duration: $duration + 10 = 20
+    * Duration + Duration: $duration + $other = [ValueError: Can only perform addition on GMP or int. Got Duration instead.]
+    * Duration + Regular: $duration + $regular = 20
+    * Division not allowed: $duration / 10 = [Error: Invalid callback Duration::divide, cannot access protected method Duration::divide()]
+    * Multiplication: $regular * 10 = 100
+    * No negatives: $duration + -20 = [ArithmeticError: Duration cannot be negative.]
+    * Comparison: $duration < $other = 1
+    * Comparison failure: $duration < 20 = [ArithmeticError: Can't compare incompatible types]
+    */
+
+The following exceptions can be thrown by the engine while attempting to
+perform mathematical operations:
+
+-  Error: when trying to perform an unsupported operation, which shows
+   as "Invalid callback Duration::divide, cannot access protected method
+   Duration::divide()"
+-  ArithmeticError: when ANY participating comparison indicates that it
+   is not comparable: "Can't compare incompatible types: Duration to
+   int"
+
+Additionally, the implementor may throw additional exceptions, such as a
+ValueError in the example above, to indicate that something is not
+possible to the developer.
 
 Backward Incompatible Changes
 -----------------------------
 
-None known. It might be inconvenient for people who are extending PDO
-class directly, and would like to extend the specific types. They would
-need to write their own connect functions, that wrap and proxy those
-specific types.
+There are no backward incompatible changes. Existing GMP-based code will
+remain unaffected.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3
+8.4 if time allows, or the next version.
 
 RFC Impact
 ----------
@@ -304,131 +304,101 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-Describe the impact to CLI, Development web server, embedded PHP etc.
+No impact.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Only GMP will be affected.
+
+To Opcache
+~~~~~~~~~~
+
+There should be no impact to Opcache.
 
 Open Issues
 -----------
 
-These are the known current issues.
+None, yet.
 
 Unaffected PHP Functionality
 ----------------------------
 
-Everything not PDO
-
-Frequently asked questions
---------------------------
-
-if someone does 'new PDO(...)' will they now get back 'PdoPgsql'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-No.
+Code using the GMP extension without extending it will remain unchanged.
 
 Future Scope
 ------------
 
-When to deprecate old function on PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The method PDO::sqliteCreateFunction and other driver specific methods
-should probably be deprecated and removed at 'some point'. Although this
-cleanup should happen, the position of this RFC is that it's very low
-priority, as that code has sat there for years not requiring much
-maintainance.
-
-Removing the methods that magically exist or not depending on the
-specific driver created would save some complication in the PDO code. So
-although there's no benefit in userland for deprecating the existing
-magic methods, there may be a complexity saving in maintenance.
-
-Choosing the version for them to be deprecated in can be left until the
-future.
-
-Quoting identifiers
-~~~~~~~~~~~~~~~~~~~
-
-During the discussion, a point was raised that currently there is no
-"escape identifier" method on the base PDO class. Postgres at least has
-a specific method for escaping identifiers as the rules for escaping
-those are different from escaping values. It sounds valuable to add an
-escape method to the base PDO class, but that needs to be done by
-someone familiar with all of the database drivers.
-
-SQLite constants
-~~~~~~~~~~~~~~~~
-
-There are SQLite constants that are not currently exposed in the SQLite3
-extension including:
-
--  SQLITE_DIRECTONLY
--  SQLITE_INNOCUOUS
--  SQLITE_SUBTYPE
-
-I don't intend to add these as I don't understand them.
-
-PdoSqlite aggregations, collations and functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The code for these functions has been copied from the Sqlite3 extension.
-Although SQLite allows creating these with different flags to indicate
-what character set data should be in, the implementation is hard-coded
-to use the SQLITE_UTF8 flag.
-
-It would be possible to expose, and allow users to set, the flags of
-SQLITE_UTF16, SQLITE_UTF16BE, SQLITE_UTF16LE, SQLITE_UTF16_ALIGNED, and
-SQLITE_UTF8, however what the API should look like for that is 'not
-obvious', aka I have no idea what it should be like, despite having
-thought about it for a few hours. So, I'm planning to leave it out of
-this RFC.
+-  support for other operators
+-  serialization/unserialization
+-  support for non-integers via BCMath
 
 Proposed Voting Choices
 -----------------------
 
-Accept the RFC or not.
-
-Question: PDO driver specific subclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Voting closes at 2023-07-17T17:00:00Z
+-  2/3 YES|NO vote: Allow extending the \\GMP class and use a form of
+   operator overloading
+-  2/3 YES|NO secondary vote: Disallow extending the \\GMP class if this
+   RFC fails
 
 Patches and Tests
 -----------------
 
-WIP code https://github.com/php/php-src/pull/8707
+Prototype patch: `PR
+14730 <https://github.com/php/php-src/pull/14730>`__
 
 Implementation
 --------------
 
 After the project is implemented, this section should contain
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+::
+
+   - 
+   - a link to the git commit(s)
+   - a link to the PHP manual entry for the feature
+   - a link to the language specification section (if any)
 
 References
 ----------
 
-A proposal to add `sqlite openblob
-functionality </rfc/implement_sqlite_openblob_in_pdo>`__ previously
-failed to pass. The discussion gave the impression that the sub-classing
-`approach would be more
-acceptable <https://externals.io/message/100773#100813>`__.
+Links to external references, discussions or RFCs
 
-Rejected Features
------------------
+Rejected Features and Concerns
+------------------------------
 
-Keep this updated with features that were discussed on the mail lists.
+A separate extension
+^^^^^^^^^^^^^^^^^^^^
+
+On paper, a separate extension sounds like a good idea. However, I've
+attempted this with varying degrees of success. Reimplementing
+mathematics is not straightforward or a good idea when libraries like
+GMP do a much better job. Since there is already a GMP extension, it
+makes sense to merge it with that extension instead of forking it. If
+this RFC is rejected, it is rather straightforward to fork the extension
+and create a new one. However, that will certainly cause problems in
+environments where the standard GMP extension is installed instead.
+
+Full Operator Overloading
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some people on the list have voiced their opinion that we should revisit
+full operator overloading. This RFC does not prevent us from revisiting
+that in the future, but it is outside the scope of this RFC.
+
+More Operators
+^^^^^^^^^^^^^^
+
+There are many more operators that could be implemented. However,
+another concern was raised that people may "abuse" this feature to
+implement arbitrary objects that do strange things with operators. Thus,
+the scope is kept to "obviously integer-y things," and the GMP extension
+goes to great lengths to have the engine treat its objects as numbers.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Danack
-:Slug: pdo_driver_specific_subclasses
-:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_subclasses
+:Original Authors: Robert Landers, landers.robert@gmail.com
+:Original Status: Under Discussion (or Under Discussion or Accepted or Declined)
+:Slug: operator_overrides_lite
+:Wiki URL: https://wiki.php.net/rfc/operator_overrides_lite
