@@ -1,0 +1,106 @@
+====== PHP RFC: Add persistent curl share handles ======
+  * Version: 1.0
+  * Date: 2024-10-09
+  * Author: Eric Norris, erictnorris@gmail.com
+  * Status: Under Discussion
+  * First Published at: http://wiki.php.net/rfc/curl_share_persistence
+
+===== Introduction =====
+
+PHP, while generally stateless by default, occasionally provides forms of "persistence" for connections, e.g. [[https://www.php.net/manual/en/pdo.constants.php#pdo.constants.attr-persistent|PDO::ATTR_PERSISTENT]] for persistent PDO connections.
+
+Persistence allows PHP scripts to eliminate the overhead of establishing a connection on subsequent requests, which can improve performance and reliability.
+
+''curl'', a popular URL transfer library made available as a core extension in PHP, provides the ability to share data between curl handles via a "share" interface. The PHP extension supports this functionality in ''curl_share_init'' and related functions.
+
+The PHP extension does not, however, support persistent curl share handles. Connections (and DNS lookups, SSL session IDs, etc.) are only shared between handles within a single SAPI request.
+
+===== Proposal =====
+
+This RFC proposes to add a new function, ''curl_share_init_persistent($id, $share_options)'', that will construct a persistent curl share handle.
+
+When called, the function will first check the global memory within the SAPI worker for an existing curl share handle. If found, the function will return immediately.
+
+If a curl share handle does not already exist, the function will construct a new one, apply the given share options, store it in global memory, and return it.
+
+==== Why not add persistence to curl_share_init? ====
+
+
+I had originally attempted to add a single new optional ''$persistent_id'' parameter to ''curl_share_init'', and then to call ''curl_share_setopt'' on the handle to set share options separately. Unfortunately I ran into https://github.com/curl/curl/pull/14696, where it seems that curl was re-initializing some of the share options in a way that broke functionality.
+
+This issue meant that I needed to set the share options only once in userland, which is difficult or impossible to do. I decided to introduce a new function where the PHP extension could safely know if it needed to apply the share options or not.
+
+At the time of writing the RFC I have come up with a new alternative: we could change the signature of ''curl_share_init'' to ''curl_share_init(array|null $share_options, string|null $persistent_id)''. I don't have a strong opinion on either.
+
+===== Backward Incompatible Changes =====
+
+None expected.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP ''8.x'' release.
+
+===== RFC Impact =====
+
+==== To SAPIs ====
+
+SAPIs will consume more memory proportional to the number of persistent curl share handles.
+
+==== To Existing Extensions ====
+
+''ext/curl'' will have a new function.
+
+==== To Opcache ====
+
+None.
+
+==== New Constants ====
+
+None.
+
+==== php.ini Defaults ====
+
+None.
+
+===== Open Issues =====
+
+==== Persistence Implementation ====
+
+My first attempt at a pull request used the ''EG(persistent_list)'' global variable, which uses "internal" (i.e. not directly exposed to userland) resources. I received feedback from **@cmb69** that this was deprecated, but https://wiki.php.net/rfc/resource_to_object_conversion does not directly address internal resources. These are currently still used in places like PDO and streams, even when they return objects to userland.
+
+Fortunately I was able to come up with an alternative implementation using ''ZEND_BEGIN_MODULE_GLOBALS'' instead, but it's unclear whether this is a better approach. I don't have a strong opinion on which method of persistence I use, only that I'm able to implement persistence at all.
+
+==== curl_share_close Behavior ====
+
+From **@kocsismate**:
+
+<blockquote>I'm wondering if it would make sense to explicitly close persistent shares with curl_share_close? It's a no-op for regular shares, but it may be useful for persistent ones?</blockquote>
+
+===== Future Scope =====
+
+  * As noted in the Open Issues, we may want to put together an RFC in the future for a new persistence API that avoids internal resources.
+
+===== Proposed Voting Choices =====
+
+This vote would require a ⅔ majority:
+
+^ Add curl share persistence in the next PHP 8.x ^
+|                                                |
+
+This vote would require a simple majority:
+
+^ Method signature ^^
+| curl_share_init_persistent(string $id, array $share_options) | curl_share_init(?array $share_options, ?string $persistent_id) |
+
+===== Patches and Tests =====
+
+  * Patch implementing ''curl_share_init_persistent'': https://github.com/php/php-src/pull/15603
+
+===== Implementation =====
+
+
+===== References =====
+
+  * https://wiki.php.net/rfc/resource_to_object_conversion
+
+===== Rejected Features =====
