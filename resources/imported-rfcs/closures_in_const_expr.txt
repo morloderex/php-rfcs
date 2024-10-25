@@ -7,19 +7,23 @@
 
 ===== Introduction =====
 
-Several PHP constructs are limited to accept “constant expressions” only. These expressions may only contain a limited number of operations that can roughly be summarized as “unchangeable values”. Notably attribute parameters only accept constant expressions and Closures are not currently part of the set of allowed operations in constant expressions.
+Several PHP constructs are limited to accept “constant expressions” only. These expressions may only contain a limited number of operations that can roughly be summarized as “immutable values”. Notably attribute parameters are a construct that only accepts constant expressions and Closures are not currently part of the set of allowed operations in constant expressions.
+
+As Closures are effectively just PHP source code (or rather: PHP Opcodes) they are an immutable value (when limiting some of the features) and as such there is no fundamental reason why they should not be allowed within constant expressions. And indeed there are some use cases that would be enabled by allowing Closures to appear in constant expressions.
 
 ===== Proposal =====
 
-It shall be legal to include Closures in constant expressions. This includes:
+This RFC proposes that it shall be legal to include Closures in constant expressions. This includes:
 
   * Attribute parameters.
   * Default values of properties, parameters, and static variables.
   * Constants and Class Constants.
 
+The primary use case is making Closures legal within attribute parameters, the other constructs restricted to constant expressions will implicitly work and this RFC makes no effort to arbitrarily limit Closures to attribute parameters only.
+
 ==== Constraints ====
 
-Closures placed in constant expressions are subject to the following constraints:
+If Closures are placed in constant expressions they are subject to the following constraints:
 
   * They must not include variables from the surrounding scope using <php>use($foo, $bar)</php>, because except for constants and static variables there is no surrounding scope. This also means that short closures (arrow functions) are not supported, because they perform implicit capturing. This constraint is consistent with how variables may not be part of a constant expression.
   * They must be <php>static</php> (and thus they must not access <php>$this</php>). Semantically <php>$this</php> would only be well-defined for property default values and possibly attribute parameters, but this would require reevaluating the Closure for each object / attribute instance, which would be different to existing constant expressions which are only evaluated once. This constraint is consistent with how <php>new</php> expressions may not be used in property default values.
@@ -27,6 +31,52 @@ Closures placed in constant expressions are subject to the following constraints
 ==== Scoping ====
 
 As with other constant-expressions, Closures defined in constant expressions follow the expected scoping rules of the context they are placed in. This means that Closures in property default values //may// access <php>private</php> properties, methods, and class constants of the class where they are defined, similarly to how a Closure defined in the constructor and stored in a property may access those private members. Likewise are Closures in attribute parameters allowed to access private members of the surrounding class.
+
+==== Closures in sub-expressions ====
+
+Closures behave like any other operation within a constant expression, thus they may be part of a sub-expression of another operation. While it is not particularly useful to use Closures as an operand to mathematical expressions, it will also not break anything.
+
+However the following operations are examples of how Closures can usefully be included in sub-expressions.
+
+Defining a list of Closures in a default parameter:
+<PHP>
+<?php
+
+function foo(
+    string $input,
+    array $callbacks = [
+        static function ($value) {
+            return \strtoupper($value);
+        },
+        static function ($value) {
+            return \preg_replace('/[^A-Z]/', '', $value);
+        },
+    ]
+) {
+    foreach ($callbacks as $callback) {
+        $input = $callback($input);
+    }
+
+    return $input;
+}
+
+var_dump(foo('Hello, World!')); // string(10) "HELLOWORLD"
+</PHP>
+
+Passing a Closure to a new expression:
+
+<PHP>
+<?php
+
+class MyObject
+{
+    public function __construct(private Closure $callback) {}
+}
+
+const Foo = new MyObject(static function () {
+    return 'foo';
+});
+</PHP>
 
 ==== Use Cases ====
 
