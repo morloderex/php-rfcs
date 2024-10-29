@@ -1,92 +1,325 @@
-Deprecations For PHP 8.3
-========================
+Default Expression
+==================
 
 :PHP-RFC: 0836
-:Title: Deprecations For PHP 8.3
-:Author: Christoph M. Becker <cmb@php.net>, George Peter Banyard <girgias@php.net>, Máté Kocsis <kocsismate@php.net>
-:Status: Implemented
+:Title: Default Expression
+:Author: Paul Morris <bilge@scriptfusion.com>
+:Status: Draft
 :Type: Standards Track
-:Created: 2022-08-01
-:PHP-Version: 8.3
-:Version: 1.0
-
-::
-
-      * MT_RAND_PHP: https://github.com/php/php-src/commit/61251093ab5b1ebbe112362893ff8b9edba215e0
-      * <php>ldap_connect()</php>: https://github.com/php/php-src/commit/69a8b63ecf4fec1b35ef4da1ac9579321c45f97f
-      * <php>mb_strimwidth()</php>: https://github.com/php/php-src/commit/af3c220abbff2415ccd79aeac1888edfc106ffa6
-      * NumberFormater::TYPE_CURRENCY: https://github.com/php/php-src/commit/d65251e6e863684f8fc7ddc9c0fba7cf53483f7f
+:Created: 2024-08-24
+:PHP-Version: 8.5
+:Version: 1.1
 
 Introduction
 ------------
 
-The RFC proposes to deprecate the listed functionality in PHP 8.3 and
-remove it in PHP 9.
+The only way to pass the default value to a function or method parameter
+is to not pass anything. This can be particularly difficult in some
+circumstances, because the language does not offer an intuitive way to
+pass *nothing*. This RFC proposes to make the existing keyword,
+``default``, the canonical way to pass the default value. Moreover,
+``default`` becomes a valid expression in the function argument context,
+meaning it can be creatively combined with any and all existing PHP
+expression grammars to augment the default value as it is passed,
+including assigning it to variables (see `appendix
+II <#appendix_iidefault_expressions>`__ for a comprehensive list).
 
-The following list provides a short overview of the functionality
-targeted for deprecation, while more detailed explanation is provided in
-the Proposal section:
+In its simplest form, ``default`` can be used as a single token.
 
--  Passing negative ``$width``\ s to ``mb_strimwidth()``
--  The NumberFormatter::TYPE_CURRENCY constant
--  Unnecessary ``crypt()`` related constants
--  MT_RAND_PHP
--  Global Mersenne Twister
+.. code:: php
+
+   f(default)
+
+However, this is of limited usefulness. The main benefit comes from
+using ``default`` in expression contexts, the most common case being
+**conditional expressions**.
+
+.. code:: php
+
+   function g($p = null) {
+       f($p ?? default);
+   }
+
+In this example, function ``f`` will receive whatever its default value
+is for its first argument only when ``$p`` is ``null``, otherwise it
+receives the value of ``$p``.
+
+Default as an expression
+------------------------
+
+The principal benefit of ``default`` is in its employ within
+**expressions**. Consider the following example:
+
+.. code:: php
+
+   class Config {
+       public function __construct(Theme $theme = new CuteTheme()) {}
+   }
+
+By default, the configuration is constructed with a new ``CuteTheme``.
+We want to allow users to specify a different theme, but if they do not
+specify anything, we should still use the default. For the purposes of
+this example, ``Config`` should be considered third-party code we cannot
+change. Given we want to conditionally apply the user's custom theme,
+traditionally we have a few options here, none of them good:
+
+#. Copy the current default from ``Config``. This should be considered
+   an invalid option, because we want to allow the upstream library to
+   change the default without having to update our code.
+#. Filter and splat the theme argument.
+#. Reflection.
+
+.. code:: php
+
+   // Filter and splat.
+   function applyTheme(?string $theme = null) {
+       return new Config(...array_filter([isset($theme) ? new $theme : null]));
+   }
+
+Filter and splat is a viable but unintuitive way to conditionally pass
+*nothing* as an argument and only works if we're willing to sacrifice
+``null`` as a placeholder for *nothing*. Moreover, it only works with a
+single argument when not specifying keys; as soon as two or more
+nullable arguments are involved, collapsing them in this manner risks
+passing the arguments in the wrong order. However, we could specify
+parameter names as keys to mitigate this.
+
+.. code:: php
+
+   // Reflect.
+   function applyTheme(?string $theme = null) {
+       $param = new ReflectionParameter(['Config', '__construct'], 'theme');
+       return new Config(isset($theme) ? new $theme : $param->getDefaultValue());
+   }
+
+Reflection is a verbose option with performance overhead. It requires us
+to duplicate the class and method name we're calling and be explicit
+about the name or number of the argument, in order to obtain its default
+value.
+
+``default`` provides an elegant and intuitive solution to this problem.
+
+.. code:: php
+
+   // Conditional default.
+   function applyTheme(?string $theme = null) {
+       return new Config(isset($theme) ? new $theme : default);
+   }
+
+This is somewhat similar to reflection, but PHP knows which class,
+method and argument we're calling just from context.
+
+Default as a single token
+-------------------------
+
+Default as a single token was `proposed <skipparams>`__ a decade ago as
+a mechanism for skipping some parameters, but was declined. Since then,
+`named arguments <named_params>`__ has provided a way to implicitly pass
+*nothing*, by skipping over parameters we don't want to pass. Named
+arguments mostly preclude the usefulness of skipping parameters with
+``default``, but a curious consequence of named arguments is parameter
+names suddenly became part of our APIs. That is, changing parameter
+names now constitutes a compatibility break, whether libraries want to
+adopt this contract or not. Although it is neither the principal aim nor
+benefit of this RFC, it does provide an alternative syntax for passing
+defaults that does not rely on named arguments, and as such relinquishes
+the burden on libraries to affirm parameter names part of their API.
+That is, libraries could now elect to declare parameter names not part
+of their backwards-compatibility promise by offering passing ``default``
+as an alternative.
+
+.. code:: php
+
+   // Skipping JSON depth parameter with named parameters.
+   json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+
+   // Skipping JSON depth parameter with default.
+   json_decode($json, true, default, JSON_THROW_ON_ERROR);
 
 Proposal
 --------
 
-Each feature proposed for deprecation is voted separately and requires a
-2/3 majority. All votes refer to deprecation in PHP 8.3 and removal in
-PHP 9.0.
+``default`` is now a valid expression, but only in argument-passing
+contexts. In all other contexts it is invalid, save for those in which
+it was valid previously, namely ``switch`` statements and ``match``
+expressions. That is, ``default`` may be used when calling global or
+namespaced functions, static or instance class methods (including
+anonymous classes), any callable (including closures and arrow
+functions), whether they are defined internally or in userland. Outside
+these contexts, where expressions would otherwise be accepted,
+attempting to use ``default`` will raise a compile-time error.
 
-Passing negative $widths to mb_strimwidth()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Attempting to pass ``default`` to a function with no parameters, or as
+an argument beyond the callee's defined parameter limit, will result in
+a runtime exception. Similarly, attempting to pass ``default`` to a
+required parameter, with no default defined, results in a runtime
+exception.
 
-Regarding the ``$width`` argument of ``mb_strimwidth()``, the PHP manual
-states: "Negative widths count from the end of the string." In other
-words, if ``$width`` is -2, then either two halfwidth characters or one
-fullwidth character should be trimmed from the end of the string.
+Variadics
+~~~~~~~~~
 
-This feature was introduced in git revision 70187267b4 (January 2016),
-and was contributed by Francois Laupretre francois@php.net.
+Variadic arguments do not permit a default expression. Internally, the
+variadic argument does not even count towards a function's formal
+argument count, so attempting to pass ``default`` to it results in the
+same runtime error you receive when passing an argument beyond the
+callee's limit.
 
-Although I have not seen anything written by F. Laupretre to explain
-what the anticipated usage of the feature was, it seems to have very
-limited utility. ``mb_strimwidth()`` is typically used to trim strings
-down to a length which can be printed in a terminal without wrapping. It
-seems very unusual that anyone would want to set the terminal width of a
-string to "its current value less N". (One possibility is that the
-feature was introduced for consistency with other standard library
-functions which accept a negative argument to indicate "count back from
-the end of a string".)
+Named arguments
+~~~~~~~~~~~~~~~
 
-From the time the feature was merged until now, it has always had a bug
-when combined with a non-zero ``$from`` argument. The implementation
-does arithmetic which combines *codepoint counts* with *terminal width
-counts*, with erroneous results. (This is just like the proverbial
-"apples and oranges".) If there are any fullwidth characters in the
-prefix which is skipped because of non-zero ``$from``, then
-``mb_strimwidth()`` will not trim the requested width from the end of
-the string.
+Named arguments and default expressions can be composed together, as in
+the following example.
 
-It is notable that in 9 years, no user ever noticed and reported this
-bug. My guess is that almost no-one uses the negative width feature.
-This would explain why the bug was not noticed.
+.. code:: php
 
-To implement the feature correctly, without the bug mentioned above, an
-extra pass over the prefix of the input string identified by ``$from``
-would be needed to determine its terminal width. This operation requires
-O(n) time.
+   $f = fn ($v = 1, $default = 2) => $v + $default;
+   $f(default: default + 1); // int(4)
 
-When preparing this RFC, I searched the Internet for existing
-open-source software which uses ``mb_strimwidth()`` and reviewed over
-100 such projects. None of them used negative ``$width`` arguments.
-However, if readers are aware of existing projects which rely on the
-negative ``$width`` feature, please add that information here.
+Match expression
+~~~~~~~~~~~~~~~~
 
-Question: Deprecate passing negative $widths to mb_strimwidth()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Since `match expressions <match_expression_v2>`__ also makes use of the
+``default`` token, the grammar for the default match arm had to be
+migrated from the language parser to the compiler to prevent conflicts.
+The existing semantics were perfectly preserved, so the only difference
+one might notice is a slightly different error message when attempting
+something invalid like trying to share conditions with the default match
+arm.
+
+In the context of a function argument, match expressions may contain
+``default``, ergo the following is legal (albeit contrived).
+
+.. code:: php
+
+   F(match (default) {
+       default => default
+   });
+
+In the above example, the match expression and the match body
+(right of ``=>``) are the default *expression*, while the default in the
+match condition (left of ``=>``) is the special token denoting the
+default match arm to use when no other arm matches, the same as it was
+before this RFC. However, it is also possible to use the default
+expression as a condition, simply by combining it with any other
+expression syntax.
+
+Although there is no identity expression that works for all types, if
+you know the type of ``default``, casting it to the same type is one way
+to convert it to an expression.
+
+.. code:: php
+
+   $f = fn ($v = 1) => $v;
+   $f(match (1) {
+       0 => 10,
+       (int) default => 20,
+       default => 30,
+   }); // int(20)
+
+Note that whilst multiple default arms are still prohibited, since we
+converted one of them to an expression, it is not acting as the default
+and does not count against this restriction.
+
+Internals
+~~~~~~~~~
+
+Internally, ``default`` is treated as a new opcode that causes the VM to
+perform a parameter default value lookup using reflection, albeit via an
+internal call that is more efficient than routing through the typical
+public interface. When ``default`` appears multiple times for the same
+argument, it is evaluated each time, causing each occurrence to point to
+a unique instance if the default is an object. If the lookup fails for
+any reason, a runtime exception will be thrown.
+
+Currently the only known failure case is lookup of trampoline functions,
+which can be created by calling ``__invoke`` on a closure, as in
+``(fn ($P = 1) => $P)->__invoke(default);``. Considering this is not the
+intended, nor even a documented way of invoking a closure, it is
+supposed this limitation is very minor.
+
+Discussion
+----------
+
+The greatest concern is the proposed grammar is too permissive and has
+drawbacks. A secondary concern is default values are now part of an
+object's public API. We will examine each of these issues in detail.
+
+Limiting grammar
+~~~~~~~~~~~~~~~~
+
+The most common request is to constrain the allowed expression list. As
+already noted, some expressions don't make much sense because they
+probably don't have any practical application, and some are not
+comfortable allowing expressions that don't make sense into the
+language. This implies coming up with an `arbitrary exclusion
+list <https://externals.io/message/125183#125218>`__ for certain
+expressions. Some proposed taking this a step further by `disallowing
+default as expression
+input <https://externals.io/message/125183#125321>`__, which effectively
+rules out all operator classes except conditionals and invocations of
+``match()`` that use ``default`` as a stand-alone output token.
+
+.. code:: php
+
+   // Expressions with default as output only.
+   F(1 ? default : 0)
+   F(1 ? 1 : default)
+   F(0 ?: default)
+   F(null ?? default)
+   F(match(1) { 1 => default })
+
+Further, some even expressed concerns about allowing any expressions at
+all and would only be comfortable allowing ``default`` as an isolated
+token, as in `skipparams <skipparams>`__.
+
+Critics converged on a `valid
+counter-point <https://externals.io/message/125183#125274>`__ that
+permitting expressions changing the default's type breaks LSP, as
+demonstrated in the following example (code courtesy of Ilija). Some
+have suggested this might be solved by disallowing ``default`` to be
+passed to union types (including ``mixed``).
+
+.. code:: php
+
+   class C {
+       public function F(int $V = 1) {}
+   }
+
+   class D extends C {
+       public function F(int|string $V = 's') {}
+   }
+
+   function test(C $C) {
+       $C->F(default + 1);
+   }
+
+   test(new C); // OK.
+   test(new D); // Fatal error: Uncaught TypeError: Unsupported operand types: string + int.
+
+Defaults as a contract
+~~~~~~~~~~~~~~~~~~~~~~
+
+Backward Incompatible Changes
+-----------------------------
+
+None known.
+
+Future Scope
+------------
+
+It may be possible to overcome the limitation regarding trampoline
+functions. It is unclear whether there is a practical need to do so, but
+if the need should arise, this should be possible to implement without
+any BC break.
+
+Voting
+------
+
+As per the `voting RFC <RFC/voting#required_majority>`__ a yes/no vote
+with a 2/3 majority is needed for this proposal to be accepted.
+
+Question: Implement default expressions as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -94,376 +327,198 @@ Voting Choices
 -  Yes
 -  No
 
-The NumberFormatter::TYPE_CURRENCY constant
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Regardless of how you vote above, we'd like to collect feedback on which
+limitations of this proposal would make it/still be acceptable for you,
+starting from the least significant to the most significant changes. For
+details on what each of these options mean, see
+`discussion <#discussion>`__. You can vote for multiple options, but if
+you choose the last one then it doesn't make much sense to pick any
+others.
 
-This constant is unused since it was added to PHP (in PHP 5.3 or
-before), likely it was meant to call
-``NumberFormatter::formatCurrency()``/``NumberFormatter::parseCurrency()``
-from ``NumberFormatter::format()``/``NumberFormatter::parse()``
-respectively. However, this was never implemented, likely because there
-is no way to pass the necessary currency argument.
-
-Question: Deprecate and remove the NumberFormatter::TYPE_CURRENCY constant
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Which limited grammars would you support?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
--  Yes
--  No
+-  No union types
+-  Only conditional expressions
+-  No expressions
+-  No default in arguments
 
-Unnecessary crypt() related constants
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Only the result of the primary vote has a clear path forward for
+inclusion into the language. None of the proposed alternatives come with
+any feasibility guarantees. However, if the primary vote fails, the
+secondary vote may inform whomsoever wishes to pursue a follow-up for
+limited application of ``default``, which requires a new RFC and
+implementation for that counter-proposal.
 
-There are a couple of constants which store some information about the
-current system related to the ``crypt()`` function:
+Appendix I: Further examples
+----------------------------
 
--  ``CRYPT_STD_DES``: whether standard DES salts are supported
--  ``CRYPT_BLOWFISH``: whether BlowFish salts are supported
--  ``CRYPT_EXT_DES``: whether extended DES salts are supported
--  ``CRYPT_MD5``: whether MD5 salts are supported
--  ``CRYPT_SHA256``: whether SHA-256 salts are supported
--  ``CRYPT_SHA512``: whether SHA-512 salts are supported
-
-However, these constants are always ``1`` for a long time (at least 6
-years), because the above salts are supported on all systems. Therefore,
-they are unnecessary, and they give a false impression that the
-capabilities in question are conditionally available.
-
-Question: Deprecate and remove the CRYPT_\* constants?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-MT_RAND_PHP
-~~~~~~~~~~~
-
-Authors: Tim Düsterhus timwolla@php.net, Go Kudo zeriyoshi@php.net
-
-The implementation of Mt19937 ("Mersenne Twister") in PHP versions
-before 7.1 contains two bugs:
-
--  ``mt_rand()`` without parameters returns different numbers than the
-   reference implementation, due to a typo in a variable name.
--  ``mt_rand($min, $max)`` with a restricted range uses a broken scaling
-   algorithm based on floating point arithmetic. As doubles have only 53
-   Bits of precision, this will introduce a bias if a range larger than
-   53 Bits is requested.
-
-Both of these issues were fixed in PHP 7.1 by the `RNG fixes and changes
-RFC </rfc/rng_fixes>`__ that also aliased ``rand()`` to ``mt_rand()``.
-The ``MT_RAND_PHP`` constant was added to allow developers that rely on
-a specific sequence for a given seed to opt into the old implementation
-with the non-standard Mt19937 algorithm and the biased scaler.
-
-The object-oriented ``Mt19937`` engine that was introduced in the
-`Random Extension 5.x RFC </rfc/rng_extension>`__ in PHP 8.2 also
-supports the ``MT_RAND_PHP`` option to allow developers a smooth
-migration from the global instance of Mt19937 as used with ``mt_rand()``
-to the object-oriented ``Random\Randomizer``.
-
-Supporting the biased scaler with the object-oriented API requires a
-special case for Mt19937 in the internal implementation. It furthermore
-`required a fix (PR 9197) <https://github.com/php/php-src/pull/9197>`__,
-because the biased scaler in PHP 8.1 and earlier exhibits undefined
-behavior that was only caught by the newly added tests in PHP 8.2. Thus
-the behavior for certain inputs changed between PHP 8.1 and PHP 8.2 and
-could not be relied on even in older versions, as the results depend on
-the compiler used.
-
-The only purpose of the constant/broken mode is backwards compatibility,
-but this cannot be achieved, due to the bad scaler being broken by
-design and relying on undefined behavior. As such it fails at its sole
-purpose. The bad scaling is also intransparent to the developer, as it
-silently returns biased results for certain inputs.
-
-To clean up the special cases internal implementation and to clean up
-the API for the developer, ``MT_RAND_PHP`` should be deprecated.
-
-Question: Deprecate and remove the broken pre-PHP 7.1 Mt19937 implementation (MT_RAND_PHP)?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-3:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Global Mersenne Twister
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Authors: Tim Düsterhus timwolla@php.net, Go Kudo zeriyoshi@php.net
-
-Before PHP 8.2, PHP provided two kinds of random number generators. A
-seedable random number generator using the Mt19937 ("Mersenne Twister")
-algorithm and a cryptographically secure random number generator
-(CSPRNG). The former stores its state in an implicit global variable and
-the latter is not seedable. This made it hard to achieve reproducible
-results for testing, as the use of an implicit global variable makes it
-hard to determine what operation modify the Mt19937 state, thus changing
-future values.
-
-To fix this `Random Extension 5.x </rfc/rng_extension>`__ RFC for PHP
-8.2 introduces object-based random number algorithms (“Engines”) that
-store their entire state within an object. Generating numbers with one
-object, won't affect the sequence of another object.
-
-The API of the random extension that relates to the generation of random
-integers currently looks like the following:
-
--  Global Mt19937
-
-   -  ``mt_rand()``
-   -  ``mt_srand()``
-   -  ``mt_getrandmax()``
-   -  ``rand()`` (alias for mt_rand() since PHP 7.1)
-   -  ``srand()`` (alias for mt_srand() since PHP 7.1)
-   -  ``getrandmax()`` (alias for mt_getrandmax() since PHP 7.1)
-
--  CSPRNG
-
-   -  ``random_int()``
-
--  ``\Random\Randomizer``
-
-   -  ``->getInt()``
-
-Thus there are three functions returning a random integer
-(``mt_rand()``, ``rand()``, ``random_int()``) and the object-based and
-pluggable ``Randomizer::getInt()``.
-
-The functions using the global Mt19937 instance are the worst choice:
-
--  They are not cryptographically secure.
--  They are not properly reproducible, because the state could be
-   changed unpredictably by any function call, e.g. when a library is
-   updated and adds additional calls to ``mt_rand()``.
--  Any function calling ``mt_srand()`` with a fixed seed for whatever
-   reason, will ruin randomness for the remainder of the request.
--  PHP's Mt19937 implementation only supports passing a single 32 bit
-   integer as the initial seed. Thus there are only ~4 billion possible
-   sequences of random integers generated by Mt19937. If a random seed
-   is used, collisions are expected with 50% probability after roughly
-   2**16 seeds (as per the birthday paradox). In other words: After
-   roughly 80000 requests without explicit seeding it is likely that a
-   seed and thus a sequence is reused.
--  Both the quality of the returned randomness as well as the generation
-   performance of Mt19937 is worse than that of the Xoshiro256StarStar
-   and PcgOneseq128XslRr64 engines that are provided in the
-   object-oriented API.
--  They are `functions with overloaded
-   signatures <deprecate_functions_with_overloaded_signatures>`__, which
-   are problematic for the reasons outlined in the “\ `Deprecate
-   functions with overloaded
-   signatures <deprecate_functions_with_overloaded_signatures>`__\ ”
-   RFC.
-
-But at the same time the functions using the global Mt19937 instance are
-the obvious choice for less experienced developers: The function names
-are the shortest ones and they appear to do the right thing at a first
-glance. Due to their age they also made their way into various tutorials
-and StackOverflow answers and thus code bases, possibly causing security
-issues when the use case would have required the use of
-cryptographically secure randomness. As an example a `GitHub
-Search <https://github.com/search?q=%22four+most+significant+bits+holds+version+number+4%22+language%3APHP&type=code&l=PHP>`__
-reveals that UUIDv4 implementations based on a `highly-voted Y2010
-StackOverflow answer <https://stackoverflow.com/a/2040279>`__ that uses
-``mt_rand()`` are not uncommon, as per above, UUID collisions are
-expected after 80000 requests if nothing else uses randomness within the
-request.
-
-The limitations of the global Mt19937 are effectively unfixable by
-modifying the existing functions, because developers expect to be able
-to retrieve a specific sequence with a given seed (even when considering
-that any function call could unpredictably change the state).
-
-To clean up the API and to guide developers to better alternatives, the
-global Mt19937 should be deprecated and then removed. The function-based
-API will then provide just the ``random_int()`` function which is the
-“secure by default” choice based on the CSPRNG. If reproducible
-sequences are required, the Xoshiro256StarStar and PcgOneseq128XslRr64
-engines of the object-oriented API provide high-quality randomness,
-great performance and much larger initial seeds.
-
-If reproducing existing Mt19937 sequences is required, the
-object-oriented API provides a drop-in replacement for the global
-Mt19937 using the ``\Random\Engine\Mt19937`` class.
-
-The following functions shall be deprecated:
-
--  ``mt_rand()``
--  ``mt_srand()``
--  ``mt_getrandmax()``
--  ``rand()``
--  ``srand()``
--  ``getrandmax()``
-
-A userland replacement can be written by leveraging ``$GLOBALS`` to
-store an ``\Random\Randomizer`` object with a ``\Random\Engine\Mt19937``
-engine (https://3v4l.org/B18he):
+The main examples of default expressions so far have been conditional
+expressions using the null coalesce (``??``) and ternary (``?:``)
+operators. Let's look at one more non-conditional example using the
+binary pipe operator (``|``) to augment flags.
 
 .. code:: php
 
-   <?php
-
-   function my_mt_srand(?int $seed = null) {
-       $GLOBALS['my_mt_rand'] = new \Random\Randomizer(new \Random\Engine\Mt19937($seed));
-   }
-   function my_mt_rand($min = null, $max = null) {
-       if (!isset($GLOBALS['my_mt_rand'])) {
-           $GLOBALS['my_mt_rand'] = new \Random\Randomizer(new \Random\Engine\Mt19937());
+   class Json {
+       static function encode(mixed $value, int $flags = JSON_THROW_ON_ERROR): string
+       {
+           return json_encode($value, $flags);
        }
-
-       if ($min === null && $max === null) {
-           return $GLOBALS['my_mt_rand']->nextInt();
-       }
-
-       return $GLOBALS['my_mt_rand']->getInt($min, $max);
    }
 
-   mt_srand(1234);
-   my_mt_srand(1234);
+This static class wraps the internal function, ``json_encode`` to
+provide saner defaults for JSON encoding. In particular, it sets the
+``JSON_THROW_ON_ERROR`` flag so our return type is guaranteed to be
+string, eliminating the possibility we have to deal with ``false`` as a
+return type. For the purposes of this contrived example, it is required
+to ignore the fact that the flag should be specified in the function
+body rather than the parameter default, to ensure the caller doesn't
+break this contract. Supposing we want to pretty-print our encoded JSON,
+we could call: ``Json::encode([], JSON_PRETTY_PRINT);`` However, this
+will override the throw on error flag, which we want to keep. Calling
+the function as: ``Json::encode([], default | JSON_PRETTY_PRINT);``
+allows us to keep the default and append our pretty-print flag, which
+continues to work even if the ``Json`` class should elect to update its
+defaults later.
 
-   var_dump(mt_rand());
-   var_dump(my_mt_rand());
-   var_dump(mt_rand(1, 1000));
-   var_dump(my_mt_rand(1, 1000));
+Appendix II: Default expressions
+--------------------------------
 
-Question: Deprecate the global Mt19937?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Throughout this RFC we have referred to default as an *expression*. This
+appendix lists all the ways ``default`` as an expression can be composed
+with other expressions. Not all of these examples will make much (or
+any) sense in practical terms, particularly those towards the end of the
+list, yet many may have uses depending on your requirements and
+creativity.
 
-.. _voting-choices-4:
+.. code:: php
 
-Voting Choices
-^^^^^^^^^^^^^^
+   // Numeric binary operators
+   F(default + 1)
+   F(default - 1)
+   F(default * 2)
+   F(default / 2)
+   F(default % 2)
+   F(default & 1)
+   F(default | 1)
+   F(default ^ 2)
+   F(default << 1)
+   F(default >> 1)
+   F(default ** 2)
+   F(default <=> 2)
 
--  Yes
--  No
+   // Boolean binary operators
+   F(default === 2)
+   F(default !== 2)
+   F(default == '2')
+   F(default != '2')
+   F(default >= 1)
+   F(default <= 1)
+   F(default > 1)
+   F(default < 1)
+   F(default && 0)
+   F(default || 0)
+   F(default and 0)
+   F(default or 0)
+   F(default xor 0)
 
-In addition to the 6 functions related to integer generation, the global
-Mt19937 is also used for the following functions:
+   // Unary operators
+   F(+default)
+   F(-default)
+   F(!default)
+   F(~default)
 
--  ``array_rand()``
--  ``shuffle()``
--  ``str_shuffle()``
+   // Conditional expressions
+   F(default ? 1 : 0)
+   F(1 ? default : 0)
+   F(1 ? 1 : default)
+   F(default ?: 0)
+   F(0 ?: default)
+   F(default ?? 0)
+   F(null ?? default)
 
-The proposed deprecation and removal of ``mt_srand()`` will affect these
-functions, as they will no longer be seedable, thus a decision needs to
-be taken with regard to the behavior of these functions, if the global
-Mt19937 is removed. There are two options:
+   // Variable assignments
+   F($V = default)
+   F($V += default)
+   F($V -= default)
+   F($V *= default)
+   F($V **= default)
+   F($V /= default)
+   F($V <<= default)
+   F($V >>= default)
+   F($V %= default)
+   F($V &= default)
+   F($V |= default)
+   F($V ^= default)
+   F($V .= default)
+   F($V ??= default)
+   F(list($V) = default)
+   F([, $V] = default)
 
--  Deprecate and remove ``array_rand()``, ``shuffle()``,
-   ``str_shuffle()``. A drop-in replacement is available by using
-   ``\Random\Randomizer``
--  Migrate ``array_rand()``, ``shuffle()``, ``str_shuffle()`` to use the
-   CSPRNG internally. The functions will still be available, but no
-   longer seedable. This also adds new failure cases, because the CSPRNG
-   might fail.
+   // Casts
+   F((int)default)
+   F((double)default)
+   F((string)default)
+   F((array)default)
+   F((object)default)
+   F((bool)default)
 
-Question: What to do with the non-integer functions using the global Mt19937 if the previous vote passes?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   // Match
+   F(match(default) { default => default })
 
-.. _voting-choices-5:
+   // Parens
+   F((((default))))
 
-Voting Choices
-^^^^^^^^^^^^^^
+   // Internal functions
+   F(empty(default))
+   F(include default)
+   F(include_once default)
+   F(require default)
+   F(require_once default)
 
--  Deprecate together with mt_srand()
--  Convert to CSPRNG
+   // Misc
+   F(default instanceof C)
+   F(clone default)
+   F(throw default)
+   F(print default)
 
-Deprecate calling ``ldap_connect`` with 2 parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+References
+----------
 
-Author: Andreas Heigl heiglandreas@php.net
+-  Discussion threads
 
-Currently there are three ways one can call ``ldap_connect``.
+   -  `This RFC <https://externals.io/message/125183>`__ (Bilge, August
+      24, 2024).
+   -  `Initial proposal <https://externals.io/message/124629>`__ (Bilge,
+      July 26, 2024).
 
--  With a string ``$uri``
--  With a string ``$host`` and an int ``$port``,
--  With even more parameters for those that did compile PHP with
-   OracleLDAP.
+-  Similar RFCs
 
-The 3rd way of calling it is not even documented in the docs as it is a
-very niche edge-case that would only confuse most people.
+   -  `Skipping optional parameters for functions <skipparams>`__ (Stas
+      Malyshev, January 1, 2015)
 
-The 2nd way of calling the function is based on the since some years
-deprecated underlying ``ldap_open`` function. Internally we already
-moved to the underlying ``ldap_initialize``-function that requires
-passing an LDAP-URI. For that we are already converting the passed host
-and port into an LDAP-URI of the form ``ldap://$host:$port``.
+Special thanks
+--------------
 
-This already illustrates one of the issues that this way of calling the
-function implies: It is not possible to use ``ldaps`` as a schema using
-that way of calling ``ldap_connect`` as it will always use ``ldap`` as
-schema. No matter which port is passed.
-
-A second reason why we should deprecate calling ``ldap_connect`` with
-two parameters is, that it does not allow one to pass multiple
-ldap-servers as it is possible using the LDAP-URI.
-
-The impact of the BC break should be rather small as there are not many
-users actually using the LDAP-extension and there is a clear and easy
-migration path for those that use it: Instead of calling
-
-``ldap_connect($host, $port)``
-
-one calls
-
-``ldap_connect("ldap://$host:$port??369")``
-
-Also most of the users should not be affected at all as they are using
-3rd party libraries that are already only using an LDAP-URI when calling
-``ldap_connect`` like ``Laminas\Ldap`` or ``Symfony\Ldap``
-
-The documentation at https://www.php.net/ldap_connect also explicitly
-states (since 2018) that using host and port is considered deprecated.
-
-Named parameters also only support
-``ldap_connect(uri: 'ldap://example.com')``. Calling
-``ldap_connect(host:'example.com', port:369)`` will throw an error.
-
-There already is a `PR
-open <https://github.com/php/php-src/pull/5177>`__ that implements the
-deprecation so that for the PHP8.3 releases each call to
-``ldap_connect`` with 2 parameters will emit a deprecation message so
-that people have enough time to adapt their code before we can actually
-remove using two parameters in PHP9.
-
-Question: Deprecate and remove calling ldap_connect with 2 parameters $host and $port
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-6:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Backward Incompatible Changes
------------------------------
-
-For PHP 8.3 additional deprecation notices will be emitted. The actual
-removal of the affected functionality will happen no earlier than PHP
-9.0. For the Global Mersenne Twister specifically the removal will be
-left to an additional later vote, allowing to defer the removal based on
-the remaining usage.
+The implementation for this feature was heavily subsidised by invaluable
+input from Ilija and Bob Weinand. In particular, Ilija assessed the
+feasibility and guided the implementation path, and Bob submitted the
+entire Bison grammar patch! Without them, this feature would either have
+been impossible or highly scuffed. They, along with everyone else whom
+supported me from R11, have my utmost thanks! ❤
 
 Additional Metadata
 -------------------
 
-:Extra: , Implementation:
-:Original Authors: Christoph M. Becker cmb@php.net, George Peter Banyard girgias@php.net, Máté Kocsis kocsismate@php.net
-:Slug: deprecations_php_8_3
-:Wiki URL: https://wiki.php.net/rfc/deprecations_php_8_3
+:Implementation: https://github.com/php/php-src/pull/15437
+:Original Authors: Paul Morris bilge@scriptfusion.com
+:Original PHP Version: PHP 8.5
+:Original Status: Under Discussion
+:Slug: default_expression
+:Wiki URL: https://wiki.php.net/rfc/default_expression
