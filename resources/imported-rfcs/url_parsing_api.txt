@@ -23,6 +23,9 @@ In order to address the above mentioned problems, a new, always available ''URI'
 <code php>
 namespace Uri;
 
+const URI_PARSER_RFC3986 = "rfc3986";
+const URI_PARSER_WHATWG = "whatwg";
+
 abstract class UriException extends \Exception
 {
 }
@@ -112,7 +115,7 @@ interface UriInterface extends \Stringable
     public function __toString(): string {}
 }
 
-final readonly class Rfc3986Uri implements \Uri\UriInterface
+readonly class Rfc3986Uri implements \Uri\UriInterface
 {
     private ?string $scheme;
     private ?string $user;
@@ -166,7 +169,7 @@ final readonly class Rfc3986Uri implements \Uri\UriInterface
     public function __unserialize(array $data): void;
 }
 
-final readonly class WhatWgUri implements \Uri\UriInterface
+readonly class WhatWgUri implements \Uri\UriInterface
 {
     private ?string $scheme;
     private ?string $user;
@@ -223,16 +226,23 @@ final readonly class WhatWgUri implements \Uri\UriInterface
 
 ===== API Design =====
 
-The new URI parsing API consists of multiple classes and a ''Uri\UriInterface'' interface. The latter interface is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'' namely. Both classes support instantiation via two methods:
+The new URI parsing API consists of a ''Uri\UriInterface'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri''. Both classes support instantiation via two methods:
 
   * constructor: It expects a required URI and an optional base URI parameter in order to support [[http://tools.ietf.org/html/rfc3986#section-5|reference resolution]]. In case of an invalid URI, a ''Uri\InvalidUriException'' is thrown.
-  * ''create()'' factory method: It expects the same parameters, but in case of an invalid URI, the error is returned instead of throwing an exception. This makes it possible to more efficiently validate URIs.
+  * ''create()'' factory method: It expects the same parameters as the constructor does, but in case of an invalid URI, the error is returned instead of throwing an exception. Using this method is recommended for validating URIs.
 
+The two built-in ''Uri\UriInterface'' instances are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be read via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] would make it possible not to rely on getters.
 
-
-Besides getters for accessing the individual URI components and a ''__toString()'' method, it contains two factory methods: ''Uri\Uri::fromRfc3986()'' and ''Uri\Uri::fromWhatwg()''. These methods are generally expected to be used for instantiating the two concrete implementations: ''Uri\Rfc3986Uri'' and ''Uri\WhatwgUri''.
+Besides accessors, a ''__toString()'' method.
 
 Having separate classes for the separate URI implementations makes it possible to refer to a specific implementation, or require one at the type level via type declarations. Doing so is important when one needs to work with only one of the URI implementations. However, for use-cases where it is not important which implementation is passed, the non-instantiable ''Uri\Uri'' base class is at hand.
+
+===== Relation to PSR-7 =====
+
+[[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seems a good candidate for adoption. However, the current RFC does not purse this for the following reasons:
+
+  * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WhatWG specification.
+  * PSR-7's ''UriInterface'' have non-nullable method return types expect for ''UriInterface::getPort()'' whereas WhatWG specifically allows ''null'' values.
 
 ===== Parser Library Choice =====
 
@@ -299,18 +309,6 @@ According to the rough initial benchmarks, the following relative results were m
   * ''Uri\Uri::fromWhatwg()'': 100%
 
 More accurate benchmarks are to be performed later.
-
-===== Relation to PSR-7 =====
-
-[[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface in userland for representing URIs. That's why it seems a good candidate for adoption. However, the current RFC does not purse this for the following reasons:
-
-  * PSR-7's ''UriInterface'' supports mutation of the URI objects via "wither" methods (i.e. ''UriInterface::withScheme()''). This is not currently possible to achieve for the ''URI'' extension due to technical limitations mentioned above.
-  * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WhatWG specification.
-  * PSR-7's ''UriInterface'' have non-nullable method return types expect for ''UriInterface::getPort()'' whereas WhatWG specifically allows ''null'' values.
-
-Due to its immutability, The ''Uri\Uri'' class is not compatible with the [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]].
-
-The ''Uri\Uri'' class is purposefully extendible in userland code as well.
 
 ===== Examples in Other Languages =====
 
