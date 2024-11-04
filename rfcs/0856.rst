@@ -1,401 +1,129 @@
-Is_json
-=======
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0856
-:Title: Is_json
-:Author: Juan Carlos Morales <dev.juan.morales@gmail.com>
-:Status: Withdrawn
-:Type: Unknown
-:Created: 2022-08-14
-:Version: 0.9
-
-Preliminary note
-----------------
-
-**If the name of the function needs to be change, I will change it; the
-functionality is the important thing here**
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
+:Type: Standards Track
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-This RFC introduces a new function called is_json() to validate if an
-string contains a valid json.
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-Most userland implementations to achieve this are done using
-json_decode() which by design generates an object/array while parsing
-the string, ergo using memory and processing, that could be save.
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
+
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
+
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
+
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-Description
-~~~~~~~~~~~
-
-.. code:: php
-
-   is_json(string $json, int $depth = 512, int $flags = 0): bool
-
-Parameters
-~~~~~~~~~~
-
-**``json``**
-
-The json string being analyzed.
-
-This function only works with UTF-8 encoded strings.
-
-Note:
-
-PHP implements a superset of JSON as specified in the original » RFC
-7159.
-
-**``depth``**
-
-Maximum nesting depth of the structure being decoded.
-
-**``flags``**
-
-Bitmask of **JSON_INVALID_UTF8_IGNORE**, **JSON_THROW_ON_ERROR**. The
-behavior of these constants is described on the `JSON constants
-page <https://www.php.net/manual/en/json.constants.php>`__.
-
-Function description, examples, technical strategy, current JSON parser,
-etc.
-
-Return values
-~~~~~~~~~~~~~
-
-Returns **true** if the string passed contains a valid json, otherwise
-returns **false**.
-
-Extra behavior
-~~~~~~~~~~~~~~
-
--
-
-Examples
-~~~~~~~~
-
--
-
-Fundaments/Reasons
-------------------
-
-Disadvantages of using json_decode
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-By design, json_decode() generates an object/array while parsing the
-string, ergo using memory and processing for it, that is not needed if
-the only thing to discover is if a string contains a valid json.
-
-Disadvantages of using regex
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Using a regex for this task forces different, error-prone, hard to
-maintain, implementations.
-
-Needs from major projects and developers
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-In the "References" section, there is a list of major open-source php
-projects needing this feature; also in th mntioned section can find a
-link to one of the most popular StackOverflow questions, which somehow
-reflects the need from our developers to have a feature like this
-included.
-
-Complexity added in the core
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-At the moment, there is a JSON parser in the core, used by json_decode
-to do its job, so there is no need to write a new JSON parser for this
-RFC; the proposed function will use the existing JSON parser exclusively
-to parse an string without generating any object/array in memory for it.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as this is a new function only.
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-**is_json** will no longer be available as a function name, could break
-potential userland implementations.
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
-Proposed PHP Version(s)
------------------------
+Further Motivation
+------------------
 
-next PHP 8.x
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-RFC Impact
-----------
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
-This RFC has no impact on SAPIs, existing extensions, Opcache, etc.
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
-Open Issues
------------
+Version
+-------
 
-- No open issues
+Next minor version, which is PHP 8.4.
 
-Future Scope
-------------
+Vote
+----
 
-- (To be defined)
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Proposed Voting Choices
------------------------
+Voting started on 2024-07-13 and will end on 2024-07-27.
 
-- (To be defined)
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Implementation
---------------
+Voting Choices
+^^^^^^^^^^^^^^
 
-- (To be done later after pushing to github)
+-  Yes
+-  No
 
 References
 ----------
 
-Major Open-Source projects that will benefit out of this
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-`Symfony
-Framework <https://github.com/symfony/symfony/blob/870eeb975feb1abb4b8a1722e1fd57beeab2b230/src/Symfony/Component/Validator/Constraints/JsonValidator.php>`__
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-.. code:: php
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
 
-   class JsonValidator extends ConstraintValidator
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
 
-`Laravel
-Framework <https://github.com/laravel/framework/blob/302a579f00ebcb2573f481054cbeadad9c970605/src/Illuminate/Validation/Concerns/ValidatesAttributes.php>`__
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
 
-.. code:: php
-
-       public function validateJson($attribute, $value)
-       {
-           if (is_array($value)) {
-               return false;
-           }
-
-           if (! is_scalar($value) && ! is_null($value) && ! method_exists($value, '__toString')) {
-               return false;
-           }
-
-           json_decode($value);
-
-           return json_last_error() === JSON_ERROR_NONE;
-       }
-
-`Laravel
-Framework <https://github.com/laravel/framework/blob/61eac9cae4717699ecb3941b16c3d775820d4ca2/src/Illuminate/Support/Str.php>`__
-
-.. code:: php
-
-       public static function isJson($value)
-       {
-
-`Magento <https://github.com/magento/magento2/blob/7c6b6365a3c099509d6f6e6c306cb1821910aab0/app/code/Magento/User/Block/Role/Grid/User.php>`__
-
-.. code:: php
-
-       private function getJSONString($input)
-       {
-           $output = json_decode($input);
-           return $output ? $this->_jsonEncoder->encode($output) : '{}';
-       }
-
-`Magento <https://github.com/magento/magento2/blob/7c6b6365a3c099509d6f6e6c306cb1821910aab0/lib/internal/Magento/Framework/DB/DataConverter/SerializedToJson.php>`__
-
-.. code:: php
-
-       protected function isValidJsonValue($value)
-       {
-           if (in_array($value, ['null', 'false', '0', '""', '[]'])
-               || (json_decode($value) !== null && json_last_error() === JSON_ERROR_NONE)
-           ) {
-               return true;
-           }
-           //JSON last error reset
-           json_encode([]);
-           return false;
-       }
-
-`Magento <https://github.com/magento/magento2/blob/7c6b6365a3c099509d6f6e6c306cb1821910aab0/lib/internal/Magento/Framework/Serialize/JsonValidator.php>`__
-
-.. code:: php
-
-       public function isValid($string)
-       {
-           if ($string !== false && $string !== null && $string !== '') {
-               json_decode($string);
-               if (json_last_error() === JSON_ERROR_NONE) {
-                   return true;
-               }
-           }
-           return false;
-       }
-
-`getgrav <https://github.com/getgrav/grav/blob/3e7f67f589267e61f823d19824f3ee1b9a8a38ff/system/src/Grav/Common/Data/Validation.php>`__
-
-.. code:: php
-
-       public static function validateJson($value, $params)
-       {
-           return (bool) (@json_decode($value));
-       }
-
-`Symfony
-htp-kernel <https://github.com/symfony/http-kernel/blob/94986633e4c3e7facb7defbd094a2e1170486ab5/DataCollector/RequestDataCollector.php>`__
-
-.. code:: php
-
-       public function getPrettyJson()
-       {
-           $decoded = json_decode($this->getContent()); //<------ here 
-
-           return \JSON_ERROR_NONE === json_last_error() ? json_encode($decoded, \JSON_PRETTY_PRINT) : null;
-       }
-
-`Respect /
-Validation <https://github.com/Respect/Validation/blob/3dcd859d986f1b586b5539ea19962723ab7352ed/library/Rules/Json.php>`__
-
-.. code:: php
-
-   final class Json extends AbstractRule
-   {
-       /**
-        * {@inheritDoc}
-        */
-       public function validate($input): bool
-       {
-           if (!is_string($input) || $input === '') {
-               return false;
-           }
-
-           json_decode($input);
-
-           return json_last_error() === JSON_ERROR_NONE;
-       }
-   }
-
-`Respect /
-Validation <https://github.com/Respect/Validation/blob/3dcd859d986f1b586b5539ea19962723ab7352ed/library/Rules/Json.php>`__
-
-.. code:: php
-
-   final class Json extends AbstractRule
-   {
-       /**
-        * {@inheritDoc}
-        */
-       public function validate($input): bool
-       {
-           if (!is_string($input) || $input === '') {
-               return false;
-           }
-
-           json_decode($input);
-
-           return json_last_error() === JSON_ERROR_NONE;
-       }
-   }
-
-`humhub <https://github.com/humhub/humhub/blob/26d7e2667a9317057abe335a056ac8e8f4d675fb/protected/humhub/modules/web/security/controllers/ReportController.php>`__
-
-.. code:: php
-
-       public function actionIndex()
-       {
-           Yii::$app->response->statusCode = 204;
-
-           if(!SecuritySettings::isReportingEnabled()) {
-               return;
-           }
-
-           $json_data = file_get_contents('php://input');
-           if ($json_data = json_decode($json_data)) { //<----- json_decode() just to check if is valid json-string only
-               $json_data = json_encode($json_data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-               $json_data = preg_replace('/\'nonce-[^\']*\'/', "'nonce-xxxxxxxxxxxxxxxxxxxxxxxx'", $json_data);
-               Yii::error($json_data, 'web.security');
-           }
-       }
-
-`Prestashop <https://github.com/PrestaShop/PrestaShop/blob/24f9e510ecb0cb002ac3f4834f3210e8d9359899/classes/Validate.php>`__
-
-.. code:: php
-
-       public static function isJson($string)
-       {
-           json_decode($string);
-
-           return json_last_error() == JSON_ERROR_NONE;
-       }
-
-`Wordpress
-CLI <https://github.com/wp-cli/wp-cli/blob/f3e4b0785aa3d3132ee73be30aedca8838a8fa06/php/utils.php>`__
-
-.. code:: php
-
-   function is_json( $argument, $ignore_scalars = true ) {
-       if ( ! is_string( $argument ) || '' === $argument ) {
-           return false;
-       }
-
-       if ( $ignore_scalars && ! in_array( $argument[0], [ '{', '[' ], true ) ) {
-           return false;
-       }
-
-       json_decode( $argument, $assoc = true );
-
-       return json_last_error() === JSON_ERROR_NONE;
-   }
-
-`JOOMLA
-CMS <https://github.com/joomla/joomla-cms/blob/09d14c65f25f9bc76f2698e69c4d7b35f43bc848/libraries/src/Form/Field/AccessiblemediaField.php>`__
-
-.. code:: php
-
-   if (\is_string($value)) {
-       json_decode($value); //<------ HERE
-
-       // Check if value is a valid JSON string.
-       if ($value !== '' && json_last_error() !== JSON_ERROR_NONE) {
-           /**
-            * If the value is not empty and is not a valid JSON string,
-            * it is most likely a custom field created in Joomla 3 and
-            * the value is a string that contains the file name.
-           */
-           if (is_file(JPATH_ROOT . '/' . $value)) {
-               $value = '{"imagefile":"' . $value . '","alt_text":""}';
-           } else {
-               $value = '';
-           }
-       }
-
-Stackoverflow questions related to this
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-In PHP, this question is one of the most high ranked questions related
-to json && php in stackoverflow, "Fastest way to check if a string is
-JSON in PHP?". `The
-question <https://stackoverflow.com/questions/6041741/fastest-way-to-check-if-a-string-is-json-in-php>`__
-
-Viewed 484k times. `The
-ranking <https://stackoverflow.com/questions/tagged/php%20json?sort=MostVotes&edited=true>`__
-
-Person asking how to do exactly this, also providing a real use case;
-eventhough in python, the programming language is not important. `In
-Python <https://stackoverflow.com/questions/5508509/how-do-i-check-if-a-string-is-valid-json-in-python>`__
-
-Someone has also doing exactly this , in JAVA. `In
-Java <https://stackoverflow.com/questions/3679479/check-if-file-is-json-java>`__
-
-Rejected Features
------------------
-
-- No rejected features currently.
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/9355
-:Original Authors: Juan Carlos Morales, dev.juan.morales@gmail.com
-:Original Status: Draft
-:Slug: is_json
-:Wiki URL: https://wiki.php.net/rfc/is_json
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final
