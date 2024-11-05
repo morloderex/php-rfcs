@@ -1,673 +1,228 @@
-Final Class Vector
-==================
+Deprecate Implicitly Nullable Parameter Types
+=============================================
 
 :PHP-RFC: 0839
-:Title: Final Class Vector
-:Author: Tyson Andre <tandre@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2021-09-16
+:Title: Deprecate Implicitly Nullable Parameter Types
+:Author: Máté Kocsis <kocsismate@php.net>, Gina Peter Banyard <girgias@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2023-12-20
+:PHP-Version: 8.4
 :Version: 0.2
 
 Introduction
 ------------
 
-PHP's native ``array`` type is rare among programming language in that
-it is used as an associative map of values, but also needs to support
-lists of values. In order to support both use cases, additional memory
-is needed to track keys (`around twice as much as is needed to just
-store the
-values <https://www.npopov.com/2014/12/22/PHPs-new-hashtable-implementation.html>`__,
-for non-reference counted values) .
+PHP supports nullable type declarations as of PHP 7.1 with the `?T
+syntax </rfc/nullable_types>`__, and with the `T|null
+syntax </rfc/union_types_v2>`__ as of PHP 8.0 when generalized support
+for union types was added.
 
-It would be useful to have an efficient variable-length container in the
-standard library for the following reasons:
+However, it has been possible to use `scalar type
+declarations </rfc/scalar_type_hints_v5>`__ as of PHP 7.0, the `callable
+type </rfc/callable>`__ as of PHP 5.4, ``array`` as of PHP 5.1, and
+class types as of PHP 5.0.
 
-::
+As there wasn't a syntax for nullable type declarations at the time, PHP
+5.1 enabled using ``null`` (and only ``null``) as a default value for
+typed parameters, making them implicitly nullable.
 
-     - To save memory in applications or libraries that may need to store many lists of values or run for long periods of time \\ (in modules identified as potentially exceeding memory limits) \\ (both in userland and in native code written in php-src/PECLs)
-     - To provide a better alternative to ''ArrayObject'' and ''SplFixedArray'' for use cases that require variable sized collections (For lists of values) that can be passed by value to be modified.
-     - To give users the option of stronger runtime guarantees that property, parameter, or return values really contain a list of values without gaps, that array modifications don't introduce gaps or invalid keys, that values in the collection aren't references, etc.
+However, the implicitly nullable semantics are confusing and conflict
+with other language rules, in particular because such type declarations
+can be misleading as to what types they actually accept.
+
+Furthermore, this syntax still permits signatures such as:
+
+.. code:: php
+
+   function foo(T1 $a, T2 $b = null, T3 $c) {}
+
+which appears to suggest an optional parameter before a required one.
+Even though signatures which contain an optional parameter before a
+required one were `deprecated in PHP
+8.0 <https://github.com/php/php-src/pull/5067>`__, the case of
+implicitly nullable types was left alone at that time due to BC
+concerns. This exclusion caused some bugs in the detection of which
+signatures should emit the deprecation notice. Indeed, the following
+signature only emits a deprecation as of `PHP
+8.1 <https://github.com/php/php-src/commit/c939bd2f10b41bced49eb5bf12d48c3cf64f984a>`__:
+
+.. code:: php
+
+   function bar(T1 $a, ?T2 $b = null, T3 $c) {}
+
+And the signature that uses the generalized union type signature:
+
+.. code:: php
+
+   function test(T1 $a, T2|null $b = null, T3 $c) {}
+
+only emits the deprecation notice properly as of `PHP
+8.3 <https://github.com/php/php-src/pull/11497>`__.
+
+It should be noted that the example signatures above were deprecated
+prior to the introduction of `named parameters </rfc/named_params>`__,
+which actually allowed calls to such functions in 8.0, but this was
+`corrected in PHP
+8.1 <https://github.com/php/php-src/commit/afc4d67c8b4e02a985a4cd27b8e79b343eb3c0ad>`__.
+[1]
+
+Therefore, as of PHP 8.1, any parameter that has a default value prior
+to a required one is effectively a required parameter, and will throw an
+``ArgumentCountError`` exception if the parameter is not provided, be
+that positionally or via a named argument. In consequence, support for
+implicitly nullable types already causes confusion about what should be
+permitted and what should not.
+
+Another issue with implicitly nullable types is in relation to
+inheritance. It is rather confusing that if a child class has the exact
+same type signature as the parent, but a different default value, this
+would cause an LSP violation error to be thrown.
+
+It should be noted, that prior to PHP 7.1 it was *actually* possible to
+violate the LSP by changing the default value away from ``null``. This
+was fixed as part of the introduction of `nullable
+types </rfc/nullable_types>`__.
+
+As demonstrated, supporting this "feature" not only causes confusion for
+userland, but is also a source of bugs and unneeded complexity within
+the engine which needs to handle its edge cases (e.g. to promote an
+implicitly nullable intersection type to a DNF type).
+
+Implicitly nullable types were added to work around the limitations of
+PHP 5's primitive type declaration system; as those limitations do not
+exist anymore, we propose to deprecate this feature.
 
 Proposal
 --------
 
-This proposes to add the class ``final class Vector`` to PHP.
-
-Similarly to vectors in other languages, this is backed by a
-memory-efficient representation (raw C array of values with a size and
-capacity) and provides constant amortized-time push/pop operations.
-
-Similarly to ``ArrayObject``, the ``$x[] = $value`` shorthand for
-appending to the Vector is supported in addition to ``ArrayAccess``
-functionality.
+Deprecate implicitly nullable types which are written with the following
+signature:
 
 .. code:: php
 
-   final class Vector implements IteratorAggregate, Countable, JsonSerializable, ArrayAccess
-   {
-       /**
-        * Construct a Vector from an iterable.
-        *
-        * When $preserveKeys is false, the values will be reindexed without gaps starting from 0
-        * When $preserveKeys is true, any gaps in the keys of the iterable will be filled in with null,
-        * and negative indices or non-integer indices will be rejected and cause an Exception.
-        */
-       public function __construct(iterable $iterator = [], bool $preserveKeys = true) {}
-       public function getIterator(): InternalIterator {}
-       public function count(): int {}
-       public function capacity(): int {}
-       public function shrinkToFit(): void {}
-       public function clear(): void {}
-       public function setSize(int $size): void {}
+   function foo(T $var = null) {}
 
-       public function __serialize(): array {}
-       public function __unserialize(array $data): void {}
-       public static function __set_state(array $array): Vector {}
+by emitting the following deprecation notice at compile time:
 
-       public function push(mixed $value): void {}
-       public function pop(): mixed {}
+.. code:: php
 
-       public function toArray(): array {}
-       // Strictly typed, unlike offsetGet/offsetSet
-       public function valueAt(int $offset): mixed {}
-       public function setValueAt(int $offset, mixed $value): void {}
+   Deprecated: Implicitly marking parameter $var as nullable is deprecated, the explicit nullable type must be used instead
 
-       public function offsetGet(mixed $offset): mixed {}
-       public function offsetExists(mixed $offset): bool {}
-       public function offsetSet(mixed $offset, mixed $value): void {}
-       // Throws because unset and null are different things, unlike SplFixedArray
-       public function offsetUnset(mixed $offset): void {}
-
-       public function indexOf(mixed $value): int|false {}
-       public function contains(mixed $value): bool {}
-
-       public function map(callable $callback): Vector {}
-       /**
-        * Returns the subset of elements of the Vector satisfying the predicate.
-        *
-        * If the value returned by the callback is truthy
-        * (e.g. true, non-zero number, non-empty array, truthy object, etc.),
-        * this is treated as satisfying the predicate.
-        *
-        * @param null|callable(mixed):mixed $callback
-        */
-       public function filter(?callable $callback = null): Vector {}
-
-       public function jsonSerialize(): array {}
-   }
-
-Implementation Choices
-----------------------
-
-Global Namespace
-~~~~~~~~~~~~~~~~
-
-This maintains consistency with the namespace used for general-purpose
-collections already in the SPL (as well as relatively recent additions
-such as ``WeakReference`` and ``WeakMap``). Other recent additions to
-PHP such as ``ReflectionIntersectionType`` in PHP 8.1 have also
-continued to use the global namespace when adding classes with
-functionality related to other classes.
-
-Lack of Name Prefix
-~~~~~~~~~~~~~~~~~~~
-
-::
-
-     - Short names are more convenient to remember/use.
-     - Possible future additions such as a Deque/Queue based on a efficient C array representation rather than a linked list would conflict with existing Spl names such as ''SplQueue'', ''SplStack'', etc.
-     - There is already an addition to the spl without a prefix - ''ArrayObject''. Because ''array'' was already a type its name could not reasonably be any shorter.
-
-Accepting an iterable
-~~~~~~~~~~~~~~~~~~~~~
-
-This is similar to the way the existing classes
-``ArrayObject::__construct`` and ``SplFixedArray::fromArray``.
-
-End users may be surprised if integer keys are not the same as the ones
-passed in by default (e.g. if keys were unset or inserted out of order),
-which is why ``$preserve_keys = true`` is the default.
-
-Unlike ``SplFixedArray``, this is not a fixed size, which is why this
-accepts an iterable instead of a size. Accepting a mix of different
-types (``iterable|int``) is not done because it would make code harder
-to reason about when types are missing or inaccurate.
-
-``setSize`` can be used to create a vector of a certain size after
-instantiating an empty vector. Array library helpers such as
-``array_fill`` or ``range`` may also be useful.
-
-Final Class
-~~~~~~~~~~~
-
-If this were extensible, this would have the following drawbacks
-
-::
-
-     - Not have as strong guarantees to readers of code (or even opcache, if optimizations were added targeting opcache) that elements were actually a vector or that certain methods would/wouldn't throw certain exceptions.
-     - Require more memory and runtime checks to check if this was the original class or a subclass.
-     - [[https://bugs.php.net/search.php?search_for=SplFixedArray&boolean=0&limit=30&order_by=&direction=DESC&cmd=display&status=All&bug_type=All&project=All&php_os=&phpver=&cve_id=&assign=&author_email=&bug_age=0&bug_updated=0&commented_by=|Be more likely to have discovered or undiscovered bugs]] due to userland extensions of ''Vector''
-
-push/pop
-~~~~~~~~
-
-This is consistent with the name used for
-``array_push()``/``array_pop()``
-
-Other naming choices were chosen to be consistent with existing
-functionality in ``SplFixedArray``/``ArrayObject`` where reasonable.
+And remove support for implicitly nullable types in PHP 9.
 
 Backward Incompatible Changes
 -----------------------------
 
-The class name ``\Vector`` is now used by PHP, and it will be a
-compilation error to declare classlikes of the same name in the global
-namespace since the class already exists.
+Using an implicitly nullable type will emit a deprecation notice.
 
-Proposed PHP Version(s)
------------------------
+Impact analysis and migration paths
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-8.2
+Out of the top 2000 composer packages 880 use implicitly nullable types.
+[2] One explanation for such a high usage is that using implicitly
+nullable types was mandated by Symfony's coding style.
 
-RFC Impact
-----------
+However, there exist a variety of tools to automatically update code to
+use explicit nullable types from the ``T $parameter = null`` syntax to
+``?T $parameter = null``. And Symfony used one of them to migrate their
+codebase, and change their coding style, in anticipation of this RFC.
+[3]
 
-To Opcache
-~~~~~~~~~~
+Two such tools are
+`PHP-CS-Fixer <https://github.com/PHP-CS-Fixer/PHP-CS-Fixer>`__ with the
+``nullable_type_declaration_for_default_null_value`` fixer, and
+`PHP_CodeSniffer <https://github.com/PHPCSStandards/PHP_CodeSniffer/>`__
+using the
+``SlevomatCodingStandard.TypeHints.NullableTypeForNullDefaultValue``
+sniff from the `Slevomat Coding
+Standard <https://github.com/slevomat/coding-standard>`__.
 
-None
+It should be noted that it is possible to ignore the commit which fixes
+these issues from the ``git blame`` command since git version 2.23 via
+the ``--ignore-rev`` argument flag or the creation of a
+``.git-blame-ignore-revs`` file which is passed to the
+``--ignore-revs-file`` argument flag.
 
-Unaffected PHP Functionality
-----------------------------
+This flag can also be automatically configured using:
 
-PHP's type system remains unchanged (e.g. ``array``) -
-``final class Vector`` is a class and instances are ordinary objects.
+::
 
-Benchmarks
-----------
+   shell
+   git config blame.ignoreRevsFile .git-blame-ignore-revs
 
-This is a contrived benchmark for estimating the performance of
-building/reading variable-sized arrays of different sizes, when the
-final size would be unknown on 64-bit PHP (it is known here).
+One other issue which might be revealed when converting implicitly
+nullable types to explicit ones without removing the default ``null``
+value, is that an optional parameter might now exist before a mandatory
+one. Which will cause a secondary deprecation notice as this was
+`deprecated in PHP 8.0 <https://github.com/php/php-src/pull/5067>`__ as
+previously mentioned.
 
-Read time is counted separately from create+destroy time. This is a
-total over all iterations, and the instrumentation adds to the time
-needed.
+As the ``?T`` syntax has existed since PHP 7.1, which is 7 years old,
+the various tools available to fix this issue automatically, and this
+issue being easily resolved as it requires a single change at the
+declaration site (instead of potentially infinite call-site changes), we
+deem this deprecation to be easily handled and fixed.
 
-``SplFixedArray`` doesn't have a push method (conceptually, it hasn't
-made sense for a data structure described as a fixed size array), and
-this benchmark would be faster if it did. ``SplStack`` uses ``foreach``
-for read benchmarking because the random access of ``SplStack`` is
-``O(n)`` (linear time) in a linked list.
+Code change examples
+~~~~~~~~~~~~~~~~~~~~
 
-``Vector`` is faster than the other object data structures currently
-available in the SPL.
-
-.. code:: none
-
-   Results for php 8.2.0-dev debug=false with opcache enabled=true
-
-   Appending to array:         n=       1 iterations= 8000000 memory=     376 bytes, create+destroy time=0.645 read time = 0.308 result=0
-   Appending to Vector:        n=       1 iterations= 8000000 memory=     128 bytes, create+destroy time=1.003 read time = 0.355 result=0
-   Appending to SplStack:      n=       1 iterations= 8000000 memory=     184 bytes, create+destroy time=1.737 read time = 0.742 result=0
-   Appending to SplFixedArray: n=       1 iterations= 8000000 memory=      80 bytes, create+destroy time=1.810 read time = 0.428 result=0
-
-
-   Appending to array:         n=       4 iterations= 2000000 memory=     376 bytes, create+destroy time=0.222 read time = 0.114 result=12000000
-   Appending to Vector:        n=       4 iterations= 2000000 memory=     128 bytes, create+destroy time=0.323 read time = 0.164 result=12000000
-   Appending to SplStack:      n=       4 iterations= 2000000 memory=     280 bytes, create+destroy time=0.739 read time = 0.301 result=12000000
-   Appending to SplFixedArray: n=       4 iterations= 2000000 memory=     128 bytes, create+destroy time=1.164 read time = 0.233 result=12000000
-
-
-   Appending to array:         n=       8 iterations= 1000000 memory=     376 bytes, create+destroy time=0.154 read time = 0.084 result=28000000
-   Appending to Vector:        n=       8 iterations= 1000000 memory=     192 bytes, create+destroy time=0.227 read time = 0.148 result=28000000
-   Appending to SplStack:      n=       8 iterations= 1000000 memory=     408 bytes, create+destroy time=0.530 read time = 0.240 result=28000000
-   Appending to SplFixedArray: n=       8 iterations= 1000000 memory=     192 bytes, create+destroy time=1.026 read time = 0.205 result=28000000
-
-
-   Appending to array:         n= 1048576 iterations=      20 memory=33558608 bytes, create+destroy time=0.699 read time = 0.151 result=10995105792000
-   Appending to Vector:        n= 1048576 iterations=      20 memory=16777304 bytes, create+destroy time=0.483 read time = 0.271 result=10995105792000
-   Appending to SplStack:      n= 1048576 iterations=      20 memory=33554584 bytes, create+destroy time=0.865 read time = 0.410 result=10995105792000
-   Appending to SplFixedArray: n= 1048576 iterations=      20 memory=16777304 bytes, create+destroy time=2.431 read time = 0.404 result=10995105792000
+The following example:
 
 .. code:: php
 
-   <?php
-
-   function bench_array(int $n, int $iterations) {
-       $totalReadTime = 0.0;
-       $startTime = hrtime(true);
-       $total = 0;
-       for ($j = 0; $j < $iterations; $j++) {
-           $startMemory = memory_get_usage();
-           $values = [];
-           for ($i = 0; $i < $n; $i++) {
-               $values[] = $i;
-           }
-           $startReadTime = hrtime(true);
-           for ($i = 0; $i < $n; $i++) {
-               $total += $values[$i];
-           }
-           $endReadTime = hrtime(true);
-           $totalReadTime += $endReadTime - $startReadTime;
-
-           $endMemory = memory_get_usage();
-           unset($values);
+   class Foo {
+       public function bar(int $x = null, float $y) {
+           // ...
        }
-       $endTime = hrtime(true);
-
-       $totalTime = ($endTime - $startTime) / 1000000000;
-       $totalReadTimeSeconds = $totalReadTime / 1000000000;
-       printf("Appending to array:         n=%8d iterations=%8d memory=%8d bytes, create+destroy time=%.3f read time = %.3f result=%d\n",
-           $n, $iterations, $endMemory - $startMemory, $totalTime - $totalReadTimeSeconds, $totalReadTimeSeconds, $total);
    }
-   function bench_vector(int $n, int $iterations) {
-       $startTime = hrtime(true);
-       $totalReadTime = 0.0;
-       $total = 0;
-       for ($j = 0; $j < $iterations; $j++) {
-           $startMemory = memory_get_usage();
-           $values = new Vector();
-           for ($i = 0; $i < $n; $i++) {
-               $values[] = $i;
-           }
 
-           $startReadTime = hrtime(true);
-           for ($i = 0; $i < $n; $i++) {
-               $total += $values[$i];
-           }
-           $endReadTime = hrtime(true);
-           $totalReadTime += $endReadTime - $startReadTime;
+should end up looking like:
 
-           $endMemory = memory_get_usage();
-           unset($values);
+.. code:: php
+
+   class Foo {
+       public function bar(?int $x, float $y) {
+           // ...
        }
-       $endTime = hrtime(true);
-       $totalTime = ($endTime - $startTime) / 1000000000;
-       $totalReadTimeSeconds = $totalReadTime / 1000000000;
-       printf("Appending to Vector:        n=%8d iterations=%8d memory=%8d bytes, create+destroy time=%.3f read time = %.3f result=%d\n",
-           $n, $iterations, $endMemory - $startMemory, $totalTime - $totalReadTimeSeconds, $totalReadTimeSeconds, $total);
-   }
-   // SplStack is a subclass of SplDoublyLinkedList, so it is a linked list that takes more memory than needed.
-   // Access to values in the middle of the SplStack is also less efficient.
-   function bench_spl_stack(int $n, int $iterations) {
-       $startTime = hrtime(true);
-       $totalReadTime = 0.0;
-       $total = 0;
-       for ($j = 0; $j < $iterations; $j++) {
-           $startMemory = memory_get_usage();
-           $values = new SplStack();
-           for ($i = 0; $i < $n; $i++) {
-               $values->push($i);
-           }
-           $startReadTime = hrtime(true);
-           // Random access is linear time in a linked list, so use foreach instead
-           foreach ($values as $value) {
-               $total += $value;
-           }
-           $endReadTime = hrtime(true);
-           $totalReadTime += $endReadTime - $startReadTime;
-           $endMemory = memory_get_usage();
-           unset($values);
-       }
-       $endTime = hrtime(true);
-       $totalTime = ($endTime - $startTime) / 1000000000;
-       $totalReadTimeSeconds = $totalReadTime / 1000000000;
-       printf("Appending to SplStack:      n=%8d iterations=%8d memory=%8d bytes, create+destroy time=%.3f read time = %.3f result=%d\n",
-           $n, $iterations, $endMemory - $startMemory, $totalTime - $totalReadTimeSeconds, $totalReadTimeSeconds, $total);
-   }
-   function bench_spl_fixed_array(int $n, int $iterations) {
-       $startTime = hrtime(true);
-       $totalReadTime = 0.0;
-       $total = 0;
-       for ($j = 0; $j < $iterations; $j++) {
-           $startMemory = memory_get_usage();
-           $values = new SplFixedArray();
-           for ($i = 0; $i < $n; $i++) {
-               // Imitate how push() would be implemented in a situation
-               // where the number of elements wasn't actually known ahead of time.
-               // erealloc() tends to extend the existing array when possible.
-               $size = $values->getSize();
-               $values->setSize($size + 1);
-               $values->offsetSet($size, $i);
-           }
-           $startReadTime = hrtime(true);
-           for ($i = 0; $i < $n; $i++) {
-               $total += $values[$i];
-           }
-           $endReadTime = hrtime(true);
-           $totalReadTime += $endReadTime - $startReadTime;
-           $endMemory = memory_get_usage();
-           unset($values);
-       }
-       $endTime = hrtime(true);
-       $totalTime = ($endTime - $startTime) / 1000000000;
-       $totalReadTimeSeconds = $totalReadTime / 1000000000;
-       printf("Appending to SplFixedArray: n=%8d iterations=%8d memory=%8d bytes, create+destroy time=%.3f read time = %.3f result=%d\n\n",
-           $n, $iterations, $endMemory - $startMemory, $totalTime - $totalReadTimeSeconds, $totalReadTimeSeconds, $total);
-   }
-   $n = 2**20;
-   $iterations = 10;
-   $sizes = [
-       [1, 8000000],
-       [4, 2000000],
-       [8, 1000000],
-       [2**20, 20],
-   ];
-   printf(
-       "Results for php %s debug=%s with opcache enabled=%s\n\n",
-       PHP_VERSION,
-       PHP_DEBUG ? 'true' : 'false',
-       json_encode(function_exists('opcache_get_status') && (opcache_get_status(false)['opcache_enabled'] ?? false))
-   );
-
-   foreach ($sizes as [$n, $iterations]) {
-       bench_array($n, $iterations);
-       bench_vector($n, $iterations);
-       bench_spl_stack($n, $iterations);
-       bench_spl_fixed_array($n, $iterations);
-       echo "\n";
    }
 
-Future Scope
-------------
+Version
+-------
 
-If ``\Vector`` is added, there would be plenty of time for myself or
-others to add additional methods before PHP 8.2's feature freeze
-(probably in July 2022)
+Next minor version, PHP 8.4.
 
-Additional data structures from https://github.com/TysonAndre/pecl-teds
-that are general purpose (such as ``\Deque`` or future additions) may be
-possible as well.
+Vote
+----
 
-Proposed Voting Choices
------------------------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Yes/No vote, requiring a 2/3 majority
+Voting started on 2024-02-28 and will end on 2024-03-13.
+
+Question: Accept Deprecate implicitly nullable parameter types RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 References
 ----------
 
--
-https://www.npopov.com/2014/12/22/PHPs-new-hashtable-implementation.html
-- https://github.com/TysonAndre/pecl-teds (implementations of multiple
-data structures, including ``Teds\Vector``, based originally on the
-``SplFixedArray`` documentation) -
-https://externals.io/message/112639#112641
+[1] https://externals.io/message/114007#114026
 
-Rejected Features
------------------
+[2] https://gist.github.com/kocsismate/cf3bdfbf35eb10224ee5ecd29b39656b
 
-Why not use php-ds/ext-ds instead?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-::
-
-     - No matter how useful or popular a PECL is, datastructures available in PHP's core will have much, much wider adoption in applications and libraries that are available in PECLs, allowing those applications and libraries to write faster and/or more memory efficient code.
-     - End users can make much stronger assumptions about the backwards compatibility and long-term availability of data structures that are included in core.
-     - The php-ds maintainers do not plan to merge the extension into php-src, and believe php-ds should coexist with new functionality being added in a separate namespace instead (see quote and [[##updatephp-ds_maintainer_response_clarifications|later clarifications]] for full context)
-     - Opcache may be able to make stronger optimizations of internal classes found in php-src than any third party PECL. (e.g. because ''Deque::push()'' or ''Vector::push()'' would never throw or emit notices, it may be possible to optimize it to be even faster than appending to an array in the Opcache JIT compiler)
-
-Perceived issues and uncertainties about php-ds distribution plans
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-This has been asked about multiple times in threads on unrelated
-proposals (https://externals.io/message/112639#112641 and
-https://externals.io/message/93301#93301 years ago) throughout the
-years, but the maintainer of php-ds had a long term goal of developing
-the separately from php's release cycle (and was still focusing on the
-PECL when I'd asked on the GitHub issue in the link in September 2020).
-
-To quote the maintainer on the GitHub
-`issue <https://github.com/php-ds/ext-ds/issues/156>`__ on php-ds/ext-ds
-I'd opened the last time someone suggested using php-ds (emphasis on the
-below quote mine)
-
-    **My long-term intention has been to not merge this extension into
-    php-src. I would like to see it become available as a default
-    extension at the distribution level. Unfortunately I have no
-    influence or understanding of that process.** Having an independent
-    release and development cycle is a good thing, in my opinion.
-
-    If those plans change, **I would like to hold off until a 2.0
-    release** - I've learnt a lot over the last 4 years and would like
-    to revisit some of the design decisions I made then, such as a
-    significant reduction of the interfaces or perhaps more interfaces
-    with greater specificity. Functions like ``map``, ``filter``,
-    ``reduce`` can be delegated to other libraries that operate on
-    ``iterable`` instead of having these as first-class members of the
-    interface. **There is a 2.0 branch with some ideas but I haven't
-    looked at that in a while.**
-
-    I have been working on a research project to design persistent data
-    structures for immutability, so there is a lot of work that I have
-    set for myself for this project over the next 6 months or so. I have
-    no intention to push for distribution changes in the short-term but
-    I am open to the suggestion.
-
-    > Do you mean OS distribution level (Windows, Ubuntu, CentOS,   
-    HomeBrew for mac, etc.?)
-
-    ..
-
-    He meant distribution with PHP core (on all platforms where PHP is  
-     available)
-
-    Whichever is more viable - simply not merged into core, but
-    distributed and enabled by default alongside it.0
-
-There have been no proposals from the maintainer themselves so far to
-add php-ds to core or distribute it alongside core in any form. That was
-just what the maintainer mentioned as a long term plan.
-
-The model of distributing an extension separately from core has never
-been done before, and even if approved would raise multiple concerns:
-
-::
-
-     * I personally doubt having it developed separately from php's release cycle would be accepted by voters (e.g. if unpopular decisions couldn't be voted against or vetoed, or if RFCs passed by the community for additions of datastructures (or additions of methods to datastructures) could be overturned by the php-ds maintainers)
-     * This may limit what features could be added by the community: For example, introducing the ''map()'' or ''filter()'' functionality to a ''Vector'' if the php-ds maintainers removed that function in a simplified 2.0.
-     * I'm not certain how backwards compatibility would be handled in that model, e.g. if the maintainers of ext-ds wanted to drop support for a method after it was released.
-     * This may cause delays in publishing php releases, e.g. if the maintainers were unable to quickly review patches for crashes, incompatibilities or compile errors introduced in new php versions, etc.
-     * and other concerns (e.g. API debates such as https://externals.io/message/93301#93301)
-
-With php-ds itself getting merged anytime soon (if the maintainers
-continue to plan to distribute php-ds that way) seeming unlikely to me,
-I decided to start independently working on efficient data structure
-implementations. I don't see dragging it in (against the maintainer's
-wishes) as a viable option for many, many, many reasons. But having
-efficient datastructures in PHP's core is still useful.
-
-The timeline for php-ds 2.0 is also something I am uncertain about.
-
-[STRIKEOUT:Additionally, while there may be some uses for immutable
-datastructures, I would believe there are more uses for mutable
-datastructures, especially for programmers with imperative programming
-backgrounds such as C/C++, and would propose these mutable
-datastructures regardless of those plans. Having these mutable
-datastructures in core is still useful to immutable programmers and
-functional programmers, because it provides another tool to write the
-internal, private implementation details in a memory-efficient way.]
-
-::
-
-     * //EDIT: I misread the maintainer's response as being about the project php-ds 2.0 - I'm now pretty sure the "research project to design persistent data structures for immutability" is a different project from ext-ds and possibly in a different programming language.// \\ \\(Leaving in this comment in because immutable datastructures were brought up by others in the RFC discussion)
-
-While PECL development outside of php has its benefits for development
-and ability to make new features available in older php releases, it's
-less likely that application and library authors will start making use
-of those data structures because many users won't have any given PECL
-already installed. (though php-ds also publishes a polyfill, it would
-not have the cpu and memory savings, and add its own overhead)
-
-Additionally, users (and organizations using PHP) can often make
-stronger assumptions on backwards compatibility and long-term
-availability of functionality that is merged into PHP's core.
-
-So the choice of feature set, some names, signatures, and internal
-implementation details are different, because this is reimplementing a
-common datastructure found in different forms in many languages. It's
-definitely a mature project, but I personally feel like reimplementing
-this (without referring to the php-ds source code and without copying
-the entire api as-is) is the best choice to add efficient data
-structures to core while respecting the maintainer's work on the php-ds
-project and their wish to maintain control over the php-ds project.
-
-As a result, I've been working on implementing data structures such as
-``Deque`` based on php-src's data structure implementations (mostly
-``SplFixedArray`` and ``ArrayObject``) instead (and based on my past
-PECL/RFC experience, e.g. with ``runkit7``/``igbinary``)
-
-Minor differences in API design goals
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Traditionally, PHP has been a very batteries included language. Existing
-functionality such as
-`strings <https://www.php.net/manual/en/ref.strings.php>`__ and
-`arrays <https://www.php.net/manual/en/ref.array.php>`__ have very large
-standard libraries. This makes it easier to write code without depending
-on too many third party composer libraries, and knowledge of the
-standard library can transfer to any codebase a developer works on.
-
-My hopes for ease of use, readability, speed, and static analysis in
-future data structures such as ``Vector`` are similar to those mentioned
-by Benjamin Morel in the GitHub issue:
-
-    <blockquote>Functions like map, filter, reduce can be delegated to
-    other libraries that operate on iterable instead of having these as
-    first-class members of the interface.
-
-Again, I understand the rationale behind this decision, like reducing
-duplication and keeping only the core functionality in DS. However,
-sometimes you have to take into consideration ease of use vs purity of
-the code.
-
-Ease of use / DX / readability: it seems more logical to me to do:
-
-``$map->filter(fn(...) => ...);``
-
-Rather than:
-
-``Some\filter($map, fn(...) => ...);``
-
-Speed: as you said, internal iteration is faster. And speed is one of
-the selling points of DS vs arrays.
-
-Static analysis: I love the fact that ``Map::filter()`` can be strictly
-typed as returning ``Map<TKey, TValue>`` in Psalm, for example. If you
-rely on a generic ``filter()`` function, I'm not sure such strict typing
-will be easy or even possible.
-
-Thank you for your work on DS anyway, I already use the extension in my
-closed-source project, in particular Map. I would love to use data
-structures in my open-source projects, one day! 🤞 </blockquote>
-
-Additionally, it may be inconvenient for end users (e.g. new
-contributors to projects) to remember specifics of multiple libraries or
-utility classes when working on different codebases, to deal with
-dependency conflicts after major version upgrades, or to deal with
-libraries dropping support for older php versions, getting abandoned,
-etc.
-
-Update: php-ds maintainer response clarifications
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-On September 24, 2021, `the maintainer
-responded <https://github.com/php-ds/ext-ds/issues/156#issuecomment-926353779>`__
-after being asked about current plans for php-ds
-
-    Hi everyone, I am happy to see this discussion and I thank you all
-    for taking part. My reservation to merge ds into core has always
-    been because I wanted to make sure we get it right before we do that
-    and the intention behind the mythical v2 was to achieve that, based
-    on learnings from v1 and feedback from the community. I have no
-    personal attachment to this project, I only want what is best for
-    PHP and the community.
-
-    I would love to see a dedicated, super-lean vec data structure in
-    core that has native iteration and all the other same internal
-    benefits as arrays. In my opinion, the API should be very minimal
-    and potentially compatible with all the non-assoc array functions.
-    An OO interface can easily be designed around that. I'm imagining
-    something similar to Golang's slices.
-
-    **As for the future of ds itself, I think these can co-exist and ds
-    can remain external. I've been researching and designing immutable
-    data structures over the last 4 years and I still hope to develop a
-    v2 that simplifies the interfaces and introduces immutable
-    structures. Attempting to implement a suite of structures in core or
-    an OO vector would take a lot of work and might be difficult to
-    reach consensus on with the API. I don't think we should attempt to
-    merge ds into core at any time.**
-
-    I am currently traveling and have not followed this discussion in
-    detail on the mailing list. I'd be happy to assist in any way I can
-    and will catch up as soon as I am home again this week. Feel free to
-    quote this response on the mailing list as well.
-
-I'm still awaiting some clarifications on how they they were willing to
-assist before updating the remainder of this RFC.
-
-Additionally, there may be differences in design goals, as noted in the
-above section.
-
-Adding a native type instead (is_vec)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-https://externals.io/message/109760#109812
-
-    Yes, sorry – Hack introduced the vec type (with value semantics)
-    in 2016 after they'd experimented first with Vector (object
-    semantics). Use of Vector is now discouraged.
-
-    Details here: https://github.com/facebook/hhvm/issues/6451
-
-    FB/Hack appears to be in the multi-year process of moving all PHP
-    arrays to one of [vec/dict/keyset]. \*That's likely not an option
-    for PHP itself,\* but having the option of a vec equivalent (in this
-    proposal "list") would make sense, I think.
-
-Adding a new type to php as a non-class is a massive undertaking for
-php-src itself and extension authors. It would not work with a lot of
-existing code that handled arrays and objects - I expect that ``is_vec``
-would be a separate check from ``is_object`` and ``is_array``, etc. This
-is part of why PHP 8.1 enum classes are an object type rather than a
-distinct type
-
-See
-https://www.npopov.com/2015/05/05/Internal-value-representation-in-PHP-7-part-1.html
-for how php represents values internally.
-
-That would also require a lot more familiarity than I have with opcache
-and the JIT assembly compiler, and I expect it would be more
-controversial due to not working with existing code. For a language such
-as Hack where feature development is done by one company(Facebook),
-major language redesigns and breaking changes would much more difficult
-in PHP, with users/developers from many different backgrounds (and a
-much stronger focus on backward compatibility). Additionally, adding a
-class doesn't prevent adding a vec/list in the future - for example,
-HHVM has both vec and
-https://docs.hhvm.com/hack/reference/class/HH.Vector/ and ``HH\Vector``
-remains usable, PHP has both array and ArrayObject, etc.
-
-Also, even if a type ``vec`` or ``array`` were added, ``vec`` and
-``array`` would be distinct types - a vec couldn't be passed to a
-parameter that expected an array reference (or returned in a return
-value), because later adding a string array key (in the parameter or
-return value) would be a runtime error.
-
-Changelog
-~~~~~~~~~
-
-0.2: Add php-ds maintainer response, improve documentation, note this is
-on hold while working on ``Deque`` (Double-Ended Queue) RFC
+[3] https://github.com/symfony/symfony/pull/53612
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/7488
-:Original Authors: Tyson Andre, tandre@php.net
-:Original Status: **On hold - will be updated after**\ https://wiki.php.net/rfc/deque\ **and the namespacing poll is done**
-:Slug: vector
-:Wiki URL: https://wiki.php.net/rfc/vector
+:Implementation: https://github.com/php/php-src/pull/12959
+:Original Authors: Máté Kocsis kocsismate@php.net, Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Slug: deprecate-implicitly-nullable-types
+:Wiki URL: https://wiki.php.net/rfc/deprecate-implicitly-nullable-types
