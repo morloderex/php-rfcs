@@ -1,278 +1,415 @@
-Miscellaneous Variable Functions
-================================
+Match Blocks
+============
 
 :PHP-RFC: 0866
-:Title: Miscellaneous Variable Functions
-:Author: Thomas Hruska <cubic@php.net>
+:Title: Match Blocks
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-01-28
-:Version: 1
-
-Introduction
-------------
-
-In general, PHP userland is not very good at or at least not consistent
-at exposing/accessing Zend engine internals. This occurs both at the
-userland function level and the documentation level. When someone goes
-to learn about PHP extension development for the first time, it takes a
-while to understand basic Zend engine concepts. The proposed functions
-in this RFC straddle the boundary between Zend engine and userland to
-expose more of the engine internals to userland devs perhaps looking to
-make the leap into extension development or just improving their
-understanding of how zvals function under the hood for writing more
-optimal software.
+:Type: Standards Track
+:Created: 2023-08-24
+:PHP-Version: 8
+:Version: 1.0
 
 Proposal
 --------
 
-Working implementations of all the items being proposed can be found at:
+The `match expression <https://wiki.php.net/rfc/match_expression_v2>`__
+was added to PHP 8.0 with the goal of being a safer and more useful
+alternative to the switch statement. In its current form, each match arm
+is limited to a single expression. Any arm that does not nicely fold
+into a singular expression prevents match from being used. This RFC
+proposes to lift this restriction and allow the placement of blocks at
+the match arm site.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
+.. code:: php
 
-refcount()
-~~~~~~~~~~
+   // Before
+   switch (true) {
+       // InputParameter
+       case $entityExpr instanceof AST\InputParameter:
+           $dqlParamKey = $entityExpr->name;
+           $entitySql   = '?';
+           break;
 
-int refcount(mixed &$value)
+       // snip
+   };
 
-Returns the userland internal reference count of a zval.
+   // After
+   $entitySql = match (true) {
+       // InputParameter
+       $entityExpr instanceof AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
 
--  $value - Any input variable to retrieve its refcount.
+       // snip
+   };
 
-Returns: An accurate userland perspective normalized reference count of
-a zval. Interned strings always return a refcount of 1.
+Source: `doctrine/orm
+SqlWalker.php <https://github.com/doctrine/orm/blob/2f9e98754bb451107dcffbf0a9844b90dcdee992/lib/Doctrine/ORM/Query/SqlWalker.php#L2169-L2183>`__
 
-This function returns the accurate userland-oriented reference count of
-a variable. Unlike debug_zval_dump(), it accomplishes this by passing
-the variable by reference instead of by value, correctly calculates the
-true reference count (reference refcount minus the Zend engine increment
-minus one + value refcount), and returns a straight integer value to the
-caller instead of a string. Note that the way Zend engine works is still
-likely to cause confusion with how users might expect to see a refcount
-value.
+Semantics
+---------
 
-Weak references do not solve all refcounting problems. When there is a
-balancing act to maintain, especially in flexible caching scenarios,
-weak references cannot be used.
+Return value
+~~~~~~~~~~~~
 
-Target audience: All users who need to implement flexible caching
-mechanisms such as "When 10,000 rows have been loaded into a cache,
-attempt to prune the cache down to about 5,000 rows." Also useful for
-users to track down userland refcount-based memory consumption issues.
-Also useful for extension developers working with zval references.
+Match blocks may have return values. Match will propagate the return
+value of the executed arm. The return value of the block is the last
+expression after an optional list of statements, preceded by a ``<-``
+symbol to denote the value flowing out of the block. If the match return
+value is used, each block is expected to return a value, unless it
+terminates early. If the match return value is not used, the returned
+value is simply discarded.
 
-Why it should be added to PHP: No reasonable built-in function exists to
-get just the refcount of a variable. debug_zval_dump() is insufficient,
-produces results that are incorrect, and doesn't always output the
-refcount. Some libraries depend on the incorrect behavior of
-debug_zval_dump() (mostly because there's no dedicated function for
-getting just the refcount), so changing the function isn't exactly a
-viable solution.
+.. code:: php
 
-is_interned_string()
-~~~~~~~~~~~~~~~~~~~~
+   $result = match($foo) {
+       'bar' => {
+           $l = 1;
+           $r = 2;
+           <- $l + $r;
+       },
+       'baz' => {
+           throw new Exception();
+       },
+       'qux' => {
+           // Forgot to return something
+           // This will throw a MatchBlockNoValueError if executed
+       },
+   };
 
-bool is_interned_string(mixed $value)
+Note that the return keyword is not reused in place of ``<-`` because it
+would be ambiguous whether the user meant to return from the match
+block, or return from the function. Similarly, yield can already refer
+to pausing a generator in this context.
 
-Finds whether the given variable is an interned (immutable) string.
+Control statements
+~~~~~~~~~~~~~~~~~~
 
--  $value - Any input type to validate as an interned string.
+return, break, continue and goto statements out of the block are allowed
+*only* if the return value of match itself is not used.
 
-Returns: A boolean of true if the string is interned (immutable), false
-otherwise.
+.. code:: php
 
-This function differentiates between the two internal types of strings
-in PHP core. Interned (immutable) strings have a refcount of 1 and are
-never garbage collected while other strings are refcounted and garbage
-collected.
+   match ($foo) {
+       'bar' => {
+           // Returning 'baz' from the *function* (not match)
+           // This is ok
+           return 'baz';
+       },
+   };
 
-Target audience: Some userland developers looking to optimize string
-performance for specific scenarios. Those looking to learn more about
-the underlying engine before diving into extension development.
+   var_dump(match ($foo) {
+       'bar' => {
+           // Breaking out of match (like breaking out of switch, foreach, etc)
+           // This is **not** ok
+           break;
+       },
+   });
 
-Why it should be added to PHP: Language completeness. Could also be
-useful for some userland devs for performance optimizations and learning
-more about how string zvals work. Also potentially useful for verifying
-serious bugs in extensions from userland where an extension accidentally
-modifies an interned string.
+   var_dump(match ($foo) {
+       'bar' => {
+           for ($i = 0; $i < 10; $i++) {
+               // Continuing the for loop inside the block
+               // This is ok, as the block itself is not escaped
+               continue;
+           }
+           <- 42;
+       },
+   });
 
-As a historical side note: This function would have been handy to have
-for debugging `str_splice() </rfc/working_with_substrings>`__. The code
-accidentally modified interned strings at an early point of development.
+The rationale for this decision is twofold:
 
-is_reference()
-~~~~~~~~~~~~~~
+-  It attempts to avoid confusing and potentially unsound control flow.
+   For example:
 
-bool is_reference(mixed &$value)
+.. code:: php
 
-Finds whether the type of a variable is a reference.
+   var_dump(match (1) {
+       1 => {
+           break;
+           <- 42;
+       },
+   });
+   // What is the return value of match? 
+   // A value was never returned, but the var_dump must receive a value nonetheless.
 
--  $value - Any input variable to determine if it is a reference.
+-  There are technical challenges to correctly implementing control flow
+   that escapes mid-expression. For the interested, this is explained in
+   more detail under "Technical implications of control statements"
+   below. Disallowing escaping of the match block completely dodges this
+   problem.
 
-Returns: A boolean of true if the variable is a reference, false
-otherwise.
+Scoping
+~~~~~~~
 
-This function determines whether or not a variable is a reference.
+Match blocks behave just like any other statement list in PHP in terms
+of scoping. That is, no new scope is created. All variables assigned
+inside the block are visible outside the block, within the same
+function.
 
-The Zend engine VM only has two options for its opcodes for parameters:
-Coerce a variable to a reference OR coerce a variable to a value. There
-is no opcode for passing a variable to a function as-is. If there were
-such an opcode, the number of functions that would benefit would be very
-low. Fortunately, coercion to a reference is temporary during the
-function call and causes the refcount to be a minimum of two and is only
-higher if it is an actual reference variable. However, the resulting
-behavior is that this function operates on a by-design side effect of
-Zend engine. If Zend engine ever changes significantly in the distant
-future, this function could break in a way that won't necessarily be
-able to be fixed.
+.. code:: php
 
-While this function is useful for tracking down/verifying bugs related
-to references in userland software, please take the above caveat into
-consideration when you vote.
+   match ($foo) {
+       'bar' => {
+           $bar = 'I can see this';
+       },
+   };
+   echo $bar; // I can see this
 
-Target audience: All users. While variable references generally enable
-faster application performance, lots of weird application bugs can crop
-up with references (e.g. forgetting to unset() before reusing a variable
-later).
-
-Why it should be added to PHP: A useful debugging tool. Also, language
-completeness. However, it does rely on a side effect of how the engine
-functions.
-
-is_equal_zval()
-~~~~~~~~~~~~~~~
-
-bool is_equal_zval(mixed &$value, mixed &$value2, [ bool $deref = true
-])
-
-Compares two raw zvals for equality but does not compare data for
-equality.
-
--  $value - Any input variable to determine if it has equality to
-   $value2.
--  $value2 - Any input variable to determine if it has equality to
-   $value.
--  $deref - Whether or not to compare data pointers (Default is true).
-
-Returns: A boolean of true if the zvals are pointing at the same
-reference variable (for references) or data pointer.
-
-This function performs a low-level pointer zval equality comparison
-operation between $value and $value2. Handy for looking at complex zval
-mechanisms behind the scenes of PHP. Very different from the equality
-operator (===).
-
-Target audience: Those looking to learn more about how zvals work under
-the hood, especially extension developers. Also maybe useful for some
-userland devs looking to optimize some code.
-
-Why it should be added to PHP: Language completeness. Exposes some inner
-workings of zvals that are otherwise difficult to surface.
-
-Backward Incompatible Changes
------------------------------
-
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
-
-refcount(), is_interned_string(), is_reference(), and is_equal_zval()
-will no longer be available as global function names. May break existing
-userland software that defines global functions with these names.
-Searching GitHub for those function names turns up the following
-results:
-
--  refcount() - 311,681 results. Appears to mostly be output from
-   various test suites calling debug_zval_dump(), especially PHP's own
-   test suite. No apparent naming conflicts but with that many results,
-   it's hard to be certain.
--  is_interned_string() - 1 result. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
--  is_reference() - 3,542 results. Appears to mostly be a variable name
-   in Phan. No apparent naming conflicts.
--  is_equal_zval() - 1 result. Just the test extension (qolfuncs). No
-   apparent naming conflicts.
-
-Proposed PHP Version(s)
------------------------
-
-Next PHP 8.x.
-
-RFC Impact
+Motivation
 ----------
+
+The match expression has been introduced to address some shortcomings of
+switch statements, but currently fails to address approximately half of
+its use cases. Switch cases commonly contain more than one statement.
+`popular-package-analysis <https://github.com/nikic/popular-package-analysis>`__
+revealed that 3 507 of 6 012 switch statements contained at least one
+case with more than one statement (excluding breaks). Moreover, 29 690
+of 67 563 cases were multi-statement. Since match is limited to one
+expressions per arm, a single arm that does not nicely fold into a
+singular expression prevents match from being used entirely.
+
+It has previously been argued that limiting match arms to single
+expressions is beneficial for enforcing clean code. While keeping
+functions and consequently match arms short certainly has its merits, I
+personally find excessively small functions disorienting and hard to
+name well. Moreover, some statements (e.g. control statements) cannot be
+moved into separate functions.
+
+Additionally, the `pattern matching
+RFC <https://wiki.php.net/rfc/pattern-matching>`__ plans to further
+enhance match. Specifically, each match arm will be able to specify a
+pattern to match the value against, e.g. type checks. The Doctrine
+example from the introduction could become the following:
+
+.. code:: php
+
+   $entitySql = match ($entityExpr) {
+       // InputParameter
+       is AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
+
+       // snip
+   };
+
+Why not language-level blocks?
+------------------------------
+
+Instead of just implementing blocks match, it has been suggested to
+implement blocks as a language-level concept. There are three evident
+use cases for block expressions.
+
+-  Match blocks
+-  Arrow function blocks
+-  Right-hand side of short-circuiting operators (``??=``, ``??``,
+   ``?:``, ``? :``)
+
+Return value semantics
+~~~~~~~~~~~~~~~~~~~~~~
+
+The optimal return value semantics for these three use cases are all
+slightly different.
+
+-  For match, whether the block should require returning a value depends
+   on whether the match itself returns a value.
+-  Arrow function blocks should never require a return value, as they
+   already provide ``return``. No return value should mean ``null``, to
+   stay consistent with other functions.
+-  For the remaining cases, a value should always be returned, unless
+   the block terminates.
+
+We could settle for a solution that works for all cases, namely
+returning ``null`` by default. Whether this solution is preferable is
+likely a matter of taste.
+
+.. code:: php
+
+   var_dump(match ('foo') {
+       'foo' => {
+           echo "foo branch reached\n";
+       },
+   });
+   // foo branch reached
+   // NULL
+
+   var_dump(fn () => {
+       <- 'foo';
+   }());
+   // string(3) "foo"
+
+It's also note that the general use of blocks is quite limited due to
+PHPs scoping rules. In other languages, blocks can be used to prevent
+pollution of the current scope.
+
+.. code:: rust
+
+   let foo = {
+       let tmp = tmp();
+       // ...
+       Foo { tmp }
+   };
+
+In this case, ``tmp`` resides in the isolated scope and is inaccessible
+outside of the block. However, given that PHP only has a single scope
+per function, there is no point in lexically nesting the temporary
+variables, other than potential visual benefits. The benefits are mainly
+limited to some of the short-circuiting operators (``??=``, ``??``,
+``?:``, ``? :``), as they may skip the execution of the block under
+certain conditions.
+
+.. code:: php
+
+   $foo ??= {
+       // This is only executed if $foo was null/undefined.
+       $tmp = tmp();
+       // ...
+       <- new Foo($tmp);
+   };
+
+Arrow function capturing
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Another issue is that blocks for arrow functions have previously
+beenrejected in two separate RFCs, for reasons that are not solved with
+this approach.
+
+-  https://wiki.php.net/rfc/short-functions
+-  https://wiki.php.net/rfc/auto-capture-closure
+
+It seems that most concerns for both of these RFCs were related to
+auto-capturing, which language-level blocks cannot properly address.
+
+Grammar ambiguity
+~~~~~~~~~~~~~~~~~
+
+Yet another issue is that ``{}`` is ambiguous (without arbitrary
+lookahead) in expression context, as it clashes with statement lists,
+i.e. the blocks you put after if statements, while loops, etc. An
+alternative syntax could use parentheses, although this introduces some
+inconsistency in the grammar.
+
+.. code:: php
+
+   var_dump(match ($value) {
+       'foo' => (
+           echo "foo branch reached\n";
+           'foo'
+       ),
+   });
+   // foo branch reached
+   // string(3) "foo"
+
+This works fine, but looks somewhat odd, given that we use ``{}`` in all
+other cases when wrapping statements into blocks.
+
+Technical implications of control statements
+--------------------------------------------
+
+PHPs VM is in three-address form. As opposed to most machines, PHP
+opcodes are destructive in that they consume their operands. A consumed
+operand may not be consumed again. Moreover, an unconsumed operand may
+result in a memory leak. Control statements in match expression blocks
+pose a problem when they skip over the consuming opcodes of temporary
+VARs.
+
+.. code:: php
+
+   new Foo() + match (1) {
+       1 => { return; },
+   };
 
 ::
 
-     To SAPIs:  Will be applied to all PHP environments.
-     To Existing Extensions:  Additions and changes made to ext/standard and ext/hash in the existing .c and .h files.
-     To Opcache:  New global functions (refcount(), is_interned_string(), etc) to be added to the registered opcache function list like all the other registered global functions.
-     New Constants:  No new constants introduced.
-     php.ini Defaults:  No changes to php.ini introduced.
+   0000 V0 = NEW 0 string("Foo")
+   0001 DO_FCALL
+   0002 T2 = IS_IDENTICAL int(1) int(1)
+   0003 JMPNZ T2 0006
+   0004 JMP 0005
+   0005 MATCH_ERROR int(1)
+   0006 RETURN null
+   0007 MATCH_BLOCK_NO_VALUE_ERROR
+   0008 T3 = QM_ASSIGN null
+   0009 JMP 0010
+   0010 T4 = ADD V0 T3
+   0011 FREE T4
+   0012 RETURN int(1)
 
-Open Issues
------------
+The opcode 0006 (RETURN) is always executed, skipping the 0010 (ADD)
+instruction, not consuming V0 and thus leaking the Foo object. This
+problem may be avoided by emitting a FREE opcode before RETURN. The same
+issue can occur when breaking out of switch statements, continuing in
+loops, using goto, etc. This approach is implemented in `this
+PR <https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking>`__.
+However, it has proven to be quite complex for questionable benefit.
 
-Issue 1 - Should the function name refcount() be changed to something
-else to avoid possible global namespace conflicts? 300,000+ results on
-GitHub is a lot.
+Similarly, we run into an issue in this code.
 
-Issue 2 - How likely is it that Zend engine will change in such a way
-that is_reference() will break?
+.. code:: php
 
-Issue 3 - Are there other bits of Zend engine functionality that could
-be exposed as part of this RFC (i.e. additional functions) to round out
-the RFC some more? Maybe something relevant from the bug tracker that
-comes up on occasion?
+   foo()->bar(match (1) {
+       1 => { return; },
+   });
 
-Future Scope
-------------
+::
 
-None at this time.
+   0000 INIT_FCALL_BY_NAME 0 string("foo")
+   0001 V0 = DO_FCALL_BY_NAME
+   0002 INIT_METHOD_CALL 1 V0 string("bar")
+   0003 T1 = IS_IDENTICAL int(1) int(1)
+   0004 JMPNZ T1 0007
+   0005 JMP 0006
+   0006 MATCH_ERROR int(1)
+   0007 RETURN null
+   0008 MATCH_BLOCK_NO_VALUE_ERROR
+   0009 T2 = QM_ASSIGN null
+   0010 JMP 0011
+   0011 SEND_VAL_EX T2 1
+   0012 DO_FCALL
+   0013 RETURN int(1)
 
-Proposed Voting Choices
------------------------
+The 0007 (RETURN) instruction skips over 0012 (DO_FCALL). However, the
+0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and
+increased its refcount to make sure the value is not released before the
+method bar() is called on it. Given that 0012 (DO_FCALL) is never
+executed and thus foo() is never released, it leaks.
 
-The vote will require 2/3 majority with a vote on a per-function basis.
+Both of these issues arise because there are unfreed VARs at the time
+the escaping control statements in the match blocks are executed,
+skipping over their consuming opcodes. Disallowing the escaping of the
+match blocks when there are unconsumed VARs (i.e. when it is used within
+another expression) prevents skipping over their consuming opcodes, and
+thus circumvents the issue.
 
-Patches and Tests
------------------
+Backwards incompatible changes
+------------------------------
 
-Working implementations of all the items being proposed can currently be
-found at:
+There are no backwards incompatible changes in this RFC.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
+Vote
+----
 
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point so
-turning the extension into a normal pull request should be reasonably
-straightforward.
+Voting starts ????-??-?? and ends ????-??-??.
 
-Implementation
---------------
+As this is a language change, a 2/3 majority is required.
 
-After the project is implemented, this section should contain
+Question: Add support for blocks at match arms in PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+Voting Choices
+^^^^^^^^^^^^^^
 
-References
-----------
-
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
-
-Rejected Features
------------------
-
-None at this time.
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: misc_variable_functions
-:Wiki URL: https://wiki.php.net/rfc/misc_variable_functions
+:Implementation: https://github.com/php/php-src/pull/11933
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: match_blocks
+:Wiki URL: https://wiki.php.net/rfc/match_blocks

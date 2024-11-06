@@ -1,159 +1,191 @@
-Random Migration
-================
+PHP.net Analytics Collection
+============================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
+:Title: PHP.net Analytics Collection
+:Author: Larry Garfield <larry@garfieldtech.com>, Roman Pronskiy <roman@pronskiy.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-12-22
-:Version: 0.1
+:Created: 2024-10-28
+:Version: 0.9
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+The PHP.net website is a critical resource for PHP developers worldwide,
+providing documentation, news, and updates about the PHP language. It
+has millions of visits every year. At least, we're pretty sure it does,
+since currently PHP.net lacks any useful analytics beyond rudimentary
+server logs. That makes it difficult to determine where or how best to
+invest resources (whether volunteer or paid) in improving the PHP.net
+experience, particularly the documentation.
+
+Of particular interest, the PHP Foundation is looking into expanding its
+scope to fund improvements to the documentation. However, there are over
+17,000 documentation pages on php.net, and right now no one knows which
+ones are the most high-traffic and worth investing resources in. To know
+where to get the best "bang for the buck," both literally and
+figuratively, we need better data.
+
+This RFC proposes implementing a self-hosted analytics solution to
+gather valuable insights into how users interact with the site.
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
+The Infrastructure Team, in cooperation with the Foundation, will
+install the `Matomo <https://matomo.org/>`__ analytics server on
+PHP-maintained hardware, and install a tracking code on PHP.net. The
+process is very similar to Google Analytics, but self-hosted.
 
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
+Matomo will be configured to avoid saving any Personally Identifying
+Information (PII).
 
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
+The specific code to be placed on php.net can be previewed in `this
+commit <https://github.com/php/web-php/commit/aef3309d2508b1e1ca0db5c50c829dfdfa7ee24f>`__.
 
-The following functions to deprecated:
+Data access
+~~~~~~~~~~~
 
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
+The raw data collected by Matomo will be available only to the PHP
+Infrastructure Team, which may include staff from the PHP Foundation.
 
-All of these functions have global scope issues described in the Random
-Extension RFC.
+Fully anonymized aggregate data (such as most-popular-pages, overall
+traffic rates, coarse-grained geographic information, etc.) will be made
+publicly available as feasible.
 
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
+Privacy
+~~~~~~~
 
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
+To acknowledge the presence of an analytics service, the "Logfiles"
+section of the `PHP Privacy Policy <https://www.php.net/privacy>`__ page
+will be replaced with the following:
 
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
+    Analytics
 
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
+    PHP.net collects anonymous user statistics to help improve the site.
+    We do not collect any personally identifiable information, and you
+    may opt-out of analytics at any time. Collected analytics are used
+    exclusively by the PHP.net team and PHP Foundation to improve
+    PHP.net. The raw data is never shared with any third party, ever,
+    unless compelled by a valid court order.
 
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
-
-.. code:: php
-
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
-
-Backward Incompatible Changes
------------------------------
-
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
-
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
-
-The following function names are no longer available:
-
--  random_float()
-
-Proposed PHP Version(s)
------------------------
-
-PHP 8.3 and next version
-
-RFC Impact
-----------
-
-To SAPIs
-~~~~~~~~
-
-none
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-ext-random
-
-To Opcache
-~~~~~~~~~~
-
-none
-
-New Constants
-~~~~~~~~~~~~~
-
-none
-
-php.ini Defaults
+Why self-hosted?
 ~~~~~~~~~~~~~~~~
 
-none
+One of the chief concerns with any analytics system is tracking by third
+parties. While Google Analytics and similar services are most popular,
+many members of the PHP community are justifiably concerned about what
+such companies do with the data they collect. For that reason, we
+believe this is a case where self-hosting is the better option, even if
+it isn't as feature-rich as some third party services. Protecting the
+privacy of our users is of paramount importance.
 
-Open Issues
------------
+Why Matomo?
+~~~~~~~~~~~
 
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+There are many self-hosted analytics packages available on the market.
+Matomo was selected for a number of reasons.
+
+#. It is already in use on the `PHP
+   Foundation <https://thephp.foundation/>`__ website, so the team
+   already has familiarity with it
+#. It's Free Software (GPLv3)
+#. It's written primarily in PHP
+#. It has a long history on the market (the oldest commit is over 16
+   years ago) and is still in active development, so it should be
+   reliable for a long time to come
+#. Matomo supports `GDPR
+   compliance <https://matomo.org/gdpr-analytics/>`__, including
+   allowing users to opt-out of tracking entirely
+
+While there are no doubt other viable options on the market, the above
+points (particularly the team's familiarity with the tool already) make
+it the most straightforward option.
+
+Why a JS tracker?
+~~~~~~~~~~~~~~~~~
+
+Matomo has the ability to ingest server log files as an alternative to
+using a JS code. However, that would result in inadequate data for a
+number of reasons.
+
+#. Server logs are more locked down, and thus have a higher bus factor.
+#. Automatically ingesting logs, either from the server or our CDN
+   provider, adds more moving parts that can (and likely will) break
+   from time to time.
+#. Server logs ignore cached requests served by a CDN or other proxy.
+   Even using CDN logs would miss data cached by another proxy.
+
+A client-side tracker also provides far richer data, such as:
+
+#. Time-on-page
+#. Whether they read the whole page or just a part
+#. Whether they even saw comments
+#. What percentage of users get to the docs through direct links vs the
+   home page
+#. If users are hitting a single page per browser window or navigating
+   through the site, and if the latter, how?
+#. How much are users using the search function? Is it finding what they
+   want, or is it just a crutch?
+#. Do people use the translations alone, or do they use both the English
+   site and other languages in tandem?
+#. Does anyone use multiple translations?
+#. How many people are accessing the site from a desktop vs mobile?
+#. What speed connection do people have?
+#. How many people are using the `in-browser Wasm code
+   runner <https://github.com/php/web-php/pull/1097>`__ that is
+   currently being worked on?
+
+None of that information can be derived from server logs. All of it
+could be derived from a client-side tracker, without collecting any PII.
+
+Additionally, a client-side tracker is very common on other language
+sites. From our research:
+
+-  https://www.python.org –Plausible.io, Google analytics
+-  https://go.dev/ — Google Analytics
+-  https://www.rust-lang.org/ –N/A
+-  https://nodejs.org/ – Google Analytics
+-  https://www.typescriptlang.org/ – N/A
+-  https://kotlinlang.org/ – Google Analytics
+-  https://www.swift.org/ – Adobe Analytics
+-  https://www.ruby-lang.org/ – Google Analytics
+
+Being self-hosted, ours would be the least invasive and most private of
+the bunch.
+
+Aren't analytics trackers evil?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+No. Third-party trackers that uniquely identify individuals across
+multiple domains and make that data available to other third parties are
+evil. First-party analytics can provide valuable insights into how users
+use a website. The safety advantages of this approach are:
+
+#. No outside parties see the data, ever.
+#. No PII is collected, ever.
+#. We still get useful information about how people use php.net that
+   allow us to make it better
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This is a simple yes-or-no vote to approve this service. 2/3 majority
+required to pass.
+
+Question: Approve using Matomo for analytics?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
 -  Yes
 -  No
-
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Implementation
---------------
-
-WIP
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Original Authors: Larry Garfield (larry@garfieldtech.com), Roman Pronskiy (roman@pronskiy.com)
+:Slug: phpnet-analytics
+:Wiki URL: https://wiki.php.net/rfc/phpnet-analytics
