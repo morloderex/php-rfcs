@@ -1,144 +1,150 @@
-$this Return Type
-=================
+Deprecate GET/POST Sessions
+===========================
 
 :PHP-RFC: 0838
-:Title: $this Return Type
-:Author: Nikita Popov
-:Status: Withdrawn
+:Title: Deprecate GET/POST Sessions
+:Author: Kamil Tekiela <dharman@php.net>
+:Status: Accepted
 :Type: Standards Track
-:Created: 2021-09-07
-:PHP-Version: 8.2
-:Version: 1.0
+:Created: 2024-03-03
+:PHP-Version: 8.4
+:Version: 0.2
 
 Introduction
 ------------
 
-The `static return type </rfc/static_return_type>`__ introduced in PHP
-8.0 allows specifying that a method must return an instance of the
-late-static-binding (LSB) scope, which is usually the case for named
-constructors, wither methods and fluent APIs. However, fluent APIs have
-a more specific contract that requires returning ``$this``. This RFC
-introduces a ``$this`` return type for this purpose.
+PHP supports two ways to propagate session token ID: via cookies and
+through GET or POST parameters. Cookies are the default preferred method
+that has become the de facto standard way of doing it. Using URL
+parameters and hidden form input fields has many drawbacks, both in
+terms of security and usability, but since cookies may not always be
+available, PHP provides that as an alternative option. `PHP
+documentation on passing session
+ID <https://www.php.net/manual/en/session.idpassing.php>`__
 
-The ``$this`` return type follows an established convention from PHPDoc,
-where ``@return $this`` is commonly used in place of ``@return static``
-where it comes to fluent interfaces. On a dataset of 2k composer
-packages, ``@return $this`` occurs 29k times, while ``@return static``
-is used 38k times.
+To ease the implementation of this fallback mechanism, a feature called
+``use_trans_sid`` is available which will automatically transform all
+relative URLs to include the session token ID. This way, if cookies are
+not enabled then PHP can seamlessly switch over to using URL parameters.
 
-The ``$this`` return type is arguably not a type, in that enforces not
-just the type of the return value (which is the same as ``static``), but
-also its object identity (that of ``$this``). The object identity is
-important to the usage of the API, because it determines whether the
-return value can be safely discarded:
-
-.. code:: php
-
-   // Definitely valid if methods return $this type (fluent API).
-   // May not be valid if they only return static (may be wither API).
-   $obj->method1()
-       ->method2()
-       ->method3();
-
-   // Definitely valid if methods return $this or static type (fluent/wither irrelevant).
-   $obj = $obj->method1()
-              ->method2()
-              ->method3();
-
-As such, even if a method uses a native ``static`` return type, it
-currently may still have to specify ``@return $this`` in addition to
-clarify the API contract. This is especially relevant for interfaces,
-where this not only determines valid usage, but also valid
-implementation.
-
-For example, Symfony's cache
-`ItemInterface <https://github.com/symfony/symfony/blob/8828d94796b8af4160cfc2d78565e8510835d76a/src/Symfony/Contracts/Cache/ItemInterface.php>`__
-specifies:
-
-.. code:: php
-
-   interface ItemInterface extends CacheItemInterface {
-       // Other APIs omitted.
-
-       /**
-        * @return $this
-        */
-       public function tag(string|iterable $tags): static;
-   }
-
-Under this RFC, it would become:
-
-.. code:: php
-
-   interface ItemInterface extends CacheItemInterface {
-       public function tag(string|iterable $tags): $this;
-   }
+Using GET/POST to propagate session identifiers is generally considered
+a bad practice. For example, see `Why is passing the session id as URL
+parameter
+insecure? <https://security.stackexchange.com/q/14093/188415>`__
 
 Proposal
 --------
 
-The new ``$this`` type can only be used as a return type, not as a
-property or parameter type, same as ``static``. Additionally, it can
-only be applied in cases where an instance scope (potentially) exists,
-which is instance methods and non-static closures. It cannot be applied
-to free functions, static methods and static closures, as these can
-never have a ``$this`` value.
+The proposal is to deprecate both features: initialization of session
+from identifier received via GET/POST, and automatic transformation of
+URLs in the script's output.
 
-A method with ``$this`` return type is required to return ``$this``,
-though it does not need to do so literally. The following is legal code:
+However, we should not deprecate these INI settings completely. It's
+estimated that the vast majority of PHP installations have both of these
+features disabled (either consciously or by default) in their INI files.
+Thus the deprecation will only apply to setups which have either of
+these INI settings enabled.
 
-.. code:: php
+Setups that use default settings, such as the following, will NOT
+trigger a deprecation warning:
 
-   class Test {
-       public function method(): $this {
-           $that = $this;
-           return $that;
-       }
-   }
+::
 
-The ``$this`` type is a subtype of ``static``. As such, it is possible
-to restrict a ``static`` type to ``$this`` in a subclass (but not the
-other way around):
+   session.use_only_cookies=On
+   session.use_trans_sid=Off
 
-.. code:: php
+Installations that have either of these switches in a different position
+will generate a deprecation warning:
 
-   class A {
-       public function method1(): static {}
-       public function method2(): $this {}
-   }
+::
 
-   class B extends A {
-       // This override is legal.
-       public function method1(): $this {}
+   session.use_only_cookies=Off ; Will generate a deprecation warning
+   session.use_trans_sid=On ; Will generate a deprecation warning
 
-       // This override is illegal.
-       public function method2(): static {}
-   }
+Changing any of the following settings will be deprecated:
 
-In reflection, the ``$this`` type is represented as a
-``ReflectionNamedType`` with ``isBuiltin() == true`` and
-``getName() == "$this"``.
+-  ``session.use_only_cookies``
+-  ``session.use_trans_sid``
+-  ``session.trans_sid_tags``
+-  ``session.trans_sid_hosts``
+-  ``session.referer_check``
+
+Setting any of these options through ``session_start()`` to their
+non-default value will also be deprecated.
+
+The constant ``SID`` will also be deprecated as part of this RFC. The
+standalone proposal to deprecate this constant has also been made in
+`Deprecations for PHP 8.4 <deprecations_php_8_4>`__ RFC.
+
+The goal is to remove these features completely in PHP 9.0. The
+above-listed INI entries and the constant ``SID`` will be removed.
+
+session.use_cookies = Off
+-------------------------
+
+I can't confirm whether it was intentional to allow the usage of cookie
+sessions without sending the cookie, but people have used this trick to
+adhere to strict PSR-7 standard. As explained by `Paul M. Jones in his
+blog <https://paul-m-jones.com/post/2016/04/12/psr-7-and-session-cookies/>`__
+disabling ``session.use_cookies`` instructs PHP not to send the session
+ID in the cookie upon session start. The responsibility of sending the
+cookie with the session ID falls on the developer who can do it at their
+most convenient time. For this reason, this INI setting will remain
+unaffected.
 
 Backward Incompatible Changes
 -----------------------------
 
-There are no backwards-compatible changes, as ``$this`` is not a valid
-class name and could not be used in type position previously.
+Apart from generating a deprecation notice, no other immediate backward
+incompatible changes are foreseen. However, once these settings get
+removed in the next major PHP version, using any of these INI settings
+will become impossible.
 
-Code using ``ReflectionType`` may need to be updated to support the new
-``$this`` type.
+Using automatic transformation of URLs will become impossible out of the
+box starting with PHP 9.0. To keep using this feature, PHP users will
+have to implement it in userland. While PHP will not read the session
+token from GET/POST parameters automatically anymore, it will still be
+possible to start a session with an ID received in such a way by
+manually setting it via ``session_id()``
+
+Unaffected Functionality
+------------------------
+
+Function ``output_add_rewrite_var()`` will remain unaffected. Only the
+automatic rewriting of URLs to add PHPSESSID will be deprecated.
+
+The hack which allows for manual control of the session cookie using the
+INI setting ``session.use_cookies`` will remain possible.
+
+Version
+-------
+
+Deprecation in the next minor version, PHP 8.4.
+
+Removal in PHP 9.0.
 
 Vote
 ----
 
-Yes/No.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2024-04-09 and will end on 2024-04-23.
+
+Question: Accept Deprecate GET/POST session identifiers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/pull/7470
-:Original Authors: Nikita Popov
-:Original PHP Version: PHP 8.2
-:Original Status: Inactive
-:Slug: this_return_type
-:Wiki URL: https://wiki.php.net/rfc/this_return_type
+:Implementation: https://github.com/php/php-src/pull/13578
+:Original Authors: Kamil Tekiela dharman@php.net
+:Original PHP Version: PHP 8.4
+:Slug: deprecate-get-post-sessions
+:Wiki URL: https://wiki.php.net/rfc/deprecate-get-post-sessions
