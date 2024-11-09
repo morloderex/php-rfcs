@@ -1,0 +1,226 @@
+XML_OPTION_PARSE_HUGE
+=====================
+
+:PHP-RFC: 0907
+:Title: XML_OPTION_PARSE_HUGE
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2023-09-21
+:PHP-Version: 8.4
+:Version: 0.9.1
+
+Introduction
+------------
+
+ext/xml allows the user to parse XML in an event-driven way (SAX). The
+user can register callbacks to be called when certain nodes are
+encountered while parsing. In a sense, this is a streaming parsing
+model: the user's callbacks are invoked while parsing is still
+happening. This RFC attempts to address a feature request on the old
+bugtracker: https://bugs.php.net/bug.php?id=68325.
+
+Let's break it down more clearly:
+
+First, it's important to note that the ext/xml extension can work with
+two different XML parsers: either libexpat or libxml2, with libxml2
+being the more commonly used of the two.
+
+Now, let's get to the actual issue:
+
+Starting with libxml2 version 2.7.0
+(https://github.com/GNOME/libxml2/commit/8915c150b5630178b0f9e83f0d911090095b58a1),
+parsing large input data (*) is no longer allowed by default; it must be
+explicitly enabled. This change was made to prevent potential
+denial-of-service attacks. However, this modification unintentionally
+disrupted a legitimate use-case involving the ``xml_parse`` and
+``xml_parse_into_struct`` functions. Attempting to parse large documents
+using these methods now results in a parsing error. There is a
+workaround for ``xml_parse`` by parsing in chunks, but this is a bit
+cumbersome if the data is already in memory anyway as you'll have to
+split the data into chunks. Ironically, this increases memory usage
+instead of preventing blowing up memory usage. For the latter method,
+that workaround does not work as you cannot use it with chunked parsing.
+
+This proposal aims to solve this issue by introducing a new parser
+option.
+
+(*) The definition of large is defined in
+`parserInternals.h <https://github.com/GNOME/libxml2/blob/fc26934eb0b8f66dab262465226ec14eac7cb3e8/include/libxml/parserInternals.h#L42>`__
+in libxml2, but could potentially be changed by patching and recompiling
+libxml2. Currently this is a document of 10MB (not MiB), and there is
+also a `maximum name
+length <https://github.com/GNOME/libxml2/blob/fc26934eb0b8f66dab262465226ec14eac7cb3e8/include/libxml/parserInternals.h#L61>`__
+of 50K characters. Note that depending on configuration and versions
+these limits can change.
+
+Proposal
+--------
+
+It's possible to set parser options via ``xml_parser_set_option``. The
+idea is to add a new parser option that takes effect when libxml2 is
+used. Enabling this (boolean) option will allow parsing large documents.
+The option will be called ``XML_OPTION_PARSE_HUGE``, so that will be a
+new integer constant added to the global namespace. The default value of
+the option is ``false`` because that's the behaviour right now, and
+therefore the denial-of-service prevention will still be active by
+default (which is useful for untrusted data).
+
+Internally, this option will pass XML_PARSE_HUGE to libxml2, allowing
+large documents to be parsed without resulting in a parse error. If
+libexpat is used, this option will do nothing as libexpat does not block
+loading large documents anyway.
+
+It's worth noting that for extensions like SimpleXML and DOM extensions,
+you can run into the same problem. However, there you *do* have the
+option ``LIBXML_PARSEHUGE`` already to work around this issue. The
+constant ``XML_OPTION_PARSE_HUGE`` would be the ext/xml equivalent for
+``LIBXML_PARSEHUGE``.
+
+Example Usage
+~~~~~~~~~~~~~
+
+.. code:: php
+
+   function startElement($parser, $name, $attrs) {
+       // Do something interesting
+   }
+   function endElement($parser, $name) {
+       // Do something interesting
+   }
+   $parser = xml_parser_create();
+   xml_parser_set_option($parser, XML_OPTION_PARSE_HUGE, true); // Changing this to false, or not executing this line, will cause the parsing to error out on large inputs
+   xml_set_element_handler($parser, "startElement", "endElement");
+   // Add more handlers
+   $success = xml_parse($parser, $my_long_xml_input_already_in_memory);
+
+If you try to change the huge parsing option while parsing is busy, e.g.
+in one of the callback handlers, and ``Error`` exception will be raised.
+That's because it is a programming error to do so, not an expected
+failure. Example:
+
+.. code:: php
+
+   <?php
+   function startElement($parser, $name, $attrs) {
+       xml_parser_set_option($parser, XML_OPTION_PARSE_HUGE, false);
+   }
+   function endElement($parser, $name) {
+       // Do something interesting
+   }
+   $parser = xml_parser_create();
+   xml_parser_set_option($parser, XML_OPTION_PARSE_HUGE, true);
+   xml_set_element_handler($parser, "startElement", "endElement");
+   // Add more handlers
+   $success = xml_parse($parser, "<xml></xml>");
+
+Results in: Fatal error: Uncaught Error: Cannot change option
+XML_OPTION_PARSE_HUGE while parsing in example.php:3
+
+Backward Incompatible Changes
+-----------------------------
+
+No BC breaks unless the user defined a global constant
+``XML_OPTION_PARSE_HUGE`` themselves.
+
+Proposed PHP Version(s)
+-----------------------
+
+Next PHP 8.x.
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+No changes.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+It only impacts ext/xml.
+
+To Opcache
+~~~~~~~~~~
+
+No changes.
+
+New Constants
+~~~~~~~~~~~~~
+
+Adds a single integer constant to the global namespace:
+XML_OPTION_PARSE_HUGE ( = 5). Intended to be used only inside ext/xml.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No changes.
+
+Open Issues
+-----------
+
+None yet.
+
+Unaffected PHP Functionality
+----------------------------
+
+Everything outside of ext/xml.
+
+Future Scope
+------------
+
+None yet.
+
+Proposed Voting Choices
+-----------------------
+
+One primary vote (requires 2/3 majority): add XML_OPTION_PARSE_HUGE
+parsing option?
+
+Question: Add XML_OPTION_PARSE_HUGE parsing option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Patches and Tests
+-----------------
+
+Implementation: https://github.com/php/php-src/pull/12256
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+Changelog
+---------
+
+\* 0.9.1: Fixed libxml2 version, clarified limit, added code sample,
+linked to equivalent constant \* 0.9.0: First version under discussion
+
+References
+----------
+
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
+
+Additional Metadata
+-------------------
+
+:Original Authors: Niels Dossche, nielsdos@php.net
+:Slug: xml_option_parse_huge
+:Wiki URL: https://wiki.php.net/rfc/xml_option_parse_huge
