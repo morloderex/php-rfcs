@@ -1,0 +1,196 @@
+====== PHP RFC: Function composition operators ======
+  * Version: 3.0
+  * Date: 2024-11-09
+  * Author: Larry Garfield (larry@garfieldtech.com), Jordan LeDoux (jordan.ledoux@gmail.com)
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/function-composition
+
+
+===== Introduction =====
+
+In object-oriented code, "composition" generally means "one object having a reference to another."  In functional programming, "composition" generally means "sticking two functions together end-to-end to make a new function."  Both are valid and useful techniques, especially in a multi-paradigm language like PHP.  However, the latter is currently not directly supported by the language.  This RFC aims to correct that gap, with two new operators that work on ''callables''.
+
+This RFC cleanly enables “point-free style”, an approach to programming that limits the use of unnecessary intermediary variables. Point-free style has been gaining popularity in JavaScript circles, so will be familiar to JavaScript developers using that style. 
+
+===== Proposal =====
+
+This RFC proposes two new operators
+
+<code php>
+mixed |> callable;
+
+callable + callable;
+</code>
+
+
+The ''|>'' operator, or "pipe," accepts a single-parameter callable on the right and passes the left-side value to it, evaluating to the callable's result.
+
+The ''+'' operator, or "compose," when applied to two single-parameter callables, evaluates to a new Closure object that contains the two referenced callables.  When invoked with a single argument, it will pass that argument to the first callable, then the result of that will be passed to the second callable, and return the result.  If either callable is already such a composed Closure, it will be "flattened" into just being a longer array of callables.
+
+==== Pipe ====
+
+Pipe (''|>'') evaluates left to right by passing the value (or expression result) on the left as the first and only parameter to the callable on the right.  That is, the following two code fragments are exactly equivalent:
+
+<code php>
+$result = "Hello World" |> strlen(...);
+</code>
+
+<code php>
+$result = strlen("Hello World");
+</code>
+
+For a single call that is not especially useful.  It becomes useful when multiple calls are chained together.  That is, the following two code fragments are also exactly equivalent:
+
+<code php>
+$result = "Hello World"
+    |> 'htmlentities'
+    |> str_split(...)
+    |> fn($x) => array_map(strtoupper(...), $x)
+    |> fn($x) => array_filter($x, fn($v) => $v != 'O');
+</code>
+
+<code php>
+$temp = "Hello World";
+$temp = htmlentities($temp);
+$temp = str_split($temp);
+$temp = array_map(strtoupper(...), $temp);
+$temp = array_filter($temp, fn($v) => $v != 'O');
+$result = $temp;
+</code>
+
+The left-hand side of the pipe may be any value or expression.  The right-hand side may be any valid PHP callable that takes a single parameter, or any expression that evaluates to such a callable.  Functions with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a valid callable it will throw an Error.
+
+A pipe chain is an expression, and therefore may be used anywhere an expression is valid.
+
+==== Compose ====
+
+The compose operator (''+'') is very similar conceptually to pipe, but does not invoke immediately.  Rather, it creates a new callable (Closure) that composes two or more other callables.  That allows a new operation to be defined simply and easily and then saved for later in a variable.  Because it is "just" an operator, it is compatible with all other language features.  That means, for example, conditionally building up a pipeline is just a matter of throwing ''if'' statements around as appropriate.
+
+Additionally, ''+='' will work as well, as it is just a shorthand for adding two values and assigning the result to the first variable.
+
+To reuse the example from pipes:
+
+<code php>
+$processor = htmlentities(...)
+    + str_split(...)
+    + fn($x) => array_map(strtoupper(...), $x);
+    
+if ($some_flag) {
+    $processor += fn($x) => array_filter($x, fn($v) => $v != 'O');
+}
+
+$result1 = $processor('some string');
+$result2 = $processor('other string');
+</code>
+
+This is far more flexible than the method chaining and embedded-conditional methods often used in user-space implementations today (see below).
+
+Both the left and right side of the compose operator may be any valid PHP callable that takes a single parameter, or any expression that evaluates to such a callable.  Functions with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a valid callable it will throw an Error.
+
+As compose is an expression, and therefore may be used anywhere an expression is valid.
+
+The result of adding two callables is an object approximately equivalent to (though this isn't quite the implementation):
+
+<code php>
+readonly class ComposedClosure
+{
+    private array $callables = [];
+    
+    // This is called when the left-side variable is not a ComposedClosure yet.
+    public static function make(callable $left, callable $right)
+    {
+        $this->callables[] = $left;
+        $this->callables[] = $right;
+    }
+    
+    public function __invoke(mixed $arg): mixed
+    {
+        foreach ($this->callables as $fn) {
+            $arg = $fn($arg);
+        }
+        return $arg;
+    }
+    
+    // This is an operator.
+    public function add(callable $next): self
+    {
+        $new = new self();
+        $new->callables = [...$this->callables, $next];
+        return $new;
+    }
+}
+</code>
+
+==== Callable styles ====
+
+Both pipe and compose support any callable syntax supported by PHP.  At present, the most common form is first-class-callables (eg, ''strlen(...)''), which dovetails with this syntax very cleanly.  Should further improvements be made in the future, such as a revised [[rfc:partial_function_application|Partial Function Application RFC]], it would be supported naturally.
+
+==== Syntax choice ====
+
+The use of ''|>'' for pipe is obvious.  F#, [[https://elixirschool.com/en/lessons/basics/pipe-operator/|Elixir]], and OCaml all use that operator already for the exact same behavior.  There has been a long-standing [[https://github.com/tc39/proposal-pipeline-operator/wiki|discussion in JavaScript]] about adding a ''|>'' operator as described here.  It is the standard operator for this task.
+
+For composition, there is a bit less standardization.  [[https://wiki.haskell.org/Function_composition|Haskell]] uses ''.'', but it reads "backwards" from what is proposed here.  F# uses ''>>'', as does Ruby.  
+
+The main limitation is that both strings and arrays may be valid callables in PHP, so the operator chosen must be distinguishable from those use cases.  
+
+''.'' is the string concatenation operator, meaning 'htmlentities' . 'strlen' would be ambiguous.  Does that concatenate two strings, or compose two functions?  It's unclear, and therefore not a viable option.
+
+''>>'' is a bit-wise shift operator, which is currently useless except on numeric values.  It provides no behavior for strings, arrays, or objects (eg, Closures), making it a safe addition.  However, it has no natural "append" behavior to update a ComposedClosure in place.  The natural first choice would be >>=, but that is well-known as the "bind" operator in Haskell, which does something more advanced.  We're hesitant to claim that operator for a different behavior.
+
+''+'' naturally provides ''+='' as an append, and is fairly self-evident to read.  It has no defined behavior on strings, either.  However, on arrays, it currently triggers a Warning and renders the string "Array", so <php>[$obj1, 'foo'] + [$obj2, 'bar']</php> would result in the string "ArrayArray", and two triggered warnings.  Whether it is safe to change that behavior into something meaningful from a Warning in a non-major is debatable.
+
+==== Existing implementations ====
+
+Multiple user-space libraries exist in PHP that attempt to replicate pipe-like or compose-like behavior.  All are clunky and complex by necessity compared to a native solution.  There is clear demand for this functionality, but user-space's ability to provide it is currently limited.  This list has only grown since the Pipes v2 RFC, indicating an even stronger benefit to the PHP ecosystem with a solid built-in composition syntax.
+
+  * The PHP League has a [[https://pipeline.thephpleague.com/|Pipeline]] library that encourages wrapping all functions into classes with an ''%%__invoke()%%'' method to allow them to be referenced, and using a ''->pipe()'' call for each step.
+  * Laravel includes a [[https://github.com/illuminate/pipeline|Illuminate/Pipeline]] package that has an [[https://agoalofalife.medium.com/pipeline-and-php-d9bb0a6370ca|even more cumbersome syntax]].
+  * The [[https://github.com/azjezz/psl|PHP Standard Library]] (PSL) library includes a [[https://github.com/azjezz/psl/blob/1.8.x/src/Psl/Fun/pipe.php|pipe function]], though it is more of a function concatenation operation.
+  * [[https://github.com/sebastiaanluca/php-pipe-operator|Sebastiaan Luca]] has a pipe library that works through abuse of the ''%%__call%%'' method.  It only works for named functions, I believe, not for arbitrary callables.
+  * [[https://github.com/dynamik-dev/zenpipe-php|ZenPipe]] is a new-comer that also uses a method named ''pipe()'' for what is actually a composition operation.
+  * [[https://github.com/Crell/fp|Crell/fp]] provides ''pipe()'' and ''compose()'' functions that take an array of callables.  While the lightest-weight option on this list, that makes dynamically-built pipelines or compositions more cumbersome than the syntax proposed here.
+  * Various blogs speak of "the Pipeline Pattern" ([[https://medium.com/@aaronweatherall/the-pipeline-pattern-for-fun-and-profit-9b5f43a98130|for example]])
+
+Those libraries would be mostly obsoleted by this RFC, with a more compact, more universal, better-performing syntax.
+
+===== Future Scope =====
+
+There are a number of potential improvements to this feature that have been left for later, as their implementation would be notably more involved than this RFC.  The authors believe they would be of a benfit in their own RFCs.
+
+* Generic partial function application.  While the prior RFC was declined due to its perceived use cases being insufficient to justify its complexity, there was clear interest in it, and it would vastly improve the usability of function composition.  If a less complex implementation can be found, it would most likely pass and complement this RFC well.
+
+* A ''%%__bind%%'' method or similar on objects, possibly with a dedicated operator of its own.  If implemented by an object on the left-hand side, the right-hand side would be passed to that method to invoke as it sees fit.  Such a feature would be sufficient to support arbitrary monadic behavior in PHP in a type-friendly way.
+
+===== Backward Incompatible Changes =====
+
+None
+
+===== Proposed PHP Version(s) =====
+
+8.5
+
+===== Open Issues =====
+
+Still deciding between ''+'' and ''>>'' for composition.
+
+===== Future Scope =====
+
+===== Proposed Voting Choices =====
+
+Yes or no vote.  2/3 required to pass.
+
+===== Patches and Tests =====
+
+
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
