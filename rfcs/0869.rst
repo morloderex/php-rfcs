@@ -1,255 +1,131 @@
-NameOf
-======
+Multibyte For Trim Function Mb_trim, Mb_ltrim And Mb_rtrim
+==========================================================
 
 :PHP-RFC: 0869
-:Title: NameOf
-:Author: Robert Landers <landers.robert@gmail.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-05-07
-:Version: 1.0
+:Title: Multibyte For Trim Function Mb_trim, Mb_ltrim And Mb_rtrim
+:Author: Yuya Hamada https://github.com/youkidearitai <youkidearitai@gmail.com>, based on 8ctopushttps://github.com/8ctopus <hello@octopuslabs.io>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-10-18
+:PHP-Version: 8.4
+:Version: 0.1.1
 
 Introduction
 ------------
 
-Currently, it is possible to inspect virtually any aspect of running
-code, except there is no easy way to inspect the locally executing
-scope. For example, a developer can get the class of an object with
-``get_class()`` or the name with ``MyClass::class`` or
-``$myClass::class``. A developer can get the name of a parameter or
-property via reflection, however, when a developer needs to write a
-simple error message, that may be overkill, thus the variable name is
-usually hard-coded into the error message. This usually works fine until
-a developer refactors the code and forgets to change the name of the
-variable in the error message.
+PHP does not have a multibyte equivalent of the trim function. It is
+possible to get close enough behavior using preg_replace("/^\s+|\s+$/u",
+'', $string), however adding a pre-built function to do this will
+improve the readability and clarity of PHP code. It will also
+standardize how it is done as it can be tricky. This feature would be of
+use to many PHP developers with varying levels of experience and would
+complete the mbstring extension.
 
-``nameof()`` allows developers to quickly and easily access the name of
-a variable in the current scope, in a way that keeps error messages
-consistent.
+One of use case is "trim Byte Order Mark". I think mb_ltrim would be
+work:
 
-This RFC proposes a global ``nameof()`` function that allows a developer
-to get the name of virtually any user-named variable, property, const,
-or member, quickly and easily:
+::
 
-.. code:: PHP
-
-   echo nameof($variable); // variable
-   echo nameof($object->property); // property
-   echo nameof(Enum::Case); // Case
-   echo nameof(Object::Const); // Const
-   echo nameof(myFunction(...)); // myFunction
-   echo nameof(MY_CONSTANT); // MY_CONSTANT
-
-As named parameters become more prevalent, providing the end user with
-the name of the parameter is more important, in a way that it is easy to
-locate when refactoring, especially as part of a deprecation strategy:
-
-.. code:: PHP
-
-   function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
-     // potentially many lines later...
-     if(is_called_with_deprecated_value($oldParam)) {
-       $logger->warn(nameof($oldParam) . ' is deprecated in the next version, please use ' . nameof($newParam);
-     }
-   }
-
-Further, using ``nameof()`` would allow simpler usage of attributes, by
-using the silence operator (see error checking):
-
-.. code:: PHP
-
-   // evaluates to #[EventHandler(callback: 'handler')]
-   #[EventHandler(callback: @nameof(Operator::handler))]
-   class Operator {
-     public function handler() {
-       // implementation
-     }
-   }
-
-It's important to note that some things have an ambiguous name that is a
-compile error:
-
-.. code:: PHP
-
-   echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead)
-   echo nameof($a === $b); // ??
-   echo nameof($a($b)); // same as array access
-   echo nameof($$a); // ask for $a or use the value of $a
-
-All of these will generate a compile error: "Cannot get the name of an
-ambiguous expression."
+   mb_ltrim($string, "\u{FEFF}\u{FFFE}");
 
 Proposal
 --------
 
-The ``nameof()`` function is not necessarily a function in the
-traditional sense and can be used anywhere a string literal can be used
-(such as to define static constants, array keys, and attributes). This
-means that there is an 'identity' for every valid ``nameof()``:
+Add mb_trim() function:
 
-.. code:: PHP
+**Modified 2024-04-15** When $characters is null when default parameter,
+trim list below:
 
-   ${nameof($variable)} === $variable;
-   $object->{nameof($object->property)} === $object->property;
-   constant(Enum::class . '::' . nameof(Enum::Case)) === Enum::Case;
-   constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
-   (nameof(myFunction(...))() === myFunction();
-   constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
+::
 
-There are a limited number of expressions that can resolve to a name
-using ``nameof()``:
+   function mb_trim(string $string, string ?$characters = null): string
 
--  variables (but not variable-variables): ``nameof($var)`` resolves to
-   'var'
--  properties: ``nameof($this->prop)``, ``nameof($a?->prop)`` resolves
-   to 'prop'
--  first-class callables: ``nameof(strlen(...))`` resolves to 'strlen'
--  static properties and constants: ``nameof(A::Prop)`` resolves to
-   'Prop'
--  constants: ``nameof(MY_CONST)`` resolves to 'MY_CONST'
+::
 
-When getting the name of constants and functions, the name will NOT be
-the full name, but the lexical name. This means that if the name is
-``use``'d, it will be that name. However, if the full name is used in
-the ``nameof()``, the full name is returned. It's probably easiest to
-show this with an example:
+   function mb_ltrim(string $string, string ?$characters = null, ?string $encoding = null): string {}
 
-.. code:: PHP
+::
 
-   namespace Name {
-       const MY_CONST = true;
-       function namedFunction() {}
-   }
+   function mb_rtrim(string $string, string ?$characters = null, ?string $encoding = null): string {}
 
-   namespace Other {
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction
-   }
+Here's the list of characters trimmed when default behaviors:
 
-   namespace Using {
-       use const Name\MY_CONST as ;
-       use const Name\MY_CONST as ALIASED_CONST;
-       use function Name\namedFunction;
+Same as trim:
 
-       echo nameof(MY_CONST); // MY_CONST
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(ALIASED_CONST); // ALIASED_CONST
-       echo nameof(namedFunction(...)); // namedFunction
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction(...)
-   }
+::
 
-In other language implementations (such as C#), a full name usually
-isn't returned even if you pass one in. However, a 'full name' is rarely
-required and can often be constructed from parts, if required. However,
-as a convenience, in this implementation, if a 'full name' is requested
-entered, a full name is returned. This allows for the 'least surprises'
-since what you put in is what you get out.
+   U+0020 SPACE (also in Separator category)
+   U+0009 \t
+   U+000A \n
+   U+000B \v
+   U+000D \r
 
-Additionally, consider traits and aliasing:
+not removed in trim(), probably it wasn't common enough, but ok for
+mb_trim
 
-.. code:: PHP
+::
 
-   trait A {
-     public function example() {}
-   }
+   U+000C \f
 
-   trait B {
-     public function example() {}
-   }
+Removed in trim, but not included in regex \\s
 
-   class C {
-     use A, B {
-       A::example insteadof B;
-       B::example as exampleB;
-     }
-   }
+::
 
-   $a = new C();
-   echo nameof($a->exampleB(...)); // outputs: "exampleB"
+   U+0000 \0
 
-In the example above, if we were to return the 'full name' of
-``$a->exampleB(...)`` it would actually be 'B::example' but that isn't
-helpful in the context of class ``C``. By returning the lexical name,
-the developer gets the response they expect.
+whole Separator Z category (20 codepoints) covered by regex \\s:
 
-Error Handling
---------------
+::
 
-There are several ways to handle errors, each one has its own merits but
-ultimately will be left up as a secondary vote. It may not provide the
-**best** solution, but the author doesn't have a personal preference:
+   U+0020 SPACE
+   U+00A0 NO-BREAK SPACE
+   U+1680 OGHAM SPACE MARK
+   U+2000 EN QUAD
+   U+2001 EM QUAD
+   U+2002 EN SPACE
+   U+2003 EM SPACE
+   U+2004 THREE-PER-EM SPACE
+   U+2005 FOUR-PER-EM SPACE
+   U+2006 SIX-PER-EM SPACE
+   U+2007 FIGURE SPACE
+   U+2008 PUNCTUATION SPACE
+   U+2009 THIN SPACE
+   U+200A HAIR SPACE
+   U+2028 LINE SEPARATOR
+   U+2029 PARAGRAPH SEPARATOR
+   U+202F NARROW NO-BREAK SPACE
+   U+205F MEDIUM MATHEMATICAL SPACE
+   U+3000 IDEOGRAPHIC SPACE
 
-1. No error handling
+Other symbols (included in regex \\s):
 
-In this case, there is no error handling. This would allow using
-``nameof`` on things that don't exist. For example, no error would be
-output if a developer references a static property on an instanced
-property:
+::
 
-.. code:: PHP
+   U+0085 NEXT LINE (NEL)
+   U+180E MONGOLIAN VOWEL SEPARATOR
 
-   class MyClass {
-     public string $var;
-   }
-   nameof(MyClass::var); // no error, returns 'var'
-   nameof($aVariable); // no error, returns 'aVariable'
+On the other hand, The ".." notation for $characters that was in the
+trim function was not supported. ex: \\u{0000}..\u{FFFF} Because the
+reason is below:
 
-The downside is that PHP won't natively inform a developer that they've
-used something that doesn't exist. The main benefit of this approach is
-that it would allow the community to come up with its own rules via
-static analysis tools.
+-  Unicode character is very wide
 
-2. Warnings
+   -   Difficult to search
+   -  Difficult to store in memory
+   -  Mapping with other character codes may be incompatible
 
-In this case, PHP would output a warning: "nameof(<name>): does not
-exist." where <name> is the name the developer passed.
-
-Using a class name (or any other method that would normally trigger
-autoloading) that does not exist, will trigger autoloading and attempt
-to locate the class. If it is not found, a warning will be issued. If a
-variable does not exist in the current scope, a warning will be issued.
-If the referenced property/method/const cannot be located, a warning
-will be issued. If a function or constant cannot be located in the
-current scope, a warning will be issued.
-
-Warnings can be disabled via the 'silence operator' (``@``) to behave
-just like the first case. This is the best of both worlds, allowing
-developers to 'break the rules' to specify properties/functions without
-a reference to the object (``@nameof(Object::method(...))`` vs.
-``nameof($object->method)``) but would require assistance via static
-analysis tooling to catch mistakes.
-
-3. Exceptions
-
-An exception model was considered, however, the author believes that it
-would break the concept of "using ``nameof`` wherever a string could be
-used". For example, if a name cannot be located, an exception would be
-thrown. This would be true in the case of simply defining an attribute
-with a non-existent name:
-
-#[EventHandler(handler: nameof(I_DO_NOT_EXIST))]
-
-which is probably undesirable and nearly impossible to handle in a
-graceful way.
+      -  For example, to express Hiragana, UTF-8 uses [あ-ゞ], EUC-JP
+         [あ-ゝゞ], and Shift_JIS [あ-ん].
 
 Backward Incompatible Changes
 -----------------------------
 
-There are no backward incompatible changes at this time except that
-\`nameof\` will become a reserved word.
-
-Future Scope
-------------
-
-This could be expanded in the future to allow classes and types. For
-example, ``nameof(int)`` or ``nameof(MyClass)`` but can already be
-supported via the silence operator.
+This could break a function existing in userland with the same name.
 
 Proposed PHP Version(s)
 -----------------------
 
--  8.3: release
--  8.2.x: ``nameof`` becomes a reserved word, emitting a notice
+next PHP 8.x
 
 RFC Impact
 ----------
@@ -257,76 +133,61 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-Should be none
+To SAPIs Will add the aforementioned functions to all PHP environments.
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Will existing extensions be affected? No
+Adds mb_trim(), mb_ltrim() and mb_rtrim() to the mbstring extension.
 
 To Opcache
 ~~~~~~~~~~
 
-Depends on error type vote.
-
-First case: compiled to a string literal.
-
-Second and third case: a new AST node (similar to isset) will need to be
-handled.
+No effect.
 
 New Constants
 ~~~~~~~~~~~~~
 
-None
+No new constants.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No changed php.ini settings.
 
 Open Issues
 -----------
 
-- Should first-class callables be allowed? It's relatively easy to get
-the name of a first-class callable and only included for completeness.
-
-Unaffected PHP Functionality
-----------------------------
-
-PHP will largely be unaffected by this change, except that a new global
-function is introduced.
-
-.. _future-scope-1:
+https://github.com/php/php-src/issues/9216
 
 Future Scope
 ------------
 
-None.
+This section details areas where the feature might be improved in
+future, but that are not currently proposed in this RFC.
 
 Proposed Voting Choices
 -----------------------
 
-This is a simple yes-or-no vote to include this feature. 2/3 majority
-required to pass.
+Include these so readers know where you are heading and can discuss the
+proposed voting options.
 
-There is a subvote for the type of error checking to include. Majority
-wins.
+Voting
+------
 
-Patches and Tests
------------------
+Question: Multibyte for trim function mb_trim, mb_ltrim and mb_rtrim
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-experimental implementation:
-https://github.com/php/php-src/pull/11172/files
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-References
-----------
-
-Links to external references, discussions or RFCs
+https://github.com/php/php-src/pull/12459
 
 Rejected Features
 -----------------
@@ -336,7 +197,6 @@ Keep this updated with features that were discussed on the mail lists.
 Additional Metadata
 -------------------
 
-:Original Authors: Robert Landers, landers.robert@gmail.com
-:Original Status: Under Discussion
-:Slug: nameof
-:Wiki URL: https://wiki.php.net/rfc/nameof
+:Original Authors: Yuya Hamada (https://github.com/youkidearitai), youkidearitai@gmail.com based on 8ctopus(https://github.com/8ctopus), hello@octopuslabs.io
+:Slug: mb_trim
+:Wiki URL: https://wiki.php.net/rfc/mb_trim
