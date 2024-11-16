@@ -276,7 +276,7 @@ echo $uri1->getHost();                            // example.com
 echo $uri2->getHost();                            // test.com
 </code>
 
-Besides accessors, the ''Uri\UriInterface'' contains a toString() method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications. The WhatWg standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WhatWg.
+Besides accessors, the ''Uri\UriInterface'' contains a toString() method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications to it. The WhatWg standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WhatWg.
 
 <code php>
 $uri = new Uri\WhatWgUri("https://////example.com");
@@ -284,16 +284,33 @@ $uri = new Uri\WhatWgUri("https://////example.com");
 echo $uri->__toString();                         // https://example.com
 </code> 
 
-On the other hand, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique (i.e. case normalization, percent-encoding, normalization etc.), otherwise it should return the recomposed URI.
+On the other hand, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique on the URI (i.e. case normalization, percent-encoding, normalization etc.) and return a new instance, otherwise it should return the current object without modification.
 
 <code php>
-$uri = new Uri\Rfc3986("https://EXAMPLE.COM/foo/../bar");
+// Uri\Rfc3986Uri supports normalization
+$uri = new Uri\Rfc3986Uri("https://EXAMPLE.COM/foo/../bar");
 
-echo $uri->__toString();                         // https://example.com/bar
+echo $uri->__toString();                        // https://EXAMPLE.COM/foo/../bar"
+echo $uri->normalize()->__toString();           // https://example.com/bar
+
+// Uri\WhatWgUri normalizes the URI by default, therefore normalize() doesn't change anything
+$uri = new Uri\WhatWgUri("https://EXAMPLE.COM/foo/../bar");
+
+echo $uri->__toString();                        // https://example.com/bar
+echo $uri->normalize()->__toString();           // https://example.com/bar
 </code>
 
-Normalization is especially important when it comes to comparing URIs because it reduces the likelihood of false positive results, since URI comparison is based on checking whether the URIs string representation is the same. The ''Uri::equalsTo()'' method can be used for this purpose. First, it checks whether the called object and the URI instance received in the argument list has any parent-child relation, since it doesn't make sense to compare URIs of different standards. Then it normalizes and then recomposes the URI represented by the object and the URI instance received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
+Normalization is especially important when it comes to comparing URIs because it reduces the likelihood of false positive results, since URI comparison is based on checking whether the URIs string representation is the same. The ''Uri::equalsTo()'' method can be used for comparing URIs. First, this method checks whether the called object and the URI instance received in the argument list has any parent-child relation, since it doesn't make sense to compare URIs of different standards. Then it normalizes and recomposes the URI represented by the object and the URI received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
 
+<code php>
+// A URI equals to another URI of the same standard that has the same string representation after normalization
+var_dump(new Uri\Rfc3986Uri("https://example.COM")->equalsTo(new Uri\Rfc3986Uri("https://EXAMPLE.COM")));
+
+// A URI doesn't equal to another URI of a different standard even though they have the same string representation
+new Uri\Rfc3986Uri("https://example.com/")->equalsTo(new Uri\WhatWgUri("https://example.com/"));
+</code>
+
+// TBD: overload the == operator ?
 
 Having separate classes for the separate URI implementations makes it possible to refer to a specific implementation, or require one at the type level via type declarations. Doing so is important when one needs to work with only one of the URI implementations. However, for use-cases where it is not important which implementation is passed, the non-instantiable ''Uri\Uri'' base class is at hand.
 
