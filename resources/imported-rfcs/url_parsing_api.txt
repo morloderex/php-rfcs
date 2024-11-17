@@ -247,7 +247,7 @@ readonly class WhatWgUri implements \Uri\UriInterface
 
 ===== API Design =====
 
-First of all, the new URI parsing API contains a ''Uri\UriInterface'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'', representing RFC 3986 and WhatWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent to use one specific implementation. Actually, it may cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]]. That's why it's recommended to rely on one of the concrete implementations rather than the ''Uri\UriInterface'' interface.
+First and foremost, the new URI parsing API contains a ''Uri\UriInterface'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'', representing RFC 3986 and WhatWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it may cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]]. That's why it's recommended to rely on one of the concrete URI implementations rather than the ''Uri\UriInterface'' interface itself.
 
 Both built-in URI implementations support instantiation via two methods:
 
@@ -286,7 +286,7 @@ $uri = new Uri\WhatWgUri("https://////example.com");
 echo $uri->__toString();                         // https://example.com
 </code> 
 
-On the other hand, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique on the URI (i.e. case normalization, percent-encoding, normalization etc.) and return a new instance, otherwise it should return the current object without modification.
+On the other hand, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique on the URI (i.e. case normalization, percent-encoding, normalization etc.) and return a new instance, otherwise the current, unmodified object can be returned.
 
 <code php>
 // Uri\Rfc3986Uri supports normalization
@@ -312,7 +312,7 @@ new Uri\Rfc3986Uri("https://example.COM")->equalsTo(new Uri\Rfc3986Uri("https://
 new Uri\Rfc3986Uri("https://example.com/")->equalsTo(new Uri\WhatWgUri("https://example.com/"));  // false
 </code>
 
-TBD: overload the equality operator?
+It should be noted that the ''equalsTo()'' method only accepts an ''Uri\UriInterface'' instance, while it could also accept string URIs. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in URI be also normalized, or exact string match is performed? Would the URI be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only the ''Uri\UriInterface'' parameter type is supported. Furthermore, the equality operator is not overloaded because this construct is not supported in userland.
 
 ===== Relation to PSR-7 =====
 
@@ -329,7 +329,7 @@ Specifically, ADA is written in C++, and requires a compiler supporting C++17 at
 
 The firm position of this RFC is that an URL parser extension should always be available, therefore a different parser backend written in pure C should be found. Fortunately, Niels Dossche proposed [[rfc:domdocument_html5_parser|PHP RFC: DOM HTML5 parsing and serialization]] not long after the experiment with ADA, and his work required bundling parts of the [[https://lexbor.com/|Lexbor]] browser engine. This library is written in C, and coincidentally contains a WHATWG compliant URL parsing submodule, therefore it makes it suitable to be used as the library of choice.
 
-For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uriparser/|URIParser]] library was chosen. It is a lightweight and relatively fast library with no dependencies. It uses the "new BSD license" which is compatible with the current PHP license as well as the [[https://wiki.php.net/rfc/php_license_update|PHP License Update RFC]].
+For parsing URIs according to RFC 3986, the [[https://github.com/uriparser/uriparser/|URIParser]] library was chosen. It is a lightweight and fast C library with no dependencies. It uses the "new BSD license" which is compatible with the current PHP license as well as the [[https://wiki.php.net/rfc/php_license_update|PHP License Update RFC]].
 
 ===== Plugability =====
 
@@ -341,51 +341,35 @@ The capability provided by ''parse_url()'' is used for multiple purposes in the 
   * SSL/TLS socket communication: parsing the target URL
   * GET/POST session: accepting the session ID from the query string, manipulating the output URL to automatically include the session ID ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]]
 
-It would cause an inconsistency if parsing of URIs based on the two specifications referred above was supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
+It would cause inconsistency and security vulnerability if parsing of URIs based on the two specifications referred above was supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
 
-Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. On one hand, this approach makes it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure the used backend for each usecase.
+Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. On one hand, this approach makes it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure the used backend for each use-case.
 
-For this purpose, the following values option is added with the following possible values:
+While it would sound natural to add a php.ini configuration option to configure the used parser backend globally, this option was rejected during the discussion period of the RFC because it would result in unsafe code that is controlled by global state: since any invoked piece of code can change the used parser backend, one should always check the current value of the config option before parsing URIs (and in case of libraries, the original option should also be reset after usage). Instead, the RFC proposes to add the following configuration options that only affect a single use-case:
 
-  * **''rfc3986'':** parsing based on the RFC 3986 standard via the uriparser library
-  * **''whatwg'':** parsing based on the WHATWG specification via the Lexbor library
-  * **''parse_url'':** parsing based on the behavior of the legacy ''parse_url()'' function (default value)
-
-Please note that setting the ''uri.default_handler'' PHP INI option does not affect the behavior of the ''parse_url()'' internal function itself, since the new URI parsing API is expected to be used from now on instead of this function.
-
-<code php>
-ini_set("uri.default_handler", "rfc3986");
-
-filter_var("https://example.com", FILTER_VALIDATE_URL);
-</code>
-
-The above piece of code validates ''https://example.com'' based on the RFC 3986 standard, while the below piece of code validates it based on the WHATWG specification:
-
-<code php>
-ini_set("uri.default_handler", "whatwg");
-
-filter_var("https://example.com", FILTER_VALIDATE_URL);
-</code>
+  * ''SoapClient::_doRequest()'': a new optional ''$uriParserName'' parameter is added accepting ''string'' or ''null'' arguments. ''Null'' represents the original (''parse_url()'') based method, while the new backends will be used when passing either ''URI_PARSER_RFC3986'' or ''URI_PARSER_WHATWG''.
+  * FTP/FTPS stream wrapper:
+  * ''FILTER_VALIDATE_URL'': ''filter_*'' functions using can be configured by passing a ''parser'' key to the ''$options'' array
+  * SSL/TLS socket communication:
+  * GET/POST session: since this feature is deprecated by ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]], no configuration is added.
 
 ===== Performance Considerations =====
 
-The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A fully standard compliant parser will generally be slower than ''parse_url()'', because it has to execute more code.
+The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A fully standard compliant parser will generally be slower than ''parse_url()'', because it has to execute more code. Fortunately, this overhead is usually minimal thanks to the huge efforts of the maintainers of the Lexbor and the uriparser libraries.
 
-According to the rough initial benchmarks, the following relative results were measured:
+According to the rough benchmarks, the following results were measured:
 
-==== Time of parsing of a basic URL ====
+==== Time of parsing of 1000 basic URL (''https://example.com'') ====
 
-  * ''parse_url()'': ''0.000321 sec''
-  * ''Uri\Rfc3986Uri'': ''0.000317 sec''
-  * ''Uri\WhatWgUri'': ''0.000336 sec''
+  * ''parse_url()'': ''0.000208 sec''
+  * ''Uri\Rfc3986Uri'': ''0.000311 sec''
+  * ''Uri\WhatWgUri'': ''0.000387 sec''
 
 ==== Time of parsing of a complex URL ====
 
-  * ''parse_url()'': ''0.0008572''
-  * ''Uri\Rfc3986Uri'': ''0.00101 sec''
-  * ''Uri\WhatWfUri'': ''0.000857 sec''
-
-Thanks to some optimization, ''Uri\WhatWgUri'' performs very close to ''parse_uri()'', while ''Uri\Rfc3986Uri'' is only slightly slower in the benchmarks.
+  * ''parse_url()'': ''0.000962''
+  * ''Uri\Rfc3986Uri'': ''0.00911 sec''
+  * ''Uri\WhatWgUri'': ''0.000962 sec''
 
 ===== Examples in Other Languages =====
 
