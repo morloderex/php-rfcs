@@ -1,278 +1,1234 @@
-Miscellaneous Variable Functions
-================================
+Lazy Objects
+============
 
 :PHP-RFC: 0866
-:Title: Miscellaneous Variable Functions
-:Author: Thomas Hruska <cubic@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-01-28
-:Version: 1
+:Title: Lazy Objects
+:Author: Arnaud Le Blanc <arnaud.lb@gmail.com>, Nicolas Grekas <nicolasgrekas@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-06-03
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-In general, PHP userland is not very good at or at least not consistent
-at exposing/accessing Zend engine internals. This occurs both at the
-userland function level and the documentation level. When someone goes
-to learn about PHP extension development for the first time, it takes a
-while to understand basic Zend engine concepts. The proposed functions
-in this RFC straddle the boundary between Zend engine and userland to
-expose more of the engine internals to userland devs perhaps looking to
-make the leap into extension development or just improving their
-understanding of how zvals function under the hood for writing more
-optimal software.
+Transparent lazy-initialization of objects is an important part of many
+PHP applications. However, achieving this kind of laziness in userland
+is complex, limited, and can have a significant performance impact. This
+proposal aims to bring lazy initialization to the PHP engine to mitigate
+these drawbacks.
 
-Proposal
---------
+Martin Fowler identifies `four
+strategies <https://martinfowler.com/eaaCatalog/lazyLoad.html>`__ to
+implement lazy loading using OOP: lazy initialization, value holders,
+virtual proxies (hereafter referred to as just "proxies"), and ghost
+objects. This RFC focuses on proxies and ghost objects, which provide
+transparent lazy-loading. Unlike lazy initialization and value holders,
+proxies and ghost objects do not require a class to be written with the
+lazy-loading concept in mind. Instead, the lazy-loading behavior can be
+attached externally.
 
-Working implementations of all the items being proposed can be found at:
+In both strategies, the lazy object is attached to an initializer or
+factory that is called automatically when these objects are used. From
+an abstraction point of view, lazy ghost objects from this RFC are
+indistinguishable from non-lazy ones: they can be used without knowing
+they are lazy. This is a core design principle of this RFC.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
+Lazy-loading of objects in PHP is already used in business-critical
+situations. For example, Symfony uses them in its dependency injection
+component to provide lazy services that are fully initialized only if
+needed. The Doctrine ORM makes its entities lazy, allowing objects to
+hydrate themselves from the database only when accessed. Other use cases
+include e.g. a JSON parser that uses lazy objects to defer parsing
+unless those objects are accessed.
 
-refcount()
-~~~~~~~~~~
+Implementing proxies and ghost objects in userland is non-trivial. This
+has been explored in the
+`ocramius/proxy-manager <https://packagist.org/packages/ocramius/proxy-manager>`__
+library and later in the
+`symfony/var-exporter <https://packagist.org/packages/symfony/var-exporter>`__
+one. Current implementations have several limitations, including
+incompatibility with final classes, and performance overhead due to
+magic methods. This RFC proposes to implement ghost objects and
+state-proxies natively in the engine to address these issues.
 
-int refcount(mixed &$value)
-
-Returns the userland internal reference count of a zval.
-
--  $value - Any input variable to retrieve its refcount.
-
-Returns: An accurate userland perspective normalized reference count of
-a zval. Interned strings always return a refcount of 1.
-
-This function returns the accurate userland-oriented reference count of
-a variable. Unlike debug_zval_dump(), it accomplishes this by passing
-the variable by reference instead of by value, correctly calculates the
-true reference count (reference refcount minus the Zend engine increment
-minus one + value refcount), and returns a straight integer value to the
-caller instead of a string. Note that the way Zend engine works is still
-likely to cause confusion with how users might expect to see a refcount
-value.
-
-Weak references do not solve all refcounting problems. When there is a
-balancing act to maintain, especially in flexible caching scenarios,
-weak references cannot be used.
-
-Target audience: All users who need to implement flexible caching
-mechanisms such as "When 10,000 rows have been loaded into a cache,
-attempt to prune the cache down to about 5,000 rows." Also useful for
-users to track down userland refcount-based memory consumption issues.
-Also useful for extension developers working with zval references.
-
-Why it should be added to PHP: No reasonable built-in function exists to
-get just the refcount of a variable. debug_zval_dump() is insufficient,
-produces results that are incorrect, and doesn't always output the
-refcount. Some libraries depend on the incorrect behavior of
-debug_zval_dump() (mostly because there's no dedicated function for
-getting just the refcount), so changing the function isn't exactly a
-viable solution.
-
-is_interned_string()
-~~~~~~~~~~~~~~~~~~~~
-
-bool is_interned_string(mixed $value)
-
-Finds whether the given variable is an interned (immutable) string.
-
--  $value - Any input type to validate as an interned string.
-
-Returns: A boolean of true if the string is interned (immutable), false
-otherwise.
-
-This function differentiates between the two internal types of strings
-in PHP core. Interned (immutable) strings have a refcount of 1 and are
-never garbage collected while other strings are refcounted and garbage
-collected.
-
-Target audience: Some userland developers looking to optimize string
-performance for specific scenarios. Those looking to learn more about
-the underlying engine before diving into extension development.
-
-Why it should be added to PHP: Language completeness. Could also be
-useful for some userland devs for performance optimizations and learning
-more about how string zvals work. Also potentially useful for verifying
-serious bugs in extensions from userland where an extension accidentally
-modifies an interned string.
-
-As a historical side note: This function would have been handy to have
-for debugging `str_splice() </rfc/working_with_substrings>`__. The code
-accidentally modified interned strings at an early point of development.
-
-is_reference()
-~~~~~~~~~~~~~~
-
-bool is_reference(mixed &$value)
-
-Finds whether the type of a variable is a reference.
-
--  $value - Any input variable to determine if it is a reference.
-
-Returns: A boolean of true if the variable is a reference, false
-otherwise.
-
-This function determines whether or not a variable is a reference.
-
-The Zend engine VM only has two options for its opcodes for parameters:
-Coerce a variable to a reference OR coerce a variable to a value. There
-is no opcode for passing a variable to a function as-is. If there were
-such an opcode, the number of functions that would benefit would be very
-low. Fortunately, coercion to a reference is temporary during the
-function call and causes the refcount to be a minimum of two and is only
-higher if it is an actual reference variable. However, the resulting
-behavior is that this function operates on a by-design side effect of
-Zend engine. If Zend engine ever changes significantly in the distant
-future, this function could break in a way that won't necessarily be
-able to be fixed.
-
-While this function is useful for tracking down/verifying bugs related
-to references in userland software, please take the above caveat into
-consideration when you vote.
-
-Target audience: All users. While variable references generally enable
-faster application performance, lots of weird application bugs can crop
-up with references (e.g. forgetting to unset() before reusing a variable
-later).
-
-Why it should be added to PHP: A useful debugging tool. Also, language
-completeness. However, it does rely on a side effect of how the engine
-functions.
-
-is_equal_zval()
-~~~~~~~~~~~~~~~
-
-bool is_equal_zval(mixed &$value, mixed &$value2, [ bool $deref = true
-])
-
-Compares two raw zvals for equality but does not compare data for
-equality.
-
--  $value - Any input variable to determine if it has equality to
-   $value2.
--  $value2 - Any input variable to determine if it has equality to
-   $value.
--  $deref - Whether or not to compare data pointers (Default is true).
-
-Returns: A boolean of true if the zvals are pointing at the same
-reference variable (for references) or data pointer.
-
-This function performs a low-level pointer zval equality comparison
-operation between $value and $value2. Handy for looking at complex zval
-mechanisms behind the scenes of PHP. Very different from the equality
-operator (===).
-
-Target audience: Those looking to learn more about how zvals work under
-the hood, especially extension developers. Also maybe useful for some
-userland devs looking to optimize some code.
-
-Why it should be added to PHP: Language completeness. Exposes some inner
-workings of zvals that are otherwise difficult to surface.
-
-Backward Incompatible Changes
------------------------------
-
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
-
-refcount(), is_interned_string(), is_reference(), and is_equal_zval()
-will no longer be available as global function names. May break existing
-userland software that defines global functions with these names.
-Searching GitHub for those function names turns up the following
-results:
-
--  refcount() - 311,681 results. Appears to mostly be output from
-   various test suites calling debug_zval_dump(), especially PHP's own
-   test suite. No apparent naming conflicts but with that many results,
-   it's hard to be certain.
--  is_interned_string() - 1 result. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
--  is_reference() - 3,542 results. Appears to mostly be a variable name
-   in Phan. No apparent naming conflicts.
--  is_equal_zval() - 1 result. Just the test extension (qolfuncs). No
-   apparent naming conflicts.
-
-Proposed PHP Version(s)
------------------------
-
-Next PHP 8.x.
-
-RFC Impact
-----------
-
-::
-
-     To SAPIs:  Will be applied to all PHP environments.
-     To Existing Extensions:  Additions and changes made to ext/standard and ext/hash in the existing .c and .h files.
-     To Opcache:  New global functions (refcount(), is_interned_string(), etc) to be added to the registered opcache function list like all the other registered global functions.
-     New Constants:  No new constants introduced.
-     php.ini Defaults:  No changes to php.ini introduced.
-
-Open Issues
------------
-
-Issue 1 - Should the function name refcount() be changed to something
-else to avoid possible global namespace conflicts? 300,000+ results on
-GitHub is a lot.
-
-Issue 2 - How likely is it that Zend engine will change in such a way
-that is_reference() will break?
-
-Issue 3 - Are there other bits of Zend engine functionality that could
-be exposed as part of this RFC (i.e. additional functions) to round out
-the RFC some more? Maybe something relevant from the bug tracker that
-comes up on occasion?
-
-Future Scope
-------------
-
-None at this time.
-
-Proposed Voting Choices
------------------------
-
-The vote will require 2/3 majority with a vote on a per-function basis.
-
-Patches and Tests
------------------
-
-Working implementations of all the items being proposed can currently be
-found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point so
-turning the extension into a normal pull request should be reasonably
-straightforward.
+Unless specified otherwise, this RFC will refer to "virtual proxies" and
+"state-proxies" as just "proxies".
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
+Lazy objects are standard ``zend_object`` whose initialization is
+deferred until one of their properties is accessed (including
+non-existing ones). This is implemented using the same fallback
+mechanism as ``__get`` and ``__set`` magic methods, triggered when an
+uninitialized property is accessed. No performance overhead is thus
+added to non-lazy use cases. Execution of methods or property hooks does
+not trigger initialization until one of them accesses a backed property.
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+A lazy object can be created via the Reflection API, with the user
+specifying an initializer function that is called when initialization is
+required.
 
-References
-----------
+There are two kinds of lazy objects:
 
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
+-  Ghost: These are initialized in-place by the initializer function.
+-  Proxies: The initializer returns a new instance, and interactions
+   with the proxy object are forwarded to this instance.
 
-Rejected Features
------------------
+Internal classes are not supported because their state is usually not
+managed via regular properties. This also applies to sub-classes of
+internal classes.
 
-None at this time.
+It should be noted that the proposed Reflection API has been tested
+successfully on the Doctrine and on the Symfony projects, allowing to
+`remove a bunch of hard-to-maintain
+code <https://github.com/nicolas-grekas/symfony/pull/44>`__ while
+improving transparency of lazy objects and keeping the test suite green
+with the same public API.
+
+Proposal
+--------
+
+This RFC proposes adding the following members to the
+``ReflectionClass`` and ``ReflectionProperty`` classes:
+
+.. code:: php
+
+   class ReflectionClass
+   {
+       public int const SKIP_INITIALIZATION_ON_SERIALIZE = 1;
+       public int const SKIP_DESTRUCTOR = 2;
+
+       public function newLazyGhost(callable $initializer, int $options = 0): object {}
+
+       public function newLazyProxy(callable $factory, int $options = 0): object {}
+
+       public function resetAsLazyGhost(object $object, callable $initializer, int $options = 0): void {}
+
+       public function resetAsLazyProxy(object $object, callable $factory, int $options = 0): void {}
+
+       public function initializeLazyObject(object $object): object {}
+
+       public function markLazyObjectAsInitialized(object $object): object {}
+
+       public function getLazyInitializer(object $object): ?callable
+
+       public function isUninitializedLazyObject(object $object): bool {}
+
+       // existing methods
+   }
+
+   class ReflectionProperty
+   {
+       public function setRawValueWithoutLazyInitialization(object $object, mixed $value): void {}
+
+       public function skipLazyInitialization(object $object): void {}
+
+       // existing methods
+   }
+
+Creating a Lazy Object
+~~~~~~~~~~~~~~~~~~~~~~
+
+The entry points to create a lazy object are the
+``ReflectionClass::newLazyGhost()`` and ``newLazyProxy()`` methods.
+
+.. code:: php
+
+   class MyClass
+   {
+       public function __construct(private int $foo)
+       {
+           // Heavy initialization logic here.
+       }
+
+       // ...
+   }
+
+   $initializer = static function (MyClass $ghost): void {
+       $ghost->__construct(123);
+   };
+
+   $reflector = new ReflectionClass(MyClass::class);
+   $object = $reflector->newLazyGhost($initializer);
+
+   // At this point, $object is a lazy ghost object.
+
+Creating a lazy proxy requires using the ``newLazyProxy()`` method:
+
+.. code:: php
+
+   $initializer = static function (MyClass $proxy): MyClass {
+       return new MyClass(123);
+   };
+
+   $reflector = new ReflectionClass(MyClass::class);
+   $object = $reflector->newLazyProxy($initializer);
+
+The ``resetAsLazy*()`` methods accept an already created instance. This
+allows writing classes that manage their own laziness:
+
+.. code:: php
+
+   class MyLazyClass
+   {
+       public function __construct()
+       {
+           $reflector = new ReflectionClass(self::class);
+           $reflector->resetAsLazyGhost($this, $this->initialize(...), ReflectionClass::SKIP_DESTRUCTOR);
+       }
+
+       // ...
+   }
+
+The behavior of these methods is described in more details later.
+
+Handling the State of Lazy Objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Any access to properties of a lazy object triggers its initialization
+(including via ``ReflectionProperty``). However, certain properties
+might be known ahead of time and should not trigger initialization when
+accessed:
+
+.. code:: php
+
+   class BlogPost
+   {
+       public function __construct(private int $id, private string $title, private string $content)
+       {
+       }
+   }
+
+   $reflector = new ReflectionClass(BlogPost::class);
+   $initializer = // Callable that retrieves the title and content from the database.
+   $post = $reflector->newLazyGhost($initializer);
+
+   // Without this line, the following call to ReflectionProperty::setValue() would trigger initialization.
+   $reflector->getProperty('id')->skipLazyInitialization($post);
+   $reflector->getProperty('id')->setValue($post, 123);
+
+   // Alternatively, one can use this directly:
+   $reflector->getProperty('id')->setRawValueWithoutLazyInitialization($post, 123);
+
+The ``skipLazyInitialization()`` /
+``setRawValueWithoutLazyInitialization()`` methods provide ways to
+disable lazy-initialization when a property is accessed, allowing users
+to choose the approach that best fits their design.
+
+Dynamic properties trigger initialization like declared properties.
+Using ``skipLazyInitialization()`` or
+``setRawValueWithoutLazyInitialization()`` on a dynamic property throws
+a ``ReflectionException``.
+
+Lifecycle of Lazy Objects
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An object is considered lazy if any of its properties are still hooked
+to the initializer passed to the ``newLazy*()`` and ``resetAsLazy*()``
+methods that made it lazy.
+
+There are three ways to make a lazy object non-lazy:
+
+#. Interacting with it in a way that triggers its initializer (more on
+   this below).
+#. Using ``ReflectionProperty::skipLazyInitialization()`` or
+   ``setRawValueWithoutLazyInitialization()`` on all its properties.
+#. Calling the ``ReflectionClass::initializeLazyObject()`` or
+   ``markLazyObjectAsInitialized()`` methods with the instance as
+   argument.
+
+The ``markLazyObjectAsInitialized()`` method allows marking a lazy
+object as non-lazy without running the initializer, with uninitialized
+properties set to their default values (if any). This is useful for
+managed entity objects. Accessing a typed property before it is set
+throws an "uninitialized property" error if it has no default value.
+
+Initialization Triggers
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Except for the special cases listed below, any attempt to observe the
+state of a lazy object will trigger its initialization. This ensures
+that the result of the observation is the same as if the object were
+already initialized, maintaining full transparency. These triggers
+include, but are not limited to:
+
+-  Reading or writing a property
+-  Testing if a property is set or unsetting it
+-  Calling ``ReflectionProperty::get[Raw]Value()`` and
+   ``set[Raw]Value()``
+-  Calling ``ReflectionObject::getProperties()`` or
+   ``ReflectionObject::getProperty()``
+-  Cloning (see the "Cloning" section)
+
+This behavior makes lazy objects fully transparent to their consumers.
+
+The following special cases do not trigger initialization of a lazy
+object:
+
+-  Calls to ``ReflectionProperty::skipLazyInitialization()``,
+   ``setRawValueWithoutLazyInitialization()``, or accesses to properties
+   on which these methods were called.
+-  Calls to ``get_mangled_object_vars()``.
+-  Casting to array using the ``(array)`` operator.
+-  Calls to ``serialize()`` when
+   ``ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE`` is set, unless
+   a property is accessed in ``__serialize()`` or ``__sleep()`` methods.
+-  Calls to ``ReflectionObject::__toString()``.
+-  Calls to ``var_dump($lazyObject)``, unless ``__debugInfo()`` is
+   implemented and accesses a property.
+-  Calls to ``debug_zval_dump($lazyObject)``
+
+By excluding these cases from triggering initialization, developers can
+perform certain operations on lazy objects without causing them to
+initialize, providing finer control over the initialization process.
+
+Initialization Sequence
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Ghost Objects
+^^^^^^^^^^^^^
+
+#. Before calling the initializer:
+
+   #. Properties that were not initialized with
+      ``ReflectionProperty::skipLazyInitialization()`` or
+      ``setRawValueWithoutLazyInitialization()`` are initialized to
+      their default value if any, in the same way as using
+      ``ReflectionClass::newInstanceWithoutConstructor()``.
+   #. The object is marked as non-lazy by detaching it from its
+      initializer.
+
+#. During initialization, properties can be accessed directly without
+   triggering recursive initialization. Accessing properties without a
+   default value may throw an error, as usual.
+#. The initializer must return ``null`` or no value. If the initializer
+   returns something other than ``null``, a ``TypeError`` is thrown.
+
+After initialization, the object is indistinguishable from an object
+that was never lazy.
+
+Proxy Objects
+^^^^^^^^^^^^^
+
+#. Before calling the initializer, the object is marked as non-lazy by
+   detaching it from its initializer. Unlike ghost objects, non-skipped
+   properties are not set to their default value as this would cost some
+   CPU cycles for no practical reasons.
+#. The initializer is called with the lazy proxy as first parameter.
+#. The return value of the initializer has to be an instance the same
+   class as the lazy-object, or a parent as long as the proxy does not
+   declare additional properties and doesn't override the
+   ``__destruct()`` or ``__clone()`` methods. If these conditions are
+   not true, a ``TypeError`` is thrown. See the "Notes" section.
+#. The real instance is set to the return value.
+#. The value of properties used with
+   ``ReflectionProperty::skipLazyInitialization()`` or
+   ``setRawValueWithoutLazyInitialization()`` is discarded as if
+   ``unset()`` was called.
+#. After that, any property access on the proxy is forwarded to the real
+   instance. This includes declared, dynamic, non-existing, or
+   properties used with ``ReflectionProperty::skipLazyInitialization()``
+   or ``setRawValueWithoutLazyInitialization()``.
+
+The proxy object is \_not\_ replaced or substituted for the real
+instance. After initialization, property accesses on the proxy are
+forwarded to the real instance. Observing properties of the real
+instance has the same result as observing the corresponding properties
+of the proxy.
+
+The real instance is allowed to escape the proxy and to create direct
+references to itself. This is demonstrated in the section named "About
+Proxies". The proxy may be released independently of the real instance
+when it's not referenced anymore. The proxy and real instance have
+distinct identities.
+
+Although the initializer receives the proxy object as first parameter,
+it is not expected to make changes to it (this is allowed, but any
+changes will be lost during the last step of the initialization).
+However, the proxy object can be used to make decisions based on the
+value of some initialized property, or on the class or the object, or on
+its identity. For example, the initializer may use the value of an
+initialized property when instantiating the real instance:
+
+.. code:: php
+
+   $proxy = $reflector->newLazyProxy(function ($proxy) {
+       return new MyClass($proxy->id);
+   });
+
+Common Behavior
+^^^^^^^^^^^^^^^
+
+After a successful initialization, the initializer function is not
+retained anymore by this object, and may be released if it's not
+referenced anywhere else.
+
+The scope and ``$this`` of the initializer function is not changed, and
+usual visibility constraints apply. Visibility should not be a concern
+for the common use-case of calling the constructor or another public
+method in the initializer. However, for more complex use-cases where the
+initializer wishes to access non-public properties, it is required to
+bind the initializer function to the right scope (with
+``Closure::bind()``), or to access properties with
+``ReflectionProperty``.
+
+.. code:: php
+
+   class MyClass {
+       private $prop;
+       public function __construct($prop) {
+           $this->prop = $prop;
+       }
+   }
+
+   $reflector = new ReflectionClass(MyClass::class);
+
+   // Common use-case
+   $object = $reflector->newLazyGhost(function ($object) {
+       $object->__construct('value'); // Ok
+   });
+
+   // Complex use-case
+   $object = $reflector->newLazyGhost(function ($object) use ($reflector) {
+       $object->prop = 'value';                    // Error: Cannot access private property MyClass::$prop
+       $propReflector = $reflector->getProperty('prop');
+       $propReflector->setValue($object, 'value'); // Ok
+   });
+
+More real-world examples can be seen in the "Lazy-Loading Strategies"
+section.
+
+If the initializer throws, the object properties are reverted to their
+pre-initialization state and the object is marked as lazy again. In
+other words, all effects on the object itself are reverted. Other side
+effects, such as side-effects on other objects, are not reverted. The
+goal is to not expose a half-initialized instance in case of failure.
+
+The following example demonstrates what happens when nested
+initialization fail:
+
+.. code:: php
+
+   class MyClass {
+       public $propA;
+       public $propB;
+   }
+
+   // Creating two lazy objects. The initializer of $object1 causes the initialization
+   // of $object2, which fails.
+
+   $reflector = new ReflectionClass(MyClass::class);
+
+   $object2 = $reflector->newLazyGhost(function ($object2) {
+       $object2->propB = 'value';
+       throw new \Exception('initializer exception');
+   });
+   $reflector->getProperty('propA')->setRawValueWithoutLazyInitialization($object2, 'object-2');
+
+   $object1 = $reflector->newLazyGhost(function ($object1) use ($object2) {
+       $object1->propB = 'updated';
+       $object1->propB = $object2->propB;
+   });
+   $reflector->getProperty('propA')->setRawValueWithoutLazyInitialization($object1, 'object-1');
+
+   // Both objects are uninitalized at this point
+
+   var_dump($object1); // lazy ghost object(MyClass) { "propA" => "object-1" }
+   var_dump($object2); // lazy ghost object(MyClass) { "propA" => "object-2" }
+
+   try {
+       var_dump($object1->propB); // Exception: initializer exeption
+   } catch (Exception $e) {
+       echo $e->getMessage(), "\n";
+   }
+
+   // The state of both objects is unchanged 
+
+   var_dump($object1); // lazy ghost object(MyClass) { "propA" => "object-1" }
+   var_dump($object2); // lazy ghost object(MyClass) { "propA" => "object-2" }
+
+Detailed API Behavior
+~~~~~~~~~~~~~~~~~~~~~
+
+ReflectionClass::newLazyGhost()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function newLazyGhost(callable $initializer, int $options = 0): object;
+
+The ``newLazyGhost()`` method instantiates an object without calling the
+constructor, and marks the object as lazy.
+
+Properties are not initialized to their default value yet (they are
+initialized before calling the initializer). As an example, this has an
+impact on the behavior of an ``(array)`` cast on uninitialized objects
+and also when the default value is based on a constant that is not yet
+defined when creating the lazy object, but will be defined at the point
+of initialization.
+
+The ``$initializer`` argument is a callable with the following
+signature:
+
+.. code:: php
+
+   function (object $object): void {}
+
+When initialization is required, the ``$initializer`` is called with the
+object as first parameter. The initializer should initialize the object.
+See the "Initialization Sequence" section.
+
+The ``$options`` argument is a bitfield accepting the following flags:
+
+-  ``ReflectionClass::SKIP_INITIALIZATION_ON_SERIALIZE``: By default,
+   serializing a lazy object triggers its initialization. This flag
+   disables that behavior, allowing lazy objects to be serialized as
+   empty objects. This is useful in scenarios like Doctrine entities,
+   where cascading serialization could be problematic.
+
+An ``Error`` is raised if the class is internal or extends an internal
+class:
+
+.. code:: php
+
+   $reflector = new ReflectionClass(ReflectionClass::class);
+   // Raises "Error: Cannot make instance of internal class lazy: ReflectionClass is internal"
+   $reflector->newLazyGhost($initializer);
+
+The return value is the created object. Objects whose all properties
+were initialized are not lazy anymore, as specified in the "Lifecycle of
+Lazy Objects" section. It follows that the returned object will not be
+lazy if it has no properties.
+
+The behavior of the returned object is described in the Initialization
+Triggers and Initialization Sequence sections.
+
+ReflectionClass::newLazyProxy()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function newLazyProxy(callable $factory, int $options = 0): object;
+
+The behavior of the ``newLazyProxy()`` method is the same as
+``newLazyGhost()``, except that it uses the Proxy strategy.
+
+The ``$factory`` argument is a callable with the following signature:
+
+.. code:: php
+
+   function (object $proxy): object {}
+
+When initialization is required, the ``$factory`` is called with the
+proxy as first parameter. The factory should return a new object: the
+real instance. See the "Initialization Sequence" section.
+
+ReflectionClass::resetAsLazyGhost()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function resetAsLazyGhost(object $object, callable $initializer, int $options = 0): void;
+
+The ``resetAsLazyGhost()`` method resets an existing object and marks it
+as lazy.
+
+This method allows an object to manage its own laziness by calling the
+method in its constructor, as `demonstrated
+here <https://gist.github.com/arnaud-lb/9d52e2ba4e278411bff3addf75ce56be>`__.
+In such cases, the proposed lazy-object API can be used to achieve lazy
+initialization at the implementation detail level.
+
+Another use case for this method is to achieve resettable services. In
+these scenarios, a service object already inserted into a complex
+dependency graph can be reset to its initial state using the lazy object
+infrastructure, without its implementation being aware of this concern.
+A concrete example of this use case is the Doctrine EntityManager, which
+can end up in a `hard to
+recover <https://github.com/doctrine/orm/issues/5933>`__ "closed" state,
+preventing its use in long-running processes. However, `thanks to the
+lazy-loading code
+infrastructure <https://github.com/symfony/symfony/blob/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Bridge/Doctrine/ManagerRegistry.php#L42>`__,
+recovering from such a state is possible. This method would be
+instrumental in achieving this capability without resorting to the
+current complex code used in userland.
+
+The ``$object`` argument must be a non-lazy instance of the class
+represented by ReflectionClass.
+
+The ``$options`` argument accepts the same flag as ``newLazyGhost()`` in
+addition to:
+
+-  ``ReflectionClass::SKIP_DESTRUCTOR``: By default, the
+   ``resetAsLazy*()`` methods will call the destructor of an object (if
+   any) before making it lazy. This provides safety regarding any
+   preexisting state in the object. But when the object has just been
+   created and is empty, calling the destructor is not desired and can
+   be skipped with this flag.
+
+When making an object lazy, the object destructor is called and the
+object is reset to a state equivalent to an instance created by
+``newLazyGhost()``. In particular, all non-static properties bound to
+the ReflectionClass object are ``unset()``. This effect could be
+achieved in user space with the Reflection API and Closure scopes:
+
+.. code:: php
+
+   (function () {
+       $reflector = new ReflectionObject($this);
+       foreach ($reflector->getProperties() as $prop) {
+           unset($this->{$prop->getName()});
+       }
+   })->bindTo($object, $object);
+
+This snippet omits details such as static, private, readonly, or virtual
+properties for brevity.
+
+If the class of ``$object`` is a sub-class of the one represented by the
+``ReflectionClass``, properties of the sub-class are not made lazy and
+their values are not reset. Accessing these properties does not trigger
+initialization. This behavior is useful when a class that manages its
+own lazyness is sub-classed:
+https://gist.github.com/arnaud-lb/a4fa1bd2b20be7d7281b9cdc7c323910.
+
+The object is not replaced by an other one, and its identity does not
+change. Functionality such as ``spl_object_id()``,
+``spl_object_hash()``, ``SplObjectStorage``, ``WeakMap``,
+``WeakReference``, or strict equality comparison are not affected by
+``resetAsLazy*()``.
+
+.. code:: php
+
+   $object = new MyClass();
+   $ref = WeakReference::create($object);
+   $id = spl_object_id($object);
+
+   $reflector = new ReflectionClass(MyClass::class);
+
+   $reflector->resetAsLazyGhost($object, function () {});
+   var_dump($id === spl_object_id($object)); // bool(true)
+   var_dump($ref->get() === $object);        // bool(true)
+
+   $reflector->initializeLazyObject($object);
+   var_dump($id === spl_object_id($object)); // bool(true)
+   var_dump($ref->get() === $object);        // bool(true)
+
+If the object is an initialized lazy proxy, it is marked as non-lazy
+before resetting it, and the reference count of the real instance is
+decreased. If this causes the real instance to be destroyed, its
+destructor may be called (regardless of the ``SKIP_DESTRUCTOR`` flag).
+
+If the object is lazy and non-initialized, a ``ReflectionException`` is
+thrown with the message "Object is already lazy".
+
+Objects whose all properties were initialized are not lazy anymore, as
+specified in the "Lifecycle of Lazy Objects" section. It follows that
+calling this when the class has no properties does not make an object
+lazy.
+
+After calling ``resetAsLazyGhost()``, the behavior of the object is the
+same as an object created by ``newLazyGhost()`` (except for sub-class
+properties, as described above).
+
+ReflectionClass::resetAsLazyProxy()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function resetAsLazyProxy(object $object, callable $factory, int $options = 0): void;
+
+The behavior of the ``resetAsLazyProxy()`` method is the same as
+``resetAsLazyGhost()``, except that it uses the Proxy strategy.
+
+The object itself becomes the proxy. Similarly to
+``resetAsLazyGhost()``, the object is not replaced by an other one, and
+its identity does not change, even after initialization. The proxy and
+the real instance are distinct objects, with distinct identities.
+
+ReflectionClass::isUninitializedLazyObject()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function isUninitializedLazyObject(object $object): bool;
+
+The ``isUninitializedLazyObject`` method returns ``true`` if the object
+is not yet initialized. It returns ``false`` if the object was
+initialized, or if it has never been lazy, since an initialized lazy
+object is indistinguishable from an object that was never lazy.
+
+ReflectionClass::initializeLazyObject()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function initializeLazyObject(object $object): object;
+
+The ``initializeLazyObject()`` method can be used to force
+initialization of a lazy object. It has no effect if the object is
+already initialized.
+
+The return value is the object itself for ghost objects, or the real
+instance for proxy objects.
+
+ReflectionClass::markLazyObjectAsInitialized()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function markLazyObjectAsInitialized(object $object): object;
+
+The ``markLazyObjectAsInitialized()`` method can be used to mark an
+object as initialized without calling the initializer. It has no effect
+if the object is already initialized.
+
+Its behavior is the same as described for Ghost Objects in the
+Initialization Sequence section, except that the initializer is not
+called. After that, the object is indistinguishable from an object that
+was never lazy, and was created with
+``ReflectionClass::newInstanceWithoutConstructor()``, except for the
+value of properties that were already initialized.
+
+The return value is the object itself.
+
+One use-case of this method is to initialize an object manually outside
+of the initializer function.
+
+ReflectionClass::getLazyInitializer()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function getLazyInitializer(object $object): ?callable;
+
+The ``getLazyInitializer()`` method can be used to get the initializer
+bound to a lazy instance. If the instance is not lazy, null is returned.
+
+ReflectionProperty::skipLazyInitialization()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function skipLazyInitialization(object $object): void;
+
+The ``skipLazyInitialization()`` method marks a property as non lazy
+such that it can be accessed directly without triggering initialization.
+It also initializes the property to its default value, if any.
+
+.. code:: php
+
+   class MyClass {
+       public $id;
+       public $b;
+   }
+
+   $reflector = new ReflectionClass(MyClass::class);
+   $object = $reflector->newLazyGhost(function () {});
+
+   $reflector->getProperty('id')->skipLazyInitialization($object);
+
+   $object->id = 1;        // does not trigger initialization
+   var_dump($object->id); // int(1) (does not trigger initialization)
+
+Accessing the property after calling this method has the same behavior
+as accessing it after constructing the object with
+``ReflectionClass::newInstanceWithoutConstructor()``, including throwing
+errors when accessing uninitialized properties.
+
+The property must be non-dynamic, non-static, and non-virtual.
+
+If the property is not lazy, this method has no effect.
+
+The primary use-case of ``skipLazyInitialization()`` and
+``setRawValueWithoutLazyInitialization()`` is to initialize properties
+whose value is already known and whose access should not trigger
+initialization. For example, an ORM may initialize the properties
+representing the identity of an entity.
+
+We expect that code using this method cooperates with the initializer,
+or that the initializer is aware of skipped properties.
+
+ReflectionProperty::setRawValueWithoutLazyInitialization()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+       public function setRawValueWithoutLazyInitialization(object $object, mixed $value): void;
+
+The ``setRawValueWithoutLazyInitialization()`` method as the same effect
+as ``skipLazyInitialization()``, but it will set the property to the
+specified ``$value`` instead of the default one.
+
+The method does not call hooks, if any, when setting the property value.
+
+The property is marked as non-lazy just before updating its value. If
+any other property is accessed as a side-effect the update,
+initialization of the object may be triggered. Such side-effects can be
+triggered by ``__toString()`` on the new value, or ``__destruct()`` on
+the previous value, for example. If an exception prevents updating the
+update, and the object has not been initialized, the property is marked
+as lazy again.
+
+We expect that code using this method cooperates with the initializer,
+or that the initializer is aware of initialized properties.
+
+Cloning
+~~~~~~~
+
+Cloning a lazy object triggers its initialization before cloning it. The
+result is an initialized object.
+
+For proxy objects, the proxy and its real instance are cloned, and the
+proxy clone is returned. The ``__clone()`` method is called on the real
+instance and not on the proxy. Accessing any property (declared,
+dynamic, non-existing) on the proxy clone forwards the operation to the
+corresponding property on the real instance clone.
+
+Rationale: Initialization before cloning ensures that a clone and the
+original object have separate states. That is, updating the original
+object or the state of its initializer after cloning should not have an
+impact on the clone. Cloning the proxy and its real instance, rather
+than returning a clone of the real instance, ensures that the ``clone``
+operator always returns an object of the same class.
+
+Readonly properties
+~~~~~~~~~~~~~~~~~~~
+
+The proposed changes preserve the semantics of readonly properties. The
+``resetAsLazy*()`` methods may change the value of a readonly property,
+but this is already a possibility.
+
+Currently, two consecutive observations of the value of a readonly
+property can yield different results in the following cases:
+
+-  The property was not initialized at the time of the first
+   observation, and was initialized at the time of the second one
+-  The property is unset, and access is intercepted by a ``__get`` magic
+   method
+
+The last point implies that it is possible to induce this behavior on an
+existing class by sub-classing it:
+
+.. code:: php
+
+   class A {
+       public readonly int $prop;
+   }
+   class B extends A {
+       public readonly int $prop;
+       public int $counter = 0;
+       public function __construct() {
+           unset($this->prop);
+       }
+       public function __get($name) {
+           return ++$this->counter;
+       }
+   }
+
+   $b = new B();
+   var_dump($b->prop); // int(1)
+   var_dump($b->prop); // int(2)
+
+It follows that the observable value of a readonly property can change
+unless the class is final.
+
+We preserve these semantics by never changing or unsetting a readonly
+property in the ``resetAsLazy*()`` methods, if the property is
+initialized (on the object itself or the real instance, for initialized
+proxies) and the class is final. Calling ``resetAsLazy*()`` on a class
+with such property will skip these properties as if they were flagged
+with the ``skipLazyInitialization()`` method. Trying to set those
+properties in the initializer will throw the usual Error "Cannot modify
+readonly property".
+
+Destructors
+~~~~~~~~~~~
+
+The destructor of ghost objects is called if and only if the object has
+been initialized.
+
+The destructor of proxy objects is never called. We rely on the
+destructor of the proxied instance instead.
+
+When making an existing object lazy, the ``resetAsLazy*()`` methods call
+the destructor unless the ``SKIP_DESTRUCTOR`` flag is given. The
+rationale is that, unless specified otherwise, we should assume that the
+constructor was called on this object, therefore the destructor must be
+called as well before resetting its state entirely.
+
+.. code:: php
+
+   class Connection {
+       public $prop;
+       public function __construct() {
+           $this->connect();
+       }
+       public function __destruct() {
+           $this->close();
+       }
+   }
+
+   $connection = new Connection();
+
+   $reflector = new ReflectionClass(Connection::class);
+   $reflector->resetAsLazyGhost($connection); // Calls destructor
+
+   $connection = null; // Does not call destructor (object is not initialized)
+
+var_dump() and debug_zval_dump()
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``var_dump()`` and ``debug_zval_dump()`` are two of the few special
+cases that allow us to observe a lazy object without triggering
+initialization (a full list of these cases is available in the
+"Initialization Triggers" section).
+
+The output of ``var_dump()`` and ``debug_zval_dump()`` on a lazy object
+is the same as for an object whose all properties have been ``unset()``,
+except for the ones initialized with
+``ReflectionProperty::setRawValueWithoutLazyInitialization()`` or
+``skipLazyInitialization()``: ``unset()`` properties are not visible in
+the output.
+
+For convenience we also prefix the output with the strings \``lazy
+ghost`\` or \``lazy proxy``:
+
+.. code:: php
+
+   <?php
+
+   class MyClass {
+       public $a;
+       public $b;
+   }
+
+   $reflector = new ReflectionClass(MyClass::class);
+   $obj = $reflector->newLazyGhost(function () {});
+
+   $reflector->getProperty('a')->setRawValueWithoutLazyInitialization($obj, 'value');
+
+   var_dump($obj);
+
+   // Output:
+   //
+   // lazy ghost object(MyClass)#3 (1) {
+   //   ["a"]=>
+   //   string(5) "value"
+   // }
+
+About Lazy-Loading Strategies
+-----------------------------
+
+This RFC proposes adding the ghost and proxy strategies to the engine.
+One might wonder why two strategies are needed instead of just one.
+
+The most transparent and thus default strategy should be the ghost one.
+Ghost objects handle initialization in place, meaning that once they are
+initialized, they are exactly like regular objects.
+
+As an example, the Doctrine ORM implements lazy-loading of entities by
+employing a user-space implementation of ghost objects. The following
+snippet illustrates how it would use the proposed API:
+
+.. code:: php
+
+   // User code
+
+   class BlogPost
+   {
+       private int $id;
+       private string $name;
+       private string $email;
+   }
+
+   // ORM code
+
+   class EntityManager
+   {
+       public function getReference(string $class, int $id)
+       {
+           // The ReflectionClass and ReflectionProperty instances are cached in practice
+           $reflector = new ReflectionClass($class);
+
+           $entity = $reflector->newLazyGhost(function ($entity) use ($class, $id, $reflector) {
+               $data = $this->loadFromDatabase($class, $id);
+               $reflector->getProperty('name')->setValue($entity, $data['name']);
+               $reflector->getProperty('email')->setValue($entity, $data['email']);
+           });
+
+           // id is already known and can be accessed without triggering initialization
+           $reflector->getProperty('id')->setRawValueWithoutLazyInitialization($entity, $id);
+
+           return $entity;
+       }
+   }
+
+This strategy is suitable when we control the instantiation and
+initialization of the object. This excludes its use when either of these
+is controlled by an other party.
+
+As an example, the Symfony Dependency Injection component allows to
+defer the initialization of some parts of the dependency graph by
+lazy-loading select dependencies. It employs the ghost strategy by
+default unless the dependency is to be instantiated and initialized by a
+user-provided factory, in which case it uses the proxy strategy. The
+following snippet illustrates how it would use the proposed API:
+
+.. code:: php
+
+   // User code
+
+   class ClientFactory
+   {
+       public function createClient() {
+           return new Client($this->hostname, $this->credentials);
+       }
+   }
+
+   class Client
+   {
+   }
+
+   // Symfony code
+
+   class Container
+   {
+       public function getClientService(): Client
+       {
+           $reflector = new ReflectionClass(Client::class);
+           
+           $client = $reflector->newLazyProxy(function () use ($container) {
+               $clientFactory = $container->get('client_factory');
+               return $clientFactory->createClient();
+           });
+           
+           return $client;
+       }
+
+About Proxies
+-------------
+
+When considering proxies, one might expect the implementation to rely on
+decorating every method of a target class (or interface). This type of
+proxy is called an inheritance-proxy (not to be confused with
+state-proxies implemented by this RFC).
+
+Inheritance-proxies decorate every method of a target class or interface
+to prepend the initialization logic. This logic creates another instance
+to which all method calls are forwarded. The benefits of this strategy
+are compatibility with internal classes and interfaces, allowing final
+classes implementing an interface to be made lazy. However, this
+strategy has a major drawback: it breaks object identity. If a method
+returns ``$this``, it returns the decorated object, not the proxy.
+
+The state-proxy strategy proposed by this RFC relies on proxying
+property accesses instead of methods. Methods are called on the proxy
+itself, so when a method returns ``$this``, it returns the proxy object.
+This approach minimizes identity issues. Although minimal, there is
+still a chance that the real instance escapes the proxy by creating
+references to itself during initialization. This is demonstrated by the
+following snippet:
+
+.. code:: php
+
+   class Tree {
+       public $nodes;
+       public function __construct() {
+           $this->nodes[] = new Node($this); // '$this' refers to the real instance
+       }
+   }
+   $reflector = new ReflectionClass(Tree::class);
+   $reflector->newLazyProxy(function () {
+       return new Tree();
+   });
+
+Since the state-proxy strategy requires accessing the properties of the
+decorated object, it is not compatible with internal classes or
+interfaces. Therefore, inheritance-proxies still have use cases.
+However, this proposal focuses on providing ghost objects and
+state-proxies natively, not inheritance-proxies.
+
+There are several reasons for that:
+
+#. Ghost objects and state-proxies hook into the same place in the
+   engine, simplifying the RFC and the corresponding patch.
+#. These strategies benefit the most from being in the engine: userland
+   implementation relies on complex magic accessors, is difficult to
+   maintain as new PHP versions are released, and is slower than what
+   can be achieved with engine support.
+#. It's unclear if the engine would significantly help with
+   inheritance-proxies: implementing or generating code to decorate
+   methods is simpler.
+
+``ReflectionClass::initializeLazyObject()`` returns the backing object
+to aid in implementing inheritance-proxies in userland. The previous
+description was simplified: inheritance-proxies should also proxy public
+property accesses in addition to method calls.
+
+Here is an example of a (non-optimized) lazy-loading inheritance-proxy
+using this RFC:
+
+.. code:: php
+
+   class Connection
+   {
+       public float $ttl = 1.0;
+
+       public function send(string $data): void
+       {
+           // Real implementation we want to make lazy using decoration
+       }
+   }
+
+   class LazyConnection extends Connection
+   {
+       public function __construct()
+       {
+           new ReflectionClass($this)->resetAsLazyProxy($this, $this->initialize(...), ReflectionClass::SKIP_DESTRUCTOR);
+       }
+
+       public function send(string $data): void
+       {
+           new ReflectionClass($this)->initializeLazyObject($this)->send($data);
+       }
+
+       private function initialize(): parent
+       {
+           $connection = new parent(); // Or any heavier initialization logic
+           $connection->ttl = 2.0;
+
+          return $connection;
+       }
+   }
+
+   $connection = new LazyConnection();
+
+   echo $connection->ttl; // echoes 2.0
+
+Notes
+-----
+
+Real instance implementation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The "Initialization Sequence" section specifies that, when using the
+proxy strategy, the factory of a lazy proxy is allowed to return an
+instance of the same class as the proxy, or of a parent class.
+
+Returning an instance of a sub-class is not allowed as it would lead to
+`surprising
+behaviors <https://gist.github.com/arnaud-lb/b7b6ff90070b5ae9a9ddae8a65865f86>`__.
+
+Returning an instance of a parent class is not allowed if the proxy
+class declares additional properties. It would imply that the proxy has
+a state of its own, which is far-reaching in the implementation. This
+would impact the behavior of ``get_object_vars()``, ``foreach``,
+``json_encode()``, ``serialize()``, etc. Most importantly it would lead
+to inconsistencies when dynamic properties are involved, as demonstrated
+in `this
+example <https://gist.github.com/arnaud-lb/ef41cdb33c304da9d5839b720804f225>`__.
+
+Furthermore, the proxy can not override the instance's ``__destruct()``
+or ``__clone()`` methods. This makes it more obvious which
+implementation is called, and also opens the possibility of revisiting
+this without BC breaks in the future.
+
+In use-cases where the proxy and the real instance are not instances of
+the same class, the proxy is considered to be aware of laziness, so it
+can adhere to these constraints.
+
+The externally visible type of a lazy proxy is the type of the proxy
+object, even if the real object is of a parent type. This includes the
+get_class() function, the ::class constant, the instanceof operator and
+type checking in parameter, return and property types.
+
+Future scope
+------------
+
+Higher level syntax
+~~~~~~~~~~~~~~~~~~~
+
+Lazy objects are an advanced feature that most users will not use
+directly. This feature is primarily targeted at library and framework
+authors.
+
+FFI and Fibers are examples of features recently added to PHP that most
+users may not use directly, but can benefit from greatly within
+libraries they use.
+
+As such, the authors do not plan to add higher-level syntax for creating
+lazy objects.
+
+Furthermore, it is not intended to add class-centric constructs based on
+attributes or magic methods, as this approach is orthogonal to the
+objective of this RFC, which is to create lazy objects without requiring
+cooperation from the class.
+
+However, it is possible to introduce a higher-level syntax or
+class-centric constructs in a future RFC.
+
+Lazy cloning
+~~~~~~~~~~~~
+
+The RFC proposes that the ``clone`` operator initializes the object
+before cloning it. This ensures that the state of the clone is
+independent from the object it was cloned from and avoids
+inconsistencies when properties are initialized with
+``ReflectionProperty::skipLazyInitialization()`` or
+``setRawValueWithoutLazyInitialization()``.
+
+Although it may be possible to implement lazy cloning while preserving
+``clone`` semantics, numerous edge cases with non-lazy properties make
+this very complex. Furthermore, we expect that in practice, most clone
+operations will be closely followed by an initialization of either the
+clone or the original object, so that the extra complexity may not be
+worth it.
+
+However, it may be possible to make cloning lazy in the future by
+introducing a new flag (e.g. ``DEFER_CLONE``).
+
+Backward Incompatible Changes
+-----------------------------
+
+Introduction of new constants and methods in classes ``ReflectionClass``
+and ``ReflectionProperty`` may break sub-classes declaring constants and
+methods with the same name.
+
+Proposed PHP Version(s)
+-----------------------
+
+PHP 8.4
+
+Proposed Voting Choices
+-----------------------
+
+\* Add lazy-objects as described to the engine: yes/no (2/3 required to
+pass)
+
+Voting started on 2024-07-26 and will end on 2024-08-11 00:00 GMT.
+
+Question: Add lazy-objects as described to the engine
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+.. _implementation-1:
+
+Implementation
+--------------
+
+https://github.com/php/php-src/pull/15019
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: misc_variable_functions
-:Wiki URL: https://wiki.php.net/rfc/misc_variable_functions
+:Original Authors: Arnaud Le Blanc arnaud.lb@gmail.com, Nicolas Grekas nicolasgrekas@php.net
+:Slug: lazy-objects
+:Wiki URL: https://wiki.php.net/rfc/lazy-objects
