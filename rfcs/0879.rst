@@ -1,264 +1,350 @@
-Random Extension Improvement
-============================
+PDO Driver Specific SQL Parsers
+===============================
 
 :PHP-RFC: 0879
-:Title: Random Extension Improvement
-:Author: Go Kudo <g-kudo@colopl.co.jp>, <zeriyoshi@gmail.com>
-:Status: Implemented
+:Title: PDO Driver Specific SQL Parsers
+:Author: Matteo Beccati <mbeccati@php.net>
+:Status: Accepted
 :Type: Standards Track
-:Created: 2022-06-16
-:PHP-Version: 8.2
-:Version: 1.5.4
+:Created: 2024-04-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-Several issues with `the "Random Extension 5.x"
-RFC </rfc/rng_extension>`__ were only raised after voting started (due
-to lack of proper discussion):
+The PDO extension contains a SQL parser, whose main purpose is to
+recognise parameter placeholders inside queries (i.e. ``"?"`` and
+``":paramName"``), so that it knows how many and what parameters to
+expect for a query, and pass the information to the PDO driver in use.
 
-Engine implementations are not final
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This parser had historically been modelled to work with the de-facto SQL
+standard in the PHP ecosystem at that time: MySQL. However, the SQL
+dialect used by MySQL is different when handling string literals from
+standard SQL, followed by other database vendors, such as PostgreSQL and
+SQLite.
 
-The Random Extension has classes that are natively implemented as RNG
-engines, but they are not marked as ``final``. This allows classes to be
-created that inherit from native classes, but as stated in the previous
-RFC, user-implemented engines are inferior to native classes in terms of
-execution efficiency. This is true even for inheritance without method
-overrides, which often leads to confusion.
+Specifically, MySQL treats the backslash character as an escape
+character: ``'This \'word\' is a single quoted'`` Whereas the SQL
+standard uses double single quotes:
+``'This ''word'' is a single quoted'``
 
-The extension already provides a ``Random\Engine`` interface with a
-single ``generate(): string`` method. Even if the native classes are
-made final, it is easy for the user to create an alternative class using
-delegates.
+When using databases other than MySQL with PDO, valid queries having
+string literals ending with a backslash character are throwing off the
+parser and causing apparently inexplicable bugs.
 
-This is clearly an API design error, and the native implementations of
-the interface should be marked as final.
+For example:
 
-Random\SerializableEngine is not useful
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: sql
 
-This interface is a remnant from when the ``Serializable`` interface was
-still useful. This interface is no longer needed in PHP, as
-serializability is now determined by the existence of a magic method.
+   SELECT 'foo\' AS a, '?' AS b
 
-For this reason, remove ``Random\SerializableEngine``.
+will make PDO consider ``"'foo\' AS a, '"`` to be a string literal and
+will parse the following "?" as a positional parameter placeholder. In
+fact, if you pay close attention, even the DocuWiki SQL code formatter
+is thrown off by this very example.
 
-This means that an Engine that implements SerializableEngine will no
-longer implement it. However, serializability is determined by the
-implementation of the magic method in current PHP, so it has no effect.
+We have several reports of similar bugs
+`[1 <https://bugs.php.net/bug.php?id=78534>`__],
+`[2 <https://bugs.php.net/bug.php?id=79276>`__],
+`[3 <https://bugs.php.net/bug.php?id=80340>`__], and possibly other
+duplicates\ `[7 <https://github.com/php/php-src/issues/13958>`__].
 
-Random\Engine\CombinedLCG is low quality
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+In a nutshell, the PDO SQL scanner function doesn't need to completely
+parse the SQL dialect in use. **It is sufficient to properly recognise
+quoted string literals, quoted identifier literals, and comments to skip
+placeholder detection inside them**.
 
-The newly added ``Random\Engine\CombinedLCG`` is only for use with PHP's
-``lcg_value()`` function. However, this algorithm is very classical and
-the quality of the output random numbers is at the lowest level.
+Bonus improvement
+~~~~~~~~~~~~~~~~~
 
-In order to preserve the implementation of the lcg_value() function, the
-internal implementation is retained, but the implementation as a class
-is being dropped to prevent users from unintentionally using it.
-
-There is no equivalent of array_rand()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``array_rand()`` uses RNG internally, but there is no alternative method
-in ``Randomizer``. As per the previous RFC, this was the intent, but
-upon further investigation, array_rand() is used by many packages and
-should probably be drop-in replaceable.
-
-So add a method
-``Randomizer::pickArrayKeys(array $array, int $num): array``.
-
-It may look incompatible with
-``array_rand(array $array, int $num = 1): int|string|array``, but you
-can get completely consistent results by doing the following:
-
-.. code:: php
-
-   $array = ['foo', 'bar', 'baz'];
-
-   // Before:
-   mt_srand(1234, MT_RAND_PHP);
-   $single = array_rand($array); // (int) 0
-   $multiple = array_rand($array, 2); // (array) [1, 2]
-
-   // After:
-   $engine = new Random\Engine\Mt19937(1234, MT_RAND_PHP);
-   $randomizer = new Random\Randomizer($engine);
-   $single = $randomizer->pickArrayKeys($array, 1)[0]; // (int) 0
-    // or: [$single] = $randomizer->pickArrayKeys($array, 1);
-   $multiple = $randomizer->pickArrayKeys($array, 2); // (array) [1, 2]
-
-"string" means a binary
-~~~~~~~~~~~~~~~~~~~~~~~
-
-In PHP, "string" means a binary. This is often a problem when using
-multibyte characters. For example, ``str_shuffle()`` on a Japanese
-(UTF-8) string will give messed up results.
-
-Therefore, it may be better to change the alternative method of
-str_shuffle(), ``Randomizer::shuffleString()``, to
-``Randomizer::shuffleBytes()``. This is a more appropriate name.
-
-Engine classnames are not precise
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To clearly identify the implemented algorithm, the PCG64 and
-MersenneTwister engines should be renamed to their canonical upstream
-name:
-
--  ``Random\Engine\PCG64`` → ``Random\Engine\PcgOneseq128XslRr64``
--  ``Random\Engine\MersenneTwister`` → ``Random\Engine\Mt19937``
-
-PCG is not so famous
-~~~~~~~~~~~~~~~~~~~~
-
-PCG is a very good algorithm, boasting great randomness and performance.
-However, I think its name recognition is in some ways inferior to
-Vigna's RNG, which started with Xorshift.
-
-Therefore, I reimplement Xoshiro256**, which was previously mentioned as
-a candidate, and create the class ``Random\Engine\Xoshiro256StarStar``.
-This will avoid the problem of using the old MT19937 since it is not
-familiar with PCG.
+The limitation of a global SQL parser in PDO meant that my previous `RFC
+to support the PostgreSQL-only "?"
+operator </rfc/pdo_escape_placeholders>`__\ [4] had to apply the parser
+change to all database types. The change had no known side effects, but
+I feel this RFC could improve by keeping this peculiarity inside the
+pdo_pgsql scanner only.
 
 Proposal
 --------
 
-For each of these issues, we will create a ballot option and make a
-decision.
+Following a detailed research (see below) for each of the databases
+currently supported by PDO in core, the proposal is to allow drivers to
+optionally provide a custom scanner function to handle their specific
+SQL dialect and:
 
-.. _engine-implementations-are-not-final-1:
+#. Change the `default PDO
+   scanner <https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42>`__
+   to expect standard SQL only:
 
-Engine implementations are not final
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. two-dashes and C-style comments (non-nested, as that seems to be
+      the most common format, already implemented in PDO)
 
-Question: Make all implemented engines final?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#. Add a MySQL-specific scanner function:
 
-Voting Choices
-^^^^^^^^^^^^^^
+   #. single and double quoted literals with both doubling and backslash
+      as escaping mechanisms (MySQL default)
+   #. backtick literals with doubling as escaping mechanism (I also
+      tested and it seems MySQL doesn't accept backslashes as escapes)
+   #. two-dashes (if followed by 1 whitespace), C-style comments, and
+      Hash-comments
+   #. Tests, as necessary
 
--  Yes
--  No
+#. Add a PgSQL-specific scanner function:
 
-.. _randomserializableengine-is-not-useful-1:
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. C-style "escape" string literals
+   #. Dollar-quoted string literals
+   #. two-dashes and C-style comments (non-nested, as nesting would
+      require unwanted changes to the common parser functionality)
+   #. Support for "??" as escape sequence for the "?" operator
+   #. Tests, as necessary
 
-Random\SerializableEngine is not useful
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#. Add a SqLite-specific scanner function:
 
-Question: Remove the SerializableEngine interface?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   #. single, double quoted, and backtick literals, with doubling as
+      escaping mechanism
+   #. square brackets quoting for identifiers
+   #. two-dashes and C-style comments (non-nested)
+   #. Tests, as necessary
 
-.. _voting-choices-1:
+To keep the change as simple as possible, the proposal tries to cover
+the default SQL syntax for each database as closely as possible, without
+heavy changes to the common parser code.
 
-Voting Choices
-^^^^^^^^^^^^^^
+One important thing to mention is that the proposed changes are only
+targeting the part of PDO that scans the SQL query for parameter
+placeholders. Quoting literals or using parameters in queries is **not
+going to be affected**.
 
--  Yes
--  No
+Detailed Proposal
+-----------------
 
-.. _randomenginecombinedlcg-is-low-quality-1:
+To execute the plan, a new member will be appended to:
 
-Random\Engine\CombinedLCG is low quality
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: c
 
-Question: Remove the CombinedLCG class?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   struct pdo_dbh_methods {
+       pdo_dbh_close_func      closer;
+       pdo_dbh_prepare_func        preparer;
+       pdo_dbh_do_func         doer;
+       pdo_dbh_quote_func      quoter;
+       // ...
+       pdo_dbh_sql_scanner     scanner;
+   }
 
-.. _voting-choices-2:
+Each PDO driver defines already `their own
+struct <https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code>`__.
+Leaving the new member to NULL will make the driver use the default PDO
+scanner function. Otherwise, a pointer to a custom scanner function will
+override the default when parsing queries. It's really as simple as
+that.
 
-Voting Choices
-^^^^^^^^^^^^^^
+The rest of the implementation is the actual re2c scanner code,
+config.*, Makefile changes, etc. required to incorporate the
+driver-specific scanner into the build.
 
--  Yes
--  No
+To support dollar-quoted strings on Postgres, the functionality of
+custom quoting has been added to the common PDO parser function. The
+change has no side effects for other database drivers.
 
-.. _there-is-no-equivalent-of-array_rand-1:
+One minor potential BC-break was reported while researching bug
+`#14244 <https://github.com/php/php-src/issues/14244>`__, which
+basically describes lack of support for dollar quoting in pdo_pgsql. One
+of the currently viable workarounds is to use escaped question marks
+inside dollar-quoted strings to avoid unexpected placeholder detection.
+The last version of the implementation still allows that, while raising
+the following deprecation notice:
 
-There is no equivalent of array_rand()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``Escaping question marks inside dollar quoted strings is not required anymore and is deprecated``.
 
-Question: Add the pickArrayKeys() method to the Randomizer?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Such BC-compatibility can be removed in the next major version.
 
-.. _voting-choices-3:
+Research on String Literals, Identifiers, and Comments
+------------------------------------------------------
 
-Voting Choices
-^^^^^^^^^^^^^^
+MySQL
+~~~~~
 
--  Yes
--  No
+MySQL by default accepts both backslash escaped quotes and SQL standard.
+String literals can use single or double quotes. See `the
+documentation <https://dev.mysql.com/doc/refman/8.0/en/string-literals.html>`__
+(8.0 current is linked here, but 5.7 and 8.3 behave the same).
 
-.. _string-means-a-binary-1:
+The
+`NO_BACKSLASH_ESCAPE <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>`__
+SQL mode will disable recognition of the backslash as escape character.
+If set it will break SQL scanning regardless of this RFC.
 
-"string" means a binary
-~~~~~~~~~~~~~~~~~~~~~~~
+The
+`ANSI_QUOTES <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes>`__
+SQL mode switches from backtick to SQL standard double quotes for
+identifier literals.
 
-Question: Rename Randomizer::shuffleString() to Randomizer::shuffleBytes()?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Several `comment
+types <https://dev.mysql.com/doc/refman/8.0/en/comments.html>`__
+supported: ''-- '', ``#``, and ``/* */`` (not nested).
 
-.. _voting-choices-4:
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults. All
+comment types will be supported.
 
-Voting Choices
-^^^^^^^^^^^^^^
+PostgreSQL
+~~~~~~~~~~
 
--  Yes
--  No
+Escaping has evolved over the years. Historically accepted "\'", but
+started gradually transitioning to the SQL standard around 2005, going
+from memory. Since 9.1 (2011+) it accepts only single-quoted string
+literals by default according to the SQL standard. See `the
+documentation <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS>`__.
 
-.. _engine-classnames-are-not-precise-1:
+Postgres also supports `String Constants with Unicode
+Escapes <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE>`__,
+which follow the same conventions as standard strings and are parsed by
+PDO as regular strings.
 
-Engine classnames are not precise
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+It also accepts `“escape” string
+constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE>`__,
+e.g.
 
-Question: Rename PCG64 and MersenneTwister?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code:: php
 
-.. _voting-choices-5:
+   E'This \'word\' is a single quoted'
 
-Voting Choices
-^^^^^^^^^^^^^^
+Lastly, `Dollar-Quoted String
+Constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING>`__
+are very common, especially when defining functions.
 
--  Yes
--  No
+The behaviour of strings can also be manipulated in multiple ways
+through configuration variables, such as:
+`standard_conforming_strings <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>`__,
+`backslash_quote <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE>`__,
+and
+`escape_string_warning <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING>`__.
 
-.. _pcg-is-not-so-famous-1:
+About
+`comments <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS>`__,
+it follows the standard with ``--`` and ``/* */`` (w/ nested comments
+allowed)
 
-PCG is not so famous
-~~~~~~~~~~~~~~~~~~~~
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults.
+Dollar-quoting support requires minimal changes to the common PDO parser
+function. All comment types are already supported, albeit support for
+nested comments will not be introduced.
 
-Question: Add the Xoshiro256StarStar engine and class?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+SQLite
+~~~~~~
 
-.. _voting-choices-6:
+Follows the SQL standard, and requires double single quotes to represent
+the single quote in a string literal. See
+`documentation <https://www.sqlite.org/lang_expr.html#literal_values_constants_>`__.
 
-Voting Choices
-^^^^^^^^^^^^^^
+It will however accept double-quoted strings as string literals under
+`some
+circumstances <https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted>`__.
 
--  Yes
--  No
+Double quoted identifiers, but also `backticks and square
+brackets <https://sqlite.org/lang_keywords.html>`__.
+
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
+
+The RFC aims to support single-quoted, double-quoted, backtick, and
+square-bracketed literals. All comment types are already supported.
+
+SQL Server
+~~~~~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql?view=sql-server-ver16#character-string-constants>`__.
+
+Depending on the QUOTED_IDENTIFIER setting, double quotes are either
+used for strings or identifiers.
+
+Almost SQL standard
+`comments <https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+Firebird
+~~~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants>`__.
+It also support hexadecimal (binary) strings, e.g. ``x'50444F``', and,
+similarly to Oracle, quoted strings (out of scope).
+
+The documentation mentions "Double quotes are NOT VALID for quoting
+strings. The SQL standard reserves double quotes for a different
+purpose: quoting identifiers."
+
+Almost SQL standard
+`comments <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+ODBC
+~~~~
+
+Since ODBC can connect to various types of databases, the SQL standard
+parser hopefully will suffice.
+
+Oracle
+~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html>`__.
+It also supports alternative quoting, e.g. q'<literal>' and many other
+variants, which is out of scope for this RFC.
+
+`Double quoted
+identifiers <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA>`__.
+
+Almost SQL standard
+`comments <https://docs.oracle.com/en/database/oracle/oracle-database/12.2/sqlrf/Comments.html#SQLRF-GUID-5C84C344-CEB3-4DBF-B748-337DE11CCE2A>`__:
+``--`` and ``/* */`` (not nested).
+
+The OCI driver lives in PECL: the default scanner will be used by
+default, bringing compatibility for SQL standard string literals,
+identifiers, and comments.
+
+Historical Background
+---------------------
+
+A few years back I attempted to fix a bug and came up with a `pull
+request <https://github.com/php/php-src/pull/6852>`__ that could be
+considered a proof of concept for this RFC. The same topic was also
+brought up `by others on
+internals <https://externals.io/message/114016>`__, but no one had time
+to follow up with a proper RFC.
 
 Backward Incompatible Changes
 -----------------------------
 
-The following names have been reserved and will no longer be available:
+No BC breaks, but a deprecation notice will be raised when using the
+"escaped question marks inside dollar quoted string" workaround
+described before.
 
--  Random\Engine\Mt19937
--  Random\Engine\PcgOneseq128XslRr64
--  Random\Engine\Xoshiro256StarStar
-
-The following class names will be made available again:
-
--  Random\Engine\CombinedLCG
--  Random\Engine\MersenneTwister
--  Random\Engine\PCG64
--  Random\SerializableEngine
+Users having applications that can work with multiple database engines
+should still be very careful and write portable queries, possibly using
+the ``PDO::quote()`` method when necessary instead of hardcoding strings
+containing escape characters.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.2
+Next PHP 8.x, hopefully, 8.4.
 
 RFC Impact
 ----------
@@ -266,42 +352,108 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-none
+No impact
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-none
+Drivers outside of php-src might have to be modified if they make
+assumptions about the structure of the enum pdo_param_type. They would
+have to be rebuilt since the PDO_DRIVER_API macro would be updated.
+
+That has historically been allowed/expected in minor versions. The last
+time it happened was for PHP 7.2 with `PHP RFC: Extended String Types
+For PDO </rfc/extended-string-types-for-pdo>`__.
 
 To Opcache
 ~~~~~~~~~~
 
-none
+No impact to opcache.
 
 New Constants
 ~~~~~~~~~~~~~
 
-none
+No new constant.
 
 php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-none
+No php.ini changes
+
+Open Issues
+-----------
+
+No open issues ATM.
+
+Unaffected PHP Functionality
+----------------------------
+
+Anything not related to PDO scanning the SQL query for parameter
+placeholders.
+
+Out Of Scope
+------------
+
+Dynamic changes to the scanner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The scanners are generated when PHP is compiled and, currently, cannot
+be modified at runtime. However, some databases allow configuration
+directives or ``SET`` queries to change the accepted syntax for
+literals, identifiers, etc.
+
+Being able to understand all possible combinations would require
+tracking what directives are different from the expected default and
+having several scanners inside each driver for each possible permutation
+of such configuration directives.
+
+Future Scope
+------------
+
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or
+add other custom scanner functionality.
+
+Voting
+------
+
+Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As
+usual, 2/3 majority is needed for this proposal to be accepted.
+
+Question: Implement PDO Driver specific SQL parsers?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
--  https://github.com/php/php-src/pull/8094
+`Implementation Pull
+Request <https://github.com/php/php-src/pull/14035>`__
 
 References
 ----------
 
--  https://externals.io/message/117939
+-  [1] `https:bugs.php.net/bug.php?id=78534]] \* [2]
+   [[https:\ bugs.php.net/bug.php?id=79276|https:bugs.php.net/bug.php?id=79276]]
+   \* [3]
+   [[https:\ bugs.php.net/bug.php?id=80340|https:bugs.php.net/bug.php?id=80340]]
+   \* [4] [[rfc:pdo_escape_placeholders|PHP RFC: Escape PDO "?"
+   parameter placeholder]] \* [5]
+   [[https:\ github.com/php/php-src/pull/6852|PoC implementation of a
+   custom pdo_pgsql scanner <https://bugs.php.net/bug.php?id=78534>`__
+-  [6] `Previous discussion of the topic on
+   internals <https://externals.io/message/114016>`__
+-  [7] `More recent bug <https://github.com/php/php-src/issues/13958>`__
 
 Additional Metadata
 -------------------
 
-:First Published At: http://wiki.php.net/rfc/rng_extension
-:Original Authors: Go Kudo g-kudo@colopl.co.jp zeriyoshi@gmail.com
-:Slug: random_extension_improvement
-:Wiki URL: https://wiki.php.net/rfc/random_extension_improvement
+:Discussion: https://externals.io/message/123141
+:Implementation: https://github.com/php/php-src/pull/14035
+:Original Authors: Matteo Beccati, mbeccati@php.net
+:Slug: pdo_driver_specific_parsers
+:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_parsers
