@@ -1,0 +1,340 @@
+====== PHP RFC: Data Class ======
+
+  * Version: 0.9
+  * Date: 2024-11-23
+  * Author: Rob Landers, <landers.robert@gmail.com> | <rob@bottled.codes>
+  * Status: Under Discussion (or Accepted or Declined)
+  * First Published at: http://wiki.php.net/rfc/dataclass
+
+===== Introduction =====
+
+In modern software development, value semantics is a crucial concept that treats objects based on their content rather than their identity. Unlike traditional reference semantics, where equality is determined by object identity (i.e., whether two variables point to the same memory location), value semantics ensure that two objects are considered equal if all their properties are equal. This approach is widely used in functional programming and immutable data structures to simplify reasoning about state and equality.
+
+This RFC proposes the addition of data classes to PHP, which bring value semantics to the language. With data classes, developers can easily create objects that are compared by value rather than by reference. These objects offer benefits such as predictable equality checks, reduced side effects through optional immutability, and cleaner code for data-oriented programming. Additionally, data classes use copy-on-write semantics to optimize memory usage, ensuring high performance even in mutable scenarios.
+
+By introducing data classes, PHP aims to align with the value-oriented features found in modern programming languages such as Kotlin’s data class, Python’s @dataclass, and C#’s record and struct. This feature will enhance PHP’s expressiveness and allow developers to write cleaner, more robust, and easier-to-maintain code.
+
+===== Proposal =====
+
+This RFC introduces the ''%%data%%'' modifier to PHP classes, enabling developers to create **data classes**—a new type of class designed around **value semantics**. Data classes make working with structured, data-oriented objects easier, safer, and more predictable by treating objects as **values** rather than references.
+
+Key characteristics of ''%%data%%'' classes include:
+
+=== Value-Based Equality: ===
+
+  * Instances of data classes are considered equal (''%%===%%'') if all their properties are equal, regardless of their memory location or identity.
+  * This simplifies comparisons and makes data classes ideal for working with structured data.
+
+=== Copy-on-Write Mutability: ===
+
+  * Data classes allow mutation but create new instances when properties are modified (except within constructors). This ensures safe and predictable updates while minimizing memory overhead through copy-on-write optimizations.
+
+=== No Dynamic Properties: ===
+
+  * Data classes enforce strict property definitions, disallowing dynamic properties. This ensures that data structures are explicit and predictable, reducing runtime errors.
+
+=== Flexible Integration: ===
+
+  * Data classes can be combined with existing modifiers (final, abstract, readonly, etc.), allowing developers to tailor their behavior to specific use cases.
+
+By introducing the ''%%data%%'' modifier, PHP empowers developers to create concise, expressive, and efficient objects for managing structured data. The combination of value-based semantics and copy-on-write mutability strikes a balance between the flexibility of traditional PHP classes and the safety and predictability of value-oriented programming.
+
+Example:
+
+<code php>
+data class Rectangle {
+    public function __construct(public int $width, public int $height) {}
+    
+    public function area(): int {
+        return $this->width * $this->height;
+    }
+    
+    public function resize(int $width, int $height): static {
+        $this->height = $height;
+        $this->width = $width;
+        return $this;
+    }
+}
+
+$rectangle = new Rectangle(10, 20);
+$newRectangle = $rectangle;
+$newRectangle->width = 30;
+$otherRectangle = new Rectangle(30, 20);
+
+assert($rectangle !== $newRectangle); // true
+assert($newRectangle === $otherRectangle); // true
+
+$bigRectangle = $rectangle->resize(10, 20);
+assert($bigRectangle !== $rectangle); // true
+</code>
+
+==== Constructors ====
+
+In constructors, data classes are fully mutable and not copied during any changes.
+
+This is observable in the following example:
+
+<code php>
+data class UserId {
+    public string $name;
+
+    public function __construct(public int $id, string $name) {
+        $previous = $this;
+        $this->name = $name;
+        // copy-on-write semantics are not used in constructors
+        assert($this === $previous); // true
+    }
+    
+    public function changeName(string $name): static {
+        $previous = $this;
+        $this->name = $name;
+        // copy-on-write semantics are used everywhere else
+        assert($this !== $previous); // true
+        return $this;
+    }
+}
+</code>
+
+==== Combining with other class features ====
+
+The ''%%data%%'' modifier can be combined with other modifiers, such as ''%%final%%'', ''%%abstract%%'', ''%%readonly%%'', etc.
+
+<code php>
+final readonly data class Point {
+    public function __construct(public int $x, public int $y) {}
+    
+    public function withX(int $x): static {
+        return new static($x, $this->y);
+    }
+    
+    public function withY(int $y): static {
+        return new static($this->x, $y);
+    }
+}
+</code>
+
+==== Comparisons ====
+
+Data classes are compared by value (the sum of their private, protected, and public properties), not by reference. If a data class contains references, they are compared strongly.
+
+<code php>
+class User {
+    public function __construct(public string $name) {}
+}
+
+data class UserId {
+    public function __construct(public int $id, public User $user) {}
+}
+
+$user = new User('Rob');
+$userId = new UserId(1, $user);
+$userId2 = new UserId(1, $user);
+
+assert($userId === $userId2); // true
+$user->name = 'Bob';
+assert($userId === $userId2); // true
+assert($userId->user === $userId2->user); // true
+</code>
+
+Other comparison operators are left undefined for data classes.
+
+==== Inheritance ====
+
+Data classes can only inherit from other data classes and cannot be extended by non-data classes. Further, a data class that inherits from another data class only inherits its behavior; they are not comparable to each other.
+
+<code php>
+data class Point {
+    public function __construct(public int $x, public int $y) {}
+}
+
+data class Point2D extends Point {}
+
+assert(new Point(1, 2) !== new Point2D(1, 2)); // true
+</code>
+
+==== Reflection ====
+
+Reflection will be updated to include a ''%%isDataClass()%%'' method that returns true if the class is a data class.
+
+==== var_dump ====
+
+''%%var_dump%%'' will be updated to include a ''%%data%%'' modifier in the output for data classes.
+
+<code php>
+var_dump(new Point(1, 2));
+</code>
+
+<code>
+data object(Point)#1 (2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+</code>
+
+==== Serialization ====
+
+Data classes will be (un)serializable by default and will not require any additional logic or methods.
+
+<code php>
+$data = new Point(1, 2);
+$serialized = serialize($data);
+$unserialized = unserialize($serialized);
+assert($data === $unserialized); // true
+</code>
+
+==== Cloning ====
+
+Taking a clone of a data object works but has no observable effect. While technically, a new instance is received, it is equal to the original.
+
+==== Other class features ====
+
+Out-of-the-box, data classes enjoy the features of PHP classes, such as interfaces, traits, and hooks.
+
+<code php>
+interface Point {
+  public function add(Point $point): Point;
+  public float $length { get; }
+}
+
+trait PythagoreanTheorem {
+    public readonly float $length;
+
+    private function memoizeLength(): void {
+        $this->length = sqrt($this->x ** 2 + $this->y ** 2);
+    }
+}
+
+final readonly data class Point2D implements Point {
+    use PythagoreanTheorem; // contains implementation of $length
+    
+    public function __construct(public int $x, public int $y) {
+        $this->memoizeLength(); // from the trait
+    }
+    
+    public function add(Point $point): Point {
+        return new static($this->x + $point->x, $this->y + $point->y);
+    }
+}
+</code>
+
+==== Anonymous classes ====
+
+Anonymous classes can be data classes.
+
+<code php>
+$Point = new data class {
+    public function __construct(public int $x, public int $y) {}
+};
+</code>
+
+==== Optimizations and Performance ====
+
+The implementation of data classes in PHP leverages **copy-on-write** (CoW) semantics, a proven optimization technique that minimizes memory usage and reduces the cost of creating new instances during mutations. Here’s how it works in practice:
+
+=== Lazy Copying ===
+
+When a data class instance is assigned to another variable, no actual duplication of the object occurs immediately. Instead, both variables share the same underlying data, avoiding unnecessary memory allocation. This behavior is similar to how PHP handles arrays.
+
+Example:
+
+<code php>
+$rectangle1 = new Rectangle(10, 20);
+$rectangle2 = $rectangle1; // No copy yet
+</code>
+
+At this point, both ''%%$rectangle1%%'' and ''%%$rectangle2%%'' reference the same object data in memory.
+
+=== Copy-on-Write Trigger ===
+
+A copy is only made when a modification occurs on one of the variables. This ensures that changes are isolated, preserving the immutability of the original instance.
+
+Example:
+
+<code php>
+$rectangle2->width = 30; // Now a copy is created for $rectangle2
+</code>
+
+At this point, ''%%$rectangle2%%'' is backed by a new copy of the object, while ''%%$rectangle1%%'' retains the original data.
+
+This same behavior is applied, even while in a data class method.
+
+=== Performance Benefits ===
+
+  * **Reduced Memory Usage**: By deferring object duplication until necessary, data classes avoid the overhead of eagerly copying data structures, which can be particularly beneficial when dealing with large objects or collections of data classes.
+  * **Faster Assignments**: Assigning a data class to a new variable is a constant-time operation, as it involves merely copying a reference instead of duplicating the entire object.
+  * **Efficient Mutations**: Modifying a data class instance triggers a shallow copy only when there are multiple references. If the instance is the sole reference, no copy is needed, minimizing overhead.
+
+=== Reference Management ===
+
+The PHP runtime manages references to data class instances using an internal counter. When an object is referenced by more than one variable, the runtime recognizes this and ensures that any later modification results in a new object being created, leaving the original untouched.
+
+=== Integration with Opcache ===
+
+Opcache can further optimize data classes by detecting and caching their immutable structures, reducing redundant computations and improving execution speed in scripts where data class objects are frequently reused.
+
+==== Compared to other value semantics in other languages ====
+
+A ''%%readonly data class%%'' is very similar to kotlin’s ''%%data class%%'', or ''%%record%%'' in C#.
+
+A bare ''%%data class%%'' is similar to a ''%%struct%%'' in C#, ''%%@dataclass%%'' in Python, or a ''%%struct%%'' in Go.
+
+===== Backward Incompatible Changes =====
+
+''%%data%%'' becomes a semi-reserved keyword in PHP, and may break tokenization/parsing libraries.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP 8.x or 9.0
+
+===== RFC Impact =====
+
+==== To SAPIs ====
+
+No impact to SAPIs.
+
+==== To Existing Extensions ====
+
+Existing extensions will not be affected.
+
+==== To Opcache ====
+
+Opcache may make additional optimizations for data classes.
+
+==== New Constants ====
+
+No new constants are introduced.
+
+===== Open Issues =====
+
+  * Can data classes be used as array keys?
+  * Can data classes be considered "constant expressions" for usage as default values of class properties?
+
+===== Unaffected PHP Functionality =====
+
+All existing PHP functionality is unaffected.
+
+===== Future Scope =====
+
+GMP, bcmath, and other PHP extensions could be updated to use data classes.
+
+===== Proposed Voting Choices =====
+
+As this is a new feature, the vote will be a simple Yes/No vote with a 2/3 majority required for acceptance.
+
+
+===== Patches and Tests =====
+
+The pull request is available [[https://github.com/php/php-src/pull/16904|on GitHub]].
+
+===== References =====
+
+  * [[https://en.wikipedia.org/wiki/Value_semantics|Value semantics]]
+  * [[https://kotlinlang.org/docs/data-classes.html|Kotlin data classes]]
+  * [[https://docs.microsoft.com/en-us/dotnet/csharp/whats-new/tutorials/records|C# records]]
+  * [[https://docs.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/struct|C# structs]]
+
+===== Rejected Features =====
+
+N/A
