@@ -83,11 +83,10 @@ $assoc is ['a' => 'A', 'b' => $b];
 <code php>
 //// Patterns that we may still include, TBD. ////
 
-// Variable reference expressions
-// The syntax for this one is still in flux, don't worry about the details.
-// This would allow variables from the current scope to be part of a pattern.
-$foo is @($bar); // Matches $foo against the value of $bar
-$p is Point {y: 37, x:@($x)}; // $p->x === $x && $p->y == 37
+// Variable pinning
+// Using a variable as part of a pattern.
+$foo is ^$bar; // Matches $foo against the value of $bar
+$p is Point {y: 37, x:^$x}; // $p->x === $x && $p->y == 37
 
 // Nested patterns for captured variables
 $p is Point { x: 3, y: $y is 5|6 }; 
@@ -204,7 +203,7 @@ Valid literals include:
   * Any float
   * Any string literal that does no string interpolation, denoted with single quotes, double quotes, heredoc or nowdoc.  (So ''"boop"'' is fine, but ''"boop your $nose"'' is not.)
 
-Values that are dynamic at runtime (eg, an interpolated string with a variable in it) are not literal patterns.  However, see below on "limited expression patterns."
+Values that are dynamic at runtime (eg, an interpolated string with a variable in it) are not literal patterns.  However, see below on variable pinning.
 
 === Class constant pattern ===
 
@@ -214,7 +213,7 @@ Class constants may also be used as a pattern:
 $foo is 'spade'|'heart'|self::Wild;
 </PHP>
 
-Global constants may not be used directly, as they cannot be differentiated from class names.  However, they may be used in expression patterns (see below).
+Global constants may not be used directly, as they cannot be differentiated from class names.  However, they may be used in variable pinning (see below).
 
 Enumeration cases are implemented as class constants, so are supported as well.
 
@@ -250,7 +249,7 @@ These are where pattern matching really shines.  They are more involved/complex,
 
 === Object property pattern ===
 
-A pattern may also define a class and matches against scope-accessible properties of that object.  The properties must be accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
+A pattern may also define a class and matches against scope-accessible properties of that object.  The properties must be get-accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
 
 The "value" to match each property against is itself a pattern, so can leverage any of the above pattern combinations.
 
@@ -621,29 +620,33 @@ $result = match ($p) is {
 
 Note that in this case, the variables ''$x'', ''$y'', and ''$z'' may or may not be defined after the ''match()'' statement executes depending on which pattern was matched.
 
-==== Still in-development patterns ====
+==== Variable pinning ====
 
-The following patterns are nominally optional, and we are still exploring them and the proper syntax.  They will be included if we can figure out how to make them work nicely.
+Scalar variables may be used in a pattern by prefixing them with ''^''.  The carat indicates that the variable that follows is referencing an existing variable, rather than binding a variable.  This particular syntax was chosen as it is the same as in Ruby, the only other language we know of that has this functionality.
 
-=== Limited expression pattern ===
+Global constants may also be referenced using ''^'' the same way.
 
-The use of variables directly in a pattern is not supported, as it would conflict with variable binding.  However, they may be included by delineating them within <php>@()</php>.  This approach also works for global constants.  As with literals, they are useful mainly in compound patterns and <php>match()</php>.  (NOTE: We hate the <php>@()</php> syntax, too.  Alternative suggestions very welcome.  Please just consider the feature itself for the moment.)
+Only scalar (int, float, string) variables may be pinned.  The behavior of an object or array in a pattern is ambiguous, as technically neither are valid patterns.  (There are pattern syntaxes that look like them, but are not the same thing.)  This restriction may be lifted by a future RFC if a reasonable implementation is found.
+
+Expressions may not be pinned, only defined variables.  Allowing expressions opens up a whole host of potential side-effects and other weirdness, none of which we want to address.  If an expression is needed, calculate it first and assign it to a variable, which can then be pinned.
+
+As with literals, variable pinning is useful mainly in compound patterns and <php>match()</php>.
 
 <code php>
 // Simple degenerate case patterns.
-$foo is @($bar); // Equivalent to $foo === $bar
-$foo is @(PHP_VERSION); // Equivalent to $foo === PHP_VERSION
+$foo is ^$bar; // Equivalent to $foo === $bar
+$foo is ^PHP_VERSION; // Equivalent to $foo === PHP_VERSION
 
-// More practical compound expressions
-$foo is @(Errors::$notFound)|@(Errors::$invalid); // Equivalent to $foo === Errors::$notFound || $foo === Errors::$invalid
+// More practical compound patterns
+$foo is ^Errors::$notFound|^Errors::$invalid; // Equivalent to $foo === Errors::$notFound || $foo === Errors::$invalid
 
-// An object pattern with expressions to reference variables.
-$p is Point {y: 37, x:@($x),};
+// An object pattern with pinned variables.
+$p is Point {y: 37, x:^$x,};
 // Equivalent to:
 $p instanceof Point && $p->y === 37 && $p->x === $x;
 
-// An array pattern with expressions to reference variables.
-if ($assoc is ['a' => 'A', 'b' => @($b)]) {
+// An array pattern with pinned variables.
+if ($assoc is ['a' => 'A', 'b' => ^$b]) {
   print "Yes";
 }
 // True.  Equivalent to:
@@ -656,7 +659,7 @@ if (is_array($assoc)
 }
 </code>
 
-It would be possible to expand this pattern to support arbitrary expressions within the delimiters, including function calls.  However, that has been omitted at this time in the interest of simplicity.  If a good use case for it can be shown in the future, that can be added in a backward compatible way, however.
+==== Still in-development patterns ====
 
 === Variable binding pattern matching ===
 
@@ -665,7 +668,7 @@ When binding to a variable, the <php>is</php> keyword may be nested.  In that ca
 For example:
 
 <code php>
-if ($foo is Foo{a: @($someA), $b is Point(x: 5, y: @($someY)) }) {
+if ($foo is Foo{a: ^$someA, $b is Point(x: 5, y: ^$someY) }) {
   print "x is 5, y is $someY, z is $b->z";
 }
 // Equivalent to:
@@ -715,10 +718,6 @@ PHP 8.5/9.0.
 
 Do any other patterns need to be included in the initial RFC?  Are there any listed in Future Scope that are must-have for the initial release?
 
-==== Expression pattern syntax ====
-
-The @() syntax for expression patterns is still an open question.  It needs some kind of delimeter to differentiate it from class names and binding variables, but the specific syntax we are flexible on.
-
 ==== match() "is" placement ====
 
 The authors are split as to how the syntax for pattern matching <php>match()</php> should work.  There are two options:
@@ -740,6 +739,8 @@ $result = match ($somevar) {
 </code>
 
 The former is shorter, and applies pattern matching to all arms.  The latter is more explicit, and would allow individual arms to be pattern matched or not depending on the presence of ''is''.  Of course, these options are not mutually exclusive and supporting both would be possible.  We are looking for feedback on this question.
+
+Of note, all other languages we surveyed that have a similar match-like construct for pattern matching are "all or nothing".  (Or, in many cases, are only meaningful on patterns to begin with.)
 
 ===== Future Scope =====
 
@@ -799,6 +800,8 @@ $foo is >10;
 // Equivalent to:
 $foo > 10;
 </code>
+
+Earlier discussion suggested that such a syntax should only be implemented as part of a broader "range" syntax for the whole language.  For instance, allowing <php>foreach (1..10 as $i) { ... }</php>, and similar.  For that reason we have omitted range for now.
 
 (The syntax shown here is not fully developed.  Please do not nitpick it yet.  If there is interest in including ranges out of the gate, we will flesh this out further, possibly modeling on [[https://docs.raku.org/type/Range|Raku]] or similar.)
 
