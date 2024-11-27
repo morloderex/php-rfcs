@@ -681,6 +681,51 @@ $result = match ($p) is {
 
 Note that in this case, the variables ''$x'', ''$y'', and ''$z'' may or may not be defined after the ''match()'' statement executes depending on which pattern was matched.
 
+=== Applying patterns to bound variables ===
+
+Some languages support a dedicated syntax to apply additional restrictions (pattern based or otherwise) to a matched variable.  Say, only match if a given string property is one of a particular set of values, but if it is, then bind that value to the variable.
+
+Because the proposed syntax supports full DNF pattern combinations, such behavior is achievable without a dedicated syntax.  Specifically, a bind pattern and a filtering pattern may be combined with an ''&''.
+
+For example:
+
+<code php>
+if ($foo is Foo{a: ^$someA, b: $b & Point(x: 5, y: ^$someY) }) {
+  print "x is 5, y is $someY, z is $b->z";
+}
+// Equivalent to:
+if ($foo instanceof Foo
+    && $foo->a === $someA
+    && $foo->b instanceof Point
+    && $foo->b->x === 5
+    && $foo->b->y = $someY
+    ) {
+    $b = $foo->b;
+    print "x is 5, y is $someY, z is $b->z";
+}
+</code>
+
+In the above code, the pattern will match only if both ''$b'' and ''Point(x: 5, y: ^$someY)'' match $foo->b.  A binding variable will always match, so is always true.  The object pattern may or may not match, which is the desired behavior.
+
+<code php>
+if ($params is ['user' => $user & AuthenticatedUser{role: 'admin'}, ...]) {
+    print "Congrats, $user->name, you can do admin things!"
+}
+// Equivalent to:
+if (is_array($params)
+    && array_key_exists($params, 'user')
+    && $params['user'] instanceof AuthenticatedUser
+    && $params['user']->role === 'admin'
+    ) {
+    $user = $params['user'];
+    print "Congrats, $user->name, you can do admin things!"
+}
+</code>
+
+Similarly, in the above code, The ''user'' key needs to validate against the ''AuthenticatedUser'' pattern, and against the always-true ''$user'' binding pattern.
+
+This does limit the available restrictions to those expressable as patterns, which is not all possible restrictions.  However, this behavior is available "for free" by virtue of how ''&'' pattern combinations work.  It will also naturally become more powerful in the future if and when additional pattern types are added.  At this time, we don't see a necessity to add additional syntax for more complex cases.  However, such additions could be made in future RFCs if a need is found.  (In most languages, it's a suffix like ''if'' or ''when'' that evaluates a boolean expression, which could itself be a pattern.)
+
 ==== Variable pinning ====
 
 Scalar variables may be used in a pattern by prefixing them with ''^''.  The carat indicates that the variable that follows is referencing an existing variable, rather than binding a variable.  This particular syntax was chosen as it is the same as in Ruby, the only other language we know of that has this functionality.
@@ -719,47 +764,6 @@ if (is_array($assoc)
     print "Yes";
 }
 </code>
-
-==== Still in-development patterns ====
-
-=== Variable binding pattern matching ===
-
-When binding to a variable, the <php>is</php> keyword may be nested.  In that case, the entire pattern must succeed or fail.  Values will be bound if and only if all binding patterns match as well.
-
-For example:
-
-<code php>
-if ($foo is Foo{a: ^$someA, $b is Point(x: 5, y: ^$someY) }) {
-  print "x is 5, y is $someY, z is $b->z";
-}
-// Equivalent to:
-if ($foo instanceof Foo
-    && $foo->a === $someA
-    && $foo->b instanceof Point
-    && $foo->b->x === 5
-    && $foo->b->y = $someY
-    ) {
-    $b = $foo->b;
-    print "x is 5, y is $someY, z is $b->z";
-}
-</code>
-
-<code php>
-if ($params is ['user' => $user is AuthenticatedUser{role: 'admin'}, ...]) {
-    print "Congrats, $user->name, you can do admin things!"
-}
-// Equivalent to:
-if (is_array($params)
-    && array_key_exists($params, 'user')
-    && $params['user'] instanceof AuthenticatedUser
-    && $params['user']->role === 'admin'
-    ) {
-    $user = $params['user'];
-    print "Congrats, $user->name, you can do admin things!"
-}
-</code>
-
-(Note: Some languages use a different syntax than above for this behavior.  We are still investigating the ideal syntax to use.  Rust, for instance, uses an ''@'' suffix on a pattern to indicate further restrictions to apply.)
 
 ===== Backward Incompatible Changes =====
 
