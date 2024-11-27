@@ -1,0 +1,131 @@
+====== PHP RFC: Persistent curl share handle improvement ======
+  * Version: 1.0
+  * Date: 2024-11-27
+  * Author: Eric Norris, erictnorris@gmail.com
+  * Status: Under Discussion
+  * First Published at: https://wiki.php.net/rfc/curl_share_persistence
+
+===== Introduction =====
+
+The vote for [[rfc:curl_share_persistence|PHP RFC: Add persistent curl share handles]] passed, but discussion raised after voting brought up the possibility of an improved implementation.
+
+After finishing up the [[https://github.com/php/php-src/pull/15603|original implementation pull request]], I had some free time to explore an alternative implementation: https://github.com/php/php-src/pull/16937.
+
+As a reminder, the previously accepted signature was: ''curl_share_init(?array $share_options, ?string $persistent_id): CurlShareHandle''.
+
+==== Issue: CURL_LOCK_DATA_COOKIE is potentially dangerous ====
+
+Tim Düsterhus noted concerns about allowing the ''CURL_LOCK_DATA_COOKIE'' share option:
+
+> Accidentally sharing a cookie jar for unrelated requests due to a badly chosen `$persistent_id` sounds like a vulnerability to is bound to happen to someone.
+
+This was addressed with an update to the wording of the RFC, but still remains a valid option.
+
+==== Issue: Users must choose persistent IDs ====
+
+Tim Düsterhus also noted concerns about chosen ''$persistent_id'' arguments:
+
+> Also badly chosen $persistent_ids might result in a large number of handles accumulating, without any kind of garbage collection. For the existing persistent handles (e.g. for database connections), the ID is chosen by PHP itself, ensuring a somewhat predictable behavior.
+
+This was not addressed in the RFC.
+
+==== Issue: Persistent share handles are not immutable ====
+
+The [[https://github.com/php/php-src/pull/15603|implementation pull request]] stated:
+
+> It is noteworthy that calling curl_share_setopt on the persistent handle would affect future requests using the handle; we could consider preventing this.
+
+This did not come up in any discussion on the mailing list. While it is possible to prevent this with a runtime check in ''curl_share_setopt'', and that may be within the bounds of the RFC implementation, it is not preventable via static analysis. The type signature of ''curl_share_setopt'' will not warn a user if they are passing in a persistent ''CurlShareHandle''.
+
+===== Proposal =====
+
+Introduce a new ''curl_share_init_persistent(array $share_options)'' function instead of adding optional parameters to the ''curl_share_init'' function.
+
+The new function will return a ''CurlSharePersistentHandle'' object that is usable with ''curl_setopt'' via the ''CURLOPT_SHARE'' option. The object will not be usable with any existing ''curl_share_*'' functions, as it should not be possible to change the options of a ''CurlSharePersistentHandle'' once created.
+
+[[https://www.php.net/manual/en/curl.constants.php#constant.curl-lock-data-cookie|CURL_LOCK_DATA_COOKIE]] will not be allowed as a share option.
+
+The documentation for this function may look like:
+
+==== curl_share_init_persistent ====
+
+''curl_share_init_persistent'' — Initialize a **persistent** cURL share handle.
+
+=== Description ===
+
+<code php>curl_share_init_persistent(array $share_options): CurlSharePersistentHandle</code>
+
+Initialize a **persistent** cURL share handle with the given share options. It will not be destroyed at the end of the PHP request. If a persistent share handle with the same set of ''$share_options'' is found, it will be reused.
+
+=== Parameters ===
+
+  * ''$share_options'' — an array of [[https://www.php.net/manual/en/curl.constants.php#constant.curl-lock-data-connect|CURL_LOCK_DATA_*]] constants. **Note**: [[https://www.php.net/manual/en/curl.constants.php#constant.curl-lock-data-cookie|CURL_LOCK_DATA_COOKIE]] is not allowed and, if specified, this function will throw a ''RuntimeException''. Sharing cookies between PHP requests may lead to inadvertently mixing up sensitive cookies between users.
+
+=== Return Values ===
+
+Returns a persistent cURL handle on success.
+
+===== Improvements over the original RFC =====
+
+  * ''CURL_LOCK_DATA_COOKIE'' is not allowed, which, roughly speaking, keeps curl share handles stateless. This avoids a large class of potentially hard-to-debug errors.
+  * Users no longer have to choose a persistent ID; the function implementation will reuse a single curl share handle per unique set of ''$share_options''. This simplifies usage:
+    * Users can start using new share options immediately without needing to remember to also change the ''$persistent_id''.
+    * Users cannot accidentally use a ''$persistent_id'' that corresponds to a handle with ''$share_options'' different from what they would expect.
+    * Users cannot accidentally balloon memory usage via a poorly chosen dynamic ''$persistent_id''.
+  * Since ''CurlSharePersistentHandle'' is a unique type, it is not usable with any existing ''curl_share_*'' functions. This means that once created, a ''CurlSharePersistentHandle'' is immutable.
+
+===== Backward Incompatible Changes =====
+
+None. the previous RFC implementation has not landed in any released PHP version.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP minor release.
+
+===== RFC Impact =====
+
+==== To SAPIs ====
+Effectively none. SAPIs will consume more memory proportional to the number of persistent curl share handles, but the number of unique possibilities for ''$share_options'' is too low to matter.
+
+==== To Existing Extensions ====
+
+''ext/curl'' will have a new function.
+
+==== To Opcache ====
+
+None.
+
+==== New Constants ====
+
+None.
+
+==== php.ini Defaults ====
+
+None.
+
+===== Proposed Voting Choices =====
+
+This vote requires a ⅔ majority:
+
+<doodle title="Accept curl_share_init_persistent(array $share_options): CurlSharePersistentHandle over the previous RFC signature" auth="enorris" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+This vote requires a simple majority:
+
+<doodle title="Disallow CURL_LOCK_DATA_COOKIE in $share_options" auth="enorris" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Patches and Tests =====
+
+  * https://github.com/php/php-src/pull/16937
+
+===== Implementation =====
+
+===== References =====
+
+  * https://wiki.php.net/rfc/curl_share_persistence
+  * https://externals.io/message/125858
