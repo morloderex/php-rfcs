@@ -1,0 +1,99 @@
+====== PHP RFC: isReadable/Writeable reflection methods ======
+  * Version: 0.9
+  * Date: 2024-11-28
+  * Author: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/isreadable-iswriteable
+
+===== Introduction =====
+
+The <php>ReflectionProperty::isPublic()</php> method, by design, indicates only if a property has a "public" flag set on it, nothing more.  Prior to PHP 8.1, that implicitly also meant "can be written to from scope outside the object."  However, PHP 8.1 introduced ''readonly'' properties, which broke that assumption with implicit private-set visibility.  The addition of explicit asymmetric visibility in PHP 8.4 further undermined that assumption.  The result is that there is currently no straightforward way to determine at runtime if reading from or writing to a property would be allowed.  This RFC attempts to provide such a utility.
+
+===== Proposal =====
+
+The <php>ReflectionProperty</php> object will be expanded with two additional methods, as defined below:
+
+<code php>
+class ReflectionProperty
+{
+    // ... All the existing functionality.
+    
+    public function isReadable(?string $scope = 'static', ?object $object = null): bool {}
+
+    public function isWriteable(?string $scope = 'static', ?object $object = null): bool {}
+}
+</code>
+
+The behavior of the parameters is the same for both methods.
+
+==== $scope ====
+
+The <php>$scope</php> parameter specifies the scope from which we want to know if the operation is valid.  Put another way, these methods can be read as "if I were to try to read/write this property from $scope, would that be allowed?"
+
+The <php>$scope</php> parameter may have one of three values:
+
+  * The string ''static''.  This is the default if no scope is specified.  This indicates the desired scope is wherever the method is being called from.  It means essentially "if the code right after this method call tried to read/write the property, is that allowed?"
+  * ''null''.  A ''null'' scope refers to the global scope.  That is, "would it be allowed to read/write this property from global scope?"
+  * A class name string.  Any defined class name.  "Would it be allowed to read/write this property from a method on this class?"
+
+==== $object ====
+
+The <php>$object</php> parameter is an optional object to analyze the property on.  If not provided, the analysis will look only at static information on the property, and thus ignore information such as if a ''readonly'' property has already been written to.
+
+
+==== Considered factors ====
+
+Both methods will examine the same information about a property, if available, to determine if the operation would be allowed.
+
+''isReadable()''
+
+  * Checks that the property is readable from the passed scope
+  * Checks that the property is initialized (i.e. not typed and never written to) (This check is skipped if no ''$object'' is provided.)
+  * Checks that the property is not virtual or has a get hook
+
+''isWritable()''
+
+  * Checks that the property is writable (respecting symmetric and asymmetric properties) from the passed scope
+  * Checks that the property is not ''readonly'', is not yet initialized, or is reinitializable (</php>__clone</php>)  (Initialization is not checked if no ''$object'' is provided.)
+  * Checks that the property is not virtual or has a ''set'' hook
+
+Of note, this does not absolutely guarantee that a read/write will succeed. There's at least two exceptions: 
+
+One, some PHP built-in classes have effectively immutable properties but do not use ''readonly'' or ''private(set)''. Those would not be detected here, until and unless they are updated to use the now-available mechanisms. (See, eg: https://github.com/php/php-src/issues/15309)
+
+Two, a ''get'' or ''set'' hook may throw an exception under arbitrarily complex circumstances. There is no way to evaluate that via reflection, so it's a gap that will necessarily always be there.
+
+===== Backward Incompatible Changes =====
+
+None.
+
+===== Proposed PHP Version(s) =====
+
+PHP 8.5
+
+
+===== Proposed Voting Choices =====
+
+Yes or no vote, 2/3 required to pass.
+
+<doodle title="Approve asymmetric visibility for static properties?" auth="crell" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
+
+===== Patches and Tests =====
+
+
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
