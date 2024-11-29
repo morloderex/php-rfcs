@@ -1,393 +1,118 @@
-PDO Driver Specific Sub-classes
-===============================
+Add 4 New Rounding Modes To Round() Function
+============================================
 
 :PHP-RFC: 0874
-:Title: PDO Driver Specific Sub-classes
-:Author: Danack
-:Status: Accepted
-:Type: Unknown
-:Created: 2022-06-20
+:Title: Add 4 New Rounding Modes To Round() Function
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-08-31
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-PDO is a generic database class. Some of the databases it supports have
-functionality that is specific to that database. For example, when
-connected to an SQLite database, the sqlite specific function
-PDO::sqliteCreateFunction is available.
+The RFC proposes to add 4 new modes to the round() function.
 
-Having methods exist on a class depending on how the program was
-compiled and/or what database it is connecting to is quite surprising.
-It would make the code be easier to reason about if there were
-subclasses of the PDO class, specific to each database that has specific
-functionality available.
+-  `PHP_ROUND_CEILING <https://en.wikipedia.org/wiki/Rounding#Rounding_up>`__,
+-  `PHP_ROUND_FLOOR <https://en.wikipedia.org/wiki/Rounding#Rounding_down>`__,
+-  `PHP_ROUND_AWAY_FROM_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero>`__,
+-  `PHP_ROUND_TOWARD_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero>`__.
+
+..
+
+   **Note:** The aforementioned have been transformed into an enum in a
+   `follow-up
+   RFC <https://wiki.php.net/rfc/correctly_name_the_rounding_mode_and_make_it_an_enum>`__.
+
+Two first comments on the `documentation page of the
+round() <https://www.php.net/manual/en/function.round.php>`__ function
+are related to the missing modes of rounding. The first comment has an
+outstanding number of 309 votes.
+
+Moreover, the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+already implements 4 new proposed modes known as ROUND_CEILING,
+ROUND_FLOOR, ROUND_DOWN, ROUND_UP.
 
 Proposal
 --------
 
-The proposal has two parts:
-
--  Add new subclasses of PDO with driver specific methods.
--  Add PDO::connect to be able to create the specific subclasses.
-
-Add new subclasses of PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-All of the PDO extensions that are part of the PHP src repository will
-have subclasses created for them.
-
-Some of these subclasses will expose functionality that exists that is
-peculiar to that DB, and not present in the generic PDO class. e.g.
-PdoSqlite::createFunction() should be there rather than on the generic
-PDO class PDO::sqliteCreateFunction.
-
-.. code:: php
-
-   class PdoDblib extends PDO
-   {
-
-   }
-
-.. code:: php
-
-   class PdoFirebird extends PDO
-   {
-    
-   }
-
-.. code:: php
-
-   class PdoMySql extends PDO
-   {
-       public function getWarningCount(): int {}
-   }
-
-.. code:: php
-
-   class PdoOci extends PDO
-   {
-     
-   }
-
-.. code:: php
-
-   class PdoOdbc extends PDO
-   {
-
-   }
-
-.. code:: php
-
-   class PdoPgsql extends PDO
-   {
-       /**
-        * @var int
-        * @cname PDO_PGSQL_ATTR_DISABLE_PREPARES
-        */
-       public const ATTR_DISABLE_PREPARES = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_IDLE
-        */
-       public const TRANSACTION_IDLE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_ACTIVE
-        */
-       public const TRANSACTION_ACTIVE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INTRANS
-        */
-       public const TRANSACTION_INTRANS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INERROR
-        */
-       public const TRANSACTION_INERROR = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_UNKNOWN
-        */
-       public const TRANSACTION_UNKNOWN = UNKNOWN;
-
-       public function escapeIdentifier(string $input): string {}
-
-       public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): array|false {}
-
-       public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function lobCreate(): string|false {}
-
-       // Opens an existing large object stream.  Must be called inside a transaction.
-       /** @return resource|false */
-       public function lobOpen(string $oid, string $mode = "rb"){}
-
-       public function lobUnlink(string $oid): bool {}
-
-       public function getNotify(int $fetchMode = PDO::FETCH_USE_DEFAULT, int $timeoutMilliseconds = 0): array|false {}
-
-       public function getPid(): int {}
-   }
-
-.. code:: php
-
-   class PdoSqlite extends PDO
-   {
-       /**
-        * @var int
-        * @cname SQLITE_DETERMINISTIC
-        */
-       public const DETERMINISTIC = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_OPEN_FLAGS
-        */
-       public const ATTR_OPEN_FLAGS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READONLY
-        */
-       public const OPEN_READONLY = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READWRITE
-        */
-       public const OPEN_READWRITE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_CREATE
-        */
-       public const OPEN_CREATE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_READONLY_STATEMENT
-        */
-       public const ATTR_READONLY_STATEMENT = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname
-        */
-       public const ATTR_EXTENDED_RESULT_CODES = UNKNOWN;
-
-       // Registers an aggregating User Defined Function for use in SQL statements
-       public function createAggregate(
-           string $name,
-           callable $step,
-           callable $finalize,
-           int $numArgs = -1
-       ): bool {}
-
-       // Registers a User Defined Function for use as a collating function in SQL statements
-       public function createCollation(string $name, callable $callback): bool {}
-
-       public function createFunction(
-           string $function_name,
-           callable $callback,
-           int $num_args = -1,
-           int $flags = 0
-       ): bool {}
-
-   // Whether SQLITE_OMIT_LOAD_EXTENSION is defined or not depends on how
-   // SQLite was compiled: https://www.sqlite.org/compile.html
-   #ifndef SQLITE_OMIT_LOAD_EXTENSION
-       public function loadExtension(string $name): bool {}
-   #endif
-
-       public function openBlob(
-           string $table,
-           string $column,
-           int $rowid,
-           ?string $dbname = "main", //null,
-           int $flags = PdoSqlite::OPEN_READONLY
-       ): mixed /* resource|false */ {}
-   }
-
-Although there may be DB specific functionality that could be exposed
-for the other database types that PDO supports, this RFC does not intend
-to expose them.
-
-Add a way of creating them through PDO static factory method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Add a static factory method to PDO called connect. During the connect
-process, the exact type of database being connected to will be checked,
-and if it is a DB that has a specific sub-class (i.e. all of those
-extension that ship with PHP core), return that sub-class instead of a
-generic PDO object
-
-.. code:: php
-
-   class PDO
-   {
-       public static function connect(string $dsn [, string $username [, string $password [, array $options ]]]) {
-
-           if (connecting to SQLite DB) {
-               return new PdoSqlite(...);
-           }
-
-
-           return new PDO(...);
-       }
-   }
-
-PDO::connect will return the appropriate sub-class when connecting to
-specific type of DB.
-
-Users will also be able to create the DB specific classes directly,
-through the appropriate constructor e.g.
-
-.. code:: php
-
-   $db = new PdoSqlite($dsn, $username, $password, $options);
-
-The code will throw an exception if the type of database being connected
-to isn't of the correct type for the class.
-
-Sqlite Extension directory ini setting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The Sqlite3 extension requires users to set an ini setting to allow
-SQLite extensions to be loaded, presumably from a desire to keep things
-'secure'. However, as this appears to only be a vulnerability if someone
-is able to upload and execute PHP code on a server, in which case the
-box is completely compromised any way, it doesn't seem to be necessary.
-
-Additionally, in the proposed PdoSqlite class this code:
-
-.. code:: c
-
-   sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1);
-
-is used to temporarily enable extension loading, before loading the
-extension, which only enables it through the C api, whereas the Sqlite3
-extension uses the code:
-
-.. code:: c
-
-   sqlite3_enable_load_extension(sqlite_handle, 1);
-
-which affects both the C api and loading extensions through SQL code.
+Adding 4 new constants for the rounding modes of function round():
+
+-  PHP_ROUND_CEILING - rounds num to the nearest integer bigger than
+   num,
+-  PHP_ROUND_FLOOR - rounds num to the nearest integer lower than num,
+-  PHP_ROUND_AWAY_FROM_ZERO - rounds num away from zero,
+-  PHP_ROUND_TOWARD_ZERO - rounds num towards zero.
+
+Creating two aliases of constants from Intl extension to have consistent
+naming for rounding modes:
+
+-  ROUND_TOWARD_ZERO (equivalent of PHP_ROUND_TOWARD_ZERO) alias of
+   `ROUND_DOWN <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-down>`__
+-  ROUND_AWAY_FROM_ZERO (equivalent of PHP_ROUND_AWAY_FROM_ZERO) alias
+   of
+   `ROUND_UP <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-up>`__
 
 Backward Incompatible Changes
 -----------------------------
 
-None known. It might be inconvenient for people who are extending PDO
-class directly, and would like to extend the specific types. They would
-need to write their own connect functions, that wrap and proxy those
-specific types.
+None
 
-Proposed PHP Version(s)
------------------------
+Proposed PHP Versions
+---------------------
 
-PHP 8.3
+8.4
 
-RFC Impact
-----------
+Questions
+---------
 
-To SAPIs
-~~~~~~~~
+Why not use functions ceil() and floor()?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Describe the impact to CLI, Development web server, embedded PHP etc.
+The functions ceil() and floor() round numbers to the full integer,
+while the function round() rounds the number by given precision.
+Implementing new rounding modes we get equivalent of those functions
+using round() with 0 as precision.
 
-Open Issues
------------
+.. code:: php
 
-These are the known current issues.
+   ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
+   floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
 
-Unaffected PHP Functionality
-----------------------------
+Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Everything not PDO
+Such constants already exist in the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+and represent rounding modes 'away from zero' and 'toward zero'. However
+the names rounding up and down are ambiguous. They may be easily
+confused with the rounding ceiling/floor, while the terms away
+from/toward zero are distinct.
 
-Frequently asked questions
---------------------------
+Those constants would be deprecated and replaced with their
+corresponding aliases: ROUND_TOWARD_ZERO and ROUND_AWAY_FROM_ZERO.
 
-if someone does 'new PDO(...)' will they now get back 'PdoPgsql'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Why not the enum implementation for the rounding modes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-No.
-
-Future Scope
-------------
-
-When to deprecate old function on PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The method PDO::sqliteCreateFunction and other driver specific methods
-should probably be deprecated and removed at 'some point'. Although this
-cleanup should happen, the position of this RFC is that it's very low
-priority, as that code has sat there for years not requiring much
-maintainance.
-
-Removing the methods that magically exist or not depending on the
-specific driver created would save some complication in the PDO code. So
-although there's no benefit in userland for deprecating the existing
-magic methods, there may be a complexity saving in maintenance.
-
-Choosing the version for them to be deprecated in can be left until the
-future.
-
-Quoting identifiers
-~~~~~~~~~~~~~~~~~~~
-
-During the discussion, a point was raised that currently there is no
-"escape identifier" method on the base PDO class. Postgres at least has
-a specific method for escaping identifiers as the rules for escaping
-those are different from escaping values. It sounds valuable to add an
-escape method to the base PDO class, but that needs to be done by
-someone familiar with all of the database drivers.
-
-SQLite constants
-~~~~~~~~~~~~~~~~
-
-There are SQLite constants that are not currently exposed in the SQLite3
-extension including:
-
--  SQLITE_DIRECTONLY
--  SQLITE_INNOCUOUS
--  SQLITE_SUBTYPE
-
-I don't intend to add these as I don't understand them.
-
-PdoSqlite aggregations, collations and functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The code for these functions has been copied from the Sqlite3 extension.
-Although SQLite allows creating these with different flags to indicate
-what character set data should be in, the implementation is hard-coded
-to use the SQLITE_UTF8 flag.
-
-It would be possible to expose, and allow users to set, the flags of
-SQLITE_UTF16, SQLITE_UTF16BE, SQLITE_UTF16LE, SQLITE_UTF16_ALIGNED, and
-SQLITE_UTF8, however what the API should look like for that is 'not
-obvious', aka I have no idea what it should be like, despite having
-thought about it for a few hours. So, I'm planning to leave it out of
-this RFC.
+As this is extension of the existing modes we should add complementary
+modes to the existing constants instead implementing new Enum. This way
+enum is an addition to the new constants and is not included into this
+RFC.
 
 Proposed Voting Choices
 -----------------------
 
-Accept the RFC or not.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Question: PDO driver specific subclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Voting started on 2023-11-15 and will end on 2023-11-30 00:00 GMT.
+
+Question: Implement 4 new rounding modes to \`round()\` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -395,31 +120,31 @@ Voting Choices
 -  Yes
 -  No
 
-Voting closes at 2023-07-17T17:00:00Z
+--------------
 
-Patches and Tests
------------------
+If the first voting is not accepted the result of the second voting will
+be ignored.
 
-WIP code https://github.com/php/php-src/pull/8707
+Question: Create aliases for Intl extension constants ROUND_UP and ROUND_DOWN: ROUND_AWAY_FROM_ZERO and ROUND_TOWARD_ZERO
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+GitHub pull request: https://github.com/php/php-src/pull/12056
 
 References
 ----------
 
-A proposal to add `sqlite openblob
-functionality </rfc/implement_sqlite_openblob_in_pdo>`__ previously
-failed to pass. The discussion gave the impression that the sub-classing
-`approach would be more
-acceptable <https://externals.io/message/100773#100813>`__.
+Links to external references, discussions or RFCs
 
 Rejected Features
 -----------------
@@ -429,6 +154,8 @@ Keep this updated with features that were discussed on the mail lists.
 Additional Metadata
 -------------------
 
-:Original Authors: Danack
-:Slug: pdo_driver_specific_subclasses
-:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_subclasses
+:Implementation: https://github.com/php/php-src/pull/12056
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: new_rounding_modes_to_round_function
+:Wiki URL: https://wiki.php.net/rfc/new_rounding_modes_to_round_function
