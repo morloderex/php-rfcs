@@ -1,0 +1,105 @@
+====== PHP RFC: Attributes on Constants ======
+  * Version: 0.1
+  * Date: 2024-11-30
+  * Author: Daniel Scherzer, daniel.e.scherzer@gmail.com
+  * Status: Under Discussion
+  * First Published at: http://wiki.php.net/rfc/attributes-on-constants
+  * Implementation: https://github.com/php/php-src/pull/16952
+
+===== Introduction =====
+Attributes were first introduced in [[rfc:attributes_v2]], with the current syntax adopted [[rfc:shorter_attribute_syntax_change]]. This RFC would add support for attributes on
+
+  * Compile-time non-class constants
+
+To the list of current valid targets (see [[rfc:attributes_v2#attribute_syntax]]):
+
+  * functions (including closures and short closures)
+  * classes (including anonymous classes), interfaces, traits
+  * class constants
+  * class properties
+  * class methods
+  * function/method parameters
+
+Additionally, taking advantage of this new feature, the <php>#[\Deprecated]</php> attribute is updated to also target compile-time non-class constants.
+
+"Compile-time non-class constants" refers to constants defined via <php>const MY_CONST = 5;</php> (for example) rather than those via <php>define( 'MY_CONST', 5 );</php>. Unless clear from context, in this RFC "constant" refers to a compile-time non-class constant.
+
+===== Proposal =====
+
+Attributes are allowed to target constants, with the introduction of a <php>Attribute::TARGET_CONSTANT</php>. Additionally, <php>Attribute::TARGET_ALL</php> will now include constants.
+
+To prevent confusing code, attributes are only allowed to be applied to constants that are declared in their own statement:
+
+<PHP>
+// This is okay
+#[\MyAttribute]
+const Example1 = 1;
+
+// This is an error
+#[\MyAttribute]
+const Example2 = 2,
+    Example3 = 3;
+</PHP>
+
+To expose information about these attributes to runtime, <php>ReflectionConstant::getAttributes()</php> is introduced.
+
+Additionally, the <php>#[\Deprecated]</php> attribute is updated to allow targeting constants; when applied, the constant is marked with ''CONST_DEPRECATED''.
+
+===== Backward Incompatible Changes =====
+New constant <php>Attribute::TARGET_CONSTANT</php> may conflict with subclasses that define such a constant of their own.
+
+Since <php>ReflectionConstant</php> is <php>final</php>, the added method shouldn't cause any conflicts.
+
+Extensions that validate the usage of their attributes and use <php>Attribute::TARGET_ALL</php> may need to be updated.
+
+===== Proposed PHP Version(s) =====
+Next version of PHP (PHP 8.5 or PHP 9.0)
+
+===== RFC Impact =====
+==== To SAPIs ====
+Just noting for completion: the current implementation passes the attribute information to runtime via a new opcode, ''ZEND_DECLARE_ATTRIBUTED_CONST'', that phpdbg will ignore the same way it ignores ''ZEND_DECLARE_CONST''.
+
+==== To Opcache ====
+The JIT currently has logic to emit deprecation messages for constants that are deprecated; to avoid duplicating the new logic to check a constant's attributes for a <php>#[\Deprecated]</php> attribute, that logic is centralized in a new <php>zend_deprecated_constant()</php> function.
+
+==== To Reflection ====
+New method <php>ReflectionConstant::getAttributes()</php> is added, with a signature to match the other such methods for retrieving attributes:
+
+<PHP>
+final class ReflectionConstant implements Reflector
+{
+    // Everything that currently exists
+    // ...
+
+    public function getAttributes(?string $name = null, int $flags = 0): array {}
+}
+</PHP>
+
+Additionally, code that expects <php>ReflectionConstant::isDeprecated()</php> to always return <php>false</php> for userland constants will need to be updated, since it can now be true.
+
+==== New Constants ====
+<php>Attribute::TARGET_CONSTANT</php> indicates that an attribute can be applied to compile-time non-class constants.
+
+===== Unaffected PHP Functionality =====
+Existing uses of attributes or constants - previously, trying to add an attribute to a constant would have generated an error, so any existing working current code should continue to work as expected.
+
+===== Future Scope =====
+Adding support to non-compile-time non-class constants, via <php>define()</php>.
+
+===== Proposed Voting Choices =====
+This vote requires a 2/3 majority to adopt.
+
+===== Patches and Tests =====
+https://github.com/php/php-src/pull/16952
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+  * [[rfc:attributes_v2]]
+  * [[rfc:shorter_attribute_syntax_change]]
+  * https://github.com/php/php-src/pull/16952
