@@ -1,247 +1,100 @@
-Disjunctive Normal Form Types
-=============================
+Change Directory Class To Behave Like A Resource Object
+=======================================================
 
 :PHP-RFC: 0844
-:Title: Disjunctive Normal Form Types
-:Author: George Peter Banyard <girgias@php.net>, Larry Garfield <crell@php.net>
-:Status: Implemented
+:Title: Change Directory Class To Behave Like A Resource Object
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Accepted
 :Type: Standards Track
-:Created: 2021-11-04
-:PHP-Version: 8.2
-:Version: 0.9
+:Created: 2024-09-14
+:PHP-Version: 8.5
+:Version: 0.1
 
 Introduction
 ------------
 
-`Disjunctive Normal
-Form <https://en.wikipedia.org/wiki/Disjunctive_normal_form>`__ (DNF) is
-a standard way of organizing boolean expressions. Specifically, it means
-structuring a boolean expression into an ORed series of ANDs. When
-applied to type declarations, it allows for a standard way to write
-combined Union and Intersection types that the parser can handle.
+The ``Directory`` class is probably the first instance of what we now
+call a "resource object" (and in its stricter sense an "opaque object").
+Resource/Opaque objects are usually the result of converting resources
+to objects, which in general implies, being ``final``, not serializable,
+not constructible via ``new``, cannot be cast, and does not implement
+any methods. However, as this class has existed since PHP 4 none of
+these things are formally implemented.
 
-This RFC proposes to support DNF types in order to allow mixing of union
-and intersection types.
+Valid instances of this class are created by calling the ``dir()``
+function. But one can create a broken instance by just using
+``new Directory()``, which is visible if one tries to call one of its
+methods.
+
+As it seems likely that we will repurpose this class when converting
+directory resources to objects, we think it makes sense to already
+convert this class to behave like a resource object.
 
 Proposal
 --------
 
-Examples
-~~~~~~~~
+We propose to make the following changes to the ``Directory`` class:
 
-For all examples that follow, assume the following definitions exist:
+-  Make it ``final``
+-  Throw an ``Error`` when doing ``new Directory()``
+-  Prevent cloning instances of ``Directory``
+-  Ban serialization of it via the ``@not-serializable`` doc comment on
+   the class stub
+-  Ban creating dynamic properties on an instance of ``Directory`` via
+   the ``@strict-properties`` doc comment on the class stub
 
-.. code:: php
+Rationales
+----------
 
+Preventing initialization via new
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   interface A {}
-   interface B {}
-   interface C extends A {}
-   interface D {}
+The stream layer of PHP emits warnings and may result in uninitialized
+streams. Constructors must always either throw an exception, or create a
+valid object. As these semantics are not straightforward to implement
+when creating streams we continue to rely on ``dir()`` to create
+instances of this class as it does not have the above constraints.
 
-   class W implements A {}
-   class X implements B {}
-   class Y implements A, B {}
-   class Z extends Y implements C {}
+Making the class final
+~~~~~~~~~~~~~~~~~~~~~~
 
-DNF types would allow type declarations for properties, parameters, and
-return values in the following form:
+As this class is a wrapper around an internal stream resource, and
+cannot be properly initialized without it being returned by ``dir()``,
+extending it doesn't make any sense.
 
-::
-
-   // Accepts an object that implements both A and B,
-   // OR an object that implements D.
-   (A&B)|D
-
-   // Accepts an object that implements C, 
-   // OR a child of X that also implements D,
-   // OR null.
-   C|(X&D)|null
-
-   // Accepts an object that implements all three of A, B, and D, 
-   // OR an int, 
-   // OR null.
-   (A&B&D)|int|null
-
-The following examples are not in DNF form, and thus will generate a
-parse error. However, they can be rewritten to DNF as shown.
-
-::
-
-   A&(B|D)
-   // Can be rewritten as (A&B)|(A&D)
-
-   A|(B&(D|W)|null)
-   // Can be rewritten as A|(B&D)|(B&W)|null
-
-The order of types within each AND/OR section is irrelevant, and thus
-the following type declarations are all equivalent:
-
-::
-
-   (A&B)|(C&D)|(Y&D)|null
-   (B&A)|null|(D&Y)|(C&D)
-   null|(C&D)|(B&A)|(Y&D)
-
-Requiring DNF for all type declarations allows conceptually all
-potential combinations of intersection and union rules, but in a
-standard fashion that is easier for the engine and easier for humans and
-static analyzers to comprehend.
-
-The parentheses around each intersection segment is required.
-Single-type segments do not require parentheses.
-
-Return co-variance
+Preventing cloning
 ~~~~~~~~~~~~~~~~~~
 
-When extending a class, a method return type may narrow only. That is,
-it must be the same or more restrictive as its parent. In practice, that
-means additional ANDs may be added, but not additional ORs.
+As this class is a wrapper around an internal stream resource, and there
+is no capability to duplicate streams, there is no reasonable way to
+implement cloning.
 
-.. code:: php
+Preventing serialization
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-   interface ITest {
-     public function stuff(): (A&B)|D;
-   }
+Trying to serialize (and unserialize) the state of a given file system
+doesn't make any sense.
 
-   // Acceptable.  A&B is more restrictive.
-   class TestOne implements ITest {
-     public function stuff(): A&B {}
-   }
+Preventing the creation of dynamic properties
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   // Acceptable. D is is a subset of A&B|D
-   class TestTwo implements ITest {
-     public function stuff(): D {}
-   }
-
-   // Acceptable, since C is a subset of A&B,
-   // even though it is not identical.
-   class TestThree implements ITest {
-     public function stuff(): C|D {}
-   }
-
-   // Not acceptable. This would allow an object that
-   //  implements A but not B, which is wider than the interface.
-   class TestFour implements ITest {
-     public function stuff(): A|D {}
-   }
-
-   interface ITestTwo {
-     public function things(): C|D {}
-   }
-
-   // Not acceptable. Although C extends A and B, it's possible
-   // for an object to implement A and B without implementing C.
-   // Thus this definition is wider, and not allowed.
-   class TestFive implements ITestTwo {
-     public function things(): (A&B)|D {}
-   }
-
-Parameter contra-variance
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-When extending a class, a method parameter type may widen only. That is,
-it must be the same or less restrictive as its parent. In practice, that
-means additional ORs may be added, but not additional ANDs.
-
-.. code:: php
-
-   interface ITest {
-     public function stuff((A&B)|D $arg): void {}
-   }
-
-   // Acceptable. Everything that ITest accepts is still valid
-   // and then some.
-   class TestOne implements ITest {
-     public function stuff((A&B)|D|Z $arg): void {}
-   }
-
-   // Acceptable. This accepts objects that implement just
-   // A, which is a super-set of those that implement A&B.
-   class TestOne implements ITest {
-     public function stuff(A|D $arg): void {}
-   }
-
-   // Not acceptable. The interface says D is acceptable,
-   // but this class does not.
-   class TestOne implements ITest {
-     public function stuff((A&B) $arg): void {}
-   }
-
-   interface ITestTwo {
-     public function things(C|D $arg): void;
-   }
-
-   // Acceptable. Anything that implements C implements A&B,
-   // but this rule also allows classes that implement A&B
-   // directly, and thus is wider.
-   class TestFive implements ITestTwo {
-     public function things((A&B)|D $arg): void;
-   }
-
-Property invariance
-~~~~~~~~~~~~~~~~~~~
-
-Object properties are already invariant in inheritance. This RFC does
-not change that. The type of a redeclared child property must logically
-match its parent. However, the order of segments remains irrelevant. The
-type declaration may be reordered provided that it is logically
-identical to its parent.
-
-Duplicate and redundant types
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To catch some simple bugs in type declarations, redundant types that can
-be detected without performing class loading will result in a
-compile-time error. This is similar to the logic applied to Intersection
-and Union types already, and is a super-set of it.
-
--  Each segment of a DNF type must be unique.
-
-A type declaration of ``(A&B)|(B&A)`` is invalid. The two ORed segments
-are logically equivalent, and thus superficially redundant.
-
-Note that a type declaration of ``(A&B)|C`` is not necessarily
-redundant, as C could include other methods beyond what it inherits, and
-an object could implement ``A``, ``B``, and ``D`` and still be accepted
-by the first segment and not the second.
-
--  Segments that are strict subsets of others are disallowed.
-
-For example, the type definition ``(A&B)|A`` is redundant, because all
-instances of ``A`` are already allowed, whether they also implement
-``B`` or not. That definition is redundant and thus invalid.
-
-This does not guarantee that the type is "minimal", because doing so
-would require loading all used class types.
-
-Reflection
-~~~~~~~~~~
-
-This RFC does not introduce any new reflection classes. However, it does
-make one change to the Reflection API, in that
-``ReflectionUnionType::getTypes()`` previously was guaranteed to always
-return an array of ``ReflectionNamedType`` instances. Now it will return
-some combination of ``ReflectionNamedType`` and
-``ReflectionIntersectionType`` instances. The method is already typed to
-return ``ReflectionType`` so this is not an API change, but the previous
-de facto assumption is no longer valid.
-
-``ReflectionIntersectionType::getTypes()`` will still only return
-``ReflectionNamedType`` in practice, although its return type is
-similarly ``ReflectionType``.
+Creating a dynamic property on an instance of this class points to a
+definite bug.
 
 Backward Incompatible Changes
 -----------------------------
 
-The sub-values of a ``ReflectionUnionType`` may now be
-``ReflectionIntersectionType`` instances, rather than always being
-``ReflectionNamedType``.
+It will no longer be possible:
 
-Proposed PHP Version(s)
------------------------
+-  to extend the ``Directory`` class
+-  clone, serialize, or create dynamic properties on an instance of
+   ``Directory``
+-  instantiate ``Directory`` directly via the ``new`` keyword
 
-8.2
+Version
+-------
+
+Next minor version, i.e. PHP 8.5.
 
 Vote
 ----
@@ -249,10 +102,10 @@ Vote
 As per the voting RFC a yes/no vote with a 2/3 majority is needed for
 this proposal to be accepted.
 
-Voting started on 2022-06-17 and will end on 2022-07-01.
+Voting started on 2024-10-03 and will end on 2024-10-17.
 
-Question: Accept Disjunctive Normal Form Types RFC?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Change Directory class to behave like a resource object RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -260,64 +113,21 @@ Voting Choices
 -  Yes
 -  No
 
-Future Scope
+Future scope
 ------------
 
-Non-DNF types
-~~~~~~~~~~~~~
-
-In theory, supporting conjunctive normal form type definitions (and
-ANDed list of ORs) or types which are not in a normalised form may be
-possible, either by supporting them directly or doing a compile time
-rewrite of the type expression.
-
-However, as DNF is able to represent all reasonable boolean expressions
-and having a normalized form simplifies both the engine implementation
-and user-space reflection code, the authors have no intent to pursue
-this direction.
-
-Type aliasing
-~~~~~~~~~~~~~
-
-DNF types have the potential to be rather verbose. That puts additional
-pressure on the language to develop a type aliasing mechanism to allow
-for more convenient type names. Such an RFC is best implemented as a
-separate follow up.
-
-Proposed Voting Choices
------------------------
-
-This is a simple yes/no vote to include DNF types. 2/3 required to pass.
-
-Patches and Tests
------------------
-
-Patch is available here: https://github.com/php/php-src/pull/8725
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+-  Add support to initialize the class via ``new``
+-  Add support for cloning
 
 References
 ----------
 
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
-
 Additional Metadata
 -------------------
 
-:Original Authors: George Peter Banyard girgias@php.net; Larry Garfield crell@php.net
-:Original Status: Accepted
-:Slug: dnf_types
-:Wiki URL: https://wiki.php.net/rfc/dnf_types
+:Implementation: https://github.com/php/php-src/pull/15886
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.5
+:Original Status: In voting
+:Slug: directory-opaque-object
+:Wiki URL: https://wiki.php.net/rfc/directory-opaque-object
