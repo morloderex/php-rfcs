@@ -10,7 +10,7 @@
 
 In object-oriented code, "composition" generally means "one object having a reference to another."  In functional programming, "composition" generally means "sticking two functions together end-to-end to make a new function."  Both are valid and useful techniques, especially in a multi-paradigm language like PHP.  However, the latter is currently not directly supported by the language.  This RFC aims to correct that gap, with two new operators that work on ''callables''.
 
-This RFC cleanly enables “point-free style”, an approach to programming that limits the use of unnecessary intermediary variables. Point-free style has been gaining popularity in JavaScript circles, so will be familiar to JavaScript developers using that style. 
+This RFC cleanly enables “point-free style,” an approach to programming that limits the use of unnecessary intermediary variables. Point-free style has been gaining popularity in JavaScript circles, so will be familiar to JavaScript developers using that style. 
 
 ===== Proposal =====
 
@@ -135,9 +135,9 @@ The main limitation is that both strings and arrays may be valid callables in PH
 
 ''.'' is the string concatenation operator, meaning 'htmlentities' . 'strlen' would be ambiguous.  Does that concatenate two strings, or compose two functions?  It's unclear, and therefore not a viable option.
 
-''>>'' is a bit-wise shift operator, which is currently useless except on numeric values.  It provides no behavior for strings, arrays, or objects (eg, Closures), making it a safe addition.  However, it has no natural "append" behavior to update a ComposedClosure in place.  The natural first choice would be >>=, but that is well-known as the "bind" operator in Haskell, which does something more advanced.  We're hesitant to claim that operator for a different behavior.
+''>>'' is a bit-wise shift operator, which is currently useless except on numeric values.  It provides no behavior for strings, arrays, or objects (eg, Closures), making it a safe addition.  However, it has no natural "append" behavior to update a ComposedClosure in place.  The natural first choice would be >>=, but that is well-known as the "bind" operator in Haskell, which does something more advanced.  We're hesitant to claim that operator for a different behavior, especially when it may be useful for a bind operator in the future.
 
-''+'' naturally provides ''+='' as an append, and is fairly self-evident to read.  It has no defined behavior on strings, either.  However, on arrays, it currently triggers a Warning and renders the string "Array", so <php>[$obj1, 'foo'] + [$obj2, 'bar']</php> would result in the string "ArrayArray", and two triggered warnings.  Whether it is safe to change that behavior into something meaningful from a Warning in a non-major is debatable.
+''+'' naturally provides ''+='' as an append, and is fairly self-evident to read.  It has no defined behavior on strings, either.  However, on arrays, it currently triggers a Warning and renders the string "Array", so <php>[$obj1, 'foo'] + [$obj2, 'bar']</php> would result in the string "ArrayArray", and two triggered warnings.  As the current behavior is functionally useless and already an error condition, we consider it safe to redefine into something meaningful.
 
 ==== Existing implementations ====
 
@@ -152,15 +152,32 @@ Multiple user-space libraries exist in PHP that attempt to replicate pipe-like o
   * [[https://github.com/Crell/fp|Crell/fp]] provides ''pipe()'' and ''compose()'' functions that take an array of callables.  While the lightest-weight option on this list, that makes dynamically-built pipelines or compositions more cumbersome than the syntax proposed here.
   * Various blogs speak of "the Pipeline Pattern" ([[https://medium.com/@aaronweatherall/the-pipeline-pattern-for-fun-and-profit-9b5f43a98130|for example]])
 
+The biggest limitation of any user-space implementation is performance.  Even the most minimal implementation (Crell/fp) requires adding 2-3 function calls to every operation, which is relatively expensive in PHP.  A native implementation would not have that additional overhead.  It also results in somewhat awkward function nesting, like this:
+
+<code php>
+pipe($someVal,
+    htmlentities(...),
+    str_split(...),
+    fn($x) => array_map(strtoupper(...), $x),
+    fn($x) => array_filter($x, fn($v) => $v != 'O'),
+);
+
+// (Or worse if you need conditional stages.)
+</code>
+
+More elaborate implementations tend to involve magic methods (which are substantially slower than normal function/method calls) or multi-layer middlewares, which are severe overkill for sticking two functions together.
+
+A native implementation eliminates all of those challenges.
+
 Those libraries would be mostly obsoleted by this RFC, with a more compact, more universal, better-performing syntax.
 
 ===== Future Scope =====
 
-There are a number of potential improvements to this feature that have been left for later, as their implementation would be notably more involved than this RFC.  The authors believe they would be of a benfit in their own RFCs.
+There are a number of potential improvements to this feature that have been left for later, as their implementation would be notably more involved than this RFC.  The authors believe they would be of a benefit in their own RFCs.
 
 * Generic partial function application.  While the prior RFC was declined due to its perceived use cases being insufficient to justify its complexity, there was clear interest in it, and it would vastly improve the usability of function composition.  If a less complex implementation can be found, it would most likely pass and complement this RFC well.
 
-* A ''%%__bind%%'' method or similar on objects, possibly with a dedicated operator of its own.  If implemented by an object on the left-hand side, the right-hand side would be passed to that method to invoke as it sees fit.  Such a feature would be sufficient to support arbitrary monadic behavior in PHP in a type-friendly way.
+* A ''%%__bind%%'' method or similar on objects, possibly with a dedicated operator of its own (such as ''>>='').  If implemented by an object on the left-hand side, the right-hand side would be passed to that method to invoke as it sees fit.  Such a feature would be sufficient to support arbitrary monadic behavior in PHP in a type-friendly way.
 
 ===== Backward Incompatible Changes =====
 
