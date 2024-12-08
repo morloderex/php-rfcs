@@ -81,7 +81,7 @@ readonly class WhatWgError
     public function __construct(string $position, int $errorCode) {}
 }
 
-interface UriInterface extends \Stringable
+interface Uri extends \Stringable
 {
     public function getScheme(): ?string {}
 
@@ -115,7 +115,7 @@ interface UriInterface extends \Stringable
 
     public function withFragment(?string $fragment): static {}
 
-    public function equalsTo(\Uri\UriInterface $uri, bool $excludeFragment = true): bool {}
+    public function equalsTo(\Uri\Uri $uri, bool $excludeFragment = true): bool {}
 
     public function normalize(): static {}
 
@@ -124,7 +124,7 @@ interface UriInterface extends \Stringable
     public function __toString(): string {}
 }
 
-readonly class Rfc3986Uri implements \Uri\UriInterface
+readonly class Rfc3986Uri implements \Uri\Uri
 {
     private ?string $scheme;
     private ?string $user;
@@ -171,7 +171,7 @@ readonly class Rfc3986Uri implements \Uri\UriInterface
 
     public function withFragment(?string $fragment): static {}
 
-    public function equalsTo(\Uri\UriInterface $uri, bool $excludeFragment = true): bool {}
+    public function equalsTo(\Uri\Uri $uri, bool $excludeFragment = true): bool {}
     
     public function normalize(): static {}
 
@@ -184,7 +184,7 @@ readonly class Rfc3986Uri implements \Uri\UriInterface
     public function __unserialize(array $data): void;
 }
 
-readonly class WhatWgUri implements \Uri\UriInterface
+readonly class WhatWgUri implements \Uri\Uri
 {
     private ?string $scheme;
     private ?string $user;
@@ -195,7 +195,8 @@ readonly class WhatWgUri implements \Uri\UriInterface
     private ?string $query;
     private ?string $fragment;
 
-    public static function parse(string $uri, ?string $baseUrl = null): static|array {}
+    /** @param array<int, \Uri\WhatWgError> $errors */
+    public static function parse(string $uri, ?string $baseUrl = null, &$errors): ?static {}
 
     public function __construct(string $uri, ?string $baseUrl = null) {}
 
@@ -231,7 +232,7 @@ readonly class WhatWgUri implements \Uri\UriInterface
 
     public function withFragment(?string $fragment): static {}
 
-    public function equalsTo(\Uri\UriInterface $uri, bool $excludeFragment = true): bool {}
+    public function equalsTo(\Uri\Uri $uri, bool $excludeFragment = true): bool {}
 
     public function normalize(): static {}
 
@@ -247,7 +248,7 @@ readonly class WhatWgUri implements \Uri\UriInterface
 
 ===== API Design =====
 
-First and foremost, the new URI parsing API contains a ''Uri\UriInterface'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it may cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]]. That's why it's recommended to rely on one of the concrete URI implementations rather than the ''Uri\UriInterface'' interface itself.
+First and foremost, the new URI parsing API contains a ''Uri\Uri'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it may cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]]. That's why it's recommended to rely on one of the concrete URI implementations rather than the ''Uri\Uri'' interface itself.
 
 Both built-in URI implementations support instantiation via two methods:
 
@@ -268,7 +269,7 @@ $uri = new Uri\Rfc3986Uri("invalid uri"); // A Uri/InvalidUriException is thrown
 $uri = Uri\Rfc3986Uri::parse("invalid uri"); // An array of WhatWgError objects is returned in case of an invalid URI
 </code>
 
-The two built-in ''Uri\UriInterface'' implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option, consistent with other internal interfaces. Even though hooked properties could also be declared in interfaces, but since readonly properties are not supported, this possibility was rejected: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls.
+The two built-in ''Uri\Uri'' implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option, consistent with other internal interfaces. Even though hooked properties could also be declared in interfaces, but since readonly properties are not supported, this possibility was rejected: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls.
 
 <code php>
 $uri1 = new Uri\Rfc3986Uri("https://example.com");
@@ -278,13 +279,13 @@ echo $uri1->getHost();                            // example.com
 echo $uri2->getHost();                            // test.com
 </code>
 
-Besides accessors, the ''Uri\UriInterface'' contains a toString() method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications to it. The WHATWG standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WHATWG.
+Besides accessors, the ''Uri\Uri'' contains a ''%%__toString()%%'' method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications to it. The WHATWG standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WHATWG.
 
 <code php>
 $uri = new Uri\WhatWgUri("https://////example.com");
 
 echo $uri->__toString();                         // https://example.com
-</code> 
+</code>
 
 On the other hand, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique on the URI (i.e. case normalization, percent-encoding, normalization etc.) and return a new instance, otherwise the current, unmodified object can be returned. The ''toNormalizedString()'' method is a shorthand for ''$uri->normalize()->%%__toString()%%'', and it's useful when one needs the normalized string representation, but the URI components themselves don't have to be modified.
 
@@ -314,7 +315,7 @@ new Uri\Rfc3986Uri("https://example.COM")->equalsTo(new Uri\Rfc3986Uri("https://
 new Uri\Rfc3986Uri("https://example.com/")->equalsTo(new Uri\WhatWgUri("https://example.com/"));  // false
 </code>
 
-It should be noted that the ''equalsTo()'' method only accepts an ''Uri\UriInterface'' instance, while it could also accept string URIs. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in URI be also normalized, or exact string match is performed? Would the URI be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only the ''Uri\UriInterface'' parameter type is supported. Furthermore, the equality operator is not overloaded because this construct is not supported in userland.
+It should be noted that the ''equalsTo()'' method only accepts an ''Uri\Uri'' instance, while it could also accept string URIs. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in URI be also normalized, or exact string match is performed? Would the URI be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only the ''Uri\Uri'' parameter type is supported. Furthermore, the equality operator is not overloaded because this construct is not supported in userland.
 
 ===== Relation to PSR-7 =====
 
@@ -322,6 +323,10 @@ It should be noted that the ''equalsTo()'' method only accepts an ''Uri\UriInter
 
   * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WHATWG specification.
   * PSR-7's ''UriInterface'' have non-nullable method return types except for ''UriInterface::getPort()'' whereas WHATWG specifically allows ''null'' values.
+
+===== How encoding and decoding works? =====
+
+TBD
 
 ===== Why query parameter manipulation is not supported? =====
 
