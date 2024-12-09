@@ -1,99 +1,116 @@
-Structural Typing For Closures
-==============================
+Remove Disable_classes INI Setting
+==================================
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
+:Title: Remove Disable_classes INI Setting
+:Author: George Peter Banyard <girgias@php.net>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
-:Version: 1.0
+:Type: Standards Track
+:Created: 2023-09-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
+The ``disable_classes`` INI setting is fundamentally useless and cause
+various issues in the engine, as using it will result in unexpected
+states for the engine to deal with.
+
+Only internal classes can be disabled, which brings the following
+observation. On a minimal build of PHP, with only the mandatory
+extensions enabled, there are 148 classes/interfaces/traits defined. [2]
+
+Other than a specific subset of classes defined in the SPL extension,
+disabling any of these classes will cause issues within the engine.
+Moreover, the subset of SPL classes that could be disabled are not a
+security concern.
+
+Therefore, any other class that can be disabled must come from an
+extension that can be disabled altogether. And "disabling" a class from
+an extension without disabling said extension will, other than rendering
+it useless, cause various issues that the extension is not prepared to
+handle as they expect the classes they defined to exist.
+
+If a hosting provided is concerned about an extension, then it should
+not enable it in the first place. Not break it ad hoc.
+
+Considering the above, the usefulness of this feature has always been
+dubious.
+
+This is in stark contrast to the ``disable_functions`` INI setting,
+which can be used to selectively remove functionality of an extension
+without breaking it overall.
+
+What makes this setting particularly broken is that it does not
+unregister the class, it only overwrites the create CE handler to emit a
+warning and purge the properties and function hash tables. This leads to
+various use after free, segfaults, and broken expectations for the
+engine and extensions which define said classes. On top of that, it is
+possible to actually instantiate such a class (and even classes which
+actually disallow this like ``ext/imap``) in userland, and pass it to
+function that are typed against said class without raising a TypeError.
+However, when trying to do anything with said object, stuff is going to
+explode in countless ways.
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
+Remove the ``disable_classes`` INI setting.
 
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
+Proposed PHP Version(s)
+-----------------------
 
-Example
-~~~~~~~
+Next minor version, i.e. PHP 8.4.0.
 
-.. code:: php
+RFC Impact
+----------
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
-   }
+To SAPIs
+~~~~~~~~
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
-   }
+The Fuzzer SAPI uses this setting to remove the ``InfiniteIterator``
+class.
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+The fix for this is to manually change the create handler of the
+``InfiniteIterator`` CE to throw.
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+Unaffected PHP Functionality
+----------------------------
 
-Backward Incompatible Changes
------------------------------
-
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
-
-Open Questions
---------------
-
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
-
-Future Scope
-------------
-
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+The ``disable_functions`` INI setting is not affected.
 
 Proposed Voting Choices
 -----------------------
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+References
+----------
+
+#. [1] Initial Mailing List discussion:
+   https://news-web.php.net/php.internals/120896
+#. [2] Gist containing all mandatory classes:
+   https://gist.github.com/Girgias/63d55ba1e50b580412b004046daed02b
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Implementation: https://github.com/php/php-src/pull/12043
+:Original Authors: George Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Slug: remove_disable_classes
+:Wiki URL: https://wiki.php.net/rfc/remove_disable_classes
