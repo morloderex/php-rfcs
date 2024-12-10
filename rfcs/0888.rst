@@ -1,104 +1,138 @@
-Add An Optional Parameter $result_code To Shell_exec()
-======================================================
+Readonly Hooks
+==============
 
 :PHP-RFC: 0888
-:Title: Add An Optional Parameter $result_code To Shell_exec()
-:Author: Luca Petrucci <luca@lucapetrucci.net>
+:Title: Readonly Hooks
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>, Larry Garfield <larry@garfieldtech.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2021-11-21
-:Version: 1
+:Created: 2024-07-10
+:Version: 0.9
 
 Introduction
 ------------
 
-The shell_exec() function is used to execute an external program and
-grab its entire output as a string, but it lacks a way to capture the
-exit code of the launched program contrarily to all the other functions
-of the same family (exec, system, passthru).
+Support for hooks on ``readonly`` properties was omitted from the
+original RFC, primarily to minimize complexity as there were questions
+around when it was safe to do. On further consideration, we believe that
+hooks on backed properties are sufficiently safe to support readonly,
+but not on virtual properties.
 
 Proposal
 --------
 
-This RFC proposes the addition of a second, optional parameter
-$result_code to the shell_exec() function: <code php> function
-shell_exec(string $command, &$result_code = null): string|false|null {}
-</code> If $result_code is present, the function will put the return
-code of the program into it. The same parameter and behaviour is found
-in exec(), system() and passthru() functions.
+We propose to allow both ``get`` and ``set`` hooks on ``readonly``
+properties, if and only if it is a backed property.
+
+The main concern is that readonly implies a property is immutable and
+idempotent. However, a ``get`` hook supports arbitrary code, so
+technically a developer could do something silly like:
+
+.. code:: php
+
+   class Dumb
+   {
+       public readonly int $value { get => $this->value * random_int(1, 100); }
+   }
+
+On the other hand, there is no shortage of dumb things that people can
+do with PHP already. The exact same silliness could be implemented using
+``__get``, for instance. However, there are valid uses for a readonly
+get hook, especially for ORMs and proxies. For example:
+
+.. code:: php
+
+   readonly class ProductFromDB
+   {
+       public string $id;
+       
+       public function __construct(
+           public string $name,
+           public float $price,
+           public Category $category,
+       ) {}
+   }
+
+   // Generated code.
+   readonly class LazyProduct
+   {
+       // Assigned via reflection or a closure.
+       private DbConnection $dbApi;
+       
+       // Assigned via reflection or a closure.
+       private string $categoryId;
+
+       public Category $category {
+           get {
+               $this->category ??= $this->dbApi->loadCategory($this->categoryId);
+           }
+       }
+   }
+
+That is, we feel, an entirely reasonable use of hooks, and would allow
+for lazy-load behavior per-property on readonly classes.
+
+This is subtly different from the Lazy Proxy RFC, which operates on the
+whole object at once. We believe both use cases are valuable and should
+be supported.
+
+A ``set`` hook, meanwhile, offers no issue for a backed readonly
+property. As long as it is backed we are able to determine if it is
+still uninitialized, and so a second set call would correctly fail as it
+should.
+
+At this time, Ilija is still investigating whether it is more sensible
+to put the uninitialized check on the wrapping property, when visibility
+is checked, or only on the backing property, so the error would be
+thrown from within the hook body. In practice it will not make much
+difference to the developer, so we consider either case acceptable
+depending on what ends up being easier to do.
+
+On balance, we believe the advantages and use cases for a lazy readonly
+property outweigh the potential for developers to do silly things. For
+that reason, we propose to allow both get and set hooks on backed
+readonly properties.
 
 Backward Incompatible Changes
 -----------------------------
 
-No backward compatibility breaks.
+What breaks, and what is the justification for it?
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x, currently PHP 8.2.
+List the proposed PHP versions that the feature will be included in. Use
+relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-None.
-
-To Opcache
-~~~~~~~~~~
-
-None.
-
-New Constants
-~~~~~~~~~~~~~
-
-No new constants introduced.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-No new php.ini options introduced.
-
-Unaffected PHP Functionality
-----------------------------
-
--  Behaviour of shell_exec() when called with one parameter will not
-   change;
--  `Backtick
-   operator <https://www.php.net/manual/en/language.operators.execution.php>`__
-   functionality is unaffected.
-
 Proposed Voting Choices
 -----------------------
 
-Yes/No vote, super majority of 2/3 required to pass.
+Include these so readers know where you are heading and can discuss the
+proposed voting options.
+
+Patches and Tests
+-----------------
 
 Implementation
 --------------
 
--  `Pull request (Github) <https://github.com/php/php-src/pull/7663>`__
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
 
 References
 ----------
 
--  `Relevant feature request posted by another user
-   (Bugsnet) <https://bugs.php.net/bug.php?id=81493>`__
--  Functions that already have the return_code parameter:
-
-   -  `exec() <https://www.php.net/manual/en/function.exec.php>`__
-   -  `system() <https://www.php.net/manual/en/function.system.php>`__
-   -  `passthru() <https://www.php.net/manual/en/function.passthru.php>`__
-
 Additional Metadata
 -------------------
 
-:Original Authors: Luca Petrucci, luca@lucapetrucci.net
-:Original Status: Under discussion
-:Slug: shell_exec_result_code_param
-:Wiki URL: https://wiki.php.net/rfc/shell_exec_result_code_param
+:Original Authors: Ilija Tovilo (tovilo.ilija@gmail.com), Larry Garfield (larry@garfieldtech.com)
+:Original Status: Draft (or Under Discussion or Accepted or Declined)
+:Slug: readonly_hooks
+:Wiki URL: https://wiki.php.net/rfc/readonly_hooks
