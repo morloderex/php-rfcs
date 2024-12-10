@@ -1,12 +1,12 @@
 ====== PHP RFC: Error Backtraces v2 ======
-  * Version: 1.1
+  * Version: 2.0
   * Date: 2024-12-05
   * Author: Eric Norris, erictnorris@gmail.com
   * Status: Under Discussion
   * First Published at: https://wiki.php.net/rfc/error_backtraces
 
 ===== Introduction =====
-PHP errors do not provide backtraces, which can make it difficult to ascertain their underlying cause. Enabling backtraces for certain errors will provide vital information to developers debugging production applications.
+PHP errors do not provide backtraces, which can make it difficult to ascertain their underlying cause. Enabling backtraces for fatal errors will provide vital information to developers debugging production applications.
 
 Take, for example, a recursive infinite loop:
 
@@ -49,54 +49,24 @@ Stack trace:
 Seeing this backtrace makes it far more clear that something is amiss with the recursion in this function, without looking at the source code.
 
 ===== Proposal =====
-Add configuration to enable backtraces for specific PHP error levels, defaulting to ''E_FATAL_ERRORS''.
 
-Generated backtraces must follow the existing setting for ''zend.exception_ignore_args'', and any parameters marked with the ''SensitiveParameter'' attribute.
+Add a ''fatal_error_backtraces'' INI setting, which potentially defaults to "1".
 
-The pull request associated with this RFC currently implements this via a new INI setting, ''error_backtrace_recording'', which a user may set to an error level mask, similar to ''error_reporting''.
+When enabled, PHP will generate backtraces for errors with an error level matching E_FATAL_ERRORS. Generated backtraces will respect the existing setting for ''zend.exception_ignore_args'', and parameters marked with the ''SensitiveParameter'' attribute.
 
-==== Why an error mask? ====
+''error_get_last'' will return the backtrace in the array under the ''trace'' key, if it's available. As PHP will only generate backtraces for fatal errors, this will only be available in post-shutdown code, such as callbacks registered via ''register_shutdown_function''.
 
-The first version of this RFC proposed creating backtraces for **all** errors. In the resulting discussion, [[https://externals.io/message/110302#110339|@nikic had the following feedback:]]:
+==== Why enable backtraces only for fatal errors? ====
 
-<blockquote>
-Second, PHP has plenty of functions (especially I/O functions) where
-ignoring notices and warnings is a requirement. You are not interested in
-back traces for errors your ignore. Keep in mind that error_get_last() data
-is populated independently of whether errors are suppressed or not.
+Backtraces that contain arguments will increment the refcount for those arguments, which means they will stay alive until the backtrace is destroyed. Since ''error_get_last'' will contain the backtrace for the most recent error, application developers may be surprised by objects lasting longer than they would expect - either until they called ''error_clear_last'' or caused another error.
 
-Similarly, if your code promoted all warnings to exceptions using a custom
-error handler, then you'll perform a duplicate backtrace calculation, first
-when the warning is originally through, and then again if you construct the
-exception. (This is less bad than other cases, because it's "just" twice as
-slow.)
+By limiting this feature to only ''E_FATAL_ERRORS'', we've also limited this side effect to abnormal situations only. PHP will only execute shutdown handlers after encountering a fatal error, and developers writing shutdown handling code should expect that the application is in an unusual or unreliable state.
 
-Finally, even if we completely disregard the question of performance, back
-traces are very noisy. You get one fatal error per request, but you might
-easily get 1k warnings if something happens to trigger in a loop. With back
-traces, those 1k warnings will be 100k lines.
-</blockquote>
-
-[[https://externals.io/message/110302#113264|and:]]
-
-<blockquote>
-To put my feedback into more actionable form: Rather than adding an ini
-setting that enables error backtraces for all diagnostics, I'd make it a
-mask of error types for which a backtrace should be captured, and default
-it to fatal errors only. So error_reporting=E_ALL,
-error_backtrace=E_ERROR|E_CORE_ERROR|E_COMPILE_ERROR|E_USER_ERROR|E_RECOVERABLE_ERROR|E_PARSE.
-It might be handy to expose the internal E_FATAL_ERRORS constant we have
-for that.
-
-I think this should give a very sensible default behavior, and people who
-want to capture backtraces for all errors still have an option to do so.
-</blockquote>
-
-In short, I agree with this suggestion. Defaulting to ''E_FATAL_ERRORS'' is sensible, but allowing a mask allows users the freedom to pick the setting that best suits their environment.
+In addition, modern PHP applications tend to promote PHP warnings and notices to exceptions via ''set_error_handler'', which then provides a backtrace via the ''Error'' object. It is only ''E_FATAL_ERRORS'' which are not possible to generate traces for, since they cannot be handled in application code.
 
 ===== Backward Incompatible Changes =====
 
-  * If the proposal to default to ''E_FATAL_ERRORS'' passes, messages for fatal errors will now contain backtraces and may not match the format existing code is expecting.
+  * If the sub-vote to default to "1" passes, messages for fatal errors will now contain backtraces and may not match the format existing code is expecting.
 
 ===== Proposed PHP Version(s) =====
 
@@ -106,7 +76,7 @@ Next PHP minor release.
 
 ==== To SAPIs ====
 
-As currently implemented, there will be a new Zend global, ''error_backtrace'', containing the backtrace of the most recent error.
+There will be a new Zend global, ''error_backtrace'', containing the backtrace of the most recent fatal error. 
 
 ==== To Existing Extensions ====
 
@@ -118,11 +88,11 @@ None.
 
 ==== New Constants ====
 
-  * ''E_FATAL_ERRORS'' — Like, ''E_ALL'', but for fatal errors only.
+None.
 
 ==== php.ini Defaults ====
 
-''error_backtrace_recording'' — Enable backtraces for errors matching this level. Defaults to ''E_FATAL_ERRORS''.
+''fatal_error_backtraces'' — Enable backtraces for errors matching ''E_FATAL_ERRORS''.
 
   * php.ini-development: N/A
   * php.ini-production: N/A
@@ -131,17 +101,17 @@ None.
 
 This vote requires a ⅔ majority:
 
-<doodle title="Add error mask INI setting to enable backtraces for PHP errors" auth="enorris" voteType="single" closed="true">
+<doodle title="Add a fatal_error_backtraces INI setting as described" auth="enorris" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
 ----
 
-This vote will require a simple majority.
+This vote will require a simple majority:
 
-<doodle title="Default value for error_backtrace_recording" auth="enorris" voteType="single" closed="true">
-   * 'E_FATAL_ERRORS'
+<doodle title="Default value for fatal_error_backtraces" auth="enorris" voteType="single" closed="true">
+   * '1'
    * '0'
 </doodle>
 
@@ -157,3 +127,6 @@ This vote will require a simple majority.
   * Previous discussion: https://externals.io/message/110302
 
 ===== Rejected Features =====
+
+  * Modifying the ''zend_error_cb'' signature to take a backtrace as a nullable argument, instead of storing the backtrace in a Zend global. Unfortunately we would still need to store the backtrace as a global for ''error_get_last'', and so while modifying the signature is attractive from a correctness standpoint, it is likely not worth making as a breaking change. We could consider it for PHP 9.0, however.
+  * Storing backtraces as a string. This would solve the lifetime issue, but it would limit both applications and extensions from choosing their own desired format for the exception, e.g. they would be unable to JSON-format the exception if they desired.
