@@ -1,0 +1,112 @@
+====== PHP RFC: Private classes and functions ======
+
+  * Date: 2024-12-11
+  * Author: Ilija Tovilo, tovilo.ilija@gmail.com
+  * Status: Draft
+  * Target Version: PHP 8.x
+  * Implementation: wip
+
+===== Proposal =====
+
+PHP has offered <php>public</php>, <php>protected</php> and <php>private</php> visibility for methods, properties and constants for many years. Private and protected visibility allow abstracting away the inner workings of classes from the user. Minimizing the API surface clarifies how a library is supposed to be used, and dramatically decreases the risk of BC breaks when making changes to code the user should never interact with directly.
+
+However, not only methods, properties and constants are routinely created for internal use only, but so are functions or entire classes. Currently, it is not possible to natively express this intention. All named classes and functions are accessible globally. This RFC proposes adding support for private classes and functions, which limits their usage to the current file.
+
+<code php>
+private function test() {
+    echo __FUNCTION__, "\n";
+}
+
+private class Test {
+    public function __construct() {
+        echo __METHOD__, "\n";
+    }
+}
+
+test();
+// test@/home/ilutov/Developer/php-src/test.php:1$0
+
+new Test();
+// Test@/home/ilutov/Developer/php-src/test.php:5$1::__construct
+</code>
+
+===== Rationale =====
+
+As foreshadowed, one of the primary advantages of marking classes and functions of <php>private</php> is that they are removed from the public API, and prevent users from interacting with them in ways that are not intended by the library author. Such structures are commonly marked with a <php>/** @internal */</php> comment. Native support for <php>private</php> would provide stronger guarantees that the structure is not used outside of its intended scope.
+
+The other primary motivator is to avoid clashes for classes used within single files. A good use-case for these are temporary classes in tests.
+
+<code php>
+// ATest.php
+<?php
+namespace Tests;
+
+private class DbMock {
+    // ...
+}
+
+class ATest {
+    // ...
+}
+
+// BTest.php
+<?php
+namespace Tests;
+
+private class DbMock {
+    // ...
+}
+
+class ATest {
+    // ...
+}
+
+// BTest.php
+</code>
+
+We don't have to worry about disambiguation of the <php>DbMock</php> class name, as it is only used in the current file and thus cannot clash with other private (or even public, non-<php>use</php>d) classes.
+
+Somewhat less importantly: In PHP, classes are usually placed in separate files to play nice with autoloaders. Classes that are exclusively used within a single other file could be moved to said file without issues. However, this puts the class in a weird state where it may still be used within other files, but can't be autoloaded on its own. <php>private</php> classes will necessarily be placed in the file they are used, and as they aren't accessible in other files, autoloading becomes irrelevant.
+
+===== Semantics =====
+
+<php>private</php> for classes and functions works similar to anonymous classes. Namely, the name of the structure is mangled by appending the file name, line number and incrementing id to the original name. Any usage of this name inside the current file is replaced with the mangled name through the same mechanism used by <php>use [function] Foo as Bar;</php>. This avoids trivial usage of the structure outside of its intended scope, and avoids accidental naming conflicts for internal structures.
+
+<code php>
+// ATest.php
+private class DbMock {
+    // ...
+}
+
+// loosely:
+class DbMock@/my/app/tests/ATest.php:1$0 {
+    // ...
+}
+use DbMock@/my/app/tests/ATest.php:1$0 as DbMock;
+</code>
+
+This is entirely handled at compile time, and thus there is no runtime overhead to private classes or functions. That said, because this is a compile time concept, it is also circumventable. The same is already true for anonymous classes.
+
+<code php>
+private class Test {}
+class_alias(Test::class, 'Test');
+
+// In some other file:
+
+new Test();
+</code>
+
+===== Future scope =====
+
+Likely even more common than file-private classes and functions are structures that should be restricted to some namespace. Contrary to <php>private</php>, they should not do any name mangling and as such would require a runtime check, along with a way to specify //what// namespace they may be used in. As this is a more complex task, it should be handled in its own RFC.
+
+===== Vote =====
+
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
+
+As this is a language change, a 2/3 majority is required.
+
+<doodle title="Add private classes and functions to PHP 8.x?" auth="ilutov" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
