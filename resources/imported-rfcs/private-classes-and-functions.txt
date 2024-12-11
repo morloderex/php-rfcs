@@ -10,7 +10,7 @@
 
 PHP has offered <php>public</php>, <php>protected</php> and <php>private</php> visibility for methods, properties and constants for many years. Private and protected visibility allow abstracting away the inner workings of classes from the user. Minimizing the API surface clarifies how a library is supposed to be used, and dramatically decreases the risk of BC breaks when making changes to code the user should never interact with directly.
 
-However, not only methods, properties and constants are routinely created for internal use only, but so are functions or entire classes. Currently, it is not possible to natively express this intention. All named classes and functions are accessible globally. This RFC proposes adding support for private classes and functions, which limits their usage to the current file.
+However, not only methods, properties and constants are routinely created for internal use only, but so are functions or entire classes. Currently, it is not possible to natively express this intention. All named classes and functions are accessible globally. This RFC proposes adding support for private classes and functions, which limits their usage to the current file or namespace block.
 
 <code php>
 private function test() {
@@ -38,28 +38,16 @@ The other primary motivator is to avoid clashes for classes used within single f
 
 <code php>
 // ATest.php
-<?php
 namespace Tests;
 
-private class DbMock {
-    // ...
-}
-
-class ATest {
-    // ...
-}
+private class DbMock { /* ... */ }
+class ATest { /* ... */ }
 
 // BTest.php
-<?php
 namespace Tests;
 
-private class DbMock {
-    // ...
-}
-
-class BTest {
-    // ...
-}
+private class DbMock { /* ... */ }
+class BTest { /* ... */ }
 </code>
 
 We don't have to worry about disambiguation of the <php>DbMock</php> class name, as it is only used in the current file and thus cannot clash with other private (or even public, non-<php>use</php>d) classes.
@@ -83,7 +71,7 @@ class DbMock@/my/app/tests/ATest.php:1$0 {
 use DbMock@/my/app/tests/ATest.php:1$0 as DbMock;
 </code>
 
-This is entirely handled at compile time, and thus there is no runtime overhead to private classes or functions. That said, because this is a compile time concept, it is also circumventable. The same is already true for anonymous classes.
+This is entirely handled at compile time, and thus there is no runtime overhead to private classes or functions. Because this is a compile time concept, it is also circumventable. The same is already true for anonymous classes.
 
 <code php>
 private class Test {}
@@ -92,6 +80,21 @@ class_alias(Test::class, 'Test');
 // In some other file:
 
 new Test();
+</code>
+
+Technically, because <php>use</php> statements are restricted to the current namespace block, different namespace blocks may re-use the same private class name without clashing. Given that using different namespace blocks with the same namespace in the same file is pretty obscure, this is not particularly important for real code.
+
+<code php>
+namespace Foo {
+    private class Bar {}
+    var_dump(new Bar());
+    // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:2$0)#1 (0) { }
+}
+namespace Foo {
+    private class Bar {}
+    var_dump(new Bar());
+    // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:7$1)#1 (0) { }
+}
 </code>
 
 ===== Future scope =====
