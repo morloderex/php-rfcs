@@ -1,124 +1,108 @@
-Treat Enum Instances As Values
-==============================
+Support For Floats In Sleep Function
+====================================
 
 :PHP-RFC: 0895
-:Title: Treat Enum Instances As Values
-:Author: Garet Claborn <garet@suiteux.com>
+:Title: Support For Floats In Sleep Function
+:Author: Hans Henrik Bergan <hans@loltek.net>, Michael Voříšek ?
 :Status: Draft
 :Type: Unknown
-:Created: 2023-04-28
-:Version: 0.1
+:Created: 2024-02-25
+:Version: 0.2
 
 Introduction
 ------------
 
-From the RFC template's opening quote, this RFC aims to be "pragmatic",
-"loosely typed" and cater to all camps observed in the debate (as found
-to date.)
+This RFC introduces 3 enhancements to the PHP \`sleep()\` function,
+aimed at increasing its flexibility, precision, and cross-platform
+consistency.
 
-This RFC proposes to allow the use of enum instances as array keys in
-PHP. More specifically, where errors are produces in any context where
-an enum instance is used without ->value or ->name, the engine should
-instead assume ->value.
+1/3: **Enhancement of Precision**: The first proposal seeks to extend
+the PHP \`sleep()\` function to accept both integers and floats,
+enabling delays with sub-second precision.
 
-This change aims to enhance the usability and consistency of enums in
-PHP by treating enum instances as symbols of their respective values -
-especially in the context of array keys. This will allow large amounts
-of existing code in various C-style languages to be compatible with PHP
-usage without affecting current projects.
+2/3: **Normalized Return Values on Windows**: Make sleep's return value
+consistent across operating systems (specifically Windows)
 
-Further, this proposal provides potential future RFC a path to enable
-array key type constraints in line with present == vs === semantics and
-ArrayAccess, without drastic engine overhauls.
+3/3: **Enhanced Return Value Precision**: This RFC proposes to refine
+the return value of \`sleep()\` to include sub-second precision.
 
 Proposal
 --------
 
-Given that enums already exist in PHP and enum cases are mapped to
-either ints or strings exclusively, we propose the following changes:
+The proposed changes are designed to make \`sleep()\` more versatile,
+precise, and consistent across different operating systems.
 
-Enum instances should be allowed to be used as array keys without
-producing an error. When an enum instance is used as an array key, it
-should be treated as a symbol of its value. UnitEnum , not backed as an
-int or string, should treat value as an unsigned integer iterating from
-0, more specifically modeling the relationship of enumeration (as a
-mathematical construct) with the natural numbers.
+1/3: **Acceptance of Float Arguments for Sub-Second Precision**: The
+core of this proposal is to extend the \`sleep()\` function to accept
+both integers and floats as arguments. This modification will enable
+developers to specify sleep durations with sub-second precision, a
+feature currently unavailable with the integer-only parameter. By
+adopting float values, \`sleep()\` will become a more powerful tool for
+precise timing operations, eliminating the need to resort to the more
+complex \`usleep()\` and \`time_nanosleep()\` functions for
+finer-grained delays. This change will maintain the simplicity and ease
+of use of \`sleep()`, while expanding its functionality.
 
-Example: Consider the following enum and array:
+2/3: **Normalized Return Values on Windows**: Presently, when a
+\`sleep()\` operation is interrupted on Windows, it returns a static
+value of 192, reflecting the WAIT_IO_COMPLETION constant from the
+Windows API. This behavior diverges from that on other platforms, where
+\`sleep()\` returns the number of seconds left if interrupted. To
+address this inconsistency, we propose to standardize the return value
+of \`sleep()\` across all platforms by making it return the number of
+seconds remaining, even on Windows. This adjustment will enhance the
+portability of PHP scripts and ensure consistent behavior of the
+\`sleep()\` function in cross-platform development.
 
-::
+3/3: **Return Value Precision Enhancement**: The current implementation
+of \`sleep()\` returns the number of seconds remaining upon interruption
+with an integer precision. This proposal seeks to improve the precision
+of the return value to include fractions of a second. Enhancing the
+return value precision will allow developers to have a more accurate
+understanding of the timing and duration of interruptions.
 
-    enum Color: int {
-        case red = 1;
-        case green = 2;
-        case blue = 3;
-    }
-
-::
-
-    enum WeekDays: int {
-        case monday = 1;
-        case tuesday = 2;
-        case wednesday = 3;
-    }
-
-::
-
-    $palette = [
-        1 => 'Red',
-        2 => 'Green',
-        3 => 'Blue',
-    ];
-
-Currently, the following code produces an error:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // Error
-
-With this proposal, the code above should not produce an error and
-should work as expected:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // 'Red'
-
-Last on a more opinionated note; the author suggests that enum cases are
-userland symbols and should imply value. Just as there is no need in the
-following scenario:
-
-::
-
-    $a = 1;
-    $b = '2';
-
-::
-
-    $list = [
-      $a => 'some value',
-      $b => $some_value;
-    ];
-
-vs
-
-::
-
-    $list = [
-      $a->value => 'some value',
-      $b->value => $some_value;
-    ];
+These proposed enhancements are intended to bolster the \`sleep()\`
+function's capability. By increasing precision, ensuring consistency
+across platforms, and maintaining simplicity, we aim to significantly
+improve the utility of \`sleep()`.
 
 Backward Incompatible Changes
 -----------------------------
 
-There are no backward-incompatible changes introduced by this proposal.
+Minimal impact is expected on existing codebases. However, there are
+specific areas where changes in behavior should be noted:
+
+1/3: **Handling of Float Arguments**: The extension of \`sleep()\` to
+accept float arguments represents a change from its current integer-only
+input. Previously, under \`strict_types=0`, passing a float to
+\`sleep()\` would result in an E_DEPRECATED warning due to the implicit
+conversion of the float to an integer, causing a loss of precision and
+initiating a sleep for the truncated integer value. Under
+\`strict_types=1`, passing a float would lead to a TypeError, as
+\`sleep()\` strictly expected an integer. With the proposed changes,
+\`sleep()\` will accept float values directly, enabling precise sleep
+durations without generating warnings or errors. This modification
+enhances the function's usability without disrupting existing
+integer-based usage.
+
+2/3: **Windows Platform Behavior**: The current return value of 192 on
+Windows when \`sleep()\` is interrupted (reflecting the
+WAIT_IO_COMPLETION constant) will be changed to return the actual number
+of seconds remaining, aligning with the behavior on other platforms.
+This change ensures consistency across operating systems but alters the
+specific return value Windows developers might have previously expected
+in their interrupt handling logic.
+
+3/3: **Return Value Precision**: Enhancing the return value precision of
+\`sleep()\` to include fractions of a second (when the sleep is
+interrupted) modifies the current behavior, which returns an integer.
+While this change provides more detailed information, it may affect
+existing code that expects an integer return value.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.y
+Next PHP Minor (currently 8.4) and next PHP Major (currently PHP9)
 
 RFC Impact
 ----------
@@ -126,125 +110,89 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-None
+No impact on SAPIs is anticipated.
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-None
+No existing extensions are expected to be affected by this change.
 
 To Opcache
 ~~~~~~~~~~
 
-Implementation being studied. None expected. Enums may not need some
-checks.
+No impact on Opcache is anticipated.
+
+New Constants
+~~~~~~~~~~~~~
+
+No new constants will be introduced by this RFC.
 
 php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-Could be a toggle if community desired
+This RFC does not introduce or alter any php.ini settings.
 
-Future Scope
-------------
+Open Issues
+-----------
 
-While this proposal originated in a issue with wide support, referenced
-below, we consider strongly the negative feedback which all surrounded
-adding greater type mechanics to keys.
-
-Presently there are many proposals in the history of PHP regarding
-object keys, direct overloading of the [ ] operators and a wide
-arrangement of considerations around typing. We propose that many of
-these wishes can be addressed with much less effort if we begin at the
-loose typing and iteratively add stronger typing.
-
-From present knowledge, the PHP internals teams have found methods of
-using specific classes of objects as keys but not a road to generic
-objects. If enum labels ever meet this criteria in their own right, as
-references to enum instances, such an implementation will take
-precedence over this RFC. Semantics would be the same in either case,
-however userland glue code can enable usage patterns which inform future
-development by enabling this present RFC.
-
-Future RFCs are recommended to enable
-
-::
-
-    Day::Monday == Color::Red  //true
-    Day::Monday === Color::Red //false
-
-Which could in turn allow
-
-::
-
-    class MyType implements ArrayAccess
-    //...
-    
-       public function offsetGet(Month $which){
-          //...
-       }
-    
-    //...
-    }
-    class YourType implements ArrayAccess
-    //...
-    
-       public function offsetGet(mixed $which){
-          //...
-       }
-    
-    //...
-    }
-
-Making the desirable
-
-::
-
-    $myobj = new MyType();
-    $yourobj = new YourType();
-    $x = $myobj[Color::Yellow];   // error
-    $y = $yourobj[Color::Yellow]; // fine
-
-Such a roadmap finally enables users to user to simply use match($this)
-and other userland syntactic sugar to simulate object keys. This gap can
-be further reduced and optimized from there.
+There are no open issues related to this RFC.
 
 Proposed Voting Choices
 -----------------------
 
-A two-thirds majority is required for this proposal to be accepted.
+The voting will be organized into three main questions. Each question
+aims to gather community consensus on whether to implement the proposed
+enhancements and, if so, in which version of PHP these changes should be
+applied.
+
+**1. Float Arguments for Sub-Second Precision**
+
+**Extend \`sleep()\` to accept floats for sub-second delays?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
+
+**2. Normalized Return Values on Windows**
+
+**Modify \`sleep()\` on Windows for consistent return values?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
+
+**3. Enhanced Return Value Precision**
+
+**Increase \`sleep()\` return value precision to include fractions of a
+second?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
 
 Patches and Tests
 -----------------
 
-Pending
+A pull request has already been submitted and is available for review
+at: https://github.com/php/php-src/pull/13401
 
 Implementation
 --------------
 
-Author's org has committed work on this issue and having it implemented,
-assuming community is in favor and this is not trivial for an existing
-member. Any guidance from those who have worked previously with enums is
-appreciated.
+Upon acceptance, the feature will be merged into the specified PHP
+version, and all relevant documentation will be updated accordingly.
 
 References
 ----------
 
-A robust discussion about further pros/cons/considerations at the
-original issue - https://github.com/php/php-src/issues/9208
-
-Mailing list introduction and opening RFC-
-https://news-web.php.net/php.internals/120117
-
-Mailing list post-RFC discussion: TBD
-
-Rejected Features
------------------
-
-None to date
+- Discussion on the PHP Internals mailing list:
+https://externals.io/message/122388 - PHP Manual on \`sleep()`:
+https://www.php.net/manual/en/function.sleep.php
 
 Additional Metadata
 -------------------
 
-:Original Authors: Garet Claborn, garet@suiteux.com
-:Slug: treat_enum_instances_as_values
-:Wiki URL: https://wiki.php.net/rfc/treat_enum_instances_as_values
+:Original Authors: Hans Henrik Bergan (hans@loltek.net), Michael Voříšek (?)
+:Original Version: 0.2-dev
+:Slug: sleep_function_float_support
+:Wiki URL: https://wiki.php.net/rfc/sleep_function_float_support
