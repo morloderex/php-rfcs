@@ -1,104 +1,132 @@
-Add An Optional Parameter $result_code To Shell_exec()
-======================================================
+Raising Zero To The Power Of Negative Number
+============================================
 
 :PHP-RFC: 0888
-:Title: Add An Optional Parameter $result_code To Shell_exec()
-:Author: Luca Petrucci <luca@lucapetrucci.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2021-11-21
-:Version: 1
+:Title: Raising Zero To The Power Of Negative Number
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2024-01-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-The shell_exec() function is used to execute an external program and
-grab its entire output as a string, but it lacks a way to capture the
-exit code of the launched program contrarily to all the other functions
-of the same family (exec, system, passthru).
+Raising a number to the power of a negative number is equivalent to
+taking the reciprocal of the number raised to the positive opposite of
+the power.
+
+If we raise the number zero to the power of a negative number we end up
+with the one divided by zero, which gives an undefined result. Currently
+in PHP, such operation results in ``INF``, while explicit division by
+zero gives a ``DivisionByZeroError``.
+
+.. code:: php
+
+   var_dump(0 ** -1); //float(INF)
+   var_dump(0 ** -1.1); //float(INF)
+
+   var_dump(pow(0, -1)); //float(INF)
+   var_dump(pow(0, -1.1)); //float(INF)
+
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
 Proposal
 --------
 
-This RFC proposes the addition of a second, optional parameter
-$result_code to the shell_exec() function: <code php> function
-shell_exec(string $command, &$result_code = null): string|false|null {}
-</code> If $result_code is present, the function will put the return
-code of the program into it. The same parameter and behaviour is found
-in exec(), system() and passthru() functions.
+The RFC proposes to change the behavior of this operation to match the
+division by zero operation. In the next minor version raising a number
+to the power of a negative number will throw a Deprecation, and in the
+major version, this operation will throw DivisionByZeroError.
+
+.. code:: php
+
+   //PHP 8.4
+   var_dump(0 ** -1); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(0 ** -1.1); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(pow(0, -1)); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(pow(0, -1.1)); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
+
+.. code:: php
+
+   //PHP 9.0
+   var_dump(0 ** -1); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(0 ** -1.1); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(pow(0, -1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(pow(0, -1.1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
+
+To provide a way to compute the numbers according to the IEEE 754 rules,
+the RFC proposes adding the function ``fpow`` similarly to the function
+``fdiv`` that exists for the division operation, and ``fmod`` for the
+module operation for floating numbers.
+
+.. code:: php
+
+   //PHP 8.4
+   var_dump(fpow(0, -1)); //float(INF)
+   var_dump(fpow(0, -1.1)); //float(INF)
 
 Backward Incompatible Changes
 -----------------------------
 
-No backward compatibility breaks.
+This change will break code including raising the zero number to a
+negative power. Such cases may keep their current behavior by using the
+new ``fpow`` function.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x, currently PHP 8.2.
+Deprecation Notice in the next minor PHP version 8.4.
 
-RFC Impact
-----------
+Function ``fpow`` in the next minor PHP version 8.4.
 
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-None.
-
-To Opcache
-~~~~~~~~~~
-
-None.
-
-New Constants
-~~~~~~~~~~~~~
-
-No new constants introduced.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-No new php.ini options introduced.
-
-Unaffected PHP Functionality
-----------------------------
-
--  Behaviour of shell_exec() when called with one parameter will not
-   change;
--  `Backtick
-   operator <https://www.php.net/manual/en/language.operators.execution.php>`__
-   functionality is unaffected.
+Throwing ``DivisionByZeroError`` in the next major PHP version: 9.0.
 
 Proposed Voting Choices
 -----------------------
 
-Yes/No vote, super majority of 2/3 required to pass.
+As per the voting RFC, a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2024-04-05 and will end on 2024-04-20 00:00 GMT.
+
+Question: RFC: Raising zero to the power of negative number
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Implementation
 --------------
 
--  `Pull request (Github) <https://github.com/php/php-src/pull/7663>`__
+Commit:
+https://github.com/php/php-src/commit/23afe57f01e0915eef246eba60e60fda74fd2dcf
+PR: https://github.com/php/php-src/pull/13128
+
+The implementation is based on Ilija Tovilo's PoC:
+https://github.com/php/php-src/issues/8015#issuecomment-1193391843
 
 References
 ----------
 
--  `Relevant feature request posted by another user
-   (Bugsnet) <https://bugs.php.net/bug.php?id=81493>`__
--  Functions that already have the return_code parameter:
-
-   -  `exec() <https://www.php.net/manual/en/function.exec.php>`__
-   -  `system() <https://www.php.net/manual/en/function.system.php>`__
-   -  `passthru() <https://www.php.net/manual/en/function.passthru.php>`__
+Issue GH-8015: https://github.com/php/php-src/issues/8015 RFC Division
+by zero: https://wiki.php.net/rfc/engine_warnings
 
 Additional Metadata
 -------------------
 
-:Original Authors: Luca Petrucci, luca@lucapetrucci.net
-:Original Status: Under discussion
-:Slug: shell_exec_result_code_param
-:Wiki URL: https://wiki.php.net/rfc/shell_exec_result_code_param
+:Implementation: `see Implementation section </rfc/raising_zero_to_power_of_negative_number#Implementation>`__
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: raising_zero_to_power_of_negative_number
+:Wiki URL: https://wiki.php.net/rfc/raising_zero_to_power_of_negative_number

@@ -1,103 +1,167 @@
-Deprecations For PHP 8.4
-========================
+Dedicated StreamBucket Class
+============================
 
 :PHP-RFC: 0837
-:Title: Deprecations For PHP 8.4
-:Author: Niels Dossche <nielsdos@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-07-25
+:Title: Dedicated StreamBucket Class
+:Author: Máté Kocsis <kocsismate@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-01-19
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-The RFC proposes to deprecate the listed functionality in PHP 8.4 and
-remove it in PHP 9.
+When using user filters for stream processing, one of the fundamental
+concepts is stream buckets. A stream bucket is effectively a chunk of
+stream which can be extracted from bucket brigades. Most probably, this
+metaphor comes from firefighting `bucket
+brigades <https://en.wikipedia.org/wiki/Bucket_brigade>`__ who pass
+buckets of water to each other, standing in a chain.
 
-The following list provides a short overview of the functionality
-targeted for deprecation, while more detailed explanation is provided in
-the Proposal section:
+Back to our original topic, here is an example of a very basic stream
+filter:
 
--  ``DOMAttr::schemaTypeInfo`` and ``DOMElement::schemaTypeInfo``
--  ``DOMImplementation::getFeature($feature, $version)``
--  Constant ``DOM_PHP_ERR``
--  ``mysqli_ping()`` and ``mysqli::ping()``
+.. code:: PHP
 
-Proposal
---------
+   class simple_filter extends php_user_filter {
+       function filter($in, $out, &$consumed, $closing) {
+           while ($bucket = stream_bucket_make_writeable($in)) {
+               $consumed += $bucket->datalen;
+               stream_bucket_append($out, $bucket);
+           }
+           return PSFS_PASS_ON;
+       }
+   }
 
-Each feature proposed for deprecation is voted separately and requires a
-2/3 majority. All votes refer to deprecation in PHP 8.4 and removal in
-PHP 9.
+   stream_filter_register("simple", "simple_filter")
 
-DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+*Disclaimer: the example is copy-pasted
+from*\ https://stackoverflow.com/questions/27103269/what-is-a-bucket-brigade\ *.
+Courtesy of Bob for providing such an exceptional answer to explain the
+behavior of user stream filters.*
 
-schemaTypeInfo used to be a feature of DOM Core Level 3
-https://www.w3.org/TR/2003/WD-DOM-Level-3-Core-20030226/DOM3-Core.html#core-Attr-schemaTypeInfo,
-but it was never implemented in PHP, i.e. it always returns NULL. That
-return value is not even correct, as schemaTypeInfo is not supposed to
-be nullable. Furthermore, the feature has been removed from the current
-living DOM spec. It doesn't make sense to keep a feature alive that has
-never been implemented and is removed by the reference specification.
+``$in`` and ``$out`` are the two sides of the stream bucket brigade:
+items come from the former one, which have to be passed to the latter
+one. The ``stream_bucket_make_writeable()`` function can be used to get
+the bucket from the brigade, while the ``stream_bucket_new()`` function
+is used to create a new bucket.
 
-TODO: check impact
+Discussion
+----------
 
-Question: Deprecate DOMAttr::schemaTypeInfo and DOMElement::schemaTypeInfo
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+There are a few slightly unfortunate issues how stream buckets are
+handled which are discussed in the following sections.
 
-Voting Choices
-^^^^^^^^^^^^^^
+Lack of a dedicated class
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
--  Yes
--  No
+The original problem why this RFC is submitted is that there is no
+dedicated class for stream buckets: ``stream_bucket_make_writeable()``
+and ``stream_bucket_new()`` create ``stdClass`` instances and fill in
+their ``$bucket``, ``$data``, as well as ``$datalen`` properties on the
+fly.
 
-DOMImplementation::getFeature($feature, $version)
+.. code:: PHP
+
+   $bucket = stream_bucket_new(fopen('php://temp', 'w+'), '');
+   var_dump($bucket);
+
+   /*
+   object(stdClass)#1 (3) {
+     ["bucket"]=>
+     resource(7) of type (userfilter.bucket)
+     ["data"]=>
+     string(0) ""
+     ["datalen"]=>
+     int(0)
+   }
+   */
+
+As a consequence, their return type is no more specific than ``object``.
+Similarly, the second parameters of the ``stream_bucket_append()`` and
+the ``stream_bucket_prepend()`` functions (which expect stream buckets)
+accept any kind of objects by checking the existence of the necessary
+properties.
+
+If we had a dedicated class for stream buckets then the advantages were
+the usual: better feedback could be provided by static analysis tools,
+while autocomplete in IDEs worked out of the box. Additionally, by
+having typed properties for the ``$data`` and the ``$datalen``
+properties, we could get additional safeguards.
+
+The $bucket property
+--------------------
+
+The ``$bucket`` property is a stream bucket resource which is about to
+be migrated to an object in a major PHP version as per `Resource to
+object conversion </rfc/resource_to_object_conversion>`__. However, this
+property won't be useful anymore as soon as it becomes an object, since
+it can be inlined directly into the containing stream bucket class.
+Therefore, this RFC proposes to emit a deprecation notice as soon as the
+resource to object migration happens (in a major PHP version). The
+consequent major version should then get rid of the property altogether.
+
+The $datalen property
+---------------------
+
+The name of this property doesn't conform to the currently used naming
+conventions: we usually try to avoid abbreviations whenever possible
+(e.g. when the full name is not too verbose, and the abbreviation is not
+an extremely common term - like ``$id``). Since the difference between
+``len`` and ``length`` is just 3 characters, I don't think that using
+this abbreviation is really worth it. Therefore, this RFC proposes to
+add a ``$dataLength`` property.
+
+Additionally, the ``$datalen`` property would become deprecated in favor
+of ``$dataLength`` in the subsequent minor or major version after the
+target version (possibly PHP 8.5 or PHP 9.0), and would be removed in
+the next to next major version (possibly PHP 10).
+
+The proposed class
+------------------
+
+The final form of the proposed class is the following:
+
+.. code:: PHP
+
+   final class StreamBucket
+   {
+       /**
+        * @var resource
+        * @deprecated after resource to object conversion happens
+        */
+       public $bucket;
+       public string $data;
+       /** @deprecated in PHP 8.5 or PHP 9.0 whichever comes next */
+       public int $datalen;
+       public int $dataLength;
+   }
+
+Vote
+----
+
+The vote requires 2/3 majority in order to be accepted. The vote is
+going to be closed on 2024-04-11 10:00 UTC.
+
+Primary vote
+~~~~~~~~~~~~
+
+Question: Add the StreamBucket class as proposed?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``DOMImplementation::getFeature($feature, $version)`` used to be a
-feature of DOM Core Level 3
-https://www.w3.org/TR/2003/WD-DOM-Level-3-Core-20030226/DOM3-Core.html#core-DOMImplementation3-getFeature,
-but it was never implemented in PHP, i.e. it always threw a "not
-implemented" exception. It was also never documented because of this.
-Furthermore, the feature has been removed from the current living DOM
-spec. It doesn't make sense to keep a feature alive that has never been
-implemented and is removed by the reference specification.
-
-Question: Deprecate DOMImplementation::getFeature($feature, $version)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
 Voting Choices
 ^^^^^^^^^^^^^^
 
--  Yes
--  No
-
-Constant DOM_PHP_ERR
-~~~~~~~~~~~~~~~~~~~~
-
-TODO: See reasoning:
-https://github.com/php/php-src/pull/11927#issuecomment-1672129591
-
-mysqli_ping() and mysqli::ping()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-TODO: See reasoning:
-https://github.com/php/php-src/pull/11912#issuecomment-1671762583
-
-Backward Incompatible Changes
------------------------------
-
-For PHP 8.4 additional deprecation notices will be emitted. The actual
-removal of the affected functionality will happen no earlier than PHP 9.
+-  yes
+-  no
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Niels Dossche nielsdos@php.net
-:Slug: deprecations_php_8_4
-:Wiki URL: https://wiki.php.net/rfc/deprecations_php_8_4
+:Implementation: https://github.com/php/php-src/pull/13111
+:Original Authors: Máté Kocsis kocsismate@php.net
+:Original PHP Version: next minor version (possibly PHP 8.4)
+:Slug: dedicated_stream_bucket
+:Wiki URL: https://wiki.php.net/rfc/dedicated_stream_bucket
