@@ -1,70 +1,341 @@
 ====== PHP RFC: Generic arrays ======
 
-  * Version: 0.1
-  * Date: 2016-02-13
+  * Version: 0.2
+  * Date: 2016-02-13, 2024-12-13
   * Author: Rasmus Schultz <rasmus@mindplay.dk>
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/generic-arrays
 
 ===== Introduction =====
 
-This RFC is supplemental to the [[https://wiki.php.net/rfc/generics|generics RFC]].
+The PHP programming language lacks generics - one of the biggest problems with the absence of this feature is the lack of typed arrays.
 
-This RCF proposes the addition of generic arrays and enhancements to array-related functions.
+One of the most important use cases is for things like controller/action abstractions in frameworks - these are currently forced to use complex solutions such as parameter attributes, parsing PHP-Doc annotations, or other workarounds to address the need for specifying array types, which can then only be checked at run-time by the framework, and receive limited IDE and static inspection support only from specialized external tooling. The goal for this feature is to provide a simpler, native solution to typed arrays, enabling e.g. controller/action abstractions, data-mappers, ORMs, etc. to use native reflection to determine array types.
 
-TBD: should generic versions of the standard (SPL) collection types in PHP be part of this RFC?
+This feature is designed not to conflict with full support for generics in the future. Arrays are a special case requiring special treatmeant in any case, since arrays are a builtin type, and not something that would be automatically supported by introducing generic classes and interfaces - while these could support generic collection types (classes) it is equally important to support type-hinting of the builtin, value-typed array datatype. Since arrays are declared using a literal keyword, and since this proposal extends the older ''%%array%%'' literal only, this can be done without introducing generic syntax to the rest of the language.
+
+===== Overview =====
+
+The following is a small, motivating example of safely mapping some post-data against function paramters:
+
+<code php>
+function processUserConsent(bool $accepted, array<string> $categories) {
+    if ($accepted) {
+        setcookie('consent', implode(",", $categories), time() + 24*60*60*365);
+    } else {
+        setcookie('consent', '', 1);
+    }
+}
+
+$post = [
+    "accepted" => true,
+    "categories" => ["necessary", "preferences"]
+];
+
+processUserConsent(...$post);
+</code>
+
+The array elements in this example will be automatically type-checked.
 
 ===== Proposal =====
 
-This RFC proposes the addition of two generic, type-checked countersparts to the built-in ''array'' type: one with a value type, and one with key and value types.
+Like regular arrays, typed arrays behave like values, and are passed by value. (they are not objects, and they are not passed by reference.)
 
-The ''array'' keyword is overloaded, such that the following will work as expected:
+Typed arrays are type-checked at run-time, when an array literal is created, and when an element is appended or replaced into a typed array.
 
-<code>
-$counts = array<string, int>(); // array<TKey,TValue>
-$counts["kittens"] = 12;
+The feature should use familiar generic syntax like ''%%array<User>%%'' or ''%%array<string,int>%%'' etc. for type-hints, where ''%%array<V>%%'' and ''%%array<K,V>%%'' are separate pseudo-types specifying either the element value type, or the key and value types.
 
-$versions = array<float>(); // array<TValue>
-$versions["php"] = 7.1;
-</code>
+Typed array literals will be written as e.g. ''%%$users = array<User>(new User("Alice"), new User("Bob"))%%''. (Note that this should not interfere with function calling syntax, since the ''%%array()%%'' literal is a language construct, and not a function.)
 
-Violating the key or value type of a type-checked array will trigger a ''TypeError''.
+==== Behaviors ====
 
-The actual type-checks or type-conversions performed will depend on the ''strict_mode'' flag and normal type conversion rules.
+In the following, we describe the type-casting behavior when assigning or returning typed arrays.
 
-Note that there is no generic form of the short array syntax - generic arrays can only be created explicitly by using the ''array'' keyword.
+=== Return types ===
 
-=== Array Type-casting ===
-
-Generic arrays can be explicitly [[http://php.net/manual/en/language.types.array.php#language.types.array.casting|type-cast]] using the following syntax:
+For the sake of ergonomics, an untyped array (literal or local variable) may be returned from a function with a narrower, typed array return-type:
 
 <code php>
-$array = [1,2,3];
-
-$numbers = (array<int>) $array;
+function getUsers(): array<User> {
+    return [new User(), new User()];
+}
 </code>
 
-In this example, the array is fully copied, and every element is type-checked, because ''int'' is a less general element type than ''mixed''.
+In this example, the returned array will be type-checked at the time when it is returned. (Since there are no other references to the array in this example, as an optimization, perhaps the array can internally be “upgraded” to a typed array.)
 
-Casting to a less general index or element type than that of the source array, results in creation of a new array, and keys/elements being copied. If an index or element in the source array is incompatible with the index or element types of the created generic array, a ''TypeError'' is triggered.
+=== Property Types ===
 
-If an array is cast to a more general (or identical) index and element type, a lazy reference to the source array is made, identical to how PHP arrays normally work internally.
-
-The following results in an implicit type-cast:
+For the sake of ergonomics, assigment of untyped array (literal or local variable) will be handled when assigned to properties with a narrower, typed array property-type:
 
 <code php>
-function tally(array<int> $numbers) {
+class UserList
+{
+    public array<User> $users;
+}
+
+$list = new UserList();
+
+$list->users = [new User(), new User()];
+</code>
+
+Similar to return types, the array will be type-checked at assignment. (and, as an implementatiom detail, may be “upgraded” internally.)
+
+=== Mixing array types ===
+
+We need to consider scenarios with multiple array references and mixed type assignments, as in this example:
+
+<code php>
+$a = array<int>(1, 2);
+$b = array<int>(3, 4);
+
+$c = array<int>(...$a, ...$b); // typed array
+
+$d = [...$a, ...$b]; // untyped array
+</code>
+
+In this example, ''%%$c%%'' is a typed array, and the elements of ''%%$a%%'' will be type-checked at assignment. (As an optimization and implementation detail, the elements of ''%%$b%%'' may internally be assignable without type-checking.)
+
+The array literal example for ''%%$d%%'' in an untyped array - the run-time will not attempt to reason about combined array types, and (for backwards compatibility reasons) an untyped array is always the default.
+
+=== Type casting ===
+
+We need to consider support for explicit type-casting:
+
+<code php>
+$a = ["1", "2"];
+
+$b = (array<int>) $a;
+</code>
+
+In this example, the elements of ''%%$a%%'' will be converted from ''%%string%%'' to ''%%int%%'', unless ''%%strict_types%%'' are enabled, in which case the assigment will error.
+
+In other words, assignment of elements must behave the same as assignments of individual values in PHP in general. (Note that this is true for both values and keys - if they have types, their values must be assigned and converted consistently with values assigments in PHP in general.)
+
+We must also consider what happens when arrays are cast to a wider type - for example:
+
+<code php>
+class ItemList {
+    public array $items;
+}
+
+$typedList = array<int>(1, 2, 3);
+
+$container = new ItemList();
+
+$container->items = $typedList;
+</code>
+
+In this example, ''%%$container->items%%'' is declared as an untyped array, and shall remain untyped. This mirrors how PHP currently handles type assignments - the property’s type hint determines the behavior. While the local variable in this example is a typed array, arrays are passed by value (and typed arrays preserve this semantic) and the array in ''%%ItemList::$items%%'' is a copy, which remains untyped after assignment.
+
+=== Principles ===
+
+To summarize, the key principles are:
+
+  - Typed arrays maintain their type constraints in local contexts
+  - Typed arrays lose their type constraints when assigned to ''%%array%%'' typed properties or return types
+  - Literal arrays are always untyped by default.
+
+=== Local Variables ===
+
+This feature is designed not to conflict with potential future suppport for typed local variables - only ''%%array%%'' literals and static type-hints in parameters and properties are enhanced by this proposed feature.
+
+When a typed array is assigned to a variable, the variable itself remains untyped. For example:
+
+<code php>
+$a = array<int>(1, 2, 3);
+
+$b = array<string>("foo", "bar");
+
+$a = $b; // valid
+</code>
+
+While this code is valid, variable type inference is already widely adopted by static analysis tools and IDEs, and this feature naturally lends itself to the addition of static array type-checking in such tools.
+
+=== Untyped return values ===
+
+To clarify, the behavior in scenarios without type hints, consider untyped (or explicitly ''%%mixed%%'') return values:
+
+<code php>
+function process(array<int> $nums): mixed {
+    return $nums; // returned as-is
+}
+
+$a = process([1,2,3]); // type is array<int>
+</code>
+
+In this example, the untyped array literal is coerced to ''%%array<int>%%''.
+
+Note that this would cause in error in ''%%strict_mode%%'' if the types are incorrect:
+
+<code php>
+$a = process(["one", "two"]); // error
+</code>
+
+=== Spread Arguments in Existing Code ===
+
+We must consider spread arguments as well - it would be tempting to think we could implicitly upgrade the meaning of spread arguments with type-hints in existing code, such as:
+
+<code php>
+function sum(int ...$input) {
+    return $input; // untyped array
+}
+</code>
+
+However, this is not feasible, since we would break any existing code that modifies an array after receiving it:
+
+<code php>
+function stuff(int ...$input) {
+    $input[] = "hello";
+    return $input;
+}
+</code>
+
+To be clear, this proposal does **not** propose any change to the current behavior of spread arguments.
+
+=== New Syntax for Spread Argument Types ===
+
+Since the existing ''%%int ...$input%%'' syntax specifies the //element// type, the following new syntax is proposed, as a means to specify the resulting array //argument// type:
+
+<code php>
+function process(User ...array<IUser> $input) {
+    return $input; // returns a typed array<IUser>
+}
+</code>
+
+In this example, the function will type-check the arguments against ''%%User%%'', then produce a typed array of ''%%IUser%%'' elements - in other words, this enables us to type-check input arguments using one type, while specifying a different type for the resulting array. (Note that this proposed syntax is consistent with the general ''%%Type $name%%'' type-hinting pattern.)
+
+=== Nested Arrays ===
+
+We need to consider nested array types as well, for example:
+
+<code php>
+$a = array<array<int>>([1, 2]);
+$a[] = [3, 4];
+$a[0][1] = "string"; // error
+</code>
+
+To be clear:
+
+  - Deeply nested typed arrays must be supported.
+  - Type checking must be recursive for nested structures.
+
+=== Interactions with Existing Type Syntax ===
+
+Natural interactions with existing type-hinting and type-checking syntax and behavior is expected.
+
+For example, the following examples are expected to be valid:
+
+<code php>
+$a = array<int|string>(123, "hello");    // union type-checking for array literals
+
+$b = (array<int|string>) [123, "hello"]; // union type-checking for an untyped array literal
+
+$c = array<string|null>("hello", null);  // typed array with a nullable element type
+
+$d = array<callable>(fn () => "hello");  // typed array of callables
+
+$e = array<array>();                     // typed array of untyped arrays
+
+$f = array<Iterator&Countable>();        // typed array with an intersection value type
+</code>
+
+These examples are not exhaustive, but are meant to impart the idea that typed arrays are expected to work and interact with the rest of the type system, and to support existing type-hinting syntax, in general.
+
+(The notable exception is the ''%%void%%'' type, which would not make sense as either an element or key type.)
+
+=== Pass By Reference ===
+
+We need to consider pass-by-reference semantics - for example, the following should error:
+
+<code php>
+function process(array &$untyped) {
     // ...
 }
 
-tally([7,8,9]);
+$ints = array<int>(1, 2, 3);
+
+process($ints); // ERROR
 </code>
 
-In this case, the implicit type-cast is successful. In a case where the conversion fails, a ''TypeError'' is thrown.
+That is, when a wider array type is expected, but a narrower array type gets assigned, you receive a run-time error, on account of ''%%array<int>%%'' not be assignable //by reference// to an ''%%array%%'' typed parameter.
 
-=== Reification ===
+=== Reference Semantics ===
 
-TODO describe reification of generic type arguments, describe ''array_type()'' and ''array_key_type()'' functions.
+Similar to pass-by-reference semantics, but less obviously, the same restriction applies to property assignments as well:
+
+<code php>
+class ItemList
+{
+    public array $items;
+}
+
+$items = array<int>(1, 2, 3);
+
+$list = new ItemList();
+
+$list->items = &$items; // ERROR
+</code>
+
+Again, since an ''%%array<int>%%'' cannot be assigned to an ''%%array%%'', this assignment cannot be performed.
+
+You can contrast this with the default behavior of copy semantics - this is, ''%%$items%%'' can be assigned to ''%%$list->items%%'' by creating an untyped copy of the type array, however ''%%&$items%%'' cannot be assigned to ''%%$list->items%%'', because it violates the requirement for an untyped array, which must accept any value.
+
+(The idea of allowing typed arrays to live in an untyped array property was carefully considered, and the conclusion was that this could have unpredictable side effects, such as unexpected errors deep inside in library code, if the library attempts to append to a typed array provided by you.)
+
+=== Reflection ===
+
+Developers should be able to use reflection to check if an array is typed, and to determine the key and value element types.
+
+We would need a new type to represent a reflected typed array:
+
+<code php>
+interface ReflectionArrayType extends ReflectionType
+{
+    public function getValueType(): ReflectionType;
+
+    public function hasKeyType(): bool;
+    
+    public function getKeyType(): ?ReflectionType;
+}
+</code>
+
+''%%ReflectionParameter%%'' and ''%%ReflectionProperty%%'' will both be updated, such that ''%%getType%%'' can return ''%%ReflectionArrayType%%'' for typed arrays.
+
+Note that this change applies to typed arrays only - for the sake of backwards compatibility, the ''%%getType%%'' method will continue to return a ''%%ReflectionNamedType%%'' where ''%%getName()%%'' returns ''%%array%%'', as before.
+
+This can be regarded as a non-breaking change - the return type is still ''%%ReflectionType%%'', which is the base class implemented by ''%%ReflectionArrayTypes%%'' and other type reflection models. Older code of course wouldn’t support ''%%ReflectionArrayType%%'', which means it wouldn’t support typed arrays - but typed arrays also wouldn’t be present in said older code. (Libraries of course might need to be upgraded to support typed arrays, by handling ''%%ReflectionArrayType%%''.)
+
+==== Performance Implications ====
+
+Type-checking comes with a run-time overhead - this is to be expected.
+
+However, when type-checking or type-hinting is required, the alternatives are all going to perform worse - if-statements, run-time reflection of PHP-Doc blocks, or reflection-based facilities using attributes, are all inherently going to perform worse than native, declarative typed arrays.
+
+Object-based collection types, whether in userland or in the standard library, are also inherently going to perform worse - on top of forcing pass-by-reference object semantics, which tend to be undesirable when it comes to arrays, which, having value semantics, are not subject to bugs arising from unexpected side effects.
+
+It goes without saying, any alternatives are going to be far more difficult for users to implement, as well.
+
+=== Future Optimization ===
+
+Even if this feature were to launch essentially without any optimizations, there are of course optimization paths that could be implemented in the future, if required or desired.
+
+For example, passing an array from one function to another may require copying in a first version of this feature - while future versions could (for example) implement, for example, some of the following:
+
+  - Static analysis, such that the engine would know that assigning ''%%array<int>%%'' to ''%%array<int>%%'' can be done with the usual write-on-modify optimization that PHP employs with untyped arrays.
+  - When copying is required, copying without validation, when the array element types are two compatible types, e.g. a subtype or an implemented interface.
+  - Internal preservation of array types when assigned to untyped arrays, e.g. preserving but hiding the type, and disabling the type-check, such that assigning an unmodified ''%%array<int>%%'' to an ''%%array%%'', and back to ''%%array<int>%%'', could be done by merely re-enabling the internally preserved previous type.
+
+Optimizations are almost certainly possible, but are not mandated for an initial implementation by this proposal.
+
+Users would almost definitely wish to apply typed arrays, in some cases, mainly for the sake of documentation and IDE support, so any future optimizations should definitely be considered.
+
+If, initially, users choose to apply typed arrays sparingly, for example just in their input models, the feature itself would still be a considerable win in terms of input validation performance and simplicity in many use-cases that currently require manual validation, such as parsing post-data, applying JSON structures to models, and so on.
+
+==== Impact on Existing Standard Library ====
+
+Future improvements could be made to improve type-hinting, type-checking and reflection for built-in functions - for example, a function such as ''%%array_sum%%'' could use a typed array parameter type, such as ''%%array<int|float>%%'', rather than manually type-checking it's input.
+
+Upgrading the built-in standard library is beyond the scope of this proposal.
 
 ===== Backward Incompatible Changes =====
 
