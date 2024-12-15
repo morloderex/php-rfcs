@@ -1,298 +1,350 @@
-Randomizer Additions
-====================
+PDO Driver Specific SQL Parsers
+===============================
 
 :PHP-RFC: 0881
-:Title: Randomizer Additions
-:Author: Tim Düsterhus <timwolla@php.net>
-:Status: Implemented
+:Title: PDO Driver Specific SQL Parsers
+:Author: Matteo Beccati <mbeccati@php.net>
+:Status: Accepted
 :Type: Standards Track
-:Created: 2022-10-09
-:PHP-Version: 8.3
-:Version: 1.3
+:Created: 2024-04-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-This RFC proposes to add new “building block” methods to
-\\Random\Randomizer that implement commonly useful operations that are
-either verbose or very hard to implement in userland.
+The PDO extension contains a SQL parser, whose main purpose is to
+recognise parameter placeholders inside queries (i.e. ``"?"`` and
+``":paramName"``), so that it knows how many and what parameters to
+expect for a query, and pass the information to the PDO driver in use.
 
-Generating **a random string containing specific characters** is a
-common use case to generate random identifiers, voucher codes, numeric
-strings that exceed the range of an integer and more. Implementing this
-operation in userland requires selecting random offsets within an input
-string in a loop and thus requires multiple lines of code for what
-effectively is a very simple operation. It is also easy to introduce
-subtle bugs, for example by introducing an off-by-one error with regard
-to the maximum string index by forgetting to subtract one from the
-string length. The obvious implementation that uses
-``Randomizer::getInt()`` to select the offsets is also inefficient as it
-requires at least one call to the engine per character, whereas a 64 Bit
-engine could generate randomness for 8 characters at once.
+This parser had historically been modelled to work with the de-facto SQL
+standard in the PHP ecosystem at that time: MySQL. However, the SQL
+dialect used by MySQL is different when handling string literals from
+standard SQL, followed by other database vendors, such as PostgreSQL and
+SQLite.
 
-Generating a **random floating point value** is also a useful building
-block, for example to generate a random boolean with a specific chance.
-Doing this in userland correctly is somewhere between non-trivial and
-impossible. The obvious implementation, dividing a random integer
-retrieved using ``Randomizer::getInt()`` by another integer easily
-results in a bias, because of rounding errors and the decreasing density
-of floats for larger absolute values.
+Specifically, MySQL treats the backslash character as an escape
+character: ``'This \'word\' is a single quoted'`` Whereas the SQL
+standard uses double single quotes:
+``'This ''word'' is a single quoted'``
+
+When using databases other than MySQL with PDO, valid queries having
+string literals ending with a backslash character are throwing off the
+parser and causing apparently inexplicable bugs.
+
+For example:
+
+.. code:: sql
+
+   SELECT 'foo\' AS a, '?' AS b
+
+will make PDO consider ``"'foo\' AS a, '"`` to be a string literal and
+will parse the following "?" as a positional parameter placeholder. In
+fact, if you pay close attention, even the DocuWiki SQL code formatter
+is thrown off by this very example.
+
+We have several reports of similar bugs
+`[1 <https://bugs.php.net/bug.php?id=78534>`__],
+`[2 <https://bugs.php.net/bug.php?id=79276>`__],
+`[3 <https://bugs.php.net/bug.php?id=80340>`__], and possibly other
+duplicates\ `[7 <https://github.com/php/php-src/issues/13958>`__].
+
+In a nutshell, the PDO SQL scanner function doesn't need to completely
+parse the SQL dialect in use. **It is sufficient to properly recognise
+quoted string literals, quoted identifier literals, and comments to skip
+placeholder detection inside them**.
+
+Bonus improvement
+~~~~~~~~~~~~~~~~~
+
+The limitation of a global SQL parser in PDO meant that my previous `RFC
+to support the PostgreSQL-only "?"
+operator </rfc/pdo_escape_placeholders>`__\ [4] had to apply the parser
+change to all database types. The change had no known side effects, but
+I feel this RFC could improve by keeping this peculiarity inside the
+pdo_pgsql scanner only.
 
 Proposal
 --------
 
-Add three new methods ``\Random\Randomizer`` and one enum accompanying
-one method:
+Following a detailed research (see below) for each of the databases
+currently supported by PDO in core, the proposal is to allow drivers to
+optionally provide a custom scanner function to handle their specific
+SQL dialect and:
 
-.. code:: php
+#. Change the `default PDO
+   scanner <https://github.com/php/php-src/blob/ab589e4481f0cf35c8773e0c64dccc35b8870ae1/ext/pdo/pdo_sql_parser.re#L42>`__
+   to expect standard SQL only:
 
-   namespace Random;
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. two-dashes and C-style comments (non-nested, as that seems to be
+      the most common format, already implemented in PDO)
 
-   final class Randomizer {
-       // […]
-       public function getBytesFromString(string $string, int $length): string {}
-       public function nextFloat(): float {}
-       public function getFloat(
-           float $min,
-           float $max,
-           IntervalBoundary $boundary = IntervalBoundary::ClosedOpen
-       ): float {}
+#. Add a MySQL-specific scanner function:
+
+   #. single and double quoted literals with both doubling and backslash
+      as escaping mechanisms (MySQL default)
+   #. backtick literals with doubling as escaping mechanism (I also
+      tested and it seems MySQL doesn't accept backslashes as escapes)
+   #. two-dashes (if followed by 1 whitespace), C-style comments, and
+      Hash-comments
+   #. Tests, as necessary
+
+#. Add a PgSQL-specific scanner function:
+
+   #. single and double quoted literals, with doubling as escaping
+      mechanism
+   #. C-style "escape" string literals
+   #. Dollar-quoted string literals
+   #. two-dashes and C-style comments (non-nested, as nesting would
+      require unwanted changes to the common parser functionality)
+   #. Support for "??" as escape sequence for the "?" operator
+   #. Tests, as necessary
+
+#. Add a SqLite-specific scanner function:
+
+   #. single, double quoted, and backtick literals, with doubling as
+      escaping mechanism
+   #. square brackets quoting for identifiers
+   #. two-dashes and C-style comments (non-nested)
+   #. Tests, as necessary
+
+To keep the change as simple as possible, the proposal tries to cover
+the default SQL syntax for each database as closely as possible, without
+heavy changes to the common parser code.
+
+One important thing to mention is that the proposed changes are only
+targeting the part of PDO that scans the SQL query for parameter
+placeholders. Quoting literals or using parameters in queries is **not
+going to be affected**.
+
+Detailed Proposal
+-----------------
+
+To execute the plan, a new member will be appended to:
+
+.. code:: c
+
+   struct pdo_dbh_methods {
+       pdo_dbh_close_func      closer;
+       pdo_dbh_prepare_func        preparer;
+       pdo_dbh_do_func         doer;
+       pdo_dbh_quote_func      quoter;
+       // ...
+       pdo_dbh_sql_scanner     scanner;
    }
 
-   enum IntervalBoundary {
-       case ClosedOpen;
-       case ClosedClosed;
-       case OpenClosed;
-       case OpenOpen;
-   }
+Each PDO driver defines already `their own
+struct <https://github.com/search?q=repo%3Aphp/php-src%20pdo_dbh_methods&type=code>`__.
+Leaving the new member to NULL will make the driver use the default PDO
+scanner function. Otherwise, a pointer to a custom scanner function will
+override the default when parsing queries. It's really as simple as
+that.
 
-getBytesFromString()
-~~~~~~~~~~~~~~~~~~~~
+The rest of the implementation is the actual re2c scanner code,
+config.*, Makefile changes, etc. required to incorporate the
+driver-specific scanner into the build.
 
-The method allows you to generate a string with a given length that
-consists of randomly selected bytes from a given string.
+To support dollar-quoted strings on Postgres, the functionality of
+custom quoting has been added to the common PDO parser function. The
+change has no side effects for other database drivers.
 
-Parameters
-^^^^^^^^^^
+One minor potential BC-break was reported while researching bug
+`#14244 <https://github.com/php/php-src/issues/14244>`__, which
+basically describes lack of support for dollar quoting in pdo_pgsql. One
+of the currently viable workarounds is to use escaped question marks
+inside dollar-quoted strings to avoid unexpected placeholder detection.
+The last version of the implementation still allows that, while raising
+the following deprecation notice:
 
-``string $string``
+``Escaping question marks inside dollar quoted strings is not required anymore and is deprecated``.
 
-The string from which random bytes are selected.
+Such BC-compatibility can be removed in the next major version.
 
-Note:
+Research on String Literals, Identifiers, and Comments
+------------------------------------------------------
 
-The string may contain duplicate bytes. When bytes are duplicated the
-chance of a value being selected is equal to its proportion within the
-string. If each byte only appears once, the bytes will be uniformly
-selected.
+MySQL
+~~~~~
 
-``int $length``
+MySQL by default accepts both backslash escaped quotes and SQL standard.
+String literals can use single or double quotes. See `the
+documentation <https://dev.mysql.com/doc/refman/8.0/en/string-literals.html>`__
+(8.0 current is linked here, but 5.7 and 8.3 behave the same).
 
-The length of the output string.
+The
+`NO_BACKSLASH_ESCAPE <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes>`__
+SQL mode will disable recognition of the backslash as escape character.
+If set it will break SQL scanning regardless of this RFC.
 
-Return Value
-^^^^^^^^^^^^
+The
+`ANSI_QUOTES <https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_ansi_quotes>`__
+SQL mode switches from backtick to SQL standard double quotes for
+identifier literals.
 
-A random string with the length of the parameter ``$length`` containing
-only bytes from the parameter ``$string``.
+Several `comment
+types <https://dev.mysql.com/doc/refman/8.0/en/comments.html>`__
+supported: ''-- '', ``#``, and ``/* */`` (not nested).
 
-Examples
-^^^^^^^^
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults. All
+comment types will be supported.
 
-**1. A random domain name.**
-
-.. code:: php
-
-   <?php
-   $randomizer = new \Random\Randomizer();
-
-   var_dump(sprintf(
-       "%s.example.com",
-       $randomizer->getBytesFromString('abcdefghijklmnopqrstuvwxyz0123456789', 16)
-   )); // string(28) "xfhnr0z6ok5fdlbz.example.com"
-
-**2. A numeric backup code for multi-factor authentication.**
-
-.. code:: php
-
-   <?php
-   $randomizer = new \Random\Randomizer();
-
-   var_dump(
-       implode('-', str_split($randomizer->getBytesFromString('0123456789', 20), 5))
-   ); // string(23) "09898-46592-79230-33336"
-
-**3. An arbitrary precision decimal number.**
-
-.. code:: php
-
-   <?php
-   $randomizer = new \Random\Randomizer();
-
-   // Note that trailing zeros might be returned, but all
-   // possible decimals are distinct.
-   var_dump(sprintf(
-       '0.%s',
-       $randomizer->getBytesFromString('0123456789', 30)
-   )); // string(30) "0.217312509790167227890877670844"
-
-**4. A random string where each character has a 75% chance of being 'a'
-and 25% chance of being 'b'.**
-
-.. code:: php
-
-   <?php
-   $randomizer = new \Random\Randomizer();
-
-   var_dump(
-       $randomizer->getBytesFromString('aaab', 16)
-   ); // string(16) "baabaaaaaaababaa"
-
-**5. A random DNA sequence.**
-
-.. code:: php
-
-   <?php
-   $randomizer = new \Random\Randomizer();
-
-   var_dump(
-       $randomizer->getBytesFromString('ACGT', 30)
-   ); // string(30) "CGTAGATCGTTCTGATAGAAGCTAACGGTT"
-
-getFloat()
+PostgreSQL
 ~~~~~~~~~~
 
-The method returns a float between ``$min`` and ``$max``. Whether the
-interval boundaries are open or closed (i.e. whether ``$min`` and
-``$max`` are possible results) depends on the value of the ``$boundary``
-parameter. The default is the half-open interval [$min, $max), i.e.
-including the lower and excluding the upper bound. The returned values
-are uniformly selected and evenly distributed within the configured
-interval.
+Escaping has evolved over the years. Historically accepted "\'", but
+started gradually transitioning to the SQL standard around 2005, going
+from memory. Since 9.1 (2011+) it accepts only single-quoted string
+literals by default according to the SQL standard. See `the
+documentation <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS>`__.
 
-Evenly distributed means that each possible subinterval contains the
-same number of possible values as each other identically sized
-subinterval. As an example when calling
-``->getFloat(0, 1, IntervalBoundary::ClosedOpen)`` a return value less
-than ``0.5`` is equally likely as a return value that is at least
-``0.5``. A return value less than ``0.1`` will happen in 10% of the
-cases, as will a return value that is at least ``0.9``.
+Postgres also supports `String Constants with Unicode
+Escapes <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-UESCAPE>`__,
+which follow the same conventions as standard strings and are parsed by
+PDO as regular strings.
 
-The algorithm used is the γ-section algorithm as published in: Drawing
-Random Floating-Point Numbers from an Interval. Frédéric Goualard, ACM
-Trans. Model. Comput. Simul., 32:3, 2022.
-https://doi.org/10.1145/3503512
-
-.. _parameters-1:
-
-Parameters
-^^^^^^^^^^
-
-``float $min``
-
-The lower bound of the interval of possible return values.
-
-``float $max``
-
-The upper bound of the interval of possible return values.
-
-``\Random\IntervalBoundary $boundary = \Random\IntervalBoundary::ClosedOpen``
-
--  ClosedOpen (default): ``$min`` may be returned, ``$max`` may not.
--  ClosedClosed: ``$min`` and ``$max`` both may be returned.
--  OpenClosed: ``$min`` may not be returned, ``$max`` may.
--  OpenOpen: Neither ``$min``, nor ``$max`` may be returned.
-
-.. _return-value-1:
-
-Return Value
-^^^^^^^^^^^^
-
-A random float, such that:
-
--  ClosedOpen (default): ``$float >= $min && $float < $max``
--  ClosedClosed: ``$float >= $min && $float <= $max``
--  OpenClosed: ``$float > $min && $float <= $max``
--  OpenOpen: ``$float > $min && $float < $max``
-
-.. _examples-1:
-
-Examples
-^^^^^^^^
-
-**1. Generate a random latitude and longitude:**
+It also accepts `“escape” string
+constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS-ESCAPE>`__,
+e.g.
 
 .. code:: php
 
-   <?php
-   $randomizer = new \Random\Randomizer();
+   E'This \'word\' is a single quoted'
 
-   // Note that the latitude granularity is double the
-   // longitude's granularity.
-   //
-   // For the latitude the value may be both -90 and 90.
-   // For the longitude the value may be 180, but not -180, because
-   // -180 and 180 refer to the same longitude.
-   var_dump(sprintf(
-       "Lat: %+.6f Lng: %+.6f",
-       $randomizer->getFloat(-90, 90, \Random\IntervalBoundary::ClosedClosed),
-       $randomizer->getFloat(-180, 180, \Random\IntervalBoundary::OpenClosed),
-   )); // string(32) "Lat: -51.742529 Lng: +135.396328"
+Lastly, `Dollar-Quoted String
+Constants <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-DOLLAR-QUOTING>`__
+are very common, especially when defining functions.
 
-nextFloat()
-~~~~~~~~~~~
+The behaviour of strings can also be manipulated in multiple ways
+through configuration variables, such as:
+`standard_conforming_strings <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-STANDARD-CONFORMING-STRINGS>`__,
+`backslash_quote <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-BACKSLASH-QUOTE>`__,
+and
+`escape_string_warning <https://www.postgresql.org/docs/16/runtime-config-compatible.html#GUC-ESCAPE-STRING-WARNING>`__.
 
-This method is equivalent to
-``->getFloat(0, 1, \Random\IntervalBoundary::ClosedOpen)``. The internal
-implementation is simpler and faster and it does not require explicit
-parameters for the common case of the [0, 1) interval.
+About
+`comments <https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-COMMENTS>`__,
+it follows the standard with ``--`` and ``/* */`` (w/ nested comments
+allowed)
 
-.. _return-value-2:
+The RFC aims to support all the above kinds of string literals with
+string-affecting configuration variables set to their defaults.
+Dollar-quoting support requires minimal changes to the common PDO parser
+function. All comment types are already supported, albeit support for
+nested comments will not be introduced.
 
-Return Value
-^^^^^^^^^^^^
+SQLite
+~~~~~~
 
-A random float, such that ``$float >= 0 && $float < 1``.
+Follows the SQL standard, and requires double single quotes to represent
+the single quote in a string literal. See
+`documentation <https://www.sqlite.org/lang_expr.html#literal_values_constants_>`__.
 
-.. _examples-2:
+It will however accept double-quoted strings as string literals under
+`some
+circumstances <https://www.sqlite.org/quirks.html#double_quoted_string_literals_are_accepted>`__.
 
-Examples
-^^^^^^^^
+Double quoted identifiers, but also `backticks and square
+brackets <https://sqlite.org/lang_keywords.html>`__.
 
-**1. Simulate a coinflip:**
+Almost SQL standard
+`comments <https://www.sqlite.org/lang_comment.html>`__: ``--`` and
+``/* */`` (not nested).
 
-.. code:: php
+The RFC aims to support single-quoted, double-quoted, backtick, and
+square-bracketed literals. All comment types are already supported.
 
-   <?php
-   $randomizer = new \Random\Randomizer();
+SQL Server
+~~~~~~~~~~
 
-   var_dump(
-       $randomizer->nextFloat() < 0.5
-   ); // bool(true)
+SQL standard string literals, according to the
+`documentation <https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql?view=sql-server-ver16#character-string-constants>`__.
 
-**2. Get true at a 10% chance:**
+Depending on the QUOTED_IDENTIFIER setting, double quotes are either
+used for strings or identifiers.
 
-.. code:: php
+Almost SQL standard
+`comments <https://learn.microsoft.com/en-us/sql/t-sql/language-elements/comment-transact-sql?view=sql-server-ver16>`__:
+``--`` and ``/* */`` (non nested).
 
-   <?php
-   $randomizer = new \Random\Randomizer();
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
 
-   var_dump(
-       $randomizer->nextFloat() < 0.1
-   ); // bool(false)
+Firebird
+~~~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref40/fblangref40-commons.html#fblangref40-commons-constants>`__.
+It also support hexadecimal (binary) strings, e.g. ``x'50444F``', and,
+similarly to Oracle, quoted strings (out of scope).
+
+The documentation mentions "Double quotes are NOT VALID for quoting
+strings. The SQL standard reserves double quotes for a different
+purpose: quoting identifiers."
+
+Almost SQL standard
+`comments <https://firebirdsql.org/file/documentation/chunk/en/refdocs/fblangref25/fblangref25-structure-comments.html>`__:
+``--`` and ``/* */`` (non nested).
+
+No custom parser is planned in this RFC: the default scanner will be
+used by default, bringing compatibility for SQL standard string
+literals, identifiers, and comments.
+
+ODBC
+~~~~
+
+Since ODBC can connect to various types of databases, the SQL standard
+parser hopefully will suffice.
+
+Oracle
+~~~~~~
+
+SQL standard string literals, according to the
+`documentation <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Literals.html>`__.
+It also supports alternative quoting, e.g. q'<literal>' and many other
+variants, which is out of scope for this RFC.
+
+`Double quoted
+identifiers <https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Database-Object-Names-and-Qualifiers.html#SQLRF-GUID-75337742-67FD-4EC0-985F-741C93D918DA>`__.
+
+Almost SQL standard
+`comments <https://docs.oracle.com/en/database/oracle/oracle-database/12.2/sqlrf/Comments.html#SQLRF-GUID-5C84C344-CEB3-4DBF-B748-337DE11CCE2A>`__:
+``--`` and ``/* */`` (not nested).
+
+The OCI driver lives in PECL: the default scanner will be used by
+default, bringing compatibility for SQL standard string literals,
+identifiers, and comments.
+
+Historical Background
+---------------------
+
+A few years back I attempted to fix a bug and came up with a `pull
+request <https://github.com/php/php-src/pull/6852>`__ that could be
+considered a proof of concept for this RFC. The same topic was also
+brought up `by others on
+internals <https://externals.io/message/114016>`__, but no one had time
+to follow up with a proper RFC.
 
 Backward Incompatible Changes
 -----------------------------
 
-The ``\Random\IntervalBoundary`` class name is no longer available. The
-``\Random`` namespace is reserved by the random extension and a GitHub
-code search for ``symbol:IntervalBoundary language:php`` did not emit
-any results. As such this is a theoretical issue.
+No BC breaks, but a deprecation notice will be raised when using the
+"escaped question marks inside dollar quoted string" workaround
+described before.
+
+Users having applications that can work with multiple database engines
+should still be very careful and write portable queries, possibly using
+the ``PDO::quote()`` method when necessary instead of hardcoding strings
+containing escape characters.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x
+Next PHP 8.x, hopefully, 8.4.
 
 RFC Impact
 ----------
@@ -300,67 +352,75 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-None.
+No impact
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-None.
+Drivers outside of php-src might have to be modified if they make
+assumptions about the structure of the enum pdo_param_type. They would
+have to be rebuilt since the PDO_DRIVER_API macro would be updated.
+
+That has historically been allowed/expected in minor versions. The last
+time it happened was for PHP 7.2 with `PHP RFC: Extended String Types
+For PDO </rfc/extended-string-types-for-pdo>`__.
 
 To Opcache
 ~~~~~~~~~~
 
-None.
+No impact to opcache.
 
 New Constants
 ~~~~~~~~~~~~~
 
-None.
+No new constant.
 
 php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-None.
+No php.ini changes
 
 Open Issues
 -----------
 
-None.
+No open issues ATM.
 
 Unaffected PHP Functionality
 ----------------------------
 
-The only affected functionality is the Randomizer class that receives
-new methods. These methods might be visible with Reflection. Everything
-else is unaffected.
+Anything not related to PDO scanning the SQL query for parameter
+placeholders.
 
-Proposed Voting Choices
------------------------
+Out Of Scope
+------------
 
-Each vote requires a 2/3 majority; voting runs for 2 weeks until
-2022-11-23T09:00:00Z.
+Dynamic changes to the scanner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _getbytesfromstring-1:
+The scanners are generated when PHP is compiled and, currently, cannot
+be modified at runtime. However, some databases allow configuration
+directives or ``SET`` queries to change the accepted syntax for
+literals, identifiers, etc.
 
-getBytesFromString()
-~~~~~~~~~~~~~~~~~~~~
+Being able to understand all possible combinations would require
+tracking what directives are different from the expected default and
+having several scanners inside each driver for each possible permutation
+of such configuration directives.
 
-Question: Add Randomizer::getBytesFromString()?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Future Scope
+------------
 
-Voting Choices
-^^^^^^^^^^^^^^
+Evaluate supporting "exotic" syntaxes in the existing scanners and/or
+add other custom scanner functionality.
 
--  Yes
--  No
+Voting
+------
 
-getFloat()/nextFloat()
-~~~~~~~~~~~~~~~~~~~~~~
+Voting will be open until Monday, 17 June 2024 at 15:00:00 UTC. As
+usual, 2/3 majority is needed for this proposal to be accepted.
 
-Question: Add Randomizer::nextFloat(), Randomizer::getFloat(), and the IntervalBoundary enum?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
+Question: Implement PDO Driver specific SQL parsers?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -371,40 +431,29 @@ Voting Choices
 Patches and Tests
 -----------------
 
--  Implementation of ``getBytesFromString()``:
-   https://github.com/php/php-src/pull/9664
--  Implementation of ``nextFloat()`` and ``getFloat()``:
-   https://github.com/php/php-src/pull/9679
-
-These implementations are fully functional.
-
-Implementation
---------------
-
--  https://github.com/php/php-src/commit/ac3ecd03af009d433d4b75d570b3b0f0a3fc0ff7
--  https://github.com/php/php-src/commit/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76
+`Implementation Pull
+Request <https://github.com/php/php-src/pull/14035>`__
 
 References
 ----------
 
--  First discussion on the mailing list:
-   https://externals.io/message/118762
--  RFC discussion: https://externals.io/message/118810
-
-Changelog
----------
-
--  1.3: Rename the third getFloat() parameter from $bounds to $boundary
-   to be consistent with the enum name.
--  1.2: Rename GetFloatBounds to IntervalBoundary.
--  1.1: Renames getBytesFromAlphabet to getBytesFromString, add
-   GetFloatBounds enum.
+-  [1] `https:bugs.php.net/bug.php?id=78534]] \* [2]
+   [[https:\ bugs.php.net/bug.php?id=79276|https:bugs.php.net/bug.php?id=79276]]
+   \* [3]
+   [[https:\ bugs.php.net/bug.php?id=80340|https:bugs.php.net/bug.php?id=80340]]
+   \* [4] [[rfc:pdo_escape_placeholders|PHP RFC: Escape PDO "?"
+   parameter placeholder]] \* [5]
+   [[https:\ github.com/php/php-src/pull/6852|PoC implementation of a
+   custom pdo_pgsql scanner <https://bugs.php.net/bug.php?id=78534>`__
+-  [6] `Previous discussion of the topic on
+   internals <https://externals.io/message/114016>`__
+-  [7] `More recent bug <https://github.com/php/php-src/issues/13958>`__
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/commit/ac3ecd03af009d433d4b75d570b3b0f0a3fc0ff7 and https://github.com/php/php-src/commit/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Original PHP Version: PHP 8.3
-:Slug: randomizer_additions
-:Wiki URL: https://wiki.php.net/rfc/randomizer_additions
+:Discussion: https://externals.io/message/123141
+:Implementation: https://github.com/php/php-src/pull/14035
+:Original Authors: Matteo Beccati, mbeccati@php.net
+:Slug: pdo_driver_specific_parsers
+:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_parsers
