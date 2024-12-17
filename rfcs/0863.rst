@@ -1,119 +1,500 @@
-Types For Local Variables
-=========================
+Improve Callbacks In Ext/dom And Ext/xsl
+========================================
 
 :PHP-RFC: 0863
-:Title: Types For Local Variables
-:Author: Wendell Adriel <wendelladriel.ti@gmail.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-02-08
-:Version: 1.0
+:Title: Improve Callbacks In Ext/dom And Ext/xsl
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-11-05
+:PHP-Version: 8.4
+:Version: 0.3
 
 Introduction
 ------------
 
-During the last releases of the language the support for types is
-increasing. We can already add types in a lot of contexts:
+The ``DOMXPath`` class allows developers to run XPath expression queries
+on HTML/XML documents. The ``XSLTProcessor`` class allows developers to
+perform XSL transformations on HTML/XML documents. Both of these
+internally use XPath expressions, and they support calling PHP functions
+inside those XPath expressions. However, there is an unfortunate
+limitation in that only callable strings are supported. This means that
+closures, first-class callables, and instance methods cannot be used.
+This proposal aims to improve the callback support such that any
+callable can be used.
 
--  Function arguments
--  Function return
--  Class properties
+To better understand the proposal, I'll first give some background to
+demo the usage as it is today. Then I'll introduce the proposal itself.
 
-Types can bring more confidence when writing code, they can shield
-applications from unexpected bugs and issues and improve the readability
-and maintainability of the codebase.
+Background
+----------
 
-Adding the support for declaring types on local variables is a new step
-towards the direction that the language has been adding support for
-types and it's one step closer to adding support for generics later on.
+**Important:** in all examples in this RFC, I will use the following
+sample document to work with. I will not repeat this code snippet.
+
+.. code:: php
+
+   // Set up a sample document with links to cats and dogs
+   $doc = new DOMDocument;
+   $doc->loadXML(<<<XML
+   <animals>
+       <a box_preference="small" href="cat/jill">Jill</a>
+       <a box_preference="medium" href="cat/kes">Kes</a>
+       <a box_preference="medium" href="cat/minou">Minou</a>
+       <a box_preference="large" href="cat/tessa">Tessa</a>
+       <a href="dog/jack">Jack</a>
+   </animals>
+   XML);
+
+Let's take a look at how to use a callback with ``DOMXPath``. We have to
+use ``DOMXPath::registerPhpFunctions(string|array|null $restrict=null)``
+to register callbacks. Only thereafter we can use it in the evaluation.
+
+.. code:: php
+
+   function my_callback(string $href): bool {
+       return preg_match("/cat/", $href);
+   }
+
+   $xpath = new DOMXPath($doc);
+   // This is necessary to resolve the php name in the php:function expression down below.
+   $xpath->registerNamespace("php", "http://php.net/xpath");
+   // This registers the function "my_callback" with the XPath evaluator, such that my_callback can be called.
+   $xpath->registerPhpFunctions("my_callback");
+   // This selects all <a> tags where my_callback(their href attribute content) returns true.
+   $results = $xpath->evaluate("//a[php:function('my_callback', string(@href))]");
+   foreach ($results as $result) {
+       echo "Found ", $result->textContent, "\n";
+   }
+
+   /* This script outputs:
+   Found Jill
+   Found Kes
+   Found Minou
+   Found Tessa
+   */
+
+Note that this is only the simplest example. You can do much more
+complex actions with it, even with side-effects. Furthermore, I only
+showcased a single callback. It's possible to chain multiple callbacks.
+
+Registering multiple callbacks at once is possible too, in that case you
+have to pass an array to ``registerPhpFunctions``:
+
+.. code:: php
+
+   // Now my_first_callback and my_second_callback can be used within XPath
+   $xpath->registerPhpFunctions(["my_first_callback", "my_second_callback"]);
+
+   // registerPhpFunctions() is additive, so calling it again will make even more functions callable:
+   // now strtoupper() will also be callable.
+   $xpath->registerPhpFunctions("strtoupper");
+
+Finally, if the ``$restrict`` argument is null, then all global
+functions and static class methods will be callable.
+
+I won't repeat this for ``XSLTProcessor``, but it works the same way:
+``XSLTProcessor`` also has a ``registerPhpFunctions`` method that works
+exactly the same.
 
 Proposal
 --------
 
-This RFC proposes to add a straightforward way of declaring types for
-local variables:
+Right now, it is impossible to call instance methods or closures. Based
+on feature request https://bugs.php.net/bug.php?id=38595, I propose the
+following API changes. These changes apply to *both* ``DOMXPath`` and
+``XSLTProcessor``.
 
-.. code:: PHP
+Extending the array abilities of registerPhpFunctions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   function foo() {
-       $myString = 'foo'; // Current syntax
-   }
-
-   function foo() {
-       string $myString = 'foo'; // Proposed syntax
-   }
-
-When typing local variables, if a new assignment to it results in a
-different type, then a **TypeError** should be thrown:
+If you pass an array, entries of the form ``$key => $value`` will be
+interpreted as "associate the callable $value with name $key". The key
+must be a string. Example:
 
 .. code:: php
 
-   function foo() {
-       $myString = 'foo';
-       $myString = false; // Currently is ok
-   }
+   $xpath->registerPhpFunctions(["function_name" => $callable]);
+   // Now you can use "php:function('function_name', ...)" in XPath expressions to call $callable.
 
-   function foo() {
-       string $myString = 'foo';
-       $myString = false; // Proposed - Throw a TypeError
-   }
+``$callable`` can be any kind of callable, examples:
+``"MyClass::staticFunc"``, ``[$this, "instanceFunc"]``,
+``$object->foo(...)``,
+``fn ($argument1, $argument2, etc...) => whatever``, etc.
 
-When working with arrays, we can also type the elements of the array:
-
-.. code:: php
-
-   function foo() {
-       $myArray = ['foo', 'bar']; // Current syntax
-   }
-
-   function foo() {
-       array<string> $myArray = ['foo', 'bar']; // Proposed syntax
-       // The above would be the same as defining it as array<int, string>
-   }
-
-Associate arrays can also have the type for the keys and the elements:
+The behaviour of passing only a string value without a key will remain
+the same as before. And you can mix them with ``$key => $value``
+entries:
 
 .. code:: php
 
-   function foo() {
-       $myArray = ['foo' => 'bar', 'test' => 'testing']; // Current syntax
+   $xpath->registerPhpFunctions([
+     "function_name" => $callable,
+     "var_dump"
+   ]);
+   // Now $callable can be called using "php:function('function_name', ...)"
+   // and var_dump using "php:function('var_dump', ...)".
+
+Whether the value is callable will now be checked during registration
+instead of during execution.
+
+Method signature
+~~~~~~~~~~~~~~~~
+
+The method signature of ``registerPhpFunctions`` will remain the same,
+i.e. ``registerPhpFunctions(string|array|null $restrict=null)``. You
+might be wondering why I don't change the string type in that union to
+callable. There are two reasons:
+
+#. callable|array is ambiguous: what does ``["foo", "bar"]`` mean? Does
+   this mean: register both "foo" and "bar" as functions? Or does this
+   mean: register foo::bar ?
+#. XPath expressions are written as strings, so we have to give a string
+   name to the callable.
+
+Additional registerPhpFunctionNS API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This section is based on the feature request:
+https://bugs.php.net/bug.php?id=49567.
+
+We can go even further and *additionally* add an extra API:
+registerPhpFunctionNS.
+
+.. code:: php
+
+   // Associate the prefix "example" with namespace URI "http://example.com"
+   $xpath->registerNamespace("example", "http://example.com");
+   // Register some functions with the "http://example.com" namespace.
+   $xpath->registerPhpFunctionNS("http://example.com", "first_function", $callable);
+   $xpath->registerPhpFunctionNS("http://example.com", "second_function", $another_callable);
+   // Now $callable can be called using "example:first_function(...)"
+   // and $another_callable using "example:second_function(...)".
+
+As you can see in the example, this offers a namespace-aware API and a
+nicer syntax. The fact that the function names are now fully-qualified
+avoids naming clashes when multiple independent libraries or API users
+register callbacks.
+
+The signature of this function is:
+
+.. code:: php
+
+   function registerPhpFunctionNS(string $namespaceURI, string $name, callable $callable): void;
+
+Notice how the function name is in singular (function vs the plural
+functions). Unlike the ``registerPhpFunctions`` method, we don't allow
+``null`` or arrays. Passing ``null`` to ``registerPhpFunctions`` makes
+it possible to call all global functions, which I find dubious for a
+namespace-aware API. Furthermore, in that case it *cannot* determine at
+registration time whether the global function is callable (because we
+don't know yet what function will be called). I find this a footgun that
+I'd rather avoid for a new API.
+
+Similarly, the array support for ``registerPhpFunctions`` is mostly a
+legacy relic from the past and gives conflicts with array-like
+callables. That is the reason that for ``registerPhpFunctions`` only
+string-like callables can be passed, and you have to wrap array-like
+callables. To avoid this mess, the new ``registerPhpFunctionNs`` API
+does not accept an array and consequently supports all kinds of
+callables directly without caveats.
+
+Error conditions
+~~~~~~~~~~~~~~~~
+
+There will be new error conditions added to ``registerPhpFunctions`` as
+part of this RFC.
+
+In case the argument is a string:
+
+#. If the string is not a callable: argument type error
+
+In case the argument is an array:
+
+#. If the value of an array entry is not a callable: argument type error
+#. If there is no string key, and the value cannot be converted to a
+   string: whatever error ``zval_try_get_string`` gives. Example: if you
+   do ``registerPhpFunctions([ function() {...} ])``: this will throw a
+   "Object of class Closure could not be converted to string" error.
+#. If there is a string key that's empty: argument ``ValueError``
+#. If there are NUL bytes in the string: argument ``ValueError``
+
+For ``registerPhpFunctionNS`` there are other error conditions. This
+list is shorter because the function is much simpler (i.e. no array
+handling):
+
+#. The predefined php namespace for XPath is "http://php.net/xpath", and
+   for XSL it is "http://php.net/xsl". It will *not* be possible to
+   register functions under those namespaces respectively for XPath and
+   XSL. It will throw an argument ``ValueError``.
+#. Some characters for callbacks are invalid (e.g. you cannot use a
+   colon in the function name because a colon is used to separate
+   prefixes from names). It will throw an argument ``ValueError``.
+
+Exceptions vs warnings during execution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Prior to PHP 8.0, the ``DOMXPath`` class threw warnings when invoking a
+"php:function(...)" in the following error conditions:
+
+#. The handler name is not a string
+#. The function callback could not be called because it isn't callable
+#. The function callback wasn't registered
+#. When trying to return an object from a callback to an XPath
+   expression that is not a DOM object. You can only return DOM objects
+   because they must have an XML representation.
+
+In PHP 8.0, these were changed to throw exceptions instead of warnings
+(https://github.com/php/php-src/pull/5418). ``XSLTProcessor`` has the
+same error conditions, but still uses warnings to this day. As part of
+this proposal, the implementations will be unified and will therefore
+use exceptions instead of warnings.
+
+Finally, both for ``DOMXPath`` and ``XSLTProcessor``, if you never
+called ``registerPhpFunctions`` it will throw a warning instead of
+throwing an exception. This is inconsistent because if you *did* call
+the function but did not register a function that you're trying to call
+you get an exception instead. I propose to make this an exception too
+such that it is consistent with the other error conditions.
+
+Usage examples of the API improvement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Here are some simple, but somewhat realistic examples of how this API
+improvement can be used.
+
+Here's an example of ``DOMXPath`` with the new API:
+
+.. code:: php
+
+   class Collector {
+       function __construct(private string $regex, private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xpath = new DOMXPath($doc);
+           $xpath->registerNamespace("php", "http://php.net/xpath");
+
+           // This registers the callbacks
+           $xpath->registerPhpFunctions([
+               "filter" => $this->filter(...),
+               "check_box_preference" => fn (string $box) => in_array($box, $this->available_boxes),
+           ]);
+
+           $results = $xpath->evaluate(<<<X
+           //a
+           [php:function('filter', string(@href))]
+           [php:function('check_box_preference', string(@box_preference))]
+           X);
+           foreach ($results as $result) {
+               echo "Found ", $result->textContent, "\n";
+           }
+       }
+
+       function filter(string $href): bool {
+           return preg_match($this->regex, $href);
+       }
    }
 
-   function foo() {
-       array<string, string> $myArray = ['foo' => 'bar', 'test' => 'testing']; // Proposed syntax
+   (new Collector("/cat/", ["medium", "large"]))->process($doc);
+
+As you can see, this allows the use of instance methods when you have to
+carry around state. It also allows the use of closures.
+
+And here's an example of using ``XSLTProcessor`` with the improved API:
+
+.. code:: php
+
+   <?php
+   class BoxCounter {
+       function __construct(private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xsl = new DOMDocument;
+           $xsl->loadXML(<<<XML
+           <?xml version="1.0" encoding="iso-8859-1"?>
+           <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+               xmlns:php="http://php.net/xsl">
+               <xsl:template match="//a">
+                   <xsl:if test="php:function('filter', string(@box_preference))">
+                       <xsl:value-of select="."/>
+                   </xsl:if>
+               </xsl:template>
+           </xsl:stylesheet>
+           XML);
+
+           $proc = new XSLTProcessor;
+           $proc->registerPHPFunctions(["filter" => $this->assignBox(...)]);
+           $proc->importStyleSheet($xsl);
+           echo $proc->transformToXML($doc);
+       }
+
+       function assignBox($size) {
+           if (!@$this->available_boxes[$size]) return false;
+           $this->available_boxes[$size]--;
+           return true;
+       }
    }
 
-**P.S.:The support for adding types to array elements and keys can also
-be extended to Function Arguments, Function Return and Class properties
-since currently, it's not possible to do that.**
+   (new BoxCounter(["medium" => 1, "large" => 3]))->process($doc);
 
-Implicitly, all variables that don't have a type declared should be
-considered to have the type mixed:
+This is again an example of instance methods in use, but for XSL
+transformations this time, with a stateful function.
 
-.. code:: PHP
+Special cases
+~~~~~~~~~~~~~
 
-   function foo() {
-       $myString = 'foo'; // Should be interpreted as: mixed $myString = 'foo';
-   }
+This section clarifies the behaviour of some special cases. These behave
+the same as in current PHP stable versions. These also apply to
+``registerPhpFunctionNS``.
+
+Duplicate registrations
+^^^^^^^^^^^^^^^^^^^^^^^
+
+When registering a callback with the same name twice, the last
+registration wins. This allows for overwriting registrations. For
+example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable1,
+   ]);
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable2,
+   ]);
+
+If you were to call foo, it will call $callable2 in this example.
+
+Empty array argument
+^^^^^^^^^^^^^^^^^^^^
+
+For example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([]);
+
+In this case, no functions are registered.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, since this would be optional.
+Strictly speaking, as the callable validity is checked earlier (i.e.
+when calling ``registerPhpFunctions``), this has a subtle break. If the
+function is not declared yet at the time of calling
+``registerPhpFunctions``, then this will throw an error. Previously this
+was accepted as long as the function was declared by the time the
+callback was executed. I think however that this situation is
+sufficiently rare and easily avoidable.
+
+If the part of the proposal to *also* add ``registerPhpFunctionNS`` is
+accepted, then this could also be a BC break *if* user subclasses
+already define a ``registerPhpFunctionNS`` function with a different
+signature. GitHub search revealed no such cases however, and I also
+think that this method name is rare.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.3 if possible or 9.0.
+Next PHP 8.x, that is 8.4 at the time of writing.
 
-Impact on extensions
---------------------
+RFC Impact
+----------
 
-None so far.
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+This affects both the ext/dom and ext/xsl extension.
+Implementation-wise, the ext/dom extension will gain the shared code to
+deal with XPath callables because the result set handling (and therefore
+ext/xsl) already depends on DOM classes anyway.
+
+Open Issues
+-----------
+
+None.
+
+Unaffected PHP Functionality
+----------------------------
+
+Everything else.
+
+Future Scope
+------------
+
+None right now.
+
+Proposed Voting Choices
+-----------------------
+
+Two primary votes each requiring 2/3rd majority.
+
+Accept the proposed changes to registerPhpFunctions in ext/dom and
+ext/xsl?
+
+Question: Accept the proposed changes to registerPhpFunctions in ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Add registerPhpFunctionNS to ext/dom and ext/xsl?
+
+Question: Add registerPhpFunctionNS to ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Patches and Tests
+-----------------
+
+https://github.com/php/php-src/pull/12627
+
+Implementation
+--------------
+
+Merged into PHP 8.4 in
+https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a.
+
+Manual entry TBD
+
+References
+----------
+
+#. Pre-RFC pitch: https://externals.io/message/121286
+#. Feature request: https://bugs.php.net/bug.php?id=38595
+#. Feature request: https://bugs.php.net/bug.php?id=49567
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
+
+Changelog
+---------
+
+-  0.3: Changed registerPhpFunctionsNS -> registerPhpFunctionNS
+-  0.2: Added registerPhpFunctionsNS
+-  0.1.1: Clarify special cases (which are identical to how they are in
+   current PHP versions)
+-  0.1: Initial version under discussion
 
 Additional Metadata
 -------------------
 
-:Original Authors: Wendell Adriel, wendelladriel.ti@gmail.com
-:Slug: local_variable_types
-:Wiki URL: https://wiki.php.net/rfc/local_variable_types
+:Implementation: https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a
+:Original Authors: Niels Dossche, nielsdos@php.net
+:Slug: improve_callbacks_dom_and_xsl
+:Wiki URL: https://wiki.php.net/rfc/improve_callbacks_dom_and_xsl
