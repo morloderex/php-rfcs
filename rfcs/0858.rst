@@ -1,204 +1,129 @@
-Is_valid_utf8()
-===============
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0858
-:Title: Is_valid_utf8()
-:Author: Thomas Hruska <cubic@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-01-27
-:Version: 1
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
+:Type: Standards Track
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-UTF-8 is `the most popular character set
-encoding <https://en.wikipedia.org/wiki/Popularity_of_text_encodings>`__
-globally on the web. Approximately 95% of all websites use it. PHP
-powers approximately 77.4% of the dynamic web and yet there is no UTF-8
-string validation function built into the language. This RFC aims to
-introduce an is_valid_utf8() function for correctly determining if an
-input variable is indeed a strictly valid UTF-8 string.
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-The Unicode specification is extremely difficult to implement correctly,
-which is why there is only one relatively complete library in existence,
-ICU, whose source code weighs in at around 25MB (compressed zip file).
-Improperly handled Unicode strings can trigger a wide range of issues
-from unexpectedly failed database transactions to exploitable buffer
-overflows. Many PHP applications assume that input strings are valid
-UTF-8 and generally don't consider the format of the input string as a
-source of potential vulnerabilities that could be exploited by malicious
-actors. In addition, a number of control characters in the 0x0000
-through 0x001F range can cause problems, have no particular benefit in
-webpages, and should probably be treated specially within an
-is_valid_utf8() function for PHP.
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
 
-Also, while we are at it, we should correctly handle an aspect of
-Unicode that can be abused in an unusual way that is relevant to web
-developers: Combining code points. A combining code point applies a code
-point to a previous non-combining code point. The result allows for
-constructing characters that are not part of the Unicode standard.
-However, this can be abused by starting with a non-combining code point
-and then bolting on hundreds of combining code points. The result is an
-unreadable character with a whole lot of diacritics applied to it.
-Rendered on the screen, the character can also span many lines of text
-making other content on the screen unreadable. The name for this type of
-abuse is `Zalgo text <https://en.wikipedia.org/wiki/Zalgo_text>`__.
-However, using multiple sequential combining code points is still a
-valid use of Unicode. Tibetan, for example, can use up to 8 combining
-code points. If that were doubled by default, it allows for Unicode to
-expand naturally while also dealing with excessive combining code point
-abuse.
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
+
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
+
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-A working implementation of the item being proposed can be found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-is_valid_utf8()
-~~~~~~~~~~~~~~~
-
-bool is_valid_utf8(string $value, [ bool $standard = false, int
-$combinelimit = 16 ])
-
-Finds whether the given value is a valid UTF-8 string.
-
--  $value - Any input type to validate as a UTF-8 string.
--  $standard - Whether or not to strictly adhere to the Unicode standard
-   (Default is false - see Notes).
--  $combinelimit - The maximum number of sequential combination code
-   points to allow (Default is 16).
-
-Returns: A boolean of true if the string is a valid UTF-8 string, false
-otherwise.
-
-This function determines whether or not a zval is a string and, if it
-is, whether or not it is valid UTF-8. It also sets the IS_STR_VALID_UTF8
-garbage collection flag on success for non-interned strings so that
-future calls against the same string take less time.
-
-The $standard option decides whether or not to allow the full 0x0000
-through 0x007F character range. There is significant risk with allowing
-certain control characters to reach databases, consoles, command-lines,
-etc. This function, by default, limits the range to 0x0020 through
-0x007E plus \\r, \\n, and \\t.
-
-The $combinelimit limits `Zalgo
-text <https://en.wikipedia.org/wiki/Zalgo_text>`__ to reasonable
-lengths. Zalgo text abuses combination code points, which can make a
-webpage unreadable. The maximum number of legitimate combination code
-points to date is 8 code points in Tibetan. So this function doubles
-that by default.
-
-Target audience: All users.
-
-Why it should be added to PHP: Validating UTF-8 in userland requires
-processing one byte at a time, which is slow and better done in PHP
-core. mb_check_encoding($string, "UTF-8") requires mbstring, which is
-not compiled in by default and doesn't have options for important
-protections that PHP should have out of the box. Recursive regex
-checking is an even worse option and can crash PCRE. Unicode is a
-complex Standard and most people get it wrong. In addition, passing
-malformed UTF-8 to databases, processes, or various libraries can
-trigger security vulnerabilities. UTF-8 is the most popular character
-set globally for the web. PHP accepts UTF-8 user input but does not have
-a built-in UTF-8 validation function.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-is_valid_utf8() will no longer be available as a global function name.
-May break existing userland software that defines global functions with
-this name. Searching GitHub for those function name turns up the
-following result:
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
--  is_valid_utf8() - 3,632 results. The test extension (qolfuncs) and a
-   static variable name in a popular library ($is_valid_utf8). No
-   apparent naming conflicts.
+Further Motivation
+------------------
 
-Proposed PHP Version(s)
------------------------
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-Next PHP 8.x.
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
-RFC Impact
-----------
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
--  To SAPIs: Will be applied to all PHP environments.
--  To Existing Extensions: Addition made to ext/standard in the existing
-   type.c or string.c file.
--  To Opcache: New global function (is_valid_utf8()) to be added to the
-   registered opcache function list like all the other registered global
-   functions.
--  New Constants: No new constants introduced.
--  php.ini Defaults: No changes to php.ini introduced.
+Version
+-------
 
-Open Issues
------------
+Next minor version, which is PHP 8.4.
 
-Issue 1 - Are there other areas of Unicode like Zalgo text that aren't
-context sensitive that should be handled by this function?
+Vote
+----
 
-Issue 2 - Should this function go into ext/standard/type.c or
-ext/standard/string.c?
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Issue 3 - Should this function also be a filter?
+Voting started on 2024-07-13 and will end on 2024-07-27.
 
-Future Scope
-------------
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-None at this time.
+Voting Choices
+^^^^^^^^^^^^^^
 
-Proposed Voting Choices
------------------------
-
-The vote will require 2/3 majority.
-
-Patches and Tests
------------------
-
-A working implementation of the item being proposed can currently be
-found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point, so
-turning the extension into a normal pull request should be reasonably
-straightforward.
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+-  Yes
+-  No
 
 References
 ----------
 
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-Rejected Features
------------------
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-None at this time.
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
+
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
+
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
+
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: is_valid_utf8
-:Wiki URL: https://wiki.php.net/rfc/is_valid_utf8
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final
