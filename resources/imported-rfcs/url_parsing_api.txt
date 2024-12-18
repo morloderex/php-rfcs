@@ -23,9 +23,6 @@ In order to address the above mentioned problems, a new, always available ''URI'
 <code php>
 namespace Uri;
 
-const URI_PARSER_RFC3986 = "rfc3986";
-const URI_PARSER_WHATWG = "whatwg";
-
 abstract class UriException extends \Exception
 {
 }
@@ -335,6 +332,16 @@ It should be noted that the ''equals()'' method only accepts an ''Uri\Uri'' inst
 
 These pressing questions - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
 
+Last but not least, URIs support a ''resolve()'' method that is able to resolve potentially relative URIs with the current object as the base URI:
+
+<code php>
+$uri = new Uri\Rfc3986Uri("https://example.com");
+
+echo $uri->resolve("/foo")->toString();        //  https://example.com/foo
+</code>
+
+This is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
+
 ===== Relation to PSR-7 =====
 
 [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seems a good candidate for adoption at the first glance. However, the current RFC does not purse this mainly for the following reasons:
@@ -344,7 +351,7 @@ These pressing questions - combined with the fact that the construct is not supp
 
 ===== How encoding and decoding works? =====
 
-TBD
+Encoding and decoding special characters is a very problematic aspect of URI parsing.
 
 ===== Why query parameter manipulation is not supported? =====
 
@@ -376,17 +383,31 @@ The capability provided by ''parse_url()'' is used for multiple purposes in the 
   * SSL/TLS socket communication: parsing the target URL
   * GET/POST session: accepting the session ID from the query string, manipulating the output URL to automatically include the session ID ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]]
 
-It would cause inconsistency and security vulnerability if parsing of URIs based on the two specifications referred above was supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
+It would cause inconsistency and a security vulnerability if parsing of URIs based on the two specifications referred above were supported in userland, but the legacy ''parse_url()'' based behavior was kept internally without the possibility to use the new API. That's why the current RFC was designed with plugability in mind.
 
 Specifically, supported parser backends would have to be registered by using a similar method how [[https://wiki.php.net/rfc/password_registry|password hashing algorithms are registered]]. On one hand, this approach makes it possible for 3rd party extensions to leverage URI parser backends other than the built-in ones (i.e. support for ADA URL could also be added). But more importantly, an internal "interface" for parsing and handling URIs is defined this way so that it now becomes possible to configure the used backend for each use-case. Please note that URI parser backend registration is only supported for internal code: registering custom user-land implementations is not possible for now, mainly in order to prevent a possible new attack surface.
 
 While it would sound natural to add a php.ini configuration option to configure the used parser backend globally, this option was rejected during the discussion period of the RFC because it would result in unsafe code that is controlled by global state: since any invoked piece of code can change the used parser backend, one should always check the current value of the config option before parsing URIs (and in case of libraries, the original option should also be reset after usage). Instead, the RFC proposes to add the following configuration options that only affect a single use-case:
 
-  * ''SoapClient::_doRequest()'': a new optional ''$uriParserName'' parameter is added accepting ''string'' or ''null'' arguments. ''Null'' represents the original (''parse_url()'') based method, while the new backends will be used when passing either ''URI_PARSER_RFC3986'' or ''URI_PARSER_WHATWG''.
-  * FTP/FTPS stream wrapper: a new ''uri_parser_name'' stream context option is added
-  * ''FILTER_VALIDATE_URL'': ''filter_*'' functions can be configured by passing a ''uri_parser_name'' key to the ''$options'' array
-  * SSL/TLS socket communication: a new ''uri_parser_name'' stream context option is added
+  * ''SoapClient::_doRequest()'': a new optional ''$uriParserClass'' parameter is added accepting ''string'' or ''null'' arguments. ''Null'' represents the original (''parse_url()'') based method, while the new backends will be used when passing either ''Uri\Rfc3986Uri::class'' or ''Uri\WhatWgUri::class''.
+  * FTP/FTPS stream wrapper: a new ''uri_parser_class'' stream context option is added
+  * ''FILTER_VALIDATE_URL'': ''filter_*'' functions can be configured by passing a ''uri_parser_class'' key to the ''$options'' array
+  * SSL/TLS socket communication: a new ''uri_parser_class'' stream context option is added
   * GET/POST session: since this feature is deprecated by ([[rfc:deprecate-get-post-sessions|Deprecate GET/POST sessions RFC]], no configuration is added.
+
+There are certain file-handling functions that can already accept URIs as strings: these include ''file_get_contents()'', ''file()'', ''fopen()''. As per the current proposal, the URI parser can be supplied in the ''$context'' parameter to these functions, but this approach is somewhat tedious, especially if the URI already had to be parsed previously (i.e. for validation purposes). Let's consider the following example:
+
+<code php>
+$url = $_GET['url'];
+validate_url($url);
+
+$context = stream_context_create([
+    "uri_parser_class" => \Uri\Rfc3986,
+]);
+$contents = file_get_contents($url, context: $context);
+</code>
+
+However, there are other much more convenient approaches, but the current RFC still goes with the current, less ergonomic one, as going either way would need more discussion, and a scope creep. The improvement possibilities include passing ''Uri\Uri'' instances to the functions in question, or converting URIs to streams based on [[https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/URL.html#openStream()|Java's example]].
 
 ===== Performance Considerations =====
 
