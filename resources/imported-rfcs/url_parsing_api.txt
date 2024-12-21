@@ -40,44 +40,6 @@ class InvalidUriException extends \Uri\UriException
     public readonly array $errors;
 }
 
-readonly class WhatWgError
-{
-    public const int ERROR_TYPE_DOMAIN_TO_ASCII = UNKNOWN;
-    public const int ERROR_TYPE_DOMAIN_TO_UNICODE = UNKNOWN;
-    public const int ERROR_TYPE_DOMAIN_INVALID_CODE_POINT = UNKNOWN;
-    public const int ERROR_TYPE_HOST_INVALID_CODE_POINT = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_EMPTY_PART = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_TOO_MANY_PARTS = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_NON_NUMERIC_PART = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_NON_DECIMAL_PART = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_OUT_OF_RANGE_PART = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_UNCLOSED = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_INVALID_COMPRESSION = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_TOO_MANY_PIECES = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_MULTIPLE_COMPRESSION = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_INVALID_CODE_POINT = UNKNOWN;
-    public const int ERROR_TYPE_IPV6_TOO_FEW_PIECES = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_IN_IPV6_TOO_MANY_PIECES = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_IN_IPV6_INVALID_CODE_POINT = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_IN_IPV6_OUT_OF_RANGE_PART = UNKNOWN;
-    public const int ERROR_TYPE_IPV4_IN_IPV6_TOO_FEW_PARTS = UNKNOWN;
-    public const int ERROR_TYPE_INVALID_URL_UNIT = UNKNOWN;
-    public const int ERROR_TYPE_SPECIAL_SCHEME_MISSING_FOLLOWING_SOLIDUS = UNKNOWN;
-    public const int ERROR_TYPE_MISSING_SCHEME_NON_RELATIVE_URL = UNKNOWN;
-    public const int ERROR_TYPE_INVALID_REVERSE_SOLIDUS = UNKNOWN;
-    public const int ERROR_TYPE_INVALID_CREDENTIALS = UNKNOWN;
-    public const int ERROR_TYPE_HOST_MISSING = UNKNOWN;
-    public const int ERROR_TYPE_PORT_OUT_OF_RANGE = UNKNOWN;
-    public const int ERROR_TYPE_PORT_INVALID = UNKNOWN;
-    public const int ERROR_TYPE_FILE_INVALID_WINDOWS_DRIVE_LETTER = UNKNOWN;
-    public const int ERROR_TYPE_FILE_INVALID_WINDOWS_DRIVE_LETTER_HOST = UNKNOWN;
-
-    public string $position;
-    public int $errorCode;
-
-    public function __construct(string $position, int $errorCode) {}
-}
-
 interface Uri
 {
     public function getScheme(): ?string;
@@ -197,9 +159,10 @@ readonly class WhatWgUri implements \Uri\Uri
     private ?string $fragment;
 
     /** @param array<int, \Uri\WhatWgError> $errors */
-    public static function parse(string $uri, ?string $baseUrl = null, &$errors): ?static {}
+    public static function parse(string $uri, ?string $baseUrl = null, &$errors = null): ?static {}
 
-    public function __construct(string $uri, ?string $baseUrl = null) {}
+    /** @param array<int, \Uri\WhatWgError> $softErrors */
+    public function __construct(string $uri, ?string $baseUrl = null, &$softErrors = null) {}
 
     public function getScheme(): ?string {}
 
@@ -246,6 +209,46 @@ readonly class WhatWgUri implements \Uri\Uri
     public function __serialize(): array {}
 
     public function __unserialize(array $data): void {}
+}
+
+enum WhatWgErrorType: int {
+    case DomainToAscii = 0;
+    case DomainToUnicode = 1;
+    case DomainInvalidCodePoint = 2;
+    case HostInvalidCodePoint = 3;
+    case Ipv4EmptyPart = 4;
+    case Ipv4TooManyParts = 5;
+    case Ipv4NonNumericPart = 6;
+    case Ipv4NonDecimalPart = 7;
+    case Ipv4OutOfRangePart = 8;
+    case Ipv6Unclosed = 9;
+    case Ipv6InvalidCompression = 10;
+    case Ipv6TooManyPieces = 11;
+    case Ipv6MultipleCompression = 12;
+    case Ipv6InvalidCodePoint = 13;
+    case Ipv6TooFewPieces = 14;
+    case Ipv4InIpv6TooManyPieces = 15;
+    case Ipv4InIpv6InvalidCodePoint = 16;
+    case Ipv4InIpv6OutOfRangePart = 17;
+    case Ipv4InIpv6TooFewParts = 18;
+    case InvalidUrlUnit = 19;
+    case SpecialSchemeMissingFollowingSolidus = 20;
+    case MissingSchemeNonRelativeUrl = 21;
+    case InvalidReverseSoldius = 22;
+    case InvalidCredentials = 23;
+    case HostMissing = 24;
+    case PortOfOfRange = 25;
+    case PortInvalid = 26;
+    case FileInvalidWindowsDriveLetter = 27;
+    case FileInvalidWindowsDriveLetterHost = 28;
+}
+
+readonly class WhatWgError
+{
+    public string $context;
+    public \Uri\WhatWgErrorType $type;
+
+    public function __construct(string $context, \Uri\WhatWgErrorType $type) {}
 }
 </code>
 
@@ -350,7 +353,14 @@ RFC 3986 defines that "URIs that differ in the replacement of an unreserved char
 
 The difference of RFC3986 and WHATWG comes from the fact that a maintainer of the WHATWG specification states that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
 
-For us, the biggest question is how a common interface can be still designed in spite of this difference?
+For us, the biggest question is how a common interface can be still designed in spite of this difference? Before trying to answer the question, it would be important to know some expected use-cases:
+
+  * HTTP routers: they need a decoded representation of some HTTP components (i.e. path)
+  * HTTP clients: they use URIs as-is for sending the request, but they have some use-cases (i.e. [[https://docs.guzzlephp.org/en/stable/quickstart.html#cookies|cookie handling]]) when a decoded URI component representation may be necessary
+  * SAML login: The service provider should do the least amount of processing of the login URL of the identity provider URL in order not to break the SAML signature.
+  * HTTP cache implementations: It's [[https://github.com/symfony/symfony/blob/0a9eb28d2b41ce3dca0c38f7a7524ab6678a3d57/src/Symfony/Component/HttpKernel/HttpCache/Store.php#L421|best to use a normalized URI]] in order not to store the same value for multiple URIs
+
+As it can be seen based on just a few examples, URIs can be used very differently.
 
 ===== Why query parameter manipulation is not supported? =====
 
