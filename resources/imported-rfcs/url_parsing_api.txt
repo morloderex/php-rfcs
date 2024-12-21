@@ -1,4 +1,4 @@
-====== PHP RFC: Add RFC3986 and WHATWG compliant URI parsing support ======
+====== PHP RFC: Add RFC 3986 and WHATWG compliant URI parsing support ======
   * Version: 1.0
   * Date: 2024-06-11
   * Author: Máté Kocsis, kocsismate@php.net
@@ -163,7 +163,7 @@ readonly class WhatWgUri implements \Uri\Uri
 
     /** @param array<int, \Uri\WhatWgError> $softErrors */
     public function __construct(string $uri, ?string $baseUrl = null, &$softErrors = null) {}
-
+    
     public function getScheme(): ?string {}
 
     public function withScheme(?string $scheme): static {}
@@ -347,20 +347,22 @@ This is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
 
 ===== How special characters are handled? =====
 
-Encoding and decoding special characters is a crucial aspect of URI parsing. For this purpose, both RFC3986 and WHATWG use [[https://en.wikipedia.org/wiki/Percent-encoding|percent-encoding]] (i.e. the ''%'' character is encoded as ''%25''). However, the two standards differ significantly in this regard:
+Encoding and decoding special characters is a crucial aspect of URI parsing. For this purpose, both RFC 3986 and WHATWG use [[https://en.wikipedia.org/wiki/Percent-encoding|percent-encoding]] (i.e. the ''%'' character is encoded as ''%25''). However, the two standards differ significantly in this regard:
 
 RFC 3986 defines that "URIs that differ in the replacement of an unreserved character with its corresponding percent-encoded US-ASCII octet are equivalent", which means that percent-encoded characters and their decoded form are equivalent. On the contrary, WHATWG defines URL equivalence by the equality of the serialized URLs, and never decodes percent-encoded characters, except in the host. This implies that percent-encoded characters are not equivalent to their decoded form (except in the host).
 
-The difference of RFC3986 and WHATWG comes from the fact that a maintainer of the WHATWG specification states that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
+The difference between RFC 3986 and WHATWG comes from the fact that the point of view of a maintainer of the WHATWG specification is that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
 
-For us, the biggest question is how a common interface can be still designed in spite of this difference? Before trying to answer the question, it would be important to know some expected use-cases:
+For us, the biggest question is how a common interface can be designed in spite of this difference? Before trying to answer the question, it would be important to know some of the main use-cases of an URI abstraction:
 
-  * HTTP routers: they need a decoded representation of some HTTP components (i.e. path)
-  * HTTP clients: they use URIs as-is for sending the request, but they have some use-cases (i.e. [[https://docs.guzzlephp.org/en/stable/quickstart.html#cookies|cookie handling]]) when a decoded URI component representation may be necessary
-  * SAML login: The service provider should do the least amount of processing of the login URL of the identity provider URL in order not to break the SAML signature.
-  * HTTP cache implementations: It's [[https://github.com/symfony/symfony/blob/0a9eb28d2b41ce3dca0c38f7a7524ab6678a3d57/src/Symfony/Component/HttpKernel/HttpCache/Store.php#L421|best to use a normalized URI]] in order not to store the same value for multiple URIs
+  * HTTP routers: They need the decoded representation of some HTTP components (i.e. path)
+  * HTTP clients: They use URIs as-is for sending requests, but they have some special use-cases (i.e. [[https://docs.guzzlephp.org/en/stable/quickstart.html#cookies|cookie handling]]) when a decoded URI component representation may be necessary for them
+  * SAML login: The service provider should do the least amount of processing of the login URL of the identity provider in order not to break the SAML signature
+  * HTTP cache implementations: It's [[https://github.com/symfony/symfony/blob/0a9eb28d2b41ce3dca0c38f7a7524ab6678a3d57/src/Symfony/Component/HttpKernel/HttpCache/Store.php#L421|best to use a normalized URI]] in order not to store the same cache item for multiple URIs
 
-As it can be seen based on just a few examples, URIs can be used very differently.
+As it can be seen based on just a few examples, an URI abstraction has to support many use-cases, out of which quite some are security-sensitive. That's why we should carefully evaluate how an URI interface should access the URI components. The position of this RFC is that the different use-cases can only be served with multiple accessor variants.
+
+TBD
 
 ===== Why query parameter manipulation is not supported? =====
 
