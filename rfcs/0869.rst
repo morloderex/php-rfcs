@@ -1,342 +1,415 @@
-NameOf
-======
+Match Blocks
+============
 
 :PHP-RFC: 0869
-:Title: NameOf
-:Author: Robert Landers <landers.robert@gmail.com>
+:Title: Match Blocks
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-05-07
+:Type: Standards Track
+:Created: 2023-08-24
+:PHP-Version: 8
 :Version: 1.0
-
-Introduction
-------------
-
-Currently, it is possible to inspect virtually any aspect of running
-code, except there is no easy way to inspect the locally executing
-scope. For example, a developer can get the class of an object with
-``get_class()`` or the name with ``MyClass::class`` or
-``$myClass::class``. A developer can get the name of a parameter or
-property via reflection, however, when a developer needs to write a
-simple error message, that may be overkill, thus the variable name is
-usually hard-coded into the error message. This usually works fine until
-a developer refactors the code and forgets to change the name of the
-variable in the error message.
-
-``nameof()`` allows developers to quickly and easily access the name of
-a variable in the current scope, in a way that keeps error messages
-consistent.
-
-This RFC proposes a global ``nameof()`` function that allows a developer
-to get the name of virtually any user-named variable, property, const,
-or member, quickly and easily:
-
-.. code:: PHP
-
-   echo nameof($variable); // variable
-   echo nameof($object->property); // property
-   echo nameof(Enum::Case); // Case
-   echo nameof(Object::Const); // Const
-   echo nameof(myFunction(...)); // myFunction
-   echo nameof(MY_CONSTANT); // MY_CONSTANT
-
-As named parameters become more prevalent, providing the end user with
-the name of the parameter is more important, in a way that it is easy to
-locate when refactoring, especially as part of a deprecation strategy:
-
-.. code:: PHP
-
-   function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
-     // potentially many lines later...
-     if(is_called_with_deprecated_value($oldParam)) {
-       $logger->warn(nameof($oldParam) . ' is deprecated in the next version, please use ' . nameof($newParam);
-     }
-   }
-
-Further, using ``nameof()`` would allow simpler usage of attributes, by
-using the silence operator (see error checking):
-
-.. code:: PHP
-
-   // evaluates to #[EventHandler(callback: 'handler')]
-   #[EventHandler(callback: @nameof(Operator::handler))]
-   class Operator {
-     public function handler() {
-       // implementation
-     }
-   }
-
-It's important to note that some things have an ambiguous name that is a
-compile error:
-
-.. code:: PHP
-
-   echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead)
-   echo nameof($a === $b); // ??
-   echo nameof($a($b)); // same as array access
-   echo nameof($$a); // ask for $a or use the value of $a
-
-All of these will generate a compile error: "Cannot get the name of an
-ambiguous expression."
 
 Proposal
 --------
 
-The ``nameof()`` function is not necessarily a function in the
-traditional sense and can be used anywhere a string literal can be used
-(such as to define static constants, array keys, and attributes). This
-means that there is an 'identity' for every valid ``nameof()``:
+The `match expression <https://wiki.php.net/rfc/match_expression_v2>`__
+was added to PHP 8.0 with the goal of being a safer and more useful
+alternative to the switch statement. In its current form, each match arm
+is limited to a single expression. Any arm that does not nicely fold
+into a singular expression prevents match from being used. This RFC
+proposes to lift this restriction and allow the placement of blocks at
+the match arm site.
 
-.. code:: PHP
+.. code:: php
 
-   ${nameof($variable)} === $variable;
-   $object->{nameof($object->property)} === $object->property;
-   constant(Enum::class . '::' . nameof(Enum::Case)) === Enum::Case;
-   constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
-   (nameof(myFunction(...))() === myFunction();
-   constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
+   // Before
+   switch (true) {
+       // InputParameter
+       case $entityExpr instanceof AST\InputParameter:
+           $dqlParamKey = $entityExpr->name;
+           $entitySql   = '?';
+           break;
 
-There are a limited number of expressions that can resolve to a name
-using ``nameof()``:
+       // snip
+   };
 
--  variables (but not variable-variables): ``nameof($var)`` resolves to
-   'var'
--  properties: ``nameof($this->prop)``, ``nameof($a?->prop)`` resolves
-   to 'prop'
--  first-class callables: ``nameof(strlen(...))`` resolves to 'strlen'
--  static properties and constants: ``nameof(A::Prop)`` resolves to
-   'Prop'
--  constants: ``nameof(MY_CONST)`` resolves to 'MY_CONST'
+   // After
+   $entitySql = match (true) {
+       // InputParameter
+       $entityExpr instanceof AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
 
-When getting the name of constants and functions, the name will NOT be
-the full name, but the lexical name. This means that if the name is
-``use``'d, it will be that name. However, if the full name is used in
-the ``nameof()``, the full name is returned. It's probably easiest to
-show this with an example:
+       // snip
+   };
 
-.. code:: PHP
+Source: `doctrine/orm
+SqlWalker.php <https://github.com/doctrine/orm/blob/2f9e98754bb451107dcffbf0a9844b90dcdee992/lib/Doctrine/ORM/Query/SqlWalker.php#L2169-L2183>`__
 
-   namespace Name {
-       const MY_CONST = true;
-       function namedFunction() {}
-   }
+Semantics
+---------
 
-   namespace Other {
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction
-   }
+Return value
+~~~~~~~~~~~~
 
-   namespace Using {
-       use const Name\MY_CONST as ;
-       use const Name\MY_CONST as ALIASED_CONST;
-       use function Name\namedFunction;
+Match blocks may have return values. Match will propagate the return
+value of the executed arm. The return value of the block is the last
+expression after an optional list of statements, preceded by a ``<-``
+symbol to denote the value flowing out of the block. If the match return
+value is used, each block is expected to return a value, unless it
+terminates early. If the match return value is not used, the returned
+value is simply discarded.
 
-       echo nameof(MY_CONST); // MY_CONST
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(ALIASED_CONST); // ALIASED_CONST
-       echo nameof(namedFunction(...)); // namedFunction
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction(...)
-   }
+.. code:: php
 
-In other language implementations (such as C#), a full name usually
-isn't returned even if you pass one in. However, a 'full name' is rarely
-required and can often be constructed from parts, if required. However,
-as a convenience, in this implementation, if a 'full name' is requested
-entered, a full name is returned. This allows for the 'least surprises'
-since what you put in is what you get out.
+   $result = match($foo) {
+       'bar' => {
+           $l = 1;
+           $r = 2;
+           <- $l + $r;
+       },
+       'baz' => {
+           throw new Exception();
+       },
+       'qux' => {
+           // Forgot to return something
+           // This will throw a MatchBlockNoValueError if executed
+       },
+   };
 
-Additionally, consider traits and aliasing:
+Note that the return keyword is not reused in place of ``<-`` because it
+would be ambiguous whether the user meant to return from the match
+block, or return from the function. Similarly, yield can already refer
+to pausing a generator in this context.
 
-.. code:: PHP
+Control statements
+~~~~~~~~~~~~~~~~~~
 
-   trait A {
-     public function example() {}
-   }
+return, break, continue and goto statements out of the block are allowed
+*only* if the return value of match itself is not used.
 
-   trait B {
-     public function example() {}
-   }
+.. code:: php
 
-   class C {
-     use A, B {
-       A::example insteadof B;
-       B::example as exampleB;
-     }
-   }
+   match ($foo) {
+       'bar' => {
+           // Returning 'baz' from the *function* (not match)
+           // This is ok
+           return 'baz';
+       },
+   };
 
-   $a = new C();
-   echo nameof($a->exampleB(...)); // outputs: "exampleB"
+   var_dump(match ($foo) {
+       'bar' => {
+           // Breaking out of match (like breaking out of switch, foreach, etc)
+           // This is **not** ok
+           break;
+       },
+   });
 
-In the example above, if we were to return the 'full name' of
-``$a->exampleB(...)`` it would actually be 'B::example' but that isn't
-helpful in the context of class ``C``. By returning the lexical name,
-the developer gets the response they expect.
+   var_dump(match ($foo) {
+       'bar' => {
+           for ($i = 0; $i < 10; $i++) {
+               // Continuing the for loop inside the block
+               // This is ok, as the block itself is not escaped
+               continue;
+           }
+           <- 42;
+       },
+   });
 
-Error Handling
---------------
+The rationale for this decision is twofold:
 
-There are several ways to handle errors, each one has its own merits but
-ultimately will be left up as a secondary vote. It may not provide the
-**best** solution, but the author doesn't have a personal preference:
+-  It attempts to avoid confusing and potentially unsound control flow.
+   For example:
 
-1. No error handling
+.. code:: php
 
-In this case, there is no error handling. This would allow using
-``nameof`` on things that don't exist. For example, no error would be
-output if a developer references a static property on an instanced
-property:
+   var_dump(match (1) {
+       1 => {
+           break;
+           <- 42;
+       },
+   });
+   // What is the return value of match? 
+   // A value was never returned, but the var_dump must receive a value nonetheless.
 
-.. code:: PHP
+-  There are technical challenges to correctly implementing control flow
+   that escapes mid-expression. For the interested, this is explained in
+   more detail under "Technical implications of control statements"
+   below. Disallowing escaping of the match block completely dodges this
+   problem.
 
-   class MyClass {
-     public string $var;
-   }
-   nameof(MyClass::var); // no error, returns 'var'
-   nameof($aVariable); // no error, returns 'aVariable'
+Scoping
+~~~~~~~
 
-The downside is that PHP won't natively inform a developer that they've
-used something that doesn't exist. The main benefit of this approach is
-that it would allow the community to come up with its own rules via
-static analysis tools.
+Match blocks behave just like any other statement list in PHP in terms
+of scoping. That is, no new scope is created. All variables assigned
+inside the block are visible outside the block, within the same
+function.
 
-2. Warnings
+.. code:: php
 
-In this case, PHP would output a warning: "nameof(<name>): does not
-exist." where <name> is the name the developer passed.
+   match ($foo) {
+       'bar' => {
+           $bar = 'I can see this';
+       },
+   };
+   echo $bar; // I can see this
 
-Using a class name (or any other method that would normally trigger
-autoloading) that does not exist, will trigger autoloading and attempt
-to locate the class. If it is not found, a warning will be issued. If a
-variable does not exist in the current scope, a warning will be issued.
-If the referenced property/method/const cannot be located, a warning
-will be issued. If a function or constant cannot be located in the
-current scope, a warning will be issued.
-
-Warnings can be disabled via the 'silence operator' (``@``) to behave
-just like the first case. This is the best of both worlds, allowing
-developers to 'break the rules' to specify properties/functions without
-a reference to the object (``@nameof(Object::method(...))`` vs.
-``nameof($object->method)``) but would require assistance via static
-analysis tooling to catch mistakes.
-
-3. Exceptions
-
-An exception model was considered, however, the author believes that it
-would break the concept of "using ``nameof`` wherever a string could be
-used". For example, if a name cannot be located, an exception would be
-thrown. This would be true in the case of simply defining an attribute
-with a non-existent name:
-
-#[EventHandler(handler: nameof(I_DO_NOT_EXIST))]
-
-which is probably undesirable and nearly impossible to handle in a
-graceful way.
-
-Backward Incompatible Changes
------------------------------
-
-There are no backward incompatible changes at this time except that
-\`nameof\` will become a reserved word.
-
-Future Scope
-------------
-
-This could be expanded in the future to allow classes and types. For
-example, ``nameof(int)`` or ``nameof(MyClass)`` but can already be
-supported via the silence operator.
-
-Proposed PHP Version(s)
------------------------
-
--  8.3: release
--  8.2.x: ``nameof`` becomes a reserved word, emitting a notice
-
-RFC Impact
+Motivation
 ----------
 
-To SAPIs
-~~~~~~~~
+The match expression has been introduced to address some shortcomings of
+switch statements, but currently fails to address approximately half of
+its use cases. Switch cases commonly contain more than one statement.
+`popular-package-analysis <https://github.com/nikic/popular-package-analysis>`__
+revealed that 3 507 of 6 012 switch statements contained at least one
+case with more than one statement (excluding breaks). Moreover, 29 690
+of 67 563 cases were multi-statement. Since match is limited to one
+expressions per arm, a single arm that does not nicely fold into a
+singular expression prevents match from being used entirely.
 
-Should be none
+It has previously been argued that limiting match arms to single
+expressions is beneficial for enforcing clean code. While keeping
+functions and consequently match arms short certainly has its merits, I
+personally find excessively small functions disorienting and hard to
+name well. Moreover, some statements (e.g. control statements) cannot be
+moved into separate functions.
 
-To Existing Extensions
+Additionally, the `pattern matching
+RFC <https://wiki.php.net/rfc/pattern-matching>`__ plans to further
+enhance match. Specifically, each match arm will be able to specify a
+pattern to match the value against, e.g. type checks. The Doctrine
+example from the introduction could become the following:
+
+.. code:: php
+
+   $entitySql = match ($entityExpr) {
+       // InputParameter
+       is AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
+
+       // snip
+   };
+
+Why not language-level blocks?
+------------------------------
+
+Instead of just implementing blocks match, it has been suggested to
+implement blocks as a language-level concept. There are three evident
+use cases for block expressions.
+
+-  Match blocks
+-  Arrow function blocks
+-  Right-hand side of short-circuiting operators (``??=``, ``??``,
+   ``?:``, ``? :``)
+
+Return value semantics
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Will existing extensions be affected? No
+The optimal return value semantics for these three use cases are all
+slightly different.
 
-To Opcache
-~~~~~~~~~~
+-  For match, whether the block should require returning a value depends
+   on whether the match itself returns a value.
+-  Arrow function blocks should never require a return value, as they
+   already provide ``return``. No return value should mean ``null``, to
+   stay consistent with other functions.
+-  For the remaining cases, a value should always be returned, unless
+   the block terminates.
 
-Depends on error type vote.
+We could settle for a solution that works for all cases, namely
+returning ``null`` by default. Whether this solution is preferable is
+likely a matter of taste.
 
-First case: compiled to a string literal.
+.. code:: php
 
-Second and third case: a new AST node (similar to isset) will need to be
-handled.
+   var_dump(match ('foo') {
+       'foo' => {
+           echo "foo branch reached\n";
+       },
+   });
+   // foo branch reached
+   // NULL
 
-New Constants
-~~~~~~~~~~~~~
+   var_dump(fn () => {
+       <- 'foo';
+   }());
+   // string(3) "foo"
 
-None
+It's also note that the general use of blocks is quite limited due to
+PHPs scoping rules. In other languages, blocks can be used to prevent
+pollution of the current scope.
 
-Open Issues
------------
+.. code:: rust
 
-- Should first-class callables be allowed? It's relatively easy to get
-the name of a first-class callable and only included for completeness.
+   let foo = {
+       let tmp = tmp();
+       // ...
+       Foo { tmp }
+   };
 
-Unaffected PHP Functionality
-----------------------------
+In this case, ``tmp`` resides in the isolated scope and is inaccessible
+outside of the block. However, given that PHP only has a single scope
+per function, there is no point in lexically nesting the temporary
+variables, other than potential visual benefits. The benefits are mainly
+limited to some of the short-circuiting operators (``??=``, ``??``,
+``?:``, ``? :``), as they may skip the execution of the block under
+certain conditions.
 
-PHP will largely be unaffected by this change, except that a new global
-function is introduced.
+.. code:: php
 
-.. _future-scope-1:
+   $foo ??= {
+       // This is only executed if $foo was null/undefined.
+       $tmp = tmp();
+       // ...
+       <- new Foo($tmp);
+   };
 
-Future Scope
-------------
+Arrow function capturing
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-None.
+Another issue is that blocks for arrow functions have previously
+beenrejected in two separate RFCs, for reasons that are not solved with
+this approach.
 
-Proposed Voting Choices
------------------------
+-  https://wiki.php.net/rfc/short-functions
+-  https://wiki.php.net/rfc/auto-capture-closure
 
-This is a simple yes-or-no vote to include this feature. 2/3 majority
-required to pass.
+It seems that most concerns for both of these RFCs were related to
+auto-capturing, which language-level blocks cannot properly address.
 
-There is a subvote for the type of error checking to include. Majority
-wins.
+Grammar ambiguity
+~~~~~~~~~~~~~~~~~
 
-Patches and Tests
------------------
+Yet another issue is that ``{}`` is ambiguous (without arbitrary
+lookahead) in expression context, as it clashes with statement lists,
+i.e. the blocks you put after if statements, while loops, etc. An
+alternative syntax could use parentheses, although this introduces some
+inconsistency in the grammar.
 
-experimental implementation:
-https://github.com/php/php-src/pull/11172/files
+.. code:: php
 
-Implementation
---------------
+   var_dump(match ($value) {
+       'foo' => (
+           echo "foo branch reached\n";
+           'foo'
+       ),
+   });
+   // foo branch reached
+   // string(3) "foo"
 
-After the project is implemented, this section should contain
+This works fine, but looks somewhat odd, given that we use ``{}`` in all
+other cases when wrapping statements into blocks.
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+Technical implications of control statements
+--------------------------------------------
 
-References
-----------
+PHPs VM is in three-address form. As opposed to most machines, PHP
+opcodes are destructive in that they consume their operands. A consumed
+operand may not be consumed again. Moreover, an unconsumed operand may
+result in a memory leak. Control statements in match expression blocks
+pose a problem when they skip over the consuming opcodes of temporary
+VARs.
 
-Links to external references, discussions or RFCs
+.. code:: php
 
-Rejected Features
------------------
+   new Foo() + match (1) {
+       1 => { return; },
+   };
 
-Keep this updated with features that were discussed on the mail lists.
+::
+
+   0000 V0 = NEW 0 string("Foo")
+   0001 DO_FCALL
+   0002 T2 = IS_IDENTICAL int(1) int(1)
+   0003 JMPNZ T2 0006
+   0004 JMP 0005
+   0005 MATCH_ERROR int(1)
+   0006 RETURN null
+   0007 MATCH_BLOCK_NO_VALUE_ERROR
+   0008 T3 = QM_ASSIGN null
+   0009 JMP 0010
+   0010 T4 = ADD V0 T3
+   0011 FREE T4
+   0012 RETURN int(1)
+
+The opcode 0006 (RETURN) is always executed, skipping the 0010 (ADD)
+instruction, not consuming V0 and thus leaking the Foo object. This
+problem may be avoided by emitting a FREE opcode before RETURN. The same
+issue can occur when breaking out of switch statements, continuing in
+loops, using goto, etc. This approach is implemented in `this
+PR <https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking>`__.
+However, it has proven to be quite complex for questionable benefit.
+
+Similarly, we run into an issue in this code.
+
+.. code:: php
+
+   foo()->bar(match (1) {
+       1 => { return; },
+   });
+
+::
+
+   0000 INIT_FCALL_BY_NAME 0 string("foo")
+   0001 V0 = DO_FCALL_BY_NAME
+   0002 INIT_METHOD_CALL 1 V0 string("bar")
+   0003 T1 = IS_IDENTICAL int(1) int(1)
+   0004 JMPNZ T1 0007
+   0005 JMP 0006
+   0006 MATCH_ERROR int(1)
+   0007 RETURN null
+   0008 MATCH_BLOCK_NO_VALUE_ERROR
+   0009 T2 = QM_ASSIGN null
+   0010 JMP 0011
+   0011 SEND_VAL_EX T2 1
+   0012 DO_FCALL
+   0013 RETURN int(1)
+
+The 0007 (RETURN) instruction skips over 0012 (DO_FCALL). However, the
+0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and
+increased its refcount to make sure the value is not released before the
+method bar() is called on it. Given that 0012 (DO_FCALL) is never
+executed and thus foo() is never released, it leaks.
+
+Both of these issues arise because there are unfreed VARs at the time
+the escaping control statements in the match blocks are executed,
+skipping over their consuming opcodes. Disallowing the escaping of the
+match blocks when there are unconsumed VARs (i.e. when it is used within
+another expression) prevents skipping over their consuming opcodes, and
+thus circumvents the issue.
+
+Backwards incompatible changes
+------------------------------
+
+There are no backwards incompatible changes in this RFC.
+
+Vote
+----
+
+Voting starts ????-??-?? and ends ????-??-??.
+
+As this is a language change, a 2/3 majority is required.
+
+Question: Add support for blocks at match arms in PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Original Authors: Robert Landers, landers.robert@gmail.com
-:Original Status: Under Discussion
-:Slug: nameof
-:Wiki URL: https://wiki.php.net/rfc/nameof
+:Implementation: https://github.com/php/php-src/pull/11933
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: match_blocks
+:Wiki URL: https://wiki.php.net/rfc/match_blocks

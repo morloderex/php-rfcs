@@ -1,470 +1,810 @@
-Stricter Implicit Boolean Coercions
-===================================
+Records
+=======
 
 :PHP-RFC: 0890
-:Title: Stricter Implicit Boolean Coercions
-:Author: Andreas Leathley <a.leathley@gmx.net>
-:Status: Declined
+:Title: Records
+:Author: Robert Landers <rob@bottled.codes>
+:Status: Draft
 :Type: Unknown
-:Created: 2022-05-16
-:Version: 1.9
+:Created: 2024-07-19
+:Version: 0.9
 
 Introduction
 ------------
 
-When not using strict_types in PHP, scalar type coercions have become
-less lossy/surprising in the last years - non-number-strings cannot be
-passed to an int type (leads to a TypeError), floats (or float-strings)
-with a fractional part cannot be passed to an int type (leads to a
-deprecation notice since 8.1 because it loses information). The big
-exception so far are booleans: you can give a typed boolean any scalar
-value and it will convert any non-zero (and non-empty-string) value to
-true without any notice.
+This RFC proposes the introduction of ``record`` objects, which are
+immutable classes with `value
+semantics <https://en.wikipedia.org/wiki/Value_semantics>`__.
 
-Some examples how this might lead to surprising behavior and loss of
-information:
+Value objects
+~~~~~~~~~~~~~
+
+Value objects are immutable objects that represent a value. They’re used
+to store values with a different semantic by wrapping their technical
+value, adding additional context. For example, a ``Point`` object with
+``x`` and ``y`` properties can represent a point in a 2D space, and an
+``ExpirationDate`` can represent a date when something expires. This
+prevents developers from accidentally using the wrong value in the wrong
+context.
+
+Consider this example where a function accepts an integer as a user ID,
+and the ID is accidentally set to a nonsensical value:
 
 .. code:: php
 
-   function toBool(bool $a) { var_dump($a); }
+   function updateUserRole(int $userId, string $role): void {
+       // ...
+   }
 
-   toBool('0'); // bool(false)
-   toBool(-0); // bool(false)
-   toBool('-0'); // bool(true)
-   toBool(0.0); // bool(false)
-   toBool('0.0'); // bool(true)
-   toBool(0.1); // bool(true)
-   toBool(-37593); // bool(true)
-   toBool('inactive'); // bool(true)
-   toBool('false'); // bool(true)
+   $user = getUser(/*...*/)
+   $uid = $user->id;
+   // ...
+   $uid = 5; // accidentally sets uid to an unrelated integer
+   // ...
+   updateUserRole($uid, 'admin'); // accidental passes a nonsensical value for uid
+
+Currently, the only solution to this is to use a **class**, but this
+requires significant boilerplate code. Further, **readonly classes**
+have many edge cases and are rather unwieldy.
+
+The solution
+^^^^^^^^^^^^
+
+Like arrays, strings, and other values, **record** objects are strongly
+equal (``===``) to each other if they contain the same values.
+
+Let’s take a look at an updated example using a ``record`` type for
+``UserId``. Thus, if someone were to pass an ``int`` to
+``updateUserRole``, it would throw an error:
+
+.. code:: php
+
+   record UserId(int $id);
+
+   function updateUserRole(UserId $userId, string $role): void {
+       // ...
+   }
+
+   $user = getUser(/*...*/)
+   $uid = $user->id; // $uid is a UserId object
+   // ...
+   $uid = 5;
+   // ...
+   updateUserRole($uid, 'admin'); // This will throw a TypeError
+
+Now, if ``$uid`` is accidentally set to an integer, the call to
+``updateUserRole`` will throw a ``TypeError`` because the function
+expects a ``UserId`` object instead of a plain integer.
 
 Proposal
 --------
 
-In coercive typing mode, limit the allowed scalar values for typed
-boolean arguments, boolean return types and boolean class properties to
-the following:
+This RFC proposes the introduction of a ``record`` keyword in PHP to
+define immutable value objects. These objects will allow properties to
+be initialized concisely and will provide built-in methods for common
+operations such as modifying properties, performing equality checks, and
+using a function-like instantiation syntax. Records can implement
+interfaces and use traits but can’t extend other records or classes;
+composition is allowed, however.
 
--  0 (and -0) integer (= false)
--  0.0 (and -0.0) float (= false)
--  "0" string (= false)
--  "" (empty) string (= false)
--  1 integer (= true)
--  1.0 float (= true)
--  "1" string (= true)
+Syntax and semantics
+~~~~~~~~~~~~~~~~~~~~
 
-Any other integers, floats and strings are always coerced to true (no
-behavior change) but will emit an ``E_DEPRECATED`` notice:
+Definition
+^^^^^^^^^^
 
--  For coercions from string the deprecation notice is: Implicit
-   conversion from string "%s" to true, only "", "0" or "1" are allowed
--  For coercions from int the deprecation notice is: Implicit conversion
-   from int %d to true, only 0 or 1 are allowed
--  For coercions from float the deprecation notice is: Implicit
-   conversion from float %f to true, only 0 or 1 are allowed
+A **record** is defined by the keyword ``record``, followed by the name
+of its type (e.g., ``UserId``), and then must list one or more typed
+parameters (e.g., ``int $id``) that become properties of the record. A
+parameter may provide ``private`` or ``public`` modifiers, but are
+``public`` when not specified. This is referred to as the "inline
+constructor."
 
-These would be the notices generated for the examples in the
-introduction:
+A **record** may optionally implement an interface using the
+``implements`` keyword, which may optionally be followed by a record
+body enclosed in curly braces ``{}``.
 
-.. code:: php
+A **record** may not extend another record or class.
 
-   toBool('0');
-   toBool(-0);
-   toBool('-0'); // Implicit conversion from string "-0" to true, only "", "0" or "1" are allowed
-   toBool(0.0);
-   toBool('0.0'); // Implicit conversion from string "0.0" to true, only "", "0" or "1" are allowed
-   toBool(0.1); // Implicit conversion from float 0.1 to true, only 0 or 1 are allowed
-   toBool(-37593); // Implicit conversion from int -37593 to true, only 0 or 1 are allowed
-   toBool('inactive'); // Implicit conversion from string "inactive" to true, only "", "0" or "1" are allowed
-   toBool('false'); // Implicit conversion from string "false" to true, only "", "0" or "1" are allowed
+A **record** may contain a traditional constructor with zero arguments
+to perform further initialization.
 
-In the long-term these deprecations should be raised to a warning or to
-a ``TypeError``. The earliest for that is the next major version (PHP
-9.0). At that time there will have been multiple years of experience
-with these new deprecation notices, making it easier to decide on how to
-continue and the impact in the PHP ecosystem.
+A **record** body may contain property hooks, methods, and use traits.
 
-Rationale
----------
+A **record** body may also declare properties whose values are only
+mutable during a constructor call. At any other time, the property is
+immutable.
 
-This RFC boils down to these questions:
+A **record** body may also contain static methods and properties, which
+behave identically to static methods and properties in classes. They may
+be accessed using the ``::`` operator.
 
--  Are you losing information when you reduce a value like -375, "false"
-   or 0.01 to true for a typed boolean?
--  Would you want to know when a value like -375, "false" or 0.01 is
-   given to a typed boolean in a codebase?
--  How likely is it that such a coercion is unintended?
--  What about other boolean coercions in PHP? (handled in the `next
-   section <stricter_implicit_boolean_coercions#other_boolean_coercions_in_php>`__)
--  How does this RFC fit in with the existing scalar type coercions?
-   (handled in the `Overview of scalar type
-   coercions <stricter_implicit_boolean_coercions#overview_of_scalar_type_coercions>`__
-   section)
-
-The main motivation for this RFC is to reduce the possibility of errors
-when using the boolean type in a similar way that you cannot give a
-typed int a non-number string - if you provide "false" or "49x" to an
-int argument it will result in a TypeError. It will not be silently
-coerced to 0 (or 49), as that loses information and can lead to subtle
-bugs. This RFC does the same thing for boolean types:
-
--  Avoid losing information when an unusual value is coerced to a
-   boolean type
--  Make the boolean type and the type juggling system clearer and less
-   surprising
--  Setting up only 7 scalar values as unambiguous boolean values is easy
-   to document and reason about
-
-When implementing this feature I found two bugs in php-src tests and the
-test runner that are most likely typical cases:
-
--  In the PHP test runner the strings "success" and "failed" were given
-   to a boolean function argument called $status. Maybe that argument
-   was a string previously and changed to a boolean by mistake, but it
-   clearly was a bug that has never been noticed so far.
--  In an IMAP test a boolean argument $simpleMessages always got the
-   string "multipart". I found out that there was another function
-   definition which had the argument $new_mailbox at that position. This
-   was most likely a copy-paste error or the wrong function was looked
-   up when writing the test.
-
-Changing the type of an argument, return or property in a codebase
-happens often, and because the boolean type accepts everything with no
-complaint it makes it easy to miss problems when changing a type to
-bool. In current PHP codebases there are likely a few of these
-unintended coercions to booleans which would be easy to fix if a
-developer noticed that an unusual value is coerced to true.
-
-While using strict_types is an option to avoid unintended type
-coercions, the goal of this RFC is to make coercions less error-prone
-when not using strict_types. Silently coercing "failed" (or -37486, or
-0.01) to true seems like an invitation to unexpected behavior. By
-introducing this deprecation notice users will have the chance of
-finding surprising boolean coercions in their code while the coercion
-behavior will remain the same.
-
-Other boolean coercions in PHP
-------------------------------
-
-Typed booleans (arguments, returns, properties) as discussed in this RFC
-are not the only part of PHP where implicit boolean coercions happen.
-They also occur in expressions like ``if``, the ternary operator ``?:``,
-or logical operators ``&&`` / ``||``. Whenever an expression in that
-context is not clearly true or false it is implicitly coerced to true or
-false.
-
-Using strict_types is an established way to change how scalar type
-coercions work (by prohibiting any coercions) but it does not affect
-implicit boolean coercions in expressions. But even in coercive mode
-there is a big difference between boolean expressions and boolean type
-coercions:
+As an example, the following code defines a **record** named ``Pigment``
+to represent a color, ``StockPaint`` to represent paint colors in stock,
+and ``PaintBucket`` to represent a collection of stock paints mixed
+together. The actual behavior isn’t important, but illustrates the
+syntax and semantics of records.
 
 .. code:: php
 
-   if ($variable) { // identical to if ($variable == true)
-     // the $variable in the if statement is coerced in the following way:
-     // - true for a string if it is not empty and not '0'
-     // - true for an int if it is not zero
-     // - true for a float if it is not zero
-     // - true for an array if it is not empty
-     // - always true for a resource
-     // - always true for an object
-     // - always false for null
+   namespace Paint;
+
+   // Define a record with several primary color properties
+   record Pigment(int $red, int $yellow, int $blue) {
+
+     // property hooks are allowed
+     public string $hexValue {
+       get => sprintf("#%02x%02x%02x", $this->red, $this->yellow, $this->blue),
+     }
+
+     // methods are allowed
+     public function mix(Pigment $other, float $amount): Pigment {
+       return $this->with(
+         red: $this->red * (1 - $amount) + $other->red * $amount,
+         yellow: $this->yellow * (1 - $amount) + $other->yellow * $amount,
+         blue: $this->blue * (1 - $amount) + $other->blue * $amount
+       );
+     }
+     
+     // all properties are mutable in constructors
+     public function __construct() {
+       $this->red = max(0, min(255, $this->red));
+       $this->yellow = max(0, min(255, $this->yellow));
+       $this->blue = max(0, min(255, $this->blue));
+     }
+     
+     public function with() {
+       // prevent the creation of a new Pigment from an existing pigment
+       throw new \LogicException("Cannot create a new Pigment from an existing pigment");
+     }
    }
 
-   if ($array) {
-     // executed for a non-empty array
+   // simple records do not need to define a body
+   record StockPaint(Pigment $color, float $volume);
+
+   record PaintBucket(StockPaint ...$constituents) {
+     public function mixIn(StockPaint $paint): PaintBucket {
+       return $this->with(...[...$this->constituents, $paint]);
+     }
+
+     public function color(): Pigment {
+       return array_reduce($this->constituents, fn($color, $paint) => $color->mix($paint->color, $paint->volume), Pigment(0, 0, 0));
+     }
    }
 
-   toBool($array); // TypeError, must be of type bool, array given
+Usage
+^^^^^
 
-Typed booleans behave differently compared to boolean expressions
-because they do not accept arrays, resources, objects and null. Further
-restricting typed booleans is therefore not a change which makes the
-language more inconsistent, on the contrary, it could be an opportunity
-to differentiate these two use cases more clearly from each other, as
-they often have different expectations already:
+A record may be used much like a class, as the behavior of the two is
+very similar, assisting in migrating from one implementation to another:
 
 .. code:: php
 
-   // often used to check if $string is not empty, and it is reasonably clear
-   if ($string) {
-     // do something with $string here
+   $gray = $bucket->mixIn($blackPaint)->mixIn($whitePaint);
+
+Records are instantiated in a function format, with ``&`` prepended.
+This provides visual feedback that a record is being created instead of
+a function call.
+
+.. code:: php
+
+   $black = &Pigment(0, 0, 0);
+   $white = &Pigment(255, 255, 255);
+   $blackPaint = &StockPaint($black, 1);
+   $whitePaint = &StockPaint($white, 1);
+   $bucket = &PaintBucket();
+
+   $gray = $bucket->mixIn($blackPaint)->mixIn($whitePaint);
+   $grey = $bucket->mixIn($blackPaint)->mixIn($whitePaint);
+
+   assert($gray === $grey); // true
+
+Optional parameters and default values
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A ``record`` can also be defined with optional parameters that are set
+if omitted during instantiation.
+
+One or more properties defined in the inline constructor may have a
+default value declared using the same syntax and rules as any other
+default parameter in methods/functions. If a property has a default
+value, it is optional when instantiating the record, and PHP will assign
+the default value to the property if omitted.
+
+.. code:: php
+
+   record Rectangle(int $x, int $y = 10);
+   var_dump(&Rectangle(10)); // output a record with x: 10 and y: 10
+
+Auto-generated with method
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To make records more useful, the RFC proposes generating a ``with``
+method for each record. This method allows for partial updates to the
+properties, creating a new instance of the record with the specified
+properties updated.
+
+How the with method works
+'''''''''''''''''''''''''
+
+**Named arguments**
+
+The ``with`` method accepts only named arguments defined in the inline
+constructor. Properties not defined in the inline constructor can’t be
+updated by this method.
+
+**Variadic arguments**
+
+Variadic arguments from the inline constructor don’t require named
+arguments in the ``with`` method. However, mixing named and variadic
+arguments in the same ``with`` method call is not allowed by PHP syntax.
+
+Using named arguments:
+
+.. code:: php
+
+   record UserId(int $id) {
+     public string $serialNumber;
+
+     public function __construct() {
+       $this->serialNumber = "U{$this->id}";
+     }
    }
 
-   $obj->boolProperty = $string; // did you want to check if $string is not empty here?
-                                 // is it a value from a form, API or DB that should be '', '0' or '1'?
-                                 // or is it a mistake because something is missing?
+   $userId = &UserId(1);
+   $otherId = $userId->with(2); // Fails: Named arguments must be used
+   $otherId = $userId->with(serialNumber: "U2"); // Error: serialNumber is not defined in the inline constructor
+   $otherId = $userId->with(id: 2); // Success: id is updated
 
-When giving a typed boolean a scalar value you are reducing an int,
-float or string to a boolean, possibly losing information, and not
-evaluating an expression where there is follow-up code to do something
-more as is the case with ``if``, ``?:`` or ``&&`` / ``||``. By limiting
-the values of a typed boolean the previous example becomes less
-ambiguous:
+Using variadic arguments:
 
 .. code:: php
 
-   $obj->boolProperty = $string; // $string must be '', '0' or '1', otherwise we get a deprecation notice
-   $obj->boolProperty = strlen($string) > 0; // instead check that $string is not empty
+   record Vector(int $dimensions, int ...$values);
 
-filter extension
-----------------
+   $vector = &Vector(3, 1, 2, 3);
+   $vector = $vector->with(dimensions: 4); // Success: values are updated
+   $vector = $vector->with(dimensions: 4, 1, 2, 3, 4); // Error: mixing named arguments with variadic arguments is not allowed by PHP syntax
+   $vector = $vector->with(dimensions: 4)->with(1, 2, 3, 4); // Success: First update dimensions, then values
 
-The filter extension has its own way to validate booleans
-(FILTER_VALIDATE_BOOLEAN):
+Custom with method
+''''''''''''''''''
 
--  "1", "true", "on" and "yes" evaluate to true, everything else to
-   false
--  if FILTER_NULL_ON_FAILURE is also used, only "0", "false", "off",
-   "no" and "" evaluate to false, everything else to null
-
-This behavior is incompatible with how PHP handles boolean coercions,
-making it impossible to resolve the behaviors without massive BC breaks.
-But it does add another argument in favor of this RFC - somebody
-switching from the filter extension to built-in boolean types has a big
-chance of accidentally introducing behavior changes in their
-application:
-
--  PHP converts most values to true, while the filter extension converts
-   these values to false (or null) - for example "success", "false",
-   "off", "5", or "-30"
--  The deprecation notice would make all these occurences visible and
-   easy to fix
-
-Usages of FILTER_VALIDATE_BOOLEAN are otherwise not affected by this RFC
-- that behavior remains unchanged.
-
-Considered alternatives
------------------------
-
-It was briefly considered to allow more values for typed booleans
-instead of only 0, 1 and an empty string - for example the string "on".
-But it would be difficult and a bit arbitrary to determine where to draw
-the line for possible values, and an important goal of this RFC is for
-the coercion behavior to be simple and intuitive to understand. 0 and 1
-are common alternative values to express a boolean in many programming
-languages, in databases and in APIs. Other values are not as widely used
-and would only make the coercion behavior more difficult to understand.
-
-Another possibility would have been to also change the behavior of
-boolean coercions, for example coerce the string "false" to false
-instead of true. Yet this would be quite a substantial BC break with no
-obvious benefits. With this RFC there will be a deprecation notice when
-coercing "false" to true, therefore such behavior can be noticed instead
-of having to change it.
-
-Overview of scalar type coercions
----------------------------------
-
-This is the status of coercions if this RFC passes (and any deprecation
-notices and TypeErrors are avoided) - the new behavior can be seen in
-the last column (To bool), it is quite symmetrical to the existing
-behavior in the "From bool" row:
-
-+-------------+-------------+-------------+-------------+-------------+
-|             | To string   | To int      | To float    | To bool     |
-+-------------+-------------+-------------+-------------+-------------+
-| From string |             | only        | only        | only        |
-|             |             | allowed for | allowed for | allowed for |
-|             |             | numeric     | numeric     | "", "0" and |
-|             |             | values with | values      | "1"         |
-|             |             | no          |             |             |
-|             |             | fractional  |             |             |
-|             |             | part        |             |             |
-+-------------+-------------+-------------+-------------+-------------+
-| From int    | always      |             | always      | only        |
-|             | possible    |             | possible    | allowed for |
-|             |             |             |             | 0 and 1     |
-+-------------+-------------+-------------+-------------+-------------+
-| From float  | always      | only        |             | only        |
-|             | possible    | allowed if  |             | allowed for |
-|             |             | there is no |             | 0 and 1     |
-|             |             | fractional  |             |             |
-|             |             | part        |             |             |
-+-------------+-------------+-------------+-------------+-------------+
-| From bool   | always      | always      | always      |             |
-|             | possible    | possible    | possible    |             |
-|             | (coerced to | (coerced to | (coerced to |             |
-|             | "" or "1")  | 0 or 1)     | 0 or 1)     |             |
-+-------------+-------------+-------------+-------------+-------------+
-
-This RFC would further reduce the gap between strict mode and coercive
-mode, as even in coercive mode no information would be lost when
-coercing a scalar value and only values that are reasonable are accepted
-(otherwise a deprecation notice is emitted). All allowed coercions can
-be reversed to end up with the original value or almost the same ("0"
-can become "") - that is something this RFC makes possible, as without
-this RFC reversing a coercion to boolean will often not lead back to the
-original value. These examples illustrate reversibility and the loss of
-information:
+A developer may define their own ``with`` method if they choose, and
+reference the generated ``with`` method using ``parent::with()``. This
+allows a developer to define policies or constraints on how data can
+change from instance to instance.
 
 .. code:: php
 
-   function toBool(bool $a) { return $a; }
-   function toString(string $a) { return $a; }
-   function toInt(int $a) { return $a; }
-   function toFloat(float $a) { return $a; }
+   record Planet(string $name, int $population) {
+     // create a with method that only accepts population updates
+     public function with(int $population): Planet {
+       return parent::with(population: $population);
+     }
+   }
+   $pluto = Planet("Pluto", 0);
+   // we made it!
+   $pluto = $pluto->with(population: 1);
+   // and then we changed the name
+   $mickey = $pluto->with(name: "Mickey"); // Error: no named argument for population
 
-   toString(toBool('')); // '' is coerced to false and then back to ''
-   toInt(toBool(0)); // 0 coerced to false and then back to 0
-   toFloat(toBool(0.0)); // 0.0 coerced to false and then back to 0.0
+Constructors
+^^^^^^^^^^^^
 
-   toString(toBool('success')); 
-   // => 'success' is coerced to true and then back to '1'
-   // the new deprecation notice of this RFC points out the loss of information
-                                
-   toInt(toBool(-33));
-   // => -33 is coerced to true and then back to 1
-   // the new deprecation notice of this RFC points out the loss of information
+A **record** has two types of constructors: the inline constructor and
+the traditional constructor.
 
-   toFloat(toBool(0.01)); 
-   // => 0.01 is coerced to true and then back to 1
-   // the new deprecation notice of this RFC points out the loss of information
-                         
-   // Existing behavior leading to TypeErrors and deprecation notices:
-   toFloat('success'); // TypeError, not a numeric string
-   toInt('1.6'); // Deprecation notice because fractional part is lost
-   toString(['']); // TypeError, array cannot be implicitly coerced to string
-   toBool(null); // TypeError, null cannot be implicitly coerced to bool
+The inline constructor is always required and must define at least one
+parameter. The traditional constructor is optional and can be used for
+further initialization logic, but must not accept any arguments.
 
-Having as little information loss as possible when coercing scalar types
-makes them safer to use and more predictable.
+When a traditional constructor exists and is called, the properties are
+already initialized to the values from the inline constructor and are
+mutable until the end of the method, at which point they become
+immutable.
 
-Implementation notes
---------------------
+.. code:: php
 
-As this is my first RFC and my first contribution to php-src, I mimicked
-the code from the "Deprecate implicit non-integer-compatible float to
-int conversions" RFC (https://github.com/php/php-src/pull/6661). I added
-some tests and made sure the existing tests still pass. There might be
-some room for improvements on my implementation though, so any feedback
-is welcome!
+   // Inline constructor defining two properties
+   record User(string $name, string $emailAddress) {
+     public string $id;
+
+     // Traditional constructor
+     public function __construct() {
+       if (!is_valid_email($this->emailAddress)) {
+         throw new InvalidArgumentException("Invalid email address");
+       }
+       
+       $this->id = hash('sha256', $this->emailAddress);
+       $this->name = ucwords($this->name);
+       // all properties are now immutable
+     }
+   }
+
+Implementing Interfaces
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A **record** can implement interfaces, but it cannot extend other
+records or classes, but may use traits:
+
+.. code:: php
+
+   interface Vehicle {}
+
+   interface Car extends Vehicle {
+     public function drive(): void;
+   }
+
+   interface SpaceShip extends Vehicle {
+     public function launch(): void;
+   }
+
+   record FancyCar(string $model) implements Car {
+     public function drive(): void {
+       echo "Driving a Fancy Car {$this->model}";
+     }
+   }
+
+   record SpaceCar(string $model) implements Car, SpaceShip {
+     public function drive(): void {
+       echo "Driving a Space Car {$this->model}";
+     }
+     
+     public function launch(): void {
+       echo "Launching a Space Car {$this->model}";
+     }
+   }
+
+   record Submarine(string $model) implements Vehicle {
+     use Submersible;
+   }
+
+   record TowTruct(string $model, private Car $towing) implements Car {
+     use Towable;
+   }
+
+Mental models and how it works
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+From the perspective of a developer, declaring a record declares an
+object with the same name. The developer can consider the record
+function (the inline constructor) as a factory function that creates a
+new object or retrieves an existing object from an array.
+
+For example, this would be a valid mental model for a Point record:
+
+.. code:: php
+
+   record Point(int $x, int $y) {
+       public float $magnitude;
+       
+       public function __construct() {
+           $this->magnitude = sqrt($this->x ** 2 + $this->y ** 2);
+       }
+
+       public function add(Point $point): Point {
+           return &Point($this->x + $point->x, $this->y + $point->y);
+       }
+       
+       public function dot(Point $point): int {
+           return $this->x * $point->x + $this->y * $point->y;
+       }
+   }
+
+   // similar to declaring the following function and class
+
+   // used during construction to allow mutability
+   class Point_Implementation {
+       public int $x;
+       public int $y;
+       public float $magnitude;
+
+       public function __construct() {
+           $this->magnitude = sqrt($this->x ** 2 + $this->y ** 2);
+       }
+
+       public function with(...$parameters) {
+           // validity checks omitted for brevity
+           $parameters = array_merge([$this->x, $this->y], $parameters);
+           return Point(...$parameters);
+       }
+       
+       public function add(Point $point): Point {
+           return Point($this->x + $point->x, $this->y + $point->y);
+       }
+       
+       public function dot(Point $point): int {
+           return $this->x * $point->x + $this->y * $point->y;
+       }
+   }
+
+   // used to enforce immutability but has nearly the same implementation
+   readonly class Point {
+       public float $magnitude;
+
+       public function __construct(public int $x, public int $y) {}
+
+       public function with(...$parameters): self {
+           // validity checks omitted for brevity
+           $parameters = array_merge([$this->x, $this->y], $parameters);
+           return Point(...$parameters);
+       }
+       
+       public function add(Point $point): Point {
+           return Point($this->x + $point->x, $this->y + $point->y);
+       }
+       
+       public function dot(Point $point): int {
+           return $this->x * $point->x + $this->y * $point->y;
+       }
+   }
+
+   function Point(int $x, int $y): Point {
+       static $points = [];
+       
+       $key = hash_object($mutablePoint);
+       if ($points[$key] ?? null) {
+           // return an existing point
+           return $points[$key];
+       }
+       
+       // create a new point
+       $reflector = new \ReflectionClass(Point_Implementation::class);
+       $mutablePoint = $reflector->newInstanceWithoutConstructor();
+       $mutablePoint->x = $x;
+       $mutablePoint->y = $y;
+       $mutablePoint->__construct();
+       
+       // copy properties to an immutable Point and return it
+       $point = new Point($mutablePoint->x, $mutablePoint->y);
+       $point->magnitude = $mutablePoint->magnitude;
+       return $points[$key] = $point;
+   }
+
+In reality, this is quite different from how it works in the engine, but
+this provides a mental model of how behavior should be expected to work.
+
+Performance considerations
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To ensure that records are both performant and memory-efficient, the RFC
+proposes leveraging PHP’s copy-on-write (COW) semantics (similar to
+arrays) and interning values. Unlike interned strings, the garbage
+collector will be allowed to clean up these interned records when
+they’re no longer referenced.
+
+.. code:: php
+
+   $point1 = &Point(3, 4);
+   $point2 = $point1; // No data duplication, $point2 references the same data as $point1
+   $point3 = Point(3, 4); // No data duplication, it is pointing to the same memory as $point1
+
+   $point4 = $point1->with(x: 5); // Data duplication occurs here, creating a new instance
+   $point5 = &Point(5, 4); // No data duplication, it is pointing to the same memory as $point4
+
+Cloning and with()
+^^^^^^^^^^^^^^^^^^
+
+Calling ``clone`` on a ``record`` results in the same record object
+being returned. As it is a "value" object, it represents a value and is
+the same thing as saying ``clone 3``—you expect to get back a ``3``.
+
+If ``->with()`` is called with no arguments, a warning will be emitted,
+as this is most likely a mistake.
+
+Serialization and deserialization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Records are fully serializable and deserializable, even when nested.
+
+.. code:: php
+
+   record Single(string $value);
+   record Multiple(string $value1, string $value2);
+
+   echo $single = serialize(&Single('value')); // Outputs: "O:6:"Single":1:{s:5:"value";s:5:"value";}"
+   echo $multiple = serialize(&Multiple('value1', 'value2')); // Outputs: "O:8:"Multiple":1:{s:6:"values";a:2:{i:0;s:6:"value1";i:1;s:6:"value2";}}"
+
+   echo unserialize($single) === &Single('value'); // Outputs: true
+   echo unserialize($multiple) === &Multiple('value1', 'value2'); // Outputs: true
+
+If a record contains objects or values that are unserializable, the
+record will not be serializable.
+
+Equality
+~~~~~~~~
+
+A ``record`` is always strongly equal (``===``) to another record with
+the same value in the properties, much like an ``array`` is strongly
+equal to another array containing the same elements. For all intents,
+``$recordA === $recordB`` is the same as ``$recordA == $recordB``.
+
+Comparison operations will behave exactly like they do for classes,
+which is currently undefined.
+
+Non-trivial values
+^^^^^^^^^^^^^^^^^^
+
+For non-trivial values (e.g., objects, closures, resources, etc.), the
+``===`` operator will return ``true`` if the two operands reference the
+same instances.
+
+For example, if two different DateTime records reference the exact same
+date and are stored in a record, the records will not be considered
+equal:
+
+.. code:: php
+
+   $date1 = DateTime('2024-07-19');
+   $date2 = DateTime('2024-07-19');
+
+   record Date(DateTime $date);
+
+   $dateRecord1 = Date($date1);
+   $dateRecord2 = Date($date2);
+
+   echo $dateRecord1 === $dateRecord2; // Outputs: false
+
+However, this can be worked around by being a bit creative (see: mental
+model) as only the values passed in the constructor are compared:
+
+.. code:: php
+
+   record Date(string $date) {
+       public DateTime $datetime;
+       
+       public function __construct() {
+           $this->datetime = new DateTime($this->date);
+       }
+   }
+
+   $date1 = &Date('2024-07-19');
+   $date2 = &Date('2024-07-19');
+
+   echo $date1->datetime === $date2->datetime ? 'true' : 'false'; // Outputs: true
+
+Type hinting
+~~~~~~~~~~~~
+
+A ``\Record`` interface will be added to the engine to allow type
+hinting for records. All records implement this interface.
+
+.. code:: php
+
+   function doSomething(\Record $record): void {
+       // ...
+   }
+
+The only method on the interface is ``with``, which is a variadic method
+that accepts named arguments and returns ``self``.
+
+Reflection
+~~~~~~~~~~
+
+A new reflection class will be added to support records:
+``ReflectionRecord`` which will inherit from ``ReflectionClass`` and add
+a few additional methods:
+
+-  ``ReflectionRecord::finalizeRecord(object $instance): Record``:
+   Finalizes a record under construction, making it immutable.
+-  ``ReflectionRecord::isRecord(mixed $object): bool``: Returns ``true``
+   if the object is a record, and ``false`` otherwise.
+-  ``ReflectionRecord::getInlineConstructor(): ReflectionFunction``:
+   Returns the inline constructor of the record as
+   ``ReflectionFunction``.
+-  ``ReflectionRecord::getTraditionalConstructor(): ReflectionMethod``:
+   Returns the traditional constructor of the record as
+   ``ReflectionMethod``.
+-  ``ReflectionRecord::makeMutable(Record $instance): object``: Returns
+   a new record instance with the properties mutable.
+-  ``ReflectionRecord::isMutable(Record $instance): bool``: Returns
+   ``true`` if the record is mutable, and ``false`` otherwise.
+
+Using ``ReflectionRecord`` will allow developers to inspect records,
+their properties, and methods, as well as create new instances for
+testing or custom deserialization.
+
+Attempting to use ``ReflectionClass`` or ``ReflectionFunction`` on a
+record will throw a ``ReflectionException`` exception.
+
+finalizeRecord()
+^^^^^^^^^^^^^^^^
+
+The ``finalizeRecord()`` method is used to make a record immutable and
+look up its value in the internal cache, returning an instance that
+represents the finalized record.
+
+Calling ``finalizeRecord()`` on a record that has already been finalized
+will return the same instance. Attempting to finalize a regular object
+will throw a ``ReflectionException``.
+
+isRecord()
+^^^^^^^^^^
+
+The ``isRecord()`` method is used to determine if an object is a record.
+It returns ``true`` if the object is a finalized record.
+
+getInlineConstructor()
+^^^^^^^^^^^^^^^^^^^^^^
+
+The ``getInlineConstructor()`` method is used to get the inline
+constructor of a record as a ``ReflectionFunction``. This can be used to
+inspect inlined properties and their types.
+
+Invoking the ``invoke()`` method on the ``ReflectionFunction`` will
+create a finalized record.
+
+getTraditionalConstructor()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``getTraditionalConstructor()`` method is used to get the
+traditional constructor of a record as a ``ReflectionMethod``. This can
+be useful to inspect the constructor for further initialization.
+
+Invoking the ``invoke()`` method on the ``ReflectionMethod`` on a
+finalized record will throw an exception.
+
+makeMutable()
+^^^^^^^^^^^^^
+
+The ``makeMutable()`` method is used to create a new instance of a
+record with mutable properties. The returned instance doesn’t provide
+any value semantics and should only be used for testing purposes or when
+there is no other option.
+
+A mutable record can be finalized again using ``finalizeRecord()``. A
+mutable record will not be considered a record by ``isRecord()`` or
+implement the ``\Record`` interface. It is a regular object with the
+same properties and methods as the record. For example, ``var_dump()``
+will output ``object`` instead of ``record``.
+
+isMutable()
+^^^^^^^^^^^
+
+The ``isMutable()`` method is used to determine if a record has been
+made mutable via ``makeMutable()`` or otherwise not yet finalized.
+
+Custom deserialization example
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In cases where custom deserialization is required, a developer can use
+``ReflectionRecord`` to manually construct a new instance of a record.
+
+.. code:: php
+
+   record Seconds(int $seconds);
+
+   $example = &Seconds(5);
+
+   $reflector = new ReflectionRecord(Seconds::class);
+   $expiration = $reflector->newInstanceWithoutConstructor(); // this is a mutable object
+   $expiration->seconds = 5;
+   assert($example !== $expiration); // true
+   $expiration = $reflector->finalizeRecord($expiration);
+   assert($example === $expiration); // true
+
+var_dump
+~~~~~~~~
+
+When passed an instance of a record the ``var_dump()`` function will
+output the same as if an equivalent object were passed — e.g., both
+having the same properties — except the output generated will replace
+the prefix text "object" with the text "record."
+
+.. code:: txt
+
+   record(Point)#1 (2) {
+     ["x"]=>
+     int(1)
+     ["y"]=>
+     int(2)
+   }
+
+Considerations for implementations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``record`` cannot share its name with an existing ``record``,
+``class``, ``interface``, ``trait``, or ``function``, just like a class.
+
+Autoloading
+~~~~~~~~~~~
+
+Records will be autoloaded in the same way as classes.
+
+New Functions
+~~~~~~~~~~~~~
+
+-  ``record_exists`` will return ``true`` if a record exists and
+   ``false`` otherwise. It has the same signature as ``class_exists``.
 
 Backward Incompatible Changes
 -----------------------------
 
-The following operations will now emit an ``E_DEPRECATED`` if any scalar
-value other than "", "0", "1", 0, 1, 0.0, 1.0 is used:
+To avoid conflicts with existing code, the ``record`` keyword will be
+handled similarly to ``enum`` to prevent backward compatibility issues.
 
--  Assignment to a typed property of type ``bool`` in coercive typing
-   mode
--  Argument for a parameter of type ``bool`` for both internal and
-   userland functions in coercive typing mode
--  Returning such a value for userland functions declared with a return
-   type of ``bool`` in coercive typing mode
+Since ``&`` is currently a syntax error when prefixed on a function
+call, it will be used to denote a record instantiation.
 
-The actual conversion to a boolean value remains unchanged - anything
-that was coerced to false before will still be coerced to false, and
-anything coerced to true will still be coerced to true.
+Proposed PHP Version(s)
+-----------------------
 
-The following shows typical ways to avoid a deprecation notice:
+PHP 8.5
 
-.. code:: php
+RFC Impact
+----------
 
-   // Resolution 1: Check for an expected value or range
-   toBool($number > 0);
-   toBool($int === 5);
-   toBool($string === 'success');
-   toBool(strlen($string) > 0);
-    
-   // Resolution 2: Check for truthiness
-   toBool($scalar == true);
-    
-   // Resolution 3: Explicitly cast the argument
-   toBool((bool) $scalar);
+To SAPIs
+~~~~~~~~
 
-With the many deprecation notices that appeared in PHP 8.0 and 8.1 there
-is some wariness if new deprecation notices are worth it. These are the
-arguments why the RFC author thinks it will not cause too much pain:
+N/A
 
--  Each individual case is easy to fix, the easiest (but also least
-   useful) is to loosly compare a value to true ($value == true) instead
-   of directly giving the value to a typed bool
--  Most of the coercions that will lead to a deprecation notice are
-   likely to be unintended and the information given in the notice
-   should make it reasonably clear to a developer whether it is a bug
-   and how to fix it
--  bool arguments for internal functions are usually optional, less
-   numerous and are much more likely to be set by a constant expression
-   than a variable, reducing the surface area where this deprecation
-   notice will appear
--  deprecation notices do not demand immediate attention, and the
-   "disadvantage" of the high number of deprecation notices with 8.0 and
-   8.1 should be that most tooling and codebases have gotten more used
-   to dealing with them in their own time and not see them as an
-   immediate call to action
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
 
-Future Scope
-------------
+N/A
 
-While this RFC only targets boolean coercions when not using
-strict_types, this is just the last missing piece for the overall goal
-of having a solid and easy-to-understand foundation of type coercions
-between scalar values.
+To Opcache
+~~~~~~~~~~
 
-One benefit of these well-developed coercions could be to make them
-available in an explicit way to PHP developers. Having functions like
-``is_coerceable_to_bool`` and ``coerce_to_bool`` (and with similar
-functions for int, float and string) that behave exactly as giving a
-value to a boolean argument could be useful when receiving input from a
-form or database. Compared to the current explicit type coercions
-(``(bool)``, ``boolval``, ``(int)`` or ``(float)``) this would allow
-only a certain subset of values instead of coercing any value, giving
-developers an effective way to make sure they are dealing with values
-that make sense - or fail early if an unexpected value is encountered.
-And because it is based on the type coercion behavior of PHP the
-learning curve would be low and the knowledge would be universally
-useful within the language.
+Unknown.
 
-An example of how these functions could look like can be found on Github
-in
-`squirrelphp/scalar-types <https://github.com/squirrelphp/scalar-types>`__
-(written in PHP). This is just a preliminary example that would need to
-be discussed further with a follow-up RFC.
+New Constants
+~~~~~~~~~~~~~
 
-Proposed PHP Version
---------------------
+None
 
-Next minor version: PHP 8.2.
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None
+
+Open Issues
+-----------
+
+To-do
 
 Unaffected PHP Functionality
 ----------------------------
 
--  Manually casting to boolean will not raise a notice.
--  Strict mode (strict_types) behavior is unaffected.
--  Implicit boolean expressions (as used in if, ternary, logic
-   operators) are not affected.
--  FILTER_VALIDATE_BOOLEAN in the filter extension is not affected.
+None.
 
-Vote
-----
+Future Scope
+------------
 
-Voting started on 2022-06-06 and will end on 2022-06-20.
+-  Records for "record-like" types, such as DateTime, DateInterval, and
+   others.
 
-Question: Accept Stricter implicit boolean coercions RFC as proposed?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Proposed Voting Choices
+-----------------------
 
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+2/3 majority.
 
 Patches and Tests
 -----------------
 
-Patch: https://github.com/php/php-src/pull/8565
+TBD
+
+Implementation
+--------------
+
+To be completed during a later phase of discussion.
 
 References
 ----------
 
-| Initial mailing list discussion: <https://externals.io/message/117608>
-| RFC mailing list discussion: <https://externals.io/message/117732>
+-  `Value semantics <https://en.wikipedia.org/wiki/Value_semantics>`__
+
+Rejected Features
+-----------------
+
+TBD
 
 Additional Metadata
 -------------------
 
-:Original Authors: Andreas Leathley, a.leathley@gmx.net
-:Slug: stricter_implicit_boolean_coercions
-:Wiki URL: https://wiki.php.net/rfc/stricter_implicit_boolean_coercions
+:Original Authors: Robert Landers, landers.robert@gmail.com, rob@bottled.codes
+:Original Status: Under Discussion (or Accepted or Declined)
+:Slug: records
+:Wiki URL: https://wiki.php.net/rfc/records
