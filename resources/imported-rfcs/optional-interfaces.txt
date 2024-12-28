@@ -1,0 +1,100 @@
+====== PHP RFC: Optional Interfaces ======
+  * Version: 0.1
+  * Date: 2024-12-28
+  * Author: Juris Evertovskis, juris@glaive.pro
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/optional-interfaces
+
+===== Introduction =====
+
+PHP's ''implements'' keyword allows classes to declare that they implement one or more interfaces. This mechanism is strict: the specified interfaces must exist at runtime. While this strictness is usually beneficial, it can create challenges when developing libraries that need to interoperate with other optional libraries or different versions of libraries and when creating projects that need to be compatible with multiple PHP versions and usable with or without some PHP extensions.
+
+In such scenarios developers resort to workarounds like
+
+  * class declarations inside a conditional control structure ([[https://github.com/symfony/symfony/blob/95c43e38811a159c82112a13e631ee7121b83e54/src/Symfony/Component/Cache/Exception/CacheException.php#L17|Symfony]], [[https://github.com/laravel/framework/blob/a30619310dd739c22f561579c3de07f33d109612/src/Illuminate/Testing/ParallelRunner.php#L7|Laravel]], [[https://github.com/thephpleague/oauth2-server-bundle/blob/3f88e38cd9e6b992119e5e415bf2603d47da2f6f/src/DependencyInjection/Security/OAuth2Factory.php#L11|League]]);
+  * dummy interfaces ([[https://github.com/WordPress/WordPress-Coding-Standards/blob/9f9726a01a886b3dcced5327390470a56314aa56/WordPress/Tests/NamingConventions/PrefixAllGlobalsUnitTest.1.inc#L525|WordPress]]) which get clumsier in namespaces ([[https://stackoverflow.com/a/57996889/2182900|a StackOverflow answer]]);
+  * aliasing other interfaces ([[https://github.com/briannesbitt/Carbon/blob/a9000603ea337c8df16cc41f8b6be95a65f4d0f5/src/Carbon/Traits/Localization.php#L27|Carbon]]);
+  * creating separate bridge libraries.
+
+These solutions introduce complexity and a maintenance burden. The conditional declarations may sometimes confuse IDEs and static analysis tools that pick up the multiple definitions. If an optional interface is mocked by a dummy, the implementing class contains no indication of that and misleads the reader into thinking that an actual interface with that name is defined in a meaningful way.
+
+===== Proposal =====
+
+By prefixing an interface name with ''?'', a class can optionally implement an interface. If the interface exists, the class will implement it; otherwise, the declaration will be ignored without causing an error.
+
+This allows the developer to clearly announce that the class is interoperable with an interface, but does not require the interface per se.
+
+==== Example 1: Implementing an interface if it exists ====
+
+<PHP>
+namespace MyNamespace;
+
+use ExternalNamespace\TheInterface;
+
+class MyClass implements ?TheInterface
+{
+    // ...
+}
+</PHP>
+
+If ''\ExternalNamespace\TheInterface'' exists, ''MyClass'' will implement it. It will behave as if the class was declared as ''class MyClass implements TheInterface''.
+
+If it doesn't exist, ''MyClass'' will work as if it was declared without ''implements ?TheInterface''.
+
+==== Example 2: Optional interfaces in a list of interfaces ====
+
+Optional interfaces can appear on an interface list together with required interfaces in any order. The ''?'' applies only to the name directly following the token.
+
+<PHP>
+class MyClass1 implements A, B, ?C, ?D {}
+class MyClass2 implements ?C, ?D, A, B {}
+class MyClass3 implements A, ?C, ?D, B {}
+class MyClass4 implements ?C, A, B, ?D {}
+</PHP>
+
+All of these classes implement and require interfaces ''A'' and ''B'' while the interfaces ''C'' and ''D'' will only be implemented if they exist.
+
+==== Example 3: Extending optional interfaces ====
+
+An interface can also be optional when it's in an ''extends'' list of another interface. The list of extandable interface names works just like the ''implements'' list for classes.
+
+<PHP>
+interface MyInterface extends RequiredInterface, ?OptionalInterface {}
+</PHP>
+
+===== Backward Incompatible Changes =====
+None.
+
+Classes that do not use the ''?'' token in the interface list will function as before. Before this RFC the ''?'' token in interface lists is not valid, therefore a runnable code that would be affected does not exist.
+
+===== Proposed PHP Version(s) =====
+Next PHP 8.x.
+
+===== RFC Impact =====
+
+==== To Opcache ====
+> It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+> Please explain how you have verified your RFC's compatibility with opcache.
+
+I have not verified the compatibility with the opcache yet.
+
+==== To Reflection API ====
+
+Currently this RFC does not add the optionality information in the Reflection API.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+Keep this updated with features that were discussed on the mail lists.
