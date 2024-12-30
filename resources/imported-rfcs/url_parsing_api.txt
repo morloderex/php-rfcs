@@ -156,7 +156,7 @@ namespace Uri\WhatWg {
 
         public function withFragment(?string $fragment): static {}
 
-        public function equals(\Uri\Uri $uri, bool $excludeFragment = true): bool {}
+        public function equals(\Uri\WhatWg\Uri $uri, bool $excludeFragment = true): bool {}
 
         public function toString(): string {}
 
@@ -213,7 +213,7 @@ namespace Uri\WhatWg {
 
 ===== API Design =====
 
-First and foremost, the new URI parsing API contains a ''Uri\Uri'' interface which is implemented by two classes, ''Uri\Rfc3986Uri'' and ''Uri\WhatWgUri'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it may cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]]. That's why it's generally recommended to rely on one of the concrete URI implementations rather than the ''Uri\Uri'' interface itself for security-sensitive applications. In security-insensitive cases, ''Uri\Uri'' interface comes handy to be able to reference all URI implementations with the same type without having to list the accepted classes in a union type.
+First and foremost, the new URI parsing API contains two URI implementations, ''Uri\Rfc3986\Uri'' and ''Uri\WhatWg\Url'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it could cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]].
 
 Both built-in URI implementations support instantiation via two methods:
 
@@ -221,61 +221,53 @@ Both built-in URI implementations support instantiation via two methods:
   * a ''parse()'' factory method: It expects the same parameters as the constructor does, but in case of an invalid URI, ''null'' is returned instead of throwing an exception. Using this method is recommended for validating URIs and/or parsing URIs from untrusted input.
 
 <code php>
-$uri = new Uri\Rfc3986Uri("https://example.com"); // An RFC 3986 URI instance is created
-$uri = Uri\Rfc3986Uri::parse("https://example.com"); // An RFC 3986 URI instance is created
+$uri = new Uri\Rfc3986\Uri("https://example.com"); // An RFC 3986 URI instance is created
+$uri = Uri\Rfc3986\Uri::parse("https://example.com"); // An RFC 3986 URI instance is created
 
-$uri = new Uri\Rfc3986Uri("invalid uri"); // A Uri/InvalidUriException is thrown
-$uri = Uri\Rfc3986Uri::parse("invalid uri"); // null is returned in case of an invalid URI
+$uri = new Uri\Rfc3986\Uri("invalid uri"); // A Uri/InvalidUriException is thrown
+$uri = Uri\Rfc3986\Uri::parse("invalid uri"); // null is returned in case of an invalid URI
 
-$uri = new Uri\WhatWgUri("https://example.com"); // A WHATWG URL instance is created
-$uri = Uri\WhatWgUri::parse("https://example.com"); // A WHATWG URL instance is created
+$uri = new Uri\WhatWg\Url("https://example.com"); // A WHATWG URL instance is created
+$uri = Uri\WhatWg\Url::parse("https://example.com"); // A WHATWG URL instance is created
 
-$uri = new Uri\Rfc3986Uri("invalid uri"); // A Uri/InvalidUriException is thrown
-$uri = Uri\Rfc3986Uri::parse("invalid uri", $errors); // null is returned, and an array of WhatWgError objects are passed by reference to $errors
+$uri = new Uri\Rfc3986\Uri("invalid uri"); // A Uri/InvalidUriException is thrown
+$uri = Uri\Rfc3986\Uri::parse("invalid uri", $errors); // null is returned, and an array of WhatWgError objects are passed by reference to $errors
 </code>
 
-The two built-in ''Uri\Uri'' implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option, consistent with other internal interfaces. Hooked properties could be declared in interfaces, but since readonly properties are not supported, this possibility was rejected: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls.
+The two built-in URI implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option. Since hooked properties cannot be readonly, this possibility was rejected: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls.
 
 <code php>
-$uri1 = new Uri\Rfc3986Uri("https://example.com");
+$uri1 = new Uri\Rfc3986\Uri("https://example.com");
 $uri2 = $uri->withHost("test.com");
 
 echo $uri1->getHost();                            // example.com
 echo $uri2->getHost();                            // test.com
 </code>
 
-Besides accessors, ''Uri\Uri'' contains a ''toString()'' method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications to it. The WHATWG standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WHATWG.
+Besides accessors, URI implementations contain a ''toString()'' method too. This can be used for recomposing the URI components back to a string. Why such a method is necessary at all? It's because the recomposition process doesn't necessarily simply return the input URI, but it applies some modifications to it. The WHATWG standard specifically mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). While some of the transformations are also required by default for RFC 3986, they are less frequent than for WHATWG.
 
 <code php>
-$uri = new Uri\WhatWgUri("https://////example.com");
+$uri = new Uri\WhatWg\Url("https://////example.com");
 
 echo $uri->toString();                         // https://example.com
 </code>
 
-The attentive reader may have noticed that the examples used ''toString()'' instead of ''%%__toString()%%''. This is a deliberate design decision not to add a ''%%__toString()%%'' method to the interface and its implementations, as doing so would cause incorrect results when using equality comparison (''==''). Given the following example:
-g
+The attentive reader may have noticed that the examples used ''toString()'' instead of ''%%__toString()%%''. This is a deliberate design decision not to add a ''%%__toString()%%'' method to the built-in URI classes, as doing so would cause incorrect results when using equality comparison (''==''). Given the following example:
+
 <code php>
-$uri = new Uri\WhatWgUri("https://example.com");
+$uri = new Uri\WhatWg\Url("https://example.com");
 
 var_dump($uri == 'HTTPS://example.com');
 </code>
 
-The output would be ''bool(false)'' if ''Uri\WhatWgUri'' contained a ''%%__toString()%%'' method, because of the ''$uri'' object being automatically converted to its string representation (''https://example.com'') which is then compared against ''HTTPS://example.com''. However, as we will see in the next paragraphs, the two URIs should be indeed equal, as the result of normalization. Furthermore, equality of URIs usually disregards the fragment component, thus a ''https://example.com#foo'' URI would also yield a false positive result in the example.
+The output would be ''bool(false)'' if ''Uri\WhatWg\Url'' contained a ''%%__toString()%%'' method, because of the ''$uri'' object being automatically converted to its string representation (''https://example.com'') which is then compared against ''HTTPS://example.com''. However, as we will see in the following paragraphs, the two URIs should be indeed equal, as a result of normalization. Furthermore, equality of URIs usually disregards the fragment component, thus a ''https://example.com#foo'' URI would also yield a false positive result in the example.
 
-As mentioned above, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. If an implementation supports this process, it should apply some kind of normalization technique on the URI (i.e. case normalization, percent-encoding, normalization etc.) and return a new instance, otherwise the current, unmodified object can be returned. The ''toNormalizedString()'' method is a shorthand for ''$uri->normalize()->toString()'', and it's useful when one needs the normalized string representation, but the URI components themselves don't have to be modified.
+As mentioned above, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore, URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. Implementations should apply some kind of normalization techniques on the current URI (i.e. case normalization, percent-decoding normalization etc.) and return a new instance. The ''toNormalizedString()'' method is a shorthand for ''$uri->normalize()->toString()'', and it's useful when one needs the normalized string representation, but the URI components themselves don't have to be modified.
 
 <code php>
-// Uri\Rfc3986Uri supports normalization
-$uri = new Uri\Rfc3986Uri("https://EXAMPLE.COM/foo/../bar");
+$uri = new Uri\Rfc3986\Uri("https://EXAMPLE.COM/foo/../bar");
 
 echo $uri->toString();                          // https://EXAMPLE.COM/foo/../bar"
-echo $uri->normalize()->toString();             // https://example.com/bar
-echo $uri->toNormalizedString();                // https://example.com/bar
-
-// Uri\WhatWgUri normalizes the URI by default, therefore normalize() doesn't change anything
-$uri = new Uri\WhatWgUri("https://EXAMPLE.COM/foo/../bar");
-
-echo $uri->toString();                          // https://example.com/bar
 echo $uri->normalize()->toString();             // https://example.com/bar
 echo $uri->toNormalizedString();                // https://example.com/bar
 </code>
@@ -284,20 +276,24 @@ Normalization is especially important when it comes to comparing URIs because it
 
 <code php>
 // A URI equals to another URI of the same standard that has the same string representation after normalization
-new Uri\Rfc3986Uri("https://example.COM")->equals(new Uri\Rfc3986Uri("https://EXAMPLE.COM")));  // true
+new Uri\Rfc3986\Uri("https://example.COM")->equals(new Uri\Rfc3986\Uri("https://EXAMPLE.COM")));  // true
 
 // A URI doesn't equal to another URI of a different standard even though they have the same string representation
-new Uri\Rfc3986Uri("https://example.com/")->equals(new Uri\WhatWgUri("https://example.com/"));  // false
+new Uri\Rfc3986\Uri("https://example.com/")->equals(new Uri\WhatWg\Url("https://example.com/"));  // false
 </code>
 
-It should be noted that the ''equals()'' method only accepts an ''Uri\Uri'' instance, while it could also accept string URIs. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in string be also normalized, or exact string match should be performed? Would the passed in URI string be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only the ''Uri\Uri'' parameter type is supported.
+It should be noted that the ''equals()'' method only accepts objects, while it could also accept URI strings. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in string be also normalized, or exact string match should be performed? Would the passed in URI string be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only an URI object parameter type is supported.
 
 These pressing questions - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
 
 Last but not least, URIs support a ''resolve()'' method that is able to resolve potentially relative URIs with the current object as the base URI:
 
 <code php>
-$uri = new Uri\Rfc3986Uri("https://example.com");
+$uri = new Uri\Rfc3986\Uri("https://example.com");
+
+echo $uri->resolve("/foo")->toString();        //  https://example.com/foo
+
+$uri = new Uri\WhatWg\Url("https://example.com");
 
 echo $uri->resolve("/foo")->toString();        //  https://example.com/foo
 </code>
@@ -366,7 +362,7 @@ Specifically, supported parser backends would have to be registered by using a s
 
 While it would sound natural to add a php.ini configuration option to configure the used parser backend globally, this option was rejected during the discussion period of the RFC because it would result in unsafe code that is controlled by global state: since any invoked piece of code can change the used parser backend, one should always check the current value of the config option before parsing URIs (and in case of libraries, the original option should also be reset after usage). Instead, the RFC proposes to add the following configuration options that only affect a single use-case:
 
-  * ''SoapClient::_doRequest()'': a new optional ''$uriParserClass'' parameter is added accepting ''string'' or ''null'' arguments. ''Null'' represents the original (''parse_url()'') based method, while the new backends will be used when passing either ''Uri\Rfc3986Uri::class'' or ''Uri\WhatWgUri::class''.
+  * ''SoapClient::_doRequest()'': a new optional ''$uriParserClass'' parameter is added accepting ''string'' or ''null'' arguments. ''Null'' represents the original (''parse_url()'') based method, while the new backends will be used when passing either ''Uri\Rfc3986\Uri::class'' or ''Uri\WhatWg\Url::class''.
   * FTP/FTPS stream wrapper: a new ''uri_parser_class'' stream context option is added
   * ''FILTER_VALIDATE_URL'': ''filter_*'' functions can be configured by passing a ''uri_parser_class'' key to the ''$options'' array
   * SSL/TLS socket communication: a new ''uri_parser_class'' stream context option is added
@@ -384,7 +380,7 @@ $context = stream_context_create([
 $contents = file_get_contents($url, context: $context);
 </code>
 
-However, there are other much more convenient approaches, but the current RFC still goes with the current, less ergonomic one, as going either way would need more discussion, and a scope creep. The improvement possibilities include passing ''Uri\Uri'' instances to the functions in question, or converting URIs to streams based on [[https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/URL.html#openStream()|Java's example]].
+However, there are other much more convenient approaches, but the current RFC still goes with the current, less ergonomic one, as going either way would need more discussion, and a scope creep. The improvement possibilities include passing URI instances to the functions in question, or converting URIs to streams based on [[https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/URL.html#openStream()|Java's example]].
 
 ===== Performance Considerations =====
 
@@ -395,14 +391,14 @@ According to the rough benchmarks, the following results were measured:
 ==== Time of parsing of a basic URL (1000 times) ====
 
   * ''parse_url()'': ''0.000208 sec''
-  * ''Uri\Rfc3986Uri'': ''0.000311 sec''
-  * ''Uri\WhatWgUri'': ''0.000387 sec''
+  * ''Uri\Rfc3986\Uri'': ''0.000311 sec''
+  * ''Uri\WhatWg\Url'': ''0.000387 sec''
 
 ==== Time of parsing of a complex URL (1000 times) ====
 
   * ''parse_url()'': ''0.000962''
-  * ''Uri\Rfc3986Uri'': ''0.000911 sec''
-  * ''Uri\WhatWgUri'': ''0.000962 sec''
+  * ''Uri\Rfc3986\Uri'': ''0.000911 sec''
+  * ''Uri\WhatWg\Url'': ''0.000962 sec''
 
 ===== Examples in Other Languages =====
 
