@@ -1,156 +1,104 @@
-Use Exceptions By Default In SQLite3 Extension
-==============================================
+Raising Zero To The Power Of Negative Number
+============================================
 
 :PHP-RFC: 0889
-:Title: Use Exceptions By Default In SQLite3 Extension
-:Author: BohwaZ <php at bohwaz dot net>
+:Title: Raising Zero To The Power Of Negative Number
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
 :Status: Implemented
 :Type: Standards Track
-:Created: 2022-10-24
-:PHP-Version: 8.3
-:Version: 0.1
+:Created: 2024-01-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-The SQLite3 extension is still using PHP warnings by default. PDO is
-using exceptions, like everyone else.
+Raising a number to the power of a negative number is equivalent to
+taking the reciprocal of the number raised to the positive opposite of
+the power.
 
-It's time to move to exceptions.
+If we raise the number zero to the power of a negative number we end up
+with the one divided by zero, which gives an undefined result. Currently
+in PHP, such operation results in ``INF``, while explicit division by
+zero gives a ``DivisionByZeroError``.
+
+.. code:: php
+
+   var_dump(0 ** -1); //float(INF)
+   var_dump(0 ** -1.1); //float(INF)
+
+   var_dump(pow(0, -1)); //float(INF)
+   var_dump(pow(0, -1.1)); //float(INF)
+
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
 Proposal
 --------
 
-Progressively deprecate warnings (PHP 8.3), make exceptions the default
-(9.0) and remove warnings (10.0).
+The RFC proposes to change the behavior of this operation to match the
+division by zero operation. In the next minor version raising a number
+to the power of a negative number will throw a Deprecation, and in the
+major version, this operation will throw DivisionByZeroError.
 
-In PHP 8.3:
+.. code:: php
 
--  Create a new exception class ``SQLite3Exception``, which extends the
-   ``Exception`` class
--  Remove SQLite3 error code from the error message, and assign it to
-   the exception code
--  Make ``SQLite3::enableExceptions(true)`` throw SQLite3Exception
-   instead of Exception
--  Calling ``SQLite3::enableExceptions(false)`` raises ``E_DEPRECATED``
--  Default behavior is still to raise warnings
-   (``enableExceptions(false)``)
+   //PHP 8.4
+   var_dump(0 ** -1); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(0 ** -1.1); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(pow(0, -1)); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(pow(0, -1.1)); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-In PHP 9.0:
+.. code:: php
 
--  Make SQLite3 throw exceptions of class ``SQLite3Exception`` by
-   default, instead of raising warnings
--  Calling ``SQLite3::enableExceptions(false)`` throws an error
--  It's not possible to use warnings anymore.
--  Calling ``SQLite3::enableExceptions(true)`` raises ``E_DEPRECATED``,
-   to alert that the method will get removed
+   //PHP 9.0
+   var_dump(0 ** -1); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(0 ** -1.1); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(pow(0, -1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(pow(0, -1.1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-In PHP 10.0:
+To provide a way to compute the numbers according to the IEEE 754 rules,
+the RFC proposes adding the function ``fpow`` similarly to the function
+``fdiv`` that exists for the division operation, and ``fmod`` for the
+module operation for floating numbers.
 
--  Remove the ``SQLite3::enableExceptions`` method
+.. code:: php
+
+   //PHP 8.4
+   var_dump(fpow(0, -1)); //float(INF)
+   var_dump(fpow(0, -1.1)); //float(INF)
 
 Backward Incompatible Changes
 -----------------------------
 
-In PHP 8.3:
-
--  Code parsing the error message to get the error code may fail as the
-   error code has been moved to be consistently at the end of the error
-   message string. This is unlikely as the proper way is to use
-   ``SQLite3::lastErrorCode()``.
--  Code already relying on exceptions will not see a difference, as
-   previously \\Exception was thrown, and \\SQLite3Exception is a
-   subclass of \\Exception
-
-In PHP 9.0:
-
--  Calls to SQLite3::enableExceptions(false) will break
--  Code relying on hiding warnings will break
-
-In PHP 10.0:
-
--  Calls to ``SQLite3::enableExceptions()`` will fail
+This change will break code including raising the zero number to a
+negative power. Such cases may keep their current behavior by using the
+new ``fpow`` function.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3, 9.0, 10.0
+Deprecation Notice in the next minor PHP version 8.4.
 
-RFC Impact
-----------
+Function ``fpow`` in the next minor PHP version 8.4.
 
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-Only SQLite3.
-
-To Opcache
-~~~~~~~~~~
-
-None that I can think of.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
-
-Unaffected PHP Functionality
-----------------------------
-
-Everything outside of SQLite3 extension.
-
-Future Scope
-------------
-
-Assign SQLite3 error constants to SQLite3Exception class, eg.
-SQLite3Exception::READONLY, see https://www.sqlite.org/rescode.html
+Throwing ``DivisionByZeroError`` in the next major PHP version: 9.0.
 
 Proposed Voting Choices
 -----------------------
 
--  1: accept proposal
--  2: don't change anything
+As per the voting RFC, a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Patches and Tests
------------------
+Voting started on 2024-04-05 and will end on 2024-04-20 00:00 GMT.
 
-Pull request:
-
--  8.3: https://github.com/php/php-src/pull/11058
-
-Implementation
---------------
-
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-References
-----------
-
--  https://externals.io/message/118873
-
-Vote
-----
-
-Voting started 2023-05-09 and has ended end 2023-05-23, Europe/Paris
-timezone.
-
-Question: Use exceptions by default in SQLite3 extension as described in this RFC?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: RFC: Raising zero to the power of negative number
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -158,10 +106,27 @@ Voting Choices
 -  Yes
 -  No
 
+Implementation
+--------------
+
+Commit:
+https://github.com/php/php-src/commit/23afe57f01e0915eef246eba60e60fda74fd2dcf
+PR: https://github.com/php/php-src/pull/13128
+
+The implementation is based on Ilija Tovilo's PoC:
+https://github.com/php/php-src/issues/8015#issuecomment-1193391843
+
+References
+----------
+
+Issue GH-8015: https://github.com/php/php-src/issues/8015 RFC Division
+by zero: https://wiki.php.net/rfc/engine_warnings
+
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/commit/ddd9a08f566d86083d04de320e24f0751a1de759
-:Original Authors: BohwaZ, php at bohwaz dot net
-:Slug: sqlite3_exceptions
-:Wiki URL: https://wiki.php.net/rfc/sqlite3_exceptions
+:Implementation: `see Implementation section </rfc/raising_zero_to_power_of_negative_number#Implementation>`__
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: raising_zero_to_power_of_negative_number
+:Wiki URL: https://wiki.php.net/rfc/raising_zero_to_power_of_negative_number
