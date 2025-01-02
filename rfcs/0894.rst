@@ -1,76 +1,364 @@
-Naming Convention For The Internal PHP Function's Arguments
-===========================================================
+Resource To Object Conversion
+=============================
 
 :PHP-RFC: 0894
-:Title: Naming Convention For The Internal PHP Function's Arguments
-:Author: Hassan Ahmed <7snovic@gmail.com>
-:Status: Draft
+:Title: Resource To Object Conversion
+:Author: Máté Kocsis <kocsismate@php.net>
+:Status: Accepted
 :Type: Unknown
-:Created: 2021-12-08
-:Version: 0.1
+:Created: 2023-10-31
+:Version: 1.0
 
 Introduction
 ------------
 
-Since PHP is now supporting the `named params </rfc/named_params>`__. It
-will be important to set a -draft- naming convention for the internals
-functions parameters.
+Resources are a legacy data structure which were superseded by objects a
+long time ago. They have quite a few disadvantages like the inability of
+using ``resource`` type declarations, lack of garbage collection (they
+have to be explicitly freed), bad feedback about memory leaks, etc.
 
-PHP has function families, e.g. string's functions family, array's
-functions family, and so forth. Fortunately, most of these function
-shares the same argument naming. but there are some of them that do not.
+As far as I know, Nikita was the first one who realized these
+shortcomings and started converting resources to objects, ```GMP`` back
+in 2013 </rfc/operator_overloading_gmp#proposal_bgmp_improvements>`__,
+```XMLParser`` in 2019 <https://externals.io/message/104361#104361>`__.
+However, this ambitious project only got traction during the release
+cycle of PHP 8 where dozens of extensions were refactored so that they
+started to use objects instead of resources (`tracker
+ticket <https://github.com/php/php-tasks/issues/6>`__). At the time of
+writing, only around 7 built-in extensions remain which still expose
+resources...
 
-Proposal
---------
-
-Sharing the same arguments naming with all similar functions.
-
-Most array_\* functions accept the first argument ( Input arguments ) as
-a variable named $array.
-
-But there are some functions that does not, like \`in_array()`,
-\`array_search()`, \`count()\` ... etc.
-
-This is the same for the str_\* functions. Most of them share the
-\`$string\` argument as an input argument but some functions like
-\`strpos()`, \`stripos()\` do not.
-
-Backward Incompatible Changes
------------------------------
-
-This will break users who are already using the named arguments on 8.0
-and 8.1 versions.
-
-Proposed PHP Version(s)
------------------------
-
-PHP8.2
-
-Open Issues
------------
-
-Make sure there are no open issues when the vote starts!
-
-Proposed Voting Choices
------------------------
-
-Include these so readers know where you are heading and can discuss the
-proposed voting options.
-
-Implementation
---------------
-
-References
+Discussion
 ----------
 
-Links to external references, discussions or RFCs
+As eliminating resources altogether should be a strategic goal for PHP,
+this time, the main question is not whether the remaining resources
+should be converted to objects or not, but the timeline when we can do
+so, in order to have acceptable level of backward compatibility breaks.
 
-Rejected Features
------------------
+Therefore the goal of this RFC is to set the rules and BC expectations
+based on which the project can continue. So far, the vast majority of
+the individual conversions were "unofficial", meaning they didn't have
+to go through the formal RFC process, there was no deprecation period
+(it is not really feasible anyway), and were performed even in minor
+versions. I do believe this kind of flexibility has been beneficial for
+the overall project, however, we occasionally get complaints due to the
+introduced BC breaks. That's what this RFC should prevent for future
+conversions. But what are these breaks?
+
+First and foremost, the return value changes of ``is_resource()``
+invocations cause the biggest issues. An example of such situation is
+the following:
+
+.. code:: php
+
+   $pipes = [];
+   $process = proc_open("sleep 1", [], $pipes);
+   if (is_resource($process)) {
+       // do some stuff
+       proc_close($process);
+   }
+
+The above code won't work anymore after the conversion, since the
+``is_resource($process)`` condition will yield a different result than
+before (``false`` compared to ``true``).
+
+The easiest solution to fix the problem is to change the condition to
+the following:
+
+.. code:: php
+
+   $pipes = [];
+   $process = proc_open("sleep 1", [], $pipes);
+   if ($process !== false) {
+       // do some stuff
+       proc_close($process);
+   }
+
+By using ``$process !== false`` instead of ``is_resource($process)``,
+the ``if`` will yield the correct result, and the code is going to be
+compatible with any PHP version. One could also use
+``is_resource($process) || $process instanceof ProcessHandle``, but this
+is a more verbose way to achieve the same result.
+
+Implementation details
+----------------------
+
+Some people suggest that the ``is_resource()`` function should return
+``true`` for classes which originally used to be resources (read `a long
+thread about this topic here <https://externals.io/message/116127>`__).
+Doing so would apparently minimize the BC break by making the above
+mentioned code change unnecessary.
+
+However, the current RFC rejects the usage of the above workaround **for
+any resources besides streams** mostly because of the low perceived BC
+impact of their migration (see the impact analysis below for more
+information). Additionally, the issues introduced by the
+``is_resource()`` return value changes are mostly easy to spot and fix
+(but admittedly need some careful manual work).
+
+In case of streams though - due to their ubiquitous nature - a different
+course of action is applied in order to avoid the possibly huge BC
+breaks: ``is_resouce()`` will return ``true`` if any object is passed to
+it which previously used to be ``stream`` or ``persistent stream``
+resource. This way the following code will continue to work no matter
+that streams are represented as objects:
+
+.. code:: php
+
+   $file = fopen(__DIR__ . "/foo.txt", "r");
+   if (is_resource($file)) {
+       // do some stuff
+       fclose($file);
+   }
+
+Moreover, ``get_resource_type()`` is also changed so that it gives a
+consistent and BC compliant result for streams after the migration:
+
+.. code:: php
+
+   $pipes = [];
+   $process = proc_open("sleep 1", [], $pipes);
+   var_dump(get_resource_type($process));     //  TypeError: Argument #1 ($resource) must be of type resource
+
+   $file = fopen(__DIR__ . "/foo.txt", "r");
+   var_dump(get_resource_type($file));        // string(6) "stream"
+
+This way, code using streams doesn't have to be changed **at the time of
+the stream resource to object migration**. However, as the end goal is
+to get rid of resources altogether, the ``is_resource()`` function and
+anything related to resources may occasionally be deprecated and removed
+in the future.
+
+Resource categories
+-------------------
+
+The resources yet to be migrated can be categorized the following way
+based on their prevalence (biggest to smallest):
+
+Primary stream-related resources
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+There are a number of stream-related resources which are to be
+converted: the most important ones are ``stream`` and
+``persistent stream`` themselves. Historically, these have always been
+the most widely used resources in the whole PHP ecosystem, since the
+file handling API is organized around them.
+
+The list of functions which return primary stream resources:
+
+-  File-handling related functions:
+
+   -  ``opendir()``
+   -  ``popen()``
+   -  ``fopen()``
+   -  ``tmpfile()``
+
+::
+
+   *. Compressed file handling related functions:  
+     * ''bzopen()''
+     * ''gzopen()''
+     * ''ZipArchive::getStreamIndex()''
+     * ''ZipArchive::getStreamName()''
+     * ''ZipArchive::getStream()''
+   * Socket-related functions: 
+     * ''fsockopen()''
+     * ''pfsockopen()''
+     * ''socket_export_stream()''
+     * ''stream_socket_client()''
+     * ''stream_socket_server()''
+     * ''stream_socket_accept()''
+   * Database-related functions: 
+     * ''PDO::pgsqlLOBOpen()''
+     * ''PdoPgsql::lobOpen()''
+     * ''pg_socket()''
+     * ''SQLite::openBlob()''
+
+**Impact analysis:** Primary stream resources won't be affected by the
+above mentioned BC break due to workaround discussed in the previous
+section.
+
+Auxilliary stream-related resources
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Furthermore, streams have some auxiliary resources:
+
+-  **stream context**: it stores parameters/options for the different
+   stream wrappers
+-  **stream filter**: it helps perform operations on streams
+-  **userfilter.bucket, userfilter.bucket brigade**: `a very detailed
+   explanation, written by
+   Bob <https://stackoverflow.com/questions/27103269/what-is-a-bucket-brigade>`__
+
+Auxilliary resources are "isolated" from the primary ones, and used less
+often than them, that's why it may be possible to migrate the two
+resource categories separately from each other.
+
+**Impact analysis**:
+
+-  **stream context**: since ``stream_context_create()`` throws in case
+   of failure, the issue with the is_resource() check doesn't apply to
+   stream context resources
+-  **stream filter**: `3 out of the
+   2000 <https://gist.github.com/kocsismate/2972a071425ca57031ac3db1bf623865>`__
+   most popular PHP packages rely on checking the result of
+   ``stream_filter_append()`` and ``stream_filter_prepend()`` with
+   ``is_resource()``
+-  **userfilter.bucket, userfilter.bucket brigade**: None of the 2000
+   most popular PHP packages rely on checking the result of
+   ``stream_bucket_new()`` with ``is_resource()``. Since
+   ``userfilter.bucket brigade`` is created by PHP itself when the
+   ``php_user_filter::filter()`` method is invoked, therefore neither it
+   is affected by the BC break.
+
+Process resource
+~~~~~~~~~~~~~~~~
+
+The ``Process`` resource is returned by ``proc_open()``. According to my
+earlier `straw poll </rfc/process_object_name>`__, its new class name is
+going to be ``ProcessHandle`` once the migration takes place.
+
+**Impact analysis**: `31 out of the
+2000 <https://gist.github.com/kocsismate/70314bf3e0ab457ef325de35ed70a98d>`__
+most popular PHP packages rely on checking the result of ``proc_open()``
+with ``is_resource()``.
+
+**Implementation**: https://github.com/php/php-src/pull/12098/
+
+Other resources
+~~~~~~~~~~~~~~~
+
+The rest of the built-in extensions which currently expose resources are
+the following:
+
+-  **COM** (implementation: https://github.com/php/php-src/pull/14282)
+
+   -  **com_dotnet_istream_wrapper**
+   -  **com_dotnet_dispatch_wrapper**
+
+-  **DBA** (implementation: https://github.com/php/php-src/pull/14239)
+
+   -  **dba**: connection resource returned by ``dba_open()``
+   -  **dba persistent**: persistent connection resource returned by
+      ``dba_popen()``
+
+-  **ODBC** (implementation: https://github.com/php/php-src/pull/12040/)
+
+   -  **odbc link**: connection resource returned by ``odbc_connect()``
+   -  **odbc link persistent**: persistent connection returned by
+      ``odbc_pconnect()``
+   -  **odbc result**: result resources returned by various ``odbc_*``
+      functions
+
+-  **SOAP** (implementation: https://github.com/php/php-src/pull/14121)
+
+   -  **SOAP SDL**: ``SoapClient::$sdl``
+   -  **SOAP table**: ``SoapClient::$typemap``
+   -  **SOAP URL**: ``SoapClient::$httpurl``
+
+**Impact analysis**: None of the 2000 most popular PHP packages rely on
+the above mentioned resources.
+
+Vote
+----
+
+The RFC consists of a primary vote for accepting the implementation
+approach and 4 secondary votes for each resource category to decide when
+it is possible to convert them. Since the majority of the resource
+migrations in question don't yet have an implementation, most voting
+choices are intentionally left vague so that they only define whether a
+resource group can only be migrated in a major version or the conversion
+can happen in minor versions as well. The primary vote requires 2/3,
+while the secondary ones require a simple majority in order to be
+accepted.
+
+Implementation
+~~~~~~~~~~~~~~
+
+Question: Accept the described approach for converting resources to objects?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  yes
+-  no
+
+Primary stream resources (stream, persistent stream)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Question: When should the migration of the primary stream resources happen?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  only in a major version (e.g. PHP 9.0)
+-  in any minor or major version (e.g. PHP 8.4)
+
+Auxiliary stream resources (contexts, filters, brigades, buckets)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Question: When should the migration of the auxiliary stream resources happen?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-2:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  only in a major version (e.g. PHP 9.0)
+-  in any minor or major version (e.g. PHP 8.4)
+
+.. _process-resource-1:
+
+Process resource
+~~~~~~~~~~~~~~~~
+
+Question: When should the migration of the Process resource happen?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-3:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  in the next major version (e.g. PHP 9.0)
+-  in the next minor or major version (e.g. PHP 8.4)
+
+.. _other-resources-1:
+
+Other resources
+~~~~~~~~~~~~~~~
+
+Question: When should the migration of the resources of other extensions happen?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-4:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  only in a major version (e.g. PHP 9.0)
+-  in any minor or major version (e.g. PHP 8.4)
+
+Impact on existing extensions
+-----------------------------
+
+Extensions which use resources must adapt to the conversion and use
+objects instead.
+
+Future Scope
+------------
+
+Support for resources altogether could be removed in the future.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Hassan Ahmed, 7snovic@gmail.com
-:Slug: the_naming_convention_for_internal_functions_arguments
-:Wiki URL: https://wiki.php.net/rfc/the_naming_convention_for_internal_functions_arguments
+:Original Authors: Máté Kocsis kocsismate@php.net
+:Slug: resource_to_object_conversion
+:Wiki URL: https://wiki.php.net/rfc/resource_to_object_conversion

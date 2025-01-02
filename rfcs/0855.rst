@@ -1,257 +1,180 @@
-Interface Default Methods
-=========================
+Function Autoloading V4
+=======================
 
 :PHP-RFC: 0855
-:Title: Interface Default Methods
-:Author: Levi Morrison <levim@php.net>
-:Status: Declined
+:Title: Function Autoloading V4
+:Author: Robert Landers <landers.robert@gmail.com>
+:Status: Draft
 :Type: Unknown
-:Created: 2022-06-27
-:Version: 2.0
+:Created: 2024-08-15
+:Version: 1.0
 
 Introduction
 ------------
 
-Over time, authors sometimes want to add methods to an interface. Today,
-this causes large breakages to every implementor. This RFC proposes a
-way to reduce the scale of breakage.
+The topic of supporting function autoloading was brought up many times
+in the past, this RFC introduces a potential implementation which would
+be consistent with what we have for autoloading classes.
 
-Additionally, sometimes interfaces can implement some functionality of
-their interface in terms of other parts of their interface. For example,
-the interface ``Countable`` could implement ``function isEmpty(): bool``
-by using ``$this->count() == 0``. Today, traits are often used to
-accomplish this, but a default interface implementation could be used
-instead, and would be simpler. When interfaces are designed with this
-technique in mind, it can enable productivity of the interface over
-time.
-
-For example, see `Rust's Iterator
-trait <https://doc.rust-lang.org/std/iter/trait.Iterator.html>`__ which
-has more than 40 functions with default implementations and the
-implementor mostly needs to implement a single function,
-``next(): Option<T>``. These functions with default behaviors have been
-stabilized over time with little to no breakage in practice. For
-example, ``for_each`` was added in v1.21 and ``map_while`` was added in
-v1.57.
+By using autoloaders, programmers can already get quickly up to speed
+when it comes to classes, but the language currently lacks a way to do
+the same for functions. This requires programmers to manually (and
+carefully) include files that must be included on every request. For
+'functional' codebases, they lose the ability to use autoloaders, or
+they must write their functions as static methods on classes. This isn’t
+ideal, and this RFC seeks to close the gap between functions and
+classes.
 
 Proposal
 --------
 
-Interface methods can now provide a method body. This implementation
-will be used if the implementer does not otherwise provide an
-implementation. Default implementations are available for both instance
-and static methods.
+This RFC proposes to add two new constants to the SPL extension:
+``SPL_AUTOLOAD_CLASS``, ``SPL_AUTOLOAD_FUNCTION``. These constants may
+be passed to ``spl_autoload_register`` as the fourth parameter to
+register an autoloader for classes or functions, respectively. If not
+specified, the default value ``SPL_AUTOLOAD_CLASS`` will be used to
+retain backward compatibility.
+
+There won’t be any changes to the current autoloading mechanism when it
+comes to classes.
+
+Function Autoloading
+~~~~~~~~~~~~~~~~~~~~
+
+The function autoloader will be called with the fully qualified
+undefined function name. This will allow the function autoloader to
+determine how to load or generate the function.
+
+PHP allows programmers to call an unqualified function name.
+Traditionally, this means that PHP would first search in the current
+namespace for the function and then fall back to the global namespace if
+the function is not found. This behavior will be preserved. However, the
+function autoloader will be called **only once** for the current
+namespace; thus, the function autoloader will not be called again if the
+function is found in the global namespace.
+
+Example "``PSR-4-style``" (except the last part of the namespace is the
+file it is in) function autoloader:
 
 .. code:: php
 
-   interface Example {
-     // Today, you cannot specify an implementation, only a
-     // signature.
-     function method1(): void;
+   <?php
 
-     // With this RFC, you can provide an implementation:
-     function method2(): void {
-       echo __METHOD__, "\n";
-     } 
-   }
+   spl_autoload_register(function ($function, $type) {
+       if ($type === SPL_AUTOLOAD_FUNCTION) {
+           $function_path = dirname(str_replace('\\', DIRECTORY_SEPARATOR, $function));
+           $file = __DIR__ . '/functions/' . $function_path . '.php';
 
-Interface methods can also now be ``private`` if they a have method
-body. The purpose here is to allow helper routines if the default
-implementations of the ``public`` methods need them.
-
-The methods with default implementations are inherited similarly to
-abstract base classes, as opposed to how traits behave. For instance, a
-private method on the interface is not accessible to the class which
-implements the interface; with a trait it would be.
-
-Default Method Resolution
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Default methods for interfaces introduce a form of multiple inheritance.
-How is a method selected?
-
-Java's resolution algorithm looks like this:
-
-#. Class definitions always win. If a class, or a parent class, defines
-   a concrete method, then this will always win over all possible
-   default methods.
-#. More specific interfaces take priority over less specific ones. If
-   interfaces ``A`` and ``B`` exist and ``B`` extends ``A``, and both
-   have a default method for the same method, then when a class
-   implements B directly or indirectly the method from ``B`` will take
-   precedence over the method from ``A``.
-#. If the above rules fail, then the class needs to implement the method
-   itself, possibly delegating to one of the interfaces.
-
-This RFC proposes the same. However, rule 2 is only partially
-implemented at this time.
-
-Here's an example of a class delegating to another method:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   interface Interface2 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   class Class1 implements Interface1, Interface2 {
-       function method1() {
-           Interface1::method1();
+           if (file_exists($file)) {
+               require_once $file;
+           }
        }
-   }
+   }, false, false, SPL_AUTOLOAD_FUNCTION);
 
-   (new Class1())->method1(); // Interface1::method1
+Performance Impact
+~~~~~~~~~~~~~~~~~~
 
-Parent Scoping
-~~~~~~~~~~~~~~
+Function autoloading doesn’t appear to have a significant impact on
+performance; however, the function autoloader itself (depending upon its
+implementation) may have a performance impact.
 
-In interface default methods, you cannot use the ``parent::`` scoping
-mechanism. The following does not work:
+To help mitigate any potential performance impact of function
+autoloading many unqualified functions, a function will only be searched
+for once per namespace.
 
-.. code:: php
+spl_autoload
+~~~~~~~~~~~~
 
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
+The ``spl_autoload`` function will not be modified. It may be used as a
+function autoloader if the programmer desires, though it will limit the
+programmer to a single function per file.
 
-   interface Interface2 extends Interface1 {
-       function method1() { parent::method1(); }
-   }
+spl_autoload_unregister
+~~~~~~~~~~~~~~~~~~~~~~~
 
-The reason is that interfaces can extend multiple other interfaces e.g.
+``spl_autoload_unregister`` will be updated to accept the new constants
+as the second parameter to unregister an autoloader from either mode.
 
-.. code:: php
+spl_autoload_functions
+~~~~~~~~~~~~~~~~~~~~~~
 
-   interface Interface3 extends Interface1, Interface2 {}
+``spl_autoload_functions`` will be updated to accept one of the new
+constants as the first parameter. Passing both (i.e.,
+``SPL_AUTOLOAD_CLASS | SPL_AUTOLOAD_FUNCTION``) will result in all
+registered functions.
 
-The name of the interface should be used instead:
+spl_autoload_call
+~~~~~~~~~~~~~~~~~
 
-.. code:: php
+The ``spl_autoload_call`` function will be modified to accept a second
+parameter of one or both of the constants, with the default value set to
+``SPL_AUTOLOAD_CLASS``. The name of the first parameter will be changed
+to ``$name`` to reflect that it can be a class or function name.
 
-   interface Interface2 extends Interface1 {
-       function method1() { Interface1::method1(); }
-   }
-
-However, if a sub-class of the inheriting class calls
-``parent::method1()``, it will work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   class Class1 implements Interface1 {
-       // Inherits Interface1::method1() here.
-   }
-
-   class Class2 extends Class1 {
-       function method1() { parent::method1(); }
-   }
-
-   (new Class2())->method1);
-   // output:
-   // Interface1::method1
-
-Cancelling Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If an interface method extends a parent interface method which has a
-default, this prevents using the default method for classes which
-implement the child interface but do not directly implement the parent
-one:
+In the event that both constants are passed, it will attempt to autoload
+both types.
 
 .. code:: php
 
-   interface Interface1 {
-       function method1() { echo __METHOD__, "\n"; }
-   }
+   spl_autoload_call('Some\func', SPL_AUTOLOAD_FUNCTION); // Calls the function autoloader
+   spl_autoload_call('Some\func'); // Calls the class autoloader
+   spl_autoload_call('Some\func', SPL_AUTOLOAD_CLASS); // Calls the class autoloader
+   spl_autoload_call('func', SPL_AUTOLOAD_FUNCTION | SPL_AUTOLOAD_CLASS); // Calls both autoloaders with the name 'func'
 
-   interface Interface2 extends Interface1 {
-       function method1();
-   }
+function_exists
+~~~~~~~~~~~~~~~
 
-   /* Would be an error because method1 has not been implemented.
-   class Class1 implements Interface2 {
-       // error: method1 has not been implemented.
-   }
-    */
-
-   // This is subtly different, but valid:
-   class Class1 implements Interface1, Interface2 {}
-
-The behavior could go either way. I picked this behavior because if it's
-wrong, it's easier to correct than the other way around.
+The ``function_exists`` function will be updated to include a boolean
+option (``$autoload``) as the second parameter, which will default to
+``true``. If set to ``true``, the function autoloader will be called if
+the function is not defined, otherwise, it will not be called.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as long as you do not use the feature.
-
-If you do use the feature:
-
--  Adding a default implementation to an existing interface method will
-   not break existing code, because every existing usage has a higher
-   priority than the default.
--  If you add a new method to an interface, there is a compatibility
-   break. The impact of the break is limited to places where the
-   implementor/inheritor of the interface has a method of the same name.
+There shouldn’t be any backward incompatible changes.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3.
+8.5 or later.
 
 RFC Impact
 ----------
 
-To Extensions
-~~~~~~~~~~~~~
-
-Modules can specify an interface implementation as well. These internal
-default methods should not be marked with ``ZEND_ACC_ABSTRACT`` and
-should be instead marked with ``ZEND_ACC_DEFAULT_METHOD``.
-
 To Opcache
 ~~~~~~~~~~
 
-Opcache should also work with this feature. The proof of concept
-implementation has not triggered any issues so far in CI.
+-  Potential changes to JIT helpers to call the autoloader instead of
+   reading from the function table directly.
 
-To the Ecosystem
-~~~~~~~~~~~~~~~~
+New Constants
+~~~~~~~~~~~~~
 
-Previously, interface methods were not allowed to have method bodies.
-These tools such as parsers, code analyzers, etc will need to be
-updated.
+Two new constants will be added to the SPL extension:
+SPL_AUTOLOAD_CLASS, SPL_AUTOLOAD_FUNCTION.
 
 Open Issues
 -----------
 
-Make sure there are no open issues when the vote starts!
+None.
 
 Future Scope
 ------------
 
-This feature may be used to enhance existing interfaces in PHP.
+Potentially, constants and stream wrappers can be added in a similar
+fashion.
 
--  ``Countable`` could add
-   ``function isEmpty(): bool { return $this->count() == 0; }``.
--  ``Iterator`` could add methods like ``map``, ``filter``, and
-   ``reduce`` which behave similarly to ``array_map``, ``array_filter``,
-   and ``array_reduce``.
+Proposed Voting Choices
+-----------------------
 
-Voting
-------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-The vote will be a simple yes/no vote on whether to include the feature.
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
 
-Question: Interface Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Implement Function Autoloading v4, as described
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -262,32 +185,43 @@ Voting Choices
 Patches and Tests
 -----------------
 
-Here is a work-in-progress pull request:
-https://github.com/php/php-src/pull/11467.
+Review the implementation `on GitHub
+#15471 <https://github.com/php/php-src/pull/15471>`__
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+-  Implentation: `PR
+   #15471 <https://github.com/php/php-src/pull/15471>`__
+-  Version: TBD
+-  PHP Manual Entry: TODO
 
 References
 ----------
 
-Links to external references, discussions or RFCs
+-  `autofunc <https://wiki.php.net/rfc/autofunc>`__: This heavily
+   influenced this RFC. (declined in 2011)
+-  `function_autoloading <https://wiki.php.net/rfc/function_autoloading>`__:
+   This RFC was declined in 2011.
+-  `function_autoloading_v2 <https://wiki.php.net/rfc/function_autoloading2>`__:
+   This RFC was declined in 2012.
+
+Thank you for all of those that contributed to the discussions back
+then. I hope that this RFC will be successful.
 
 Rejected Features
 -----------------
 
-Keep this updated with features that were discussed on the mail lists.
+Autoloading constants
+~~~~~~~~~~~~~~~~~~~~~
+
+Autoloading of other types such as constants and stream wrappers will
+come in a later RFC.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Levi Morrison, levim@php.net
-:Slug: interface-default-methods
-:Wiki URL: https://wiki.php.net/rfc/interface-default-methods
+:Original Authors: Robert Landers, landers.robert@gmail.com
+:Original Status: Under Discussion (or Accepted or Declined)
+:Slug: function_autoloading4
+:Wiki URL: https://wiki.php.net/rfc/function_autoloading4
