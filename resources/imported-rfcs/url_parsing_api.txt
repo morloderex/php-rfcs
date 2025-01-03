@@ -213,7 +213,7 @@ namespace Uri\WhatWg {
 
 ===== API Design =====
 
-First and foremost, the new URI parsing API contains two URI implementations, ''Uri\Rfc3986\Uri'' and ''Uri\WhatWg\Url'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two standards makes it possible to indicate explicit intent at the type level that one specific standard is required. Actually, it could cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]].
+First and foremost, the new URI parsing API contains two URI implementations, ''Uri\Rfc3986\Uri'' and ''Uri\WhatWg\Url'', representing RFC 3986 and WHATWG URIs, respectively. Having separate classes for the two specifications makes it possible to properly model URIs with all their details and nuances. Actually, it could cause a security vulnerability to have wrong assumptions about the origin of a URI, as Daniel Stenberg (author of cURL) writes [[https://daniel.haxx.se/blog/2022/01/10/dont-mix-url-parsers/|in one of his blog posts]], that's why at least in security-sensitive applications, it's very important to explicitly require the usage of one specific standard.
 
 Both built-in URI implementations support instantiation via two methods:
 
@@ -234,7 +234,7 @@ $uri = new Uri\Rfc3986\Uri("invalid uri"); // A Uri/InvalidUriException is throw
 $uri = Uri\Rfc3986\Uri::parse("invalid uri", $errors); // null is returned, and an array of WhatWgError objects are passed by reference to $errors
 </code>
 
-The two built-in URI implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option. Since hooked properties cannot be readonly, this possibility was rejected: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls.
+The two built-in URI implementations are [[rfc:readonly_classes|readonly]], and they have a respective private [[rfc:property-hooks|virtual property]] for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option, especially because hooked properties cannot be readonly: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls. Not to mention the fact that getters may benefit from additional optional parameters in the future, if we would like to have [[rfc:url_parsing_api#how_special_characters_are_handled|more control on the encoding of the output]].
 
 <code php>
 $uri1 = new Uri\Rfc3986\Uri("https://example.com");
@@ -264,6 +264,18 @@ The output would be ''bool(false)'' if ''Uri\WhatWg\Url'' contained a ''%%__toSt
 
 As mentioned above, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URIs identifying the same resource to the same URI. Therefore, URI implementations may support normalization via the ''normalize()'' method. E.g. the ''https:///////EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs identify the same resource, so implementations may normalize both of them to ''https://example.com''. Implementations should apply some kind of normalization techniques on the current URI (i.e. case normalization, percent-decoding normalization etc.) and return a new instance. The ''toNormalizedString()'' method is a shorthand for ''$uri->normalize()->toString()'', and it's useful when one needs the normalized string representation, but the URI components themselves don't have to be modified.
 
+Let's see an example for retrieving the normalized path component (''foo/../bar'' becomes ''bar''):
+
+<code php>
+$uri1 = new Uri\Rfc3986\Uri("https://EXAMPLE.COM/foo/../bar");
+$uri2 = $uri1->normalize();
+
+echo $uri1->getPath();                           // foo/../bar
+echo $uri2->getPath();                           // bar
+</code>
+
+Another example for the two ways to return the normalized string representation of an URI:
+
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://EXAMPLE.COM/foo/../bar");
 
@@ -272,19 +284,24 @@ echo $uri->normalize()->toString();             // https://example.com/bar
 echo $uri->toNormalizedString();                // https://example.com/bar
 </code>
 
-Normalization is especially important when it comes to comparing URIs because it reduces the likelihood of false positive results, since URI comparison is based on checking whether the URIs represent the same resources. The ''Uri::equals()'' method can be used for comparing URIs. First, this method checks whether the called object and the URI instance received in the argument list has any parent-child relation, since it doesn't make sense to compare URIs of different standards. Then it normalizes and recomposes the URI represented by the object and the URI received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
+<blockquote>Please note that only ''Uri\Rfc3986\Uri'' support this capability, since the WHATWG specification doesn't have the concept of optional normalization.</blockquote>
+
+Normalization is especially important when it comes to comparing URIs because it reduces the likelihood of false positive results, since URI comparison is based on checking whether the URIs represent the same resources. The ''equals()'' method can be used for comparing URIs. First, the method only accept URI objects of the same specification, since it doesn't make sense to compare URIs of different standards. Then they normalize (if applicable) and recompose the URI represented by the object as well as the URI received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
 
 <code php>
-// A URI equals to another URI of the same standard that has the same string representation after normalization
+// An RFC 3986 URI equals another RFC 3986 URI that has the same string representation after normalization
 new Uri\Rfc3986\Uri("https://example.COM")->equals(new Uri\Rfc3986\Uri("https://EXAMPLE.COM")));  // true
 
-// A URI doesn't equal to another URI of a different standard even though they have the same string representation
-new Uri\Rfc3986\Uri("https://example.com/")->equals(new Uri\WhatWg\Url("https://example.com/"));  // false
+// A WHATWG URL equals another WHATWG URL that has the same string representation after normalization
+new Uri\WhatWg\Url("https:////example.COM/")->equals(new Uri\WhatWg\Url("https://EXAMPLE.COM")));  // true
+
+// A URI cannot be compared against another URI of a different standard
+new Uri\Rfc3986\Uri("https://example.com/")->equals(new Uri\WhatWg\Url("https://example.com/"));  // throws TypeError
 </code>
 
-It should be noted that the ''equals()'' method only accepts objects, while it could also accept URI strings. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in string be also normalized, or exact string match should be performed? Would the passed in URI string be parsed based on the same standard as the callee object? These are the questions which don't have to be answered when only an URI object parameter type is supported.
+It should be noted that the ''equals()'' method could also accept URI strings. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in string be also normalized, or exact string match should be performed? This is a question that don't have to be answered when only a URI object parameter type is supported.
 
-These pressing questions - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
+The same question - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
 
 Last but not least, URIs support a ''resolve()'' method that is able to resolve potentially relative URIs with the current object as the base URI:
 
@@ -298,7 +315,7 @@ $uri = new Uri\WhatWg\Url("https://example.com");
 echo $uri->resolve("/foo")->toString();        //  https://example.com/foo
 </code>
 
-This is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
+This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
 
 ===== How special characters are handled? =====
 
@@ -308,33 +325,24 @@ RFC 3986 defines that "URIs that differ in the replacement of an unreserved char
 
 The difference between RFC 3986 and WHATWG comes from the fact that the point of view of a maintainer of the WHATWG specification is that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
 
-For us, the biggest question is how a common interface can be designed in spite of this difference? Before trying to answer the question, it would be important to know some of the main use-cases of an URI abstraction:
+===== Why a common URI interface is not supported? =====
 
-  * HTTP routers: They need the normalized and decoded representation of some HTTP components (i.e. path)
-  * HTTP clients: They use URIs as-is for sending requests, but they have some special use-cases (i.e. [[https://docs.guzzlephp.org/en/stable/quickstart.html#cookies|cookie handling]]) when a decoded URI component representation may be necessary for them
-  * SAML login: Service providers should do the least amount of processing of the login URL of identity providers in order not to break the SAML signature, therefore they work with the raw encoded URIs
-  * HTTP cache implementations: It's [[https://github.com/symfony/symfony/blob/0a9eb28d2b41ce3dca0c38f7a7524ab6678a3d57/src/Symfony/Component/HttpKernel/HttpCache/Store.php#L421|best to use a normalized URI]] in order not to store the same cache item for multiple URIs
+[[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seemed a good candidate for adoption at the first glance. However, the current RFC didn't pursue to reuse it for the following reasons:
 
-As it can be seen based on just a few examples, an URI abstraction has to support many use-cases, out of which quite some are security-sensitive. That's why we should carefully evaluate how an URI interface should access the URI components. The position of this RFC is that the different use-cases can only be served with multiple accessor variants.
+  * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WHATWG specification.
+  * PSR-7's ''UriInterface'' have non-nullable method return types except for ''UriInterface::getPort()'' whereas WHATWG specifically allows ''null'' values.
 
-TBD
+As an alternative, the RFC attempted to define a new URI interface (called ''Uri\Uri''), but it turned out late in the RFC process that the RFC 3986 and WHATWG specifications have so many smaller or bigger differences between them that a common URI interface is not really feasible to define.
 
 ===== Why query parameter manipulation is not supported? =====
 
-It would be very useful for an URI implementation to support direct query parameter manipulation. Actually, the WHATWG URL specification contains a [[https://url.spec.whatwg.org/#urlsearchparams|URLSearchParams]] interface that could be used for the purpose. However, the position of this RFC is not to include this interface **yet** [[https://externals.io/message/123997#124077|for the following reasons]]:
+It would be very useful for a URI implementation to support direct query parameter manipulation. Actually, the WHATWG URL specification contains a [[https://url.spec.whatwg.org/#urlsearchparams|URLSearchParams]] interface that could be used for the purpose. However, the position of this RFC is not to include this interface **yet** [[https://externals.io/message/123997#124077|for the following reasons]]:
 
   * Query string parsing is a fuzzy area, since there is no established rules how to parse query strings
   * The ''URLSearchParams'' interface doesn't follow either RFC 1738, or RFC 3986
   * The already large scope of the RFC would increase even more
 
 For all these reasons, the topic of query parameter manipulation should be discussed as a followup to the current RFC.
-
-===== Relation to PSR-7 =====
-
-[[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seems a good candidate for adoption at the first glance. However, the current RFC does not purse this mainly for the following reasons:
-
-  * PSR-7 strictly follows the RFC 3986 standard, and therefore only has a notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|"userinfo"]], rather than [[https://url.spec.whatwg.org/#url-representation|"user" and "password"]] which is used by the WHATWG specification.
-  * PSR-7's ''UriInterface'' have non-nullable method return types except for ''UriInterface::getPort()'' whereas WHATWG specifically allows ''null'' values.
 
 ===== Parser Library Choice =====
 
