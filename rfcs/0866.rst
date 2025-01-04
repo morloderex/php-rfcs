@@ -1,278 +1,258 @@
-Miscellaneous Variable Functions
-================================
+A New JIT Implementation Based On IR Framework
+==============================================
 
 :PHP-RFC: 0866
-:Title: Miscellaneous Variable Functions
-:Author: Thomas Hruska <cubic@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-01-28
-:Version: 1
+:Title: A New JIT Implementation Based On IR Framework
+:Author: Dmitry Stogov <dmitry@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2023-09-20
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-In general, PHP userland is not very good at or at least not consistent
-at exposing/accessing Zend engine internals. This occurs both at the
-userland function level and the documentation level. When someone goes
-to learn about PHP extension development for the first time, it takes a
-while to understand basic Zend engine concepts. The proposed functions
-in this RFC straddle the boundary between Zend engine and userland to
-expose more of the engine internals to userland devs perhaps looking to
-make the leap into extension development or just improving their
-understanding of how zvals function under the hood for writing more
-optimal software.
+The first version of JIT for PHP was released in PHP-8.0
+(https://wiki.php.net/rfc/jit). That time we took a quite simple
+approach. We are generating native code directly from Zend VM byte code.
+This approach allowed to deliver JIT in a quite short time, but it also
+created significant limitations in possible optimizations. Smart
+optimizations require a more formal and detailed **Intermediate
+Representation** (IR). The introduction of the AArch64 JIT back-end in
+PHP-8.1, made the maintenance of JIT a bit more complex, because now we
+often have to update assembler code in two back-ends.
+
+A smarter JIT compiler with some Intermediate Representation was planned
+a long time. The real work was started in January 2022. This proposal is
+the result of these 1.75 years of work.
 
 Proposal
 --------
 
-Working implementations of all the items being proposed can be found at:
+I propose a new JIT implementation that is based on a separately
+developed `IR Framework <https://github.com/dstogov/ir>`__.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
+Instead of separate back-ends that generated x86 and AArch64 code, now
+we have a single back-end that constructs IR.
 
-refcount()
-~~~~~~~~~~
+This IR is passed to the framework that performs: machine independent
+optimizations, register allocation, scheduling, and native code
+generation. The new back-end doesn't have to care about many old
+low-level details, e.g.: register assignment, different calling
+conventions, etc.
 
-int refcount(mixed &$value)
+On the other hand, sometimes the construction of IR may be more complex
+because all the dependencies must be consistently reflected. This helps
+to find many errors during formal IR verification.
 
-Returns the userland internal reference count of a zval.
+The new JIT implementation will affect only a few core PHP developers
+who are involved in the JIT development or maintenance.
 
--  $value - Any input variable to retrieve its refcount.
+JIT is a self-contained subsystem, and the changes in the implementation
+details (even big changes) don't affect others.
 
-Returns: An accurate userland perspective normalized reference count of
-a zval. Interned strings always return a refcount of 1.
+The proposed `patch <https://github.com/php/php-src/pull/12079>`__ makes
+few changes outside **ext/opcache/jit**. It also very carefully adds new
+IR related code into **zend_jit.c** and **zend_jit_trace.c**, keeping
+the ability to work with old and new back-ends.
 
-This function returns the accurate userland-oriented reference count of
-a variable. Unlike debug_zval_dump(), it accomplishes this by passing
-the variable by reference instead of by value, correctly calculates the
-true reference count (reference refcount minus the Zend engine increment
-minus one + value refcount), and returns a straight integer value to the
-caller instead of a string. Note that the way Zend engine works is still
-likely to cause confusion with how users might expect to see a refcount
-value.
+At the current state the PR doesn't remove the sources of the old JIT
+implementation. It is possible to switch to the old implementation by
+configuring PHP with **--disable-opcache-jit-ir**.
 
-Weak references do not solve all refcounting problems. When there is a
-balancing act to maintain, especially in flexible caching scenarios,
-weak references cannot be used.
+JIT is a quite complex subsystem. Its first implementation will likely
+have bugs, but I am confident that these can be addressed. We have more
+time to fix potential issues, the sooner this proposal passes, and the
+patch is merged.
 
-Target audience: All users who need to implement flexible caching
-mechanisms such as "When 10,000 rows have been loaded into a cache,
-attempt to prune the cache down to about 5,000 rows." Also useful for
-users to track down userland refcount-based memory consumption issues.
-Also useful for extension developers working with zval references.
+The main goal of a separate IR Framework development is the
+collaboration with other compiler experts (sharing expertise,
+contribution, etc.). I'm doing my best to make the IR project
+interesting outside the PHP world and involve others. In case of
+success, this will reduce the PHP "bus-factor".
 
-Why it should be added to PHP: No reasonable built-in function exists to
-get just the refcount of a variable. debug_zval_dump() is insufficient,
-produces results that are incorrect, and doesn't always output the
-refcount. Some libraries depend on the incorrect behavior of
-debug_zval_dump() (mostly because there's no dedicated function for
-getting just the refcount), so changing the function isn't exactly a
-viable solution.
+The necessary part of the IR Framework is embedded into the PHP source
+tree, and won't introduce any new external dependencies.
 
-is_interned_string()
-~~~~~~~~~~~~~~~~~~~~
-
-bool is_interned_string(mixed $value)
-
-Finds whether the given variable is an interned (immutable) string.
-
--  $value - Any input type to validate as an interned string.
-
-Returns: A boolean of true if the string is interned (immutable), false
-otherwise.
-
-This function differentiates between the two internal types of strings
-in PHP core. Interned (immutable) strings have a refcount of 1 and are
-never garbage collected while other strings are refcounted and garbage
-collected.
-
-Target audience: Some userland developers looking to optimize string
-performance for specific scenarios. Those looking to learn more about
-the underlying engine before diving into extension development.
-
-Why it should be added to PHP: Language completeness. Could also be
-useful for some userland devs for performance optimizations and learning
-more about how string zvals work. Also potentially useful for verifying
-serious bugs in extensions from userland where an extension accidentally
-modifies an interned string.
-
-As a historical side note: This function would have been handy to have
-for debugging `str_splice() </rfc/working_with_substrings>`__. The code
-accidentally modified interned strings at an early point of development.
-
-is_reference()
-~~~~~~~~~~~~~~
-
-bool is_reference(mixed &$value)
-
-Finds whether the type of a variable is a reference.
-
--  $value - Any input variable to determine if it is a reference.
-
-Returns: A boolean of true if the variable is a reference, false
-otherwise.
-
-This function determines whether or not a variable is a reference.
-
-The Zend engine VM only has two options for its opcodes for parameters:
-Coerce a variable to a reference OR coerce a variable to a value. There
-is no opcode for passing a variable to a function as-is. If there were
-such an opcode, the number of functions that would benefit would be very
-low. Fortunately, coercion to a reference is temporary during the
-function call and causes the refcount to be a minimum of two and is only
-higher if it is an actual reference variable. However, the resulting
-behavior is that this function operates on a by-design side effect of
-Zend engine. If Zend engine ever changes significantly in the distant
-future, this function could break in a way that won't necessarily be
-able to be fixed.
-
-While this function is useful for tracking down/verifying bugs related
-to references in userland software, please take the above caveat into
-consideration when you vote.
-
-Target audience: All users. While variable references generally enable
-faster application performance, lots of weird application bugs can crop
-up with references (e.g. forgetting to unset() before reusing a variable
-later).
-
-Why it should be added to PHP: A useful debugging tool. Also, language
-completeness. However, it does rely on a side effect of how the engine
-functions.
-
-is_equal_zval()
-~~~~~~~~~~~~~~~
-
-bool is_equal_zval(mixed &$value, mixed &$value2, [ bool $deref = true
-])
-
-Compares two raw zvals for equality but does not compare data for
-equality.
-
--  $value - Any input variable to determine if it has equality to
-   $value2.
--  $value2 - Any input variable to determine if it has equality to
-   $value.
--  $deref - Whether or not to compare data pointers (Default is true).
-
-Returns: A boolean of true if the zvals are pointing at the same
-reference variable (for references) or data pointer.
-
-This function performs a low-level pointer zval equality comparison
-operation between $value and $value2. Handy for looking at complex zval
-mechanisms behind the scenes of PHP. Very different from the equality
-operator (===).
-
-Target audience: Those looking to learn more about how zvals work under
-the hood, especially extension developers. Also maybe useful for some
-userland devs looking to optimize some code.
-
-Why it should be added to PHP: Language completeness. Exposes some inner
-workings of zvals that are otherwise difficult to surface.
+The details of the IR framework are complex. This
+`presentation <https://www.researchgate.net/publication/374470404_IR_JIT_Framework_a_base_for_the_next_generation_JIT_for_PHP>`__
+explains design ideas and makes overview of the most important
+implementaion details.
 
 Backward Incompatible Changes
 -----------------------------
 
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
-
-refcount(), is_interned_string(), is_reference(), and is_equal_zval()
-will no longer be available as global function names. May break existing
-userland software that defines global functions with these names.
-Searching GitHub for those function names turns up the following
-results:
-
--  refcount() - 311,681 results. Appears to mostly be output from
-   various test suites calling debug_zval_dump(), especially PHP's own
-   test suite. No apparent naming conflicts but with that many results,
-   it's hard to be certain.
--  is_interned_string() - 1 result. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
--  is_reference() - 3,542 results. Appears to mostly be a variable name
-   in Phan. No apparent naming conflicts.
--  is_equal_zval() - 1 result. Just the test extension (qolfuncs). No
-   apparent naming conflicts.
+There are no BC breaks in regard to user land PHP code.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.
+next (master branch)
 
 RFC Impact
 ----------
 
-::
+Performance
+~~~~~~~~~~~
 
-     To SAPIs:  Will be applied to all PHP environments.
-     To Existing Extensions:  Additions and changes made to ext/standard and ext/hash in the existing .c and .h files.
-     To Opcache:  New global functions (refcount(), is_interned_string(), etc) to be added to the registered opcache function list like all the other registered global functions.
-     New Constants:  No new constants introduced.
-     php.ini Defaults:  No changes to php.ini introduced.
+The current new PHP JIT implements exactly the same set of PHP related
+features and optimizations as the old one.
+
+Because the IR Framework provides more optimizations and has a smarter
+Register Allocator, the JIT produces a bit faster (5-10%) and smaller
+code.
+
+This is visible with **bench.php** and **micro_bench.php**. The speed of
+the real-life applications is not affected.
+
+The compilation speed of the Tracing JIT is almost the same. The
+compilation speed of the Function JIT is up to 4 times slower (tested on
+Wordpress).
+
+This is quite a good result for an Optimizing JIT compiler. In my tests,
+PHP with the new JIT may produce ~15MB of native code per second.
+
+Zend VM
+~~~~~~~
+
+On JIT supported platforms (x86, x86_64, AArch64), the HYBRID VM
+interpreter starts to save and restore all the persistent CPU registers
+at **execute_ex()** prologue and epilogue.
+
+This allows elimination of the similar save/restore code in each JIT-ed
+function or trace. CLANG and MSVC builds that use CALL VM are not
+impacted.
+
+To Opcache
+~~~~~~~~~~
+
+JIT is implemented as a part of Opcache, so the PR changes the build
+process for Opcache. No other changes are present.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+The PR does not introduce new php.ini detectives or changes any default
+values.
+
+It adds few new IR related JIT debugging capabilities that may be
+enabled through **opcache.jit_debug** directive bits:
+
+-  0x01000000 - print the initial IR graph right after construction
+-  0x02000000 - print the final IR graph right before code emission
+-  0x04000000 - print Control Flow Graph
+-  0x08000000 - print information about Live Ranges and Allocated
+   Registers
+-  0x10000000 - print IR graph after Sparse Conditional Constants
+   Propagation pass
+-  0x20000000 - print IR graph after Global Code Motion and
+   linearization pass
+-  0x40000000 - print IR graph after Register Allocation pass
+-  0x80000000 - annotate IR graph with information about CFG, Registers
+   and Code Generation rules
+
+To SAPIs
+~~~~~~~~
+
+SAPIs are not affected.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+PHP extensions are not affected.
+
+New Constants
+~~~~~~~~~~~~~
+
+There are no new constants.
 
 Open Issues
 -----------
 
-Issue 1 - Should the function name refcount() be changed to something
-else to avoid possible global namespace conflicts? 300,000+ results on
-GitHub is a lot.
+Should we keep the old implementation of the JIT for a while, or change
+the patch to replace it straight away?
 
-Issue 2 - How likely is it that Zend engine will change in such a way
-that is_reference() will break?
+Unaffected PHP Functionality
+----------------------------
 
-Issue 3 - Are there other bits of Zend engine functionality that could
-be exposed as part of this RFC (i.e. additional functions) to round out
-the RFC some more? Maybe something relevant from the bug tracker that
-comes up on occasion?
+JIT is developed as a self-contained feature, and doesn't affect
+anything else directly.
 
 Future Scope
 ------------
 
-None at this time.
+The usage of IR opens the door for more powerful optimizations. Some of
+these are going to be PHP independent (e.g.): the planned introduction
+of new loop optimization passes, improvement in LOAD/STORE motion and
+redundancy, improvements to the code generator.
+
+The other part is PHP specific (for example, we can extend CPU register
+usage for more instructions).
+
+It is also possible to support new JIT targets (e.g. RISCV), almost
+independently of PHP.
+
+Finally, we may try to completely avoid the manual IR construction in
+JIT. We may introduce a single formal specification for VM instructions
+in a C-like language, convert it to IR and then use partial evaluation
+to generate VM and JIT handlers (similar to Truffle).
 
 Proposed Voting Choices
 -----------------------
 
-The vote will require 2/3 majority with a vote on a per-function basis.
+Voting opened 2023-10-06 and closes 2023-10-19.
+
+Question: Merge the new JIT implementation into PHP master?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Secondary vote: Should we keep the old JIT implementation for a while or
+remove it right after merge?
+
+Note, that old implementation is not going to be tested (by CI) and we
+can't guarantee its work anyway.
+
+Question: Remove the old JIT implementation right after merging the new one?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-Working implementations of all the items being proposed can currently be
-found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point so
-turning the extension into a normal pull request should be reasonably
-straightforward.
+#. https://github.com/php/php-src/pull/12079
+#. All CI tests (including nightly workflow) passed:
+   https://github.com/dstogov/php-src/actions/runs/6123676012/job/16638279521
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
+::
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+    - merged into master via 25cb2a40d640b64f8881a894f2247d46a781ef75
+    - old JIT implementation is not removed yet
 
 References
 ----------
 
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
-
-Rejected Features
------------------
-
-None at this time.
+https://github.com/dstogov/ir
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: misc_variable_functions
-:Wiki URL: https://wiki.php.net/rfc/misc_variable_functions
+:First Published At: http://wiki.php.net/rfc/php-ir
+:Original Authors: Dmitry Stogov, dmitry@php.net
+:Slug: jit-ir
+:Wiki URL: https://wiki.php.net/rfc/jit-ir
