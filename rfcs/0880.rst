@@ -1,159 +1,178 @@
-Random Migration
-================
+Optional Interfaces
+===================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
+:Title: Optional Interfaces
+:Author: Juris Evertovskis <juris@glaive.pro>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-12-22
+:Created: 2024-12-28
 :Version: 0.1
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+PHP's ``implements`` keyword allows classes to declare that they
+implement one or more interfaces. This mechanism is strict: the
+specified interfaces must exist at runtime. While this strictness is
+usually beneficial, it can create challenges when developing libraries
+that need to interoperate with other optional libraries or different
+versions of libraries and when creating projects that need to be
+compatible with multiple PHP versions and usable with or without some
+PHP extensions.
+
+In such scenarios developers resort to workarounds like
+
+-  class declarations inside a conditional control structure
+   (`Symfony <https://github.com/symfony/symfony/blob/95c43e38811a159c82112a13e631ee7121b83e54/src/Symfony/Component/Cache/Exception/CacheException.php#L17>`__,
+   `Laravel <https://github.com/laravel/framework/blob/a30619310dd739c22f561579c3de07f33d109612/src/Illuminate/Testing/ParallelRunner.php#L7>`__,
+   `League <https://github.com/thephpleague/oauth2-server-bundle/blob/3f88e38cd9e6b992119e5e415bf2603d47da2f6f/src/DependencyInjection/Security/OAuth2Factory.php#L11>`__);
+-  dummy interfaces
+   (`WordPress <https://github.com/WordPress/WordPress-Coding-Standards/blob/9f9726a01a886b3dcced5327390470a56314aa56/WordPress/Tests/NamingConventions/PrefixAllGlobalsUnitTest.1.inc#L525>`__)
+   which get clumsier in namespaces (`a StackOverflow
+   answer <https://stackoverflow.com/a/57996889/2182900>`__);
+-  aliasing other interfaces
+   (`Carbon <https://github.com/briannesbitt/Carbon/blob/a9000603ea337c8df16cc41f8b6be95a65f4d0f5/src/Carbon/Traits/Localization.php#L27>`__);
+-  creating separate bridge libraries.
+
+These solutions introduce complexity and a maintenance burden. The
+conditional declarations may sometimes confuse IDEs and static analysis
+tools that pick up the multiple definitions. If an optional interface is
+mocked by a dummy, the implementing class contains no indication of that
+and misleads the reader into thinking that an actual interface with that
+name is defined in a meaningful way.
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
+By prefixing an interface name with ``?``, a class can optionally
+implement an interface. If the interface exists, the class will
+implement it; otherwise, the declaration will be ignored without causing
+an error.
 
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
+This allows the developer to clearly announce that the class is
+interoperable with an interface, but does not require the interface per
+se.
 
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-The following functions to deprecated:
-
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
-
-All of these functions have global scope issues described in the Random
-Extension RFC.
-
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
-
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
-
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
-
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
-
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
+Example 1: Implementing an interface if it exists
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code:: php
 
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
+   namespace MyNamespace;
+
+   use ExternalNamespace\TheInterface;
+
+   class MyClass implements ?TheInterface
+   {
+       // ...
+   }
+
+If ``\ExternalNamespace\TheInterface`` exists, ``MyClass`` will
+implement it. It will behave as if the class was declared as
+``class MyClass implements TheInterface``.
+
+If it doesn't exist, ``MyClass`` will work as if it was declared without
+``implements ?TheInterface``.
+
+Example 2: Optional interfaces in a list of interfaces
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Optional interfaces can appear on an interface list together with
+required interfaces in any order. The ``?`` applies only to the name
+directly following the token.
+
+.. code:: php
+
+   class MyClass1 implements A, B, ?C, ?D {}
+   class MyClass2 implements ?C, ?D, A, B {}
+   class MyClass3 implements A, ?C, ?D, B {}
+   class MyClass4 implements ?C, A, B, ?D {}
+
+All of these classes implement and require interfaces ``A`` and ``B``
+while the interfaces ``C`` and ``D`` will only be implemented if they
+exist.
+
+Example 3: Extending optional interfaces
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An interface can also be optional when it's in an ``extends`` list of
+another interface. The list of extandable interface names works just
+like the ``implements`` list for classes.
+
+.. code:: php
+
+   interface MyInterface extends RequiredInterface, ?OptionalInterface {}
 
 Backward Incompatible Changes
 -----------------------------
 
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
+None.
 
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
-
-The following function names are no longer available:
-
--  random_float()
+Classes that do not use the ``?`` token in the interface list will
+function as before. Before this RFC the ``?`` token in interface lists
+is not valid, therefore a runnable code that would be affected does not
+exist.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3 and next version
+Next PHP 8.x.
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-none
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-ext-random
-
 To Opcache
 ~~~~~~~~~~
 
-none
+   It is necessary to develop RFC's with opcache in mind, since opcache
+   is a core extension distributed with PHP.
 
-New Constants
-~~~~~~~~~~~~~
+..
 
-none
+   Please explain how you have verified your RFC's compatibility with
+   opcache.
 
-php.ini Defaults
-~~~~~~~~~~~~~~~~
+I have not verified the compatibility with the opcache yet.
 
-none
+To Reflection API
+~~~~~~~~~~~~~~~~~
 
-Open Issues
------------
-
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+Currently this RFC does not add the optionality information in the
+Reflection API.
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+Include these so readers know where you are heading and can discuss the
+proposed voting options.
 
 Implementation
 --------------
 
-WIP
+-  Implementation: https://github.com/php/php-src/pull/17288
+
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+References
+----------
+
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Original Authors: Juris Evertovskis, juris@glaive.pro
+:Original Status: Under Discussion
+:Slug: optional-interfaces
+:Wiki URL: https://wiki.php.net/rfc/optional-interfaces
