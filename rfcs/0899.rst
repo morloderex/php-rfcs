@@ -1,170 +1,635 @@
-Undefined Property Error Promotion
-==================================
+Static Constructors
+===================
 
 :PHP-RFC: 0899
-:Title: Undefined Property Error Promotion
-:Author: Mark Randall <marandall@php.net>
-:Status: Accepted
-:Type: Unknown
-:Created: 2022-04-04
-:Version: 1
+:Title: Static Constructors
+:Author: Erick de Azevedo Lima <ericklima.comp@gmail.com>
+:Status: Draft
+:Type: Standards Track
+:Created: 2024-06-08
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-Undefined properties are those that have not yet been defined either by
-the presence of a property declaration, or by adding them to the
-properties hashmap through direct assignment, or by having them assigned
-by an internal function such as json_decode. Accessing an undefined
-property emits an E_WARNING "Undefined property <className>::$varName"
-and treats the value as if it were null, but does not otherwise interupt
-execution, allowing code execution to continue unabated, but potentially
-in an unintended state.
+In PHP, initializing static properties with non-constant values often
+requires cumbersome workarounds that can clutter the code and reduce
+readability. One commonly used technique is to create a method that's
+called inside the class constructor or before any attempt to read the
+static property. This method first checks if the static properties have
+been initialized, and if they haven't, it initializes them. Here is an
+example of code I've encountered in some codebases, which requires
+calling the initializer method before every usage of the static property
+to ensure it's properly initialized:
 
-Undefined properties previously triggered an E_NOTICE, however this was
-upgraded to E_WARNING as part of the PHP 8.0 Engine Warnings RFC:
-https://wiki.php.net/rfc/engine_warnings - By the time this RFC would
-come into effect, if passed, undefined properties would have emitted a
-warning for 5+ years.
+.. code:: php
+
+   class MyClass
+   {
+       private static \DatetimeImmutable $minDate;
+       
+       public function __construct(
+           private \DateTimeInterface $scheduledDate
+       ) {
+           self::initializeMinDate();
+           
+           if ($scheduledDate < self::$minDate) {
+               $errMsg = 'Cannot set a scheduledDate before [' . self::$minDate->format('d/m/Y H:i:s') . ']';
+               
+               throw new \DomainException($errMsg);
+           }
+       }
+
+       private static function initializeMinDate()
+       {
+           if(isset(self::$minDate)) {
+               return;
+           }
+           
+           // could get it from config, database or whatever 
+           self::$minDate = new \DatetimeImmutable('2024-01-01 00:00:00');
+       }
+       
+       // ...
+   }
+
+Such boilerplate reduces readability and could lead to bugs if a new
+method is implemented and the programmer forgets to call the initializer
+method:
+
+.. code:: php
+
+   class MyClass
+   {
+       private static \DatetimeImmutable $minDate;
+       
+       public function __construct(
+           private \DateTimeInterface $scheduledDate
+       ) {
+           self::initializeMinDate();
+           
+           if ($scheduledDate < self::$minDate) {
+               $errMsg = 'Cannot set a scheduledDate before [' . self::$minDate->format('d/m/Y H:i:s') . ']';
+               
+               throw new \DomainException($errMsg);
+           }
+       }
+       
+       public static function getMinDate()
+       {        
+           return self::$minDate;
+       }
+
+       private static function initializeMinDate()
+       {
+           if(isset(self::$minDate)) {
+               return;
+           }
+           
+           // could get it from config, database or whatever 
+           self::$minDate = new \DatetimeImmutable('2024-01-01 00:00:00');
+       }
+       
+       // ...
+   }
+
+   // Boom! getMinDate does not check if MyClass::$minDate was initialized
+   echo MyClass::getMinDate()->format('d/m/Y H:i:s') . PHP_EOL;
+
+   var_dump($c);
 
 Proposal
 --------
 
-This RFC proposes that accessing an undefined property is rendered
-illegal behaviour in the next major version of PHP, and will result in
-an error exception being thrown if it occurs.
+This RFC proposes the introduction of a new magic method,
+``__staticConstruct``, in PHP to streamline the initialization of static
+properties and improve code clarity. If declared in a class, this method
+will be invoked automatically by the engine just after the current code
+that initializes the class's static properties. Before proposing this
+RFC, I considered using a userland autoloader for this purpose, but I
+realized that it is clearly out of the scope of a class autoloader,
+which is to find and load the class.
 
-For the purposes of this RFC, accessing an property means to use the
-property in such a way that the engine attempts to read its value for
-use in an expression, without accounting for the possibility of it being
-unset. These can be identified by the warning Undefined property
-<className>::$varName.
+Previous RFC on this subject
+----------------------------
 
-isset / empty / null coalesce DO account for undefined properties and as
-such are not covered by this RFC.
+There was a previous attempt to create an RFC for static constructors,
+which can be found at: https://externals.io/message/84602
 
-The presence of magical \`get\` will continue to work as it does now,
-and unknown properties will route to the magical \`get\` handler rather
-than cause an error (unless called within \`get\` on itself).
+Addressing Potential Criticism
+------------------------------
 
-Considerations
---------------
+Some might argue against this RFC on the basis that static properties
+should be avoided as suggested by certain design patterns or even due to
+concerns about testability. However, static properties already exist in
+PHP and have proven to be useful in certain scenarios. Ignoring the need
+for a more elegant initialization method does not negate the practical
+use cases where static properties are beneficial and the natural
+approach.
 
-PHP has traditionally been quite lax in its enforcement of accessing
-undefined values that are stored within various data structures.
+Comparison with Other Object-Oriented Languages
+-----------------------------------------------
 
-There are 3 primary storage locations for values within PHP, these are:
+Object-oriented languages like Java, which adhere more strictly to
+object-oriented principles, include static properties and offer
+mechanisms for their initialization with non-trivial expressions. Java
+uses method calls or static blocks for this purpose, as will be
+demonstrated later in this text, illustrating that even in environments
+stricter about OOP principles than PHP, static properties are sometimes
+useful and require appropriate initialization methods.
 
-#. **Variables** (compiled variables) which are stored within the stack
-   frame.
-#. **Properties** which are stored within a zend_object instance within
-   the properties HashTable and the properties_table (which identifies
-   their location by their slot number sourced from the class entry).
-#. **Arrays** stored within the bucket.
+A real-life example
+-------------------
 
-With the passing of the undefined variable error promotion RFC
-(https://wiki.php.net/rfc/undefined_variable_error_promotion) the first
-of these, variables, is scheduled for promotion to an error in PHP 9.0.
+One real-life and prominent example is found in Composer's
+``ClassLoader`` class, which uses a closure to initialize the
+``$includeFile`` static property. This initialization is done in an
+``initialize`` method, which is called inside the constructor, resulting
+in less elegant and less readable code.
 
-The next natural target is properties, this is in line in line with
-additional changes targeted at PHP 9.0 that will promote **WRITING** to
-undefined properties to be an Error
-(https://wiki.php.net/rfc/deprecate_dynamic_properties) unless the
-#[AllowDynamicProperties] attribute is set upon the class definition
-(stdClass includes this capability as standard).
-
-It seems to be the natural progression that if writing to an undefined
-property will throw, reading from one should do likewise, to protect the
-user against unintended behaviour.
-
-However, there is a potential exception to this rule, and that is the
-presence of stdClass, which is intended to exclusively hold unknown (to
-the class entry) properties, often those sourced from casting an array
-to an object, or from an internal function decoding some other data such
-as json_decode when it encounters an object, without the assoc parameter
-set.
-
-While reading an undefined property on a user defined class will almost
-always be programmer error, historically it would not be entirely
-unexpected to see similar to the following code when dealing with json:
+Composer's ClassLoader:
 
 .. code:: php
 
-   if ($obj->name) { 
-     echo "Hello " . $obj->name;
-   }
+   class ClassLoader
+   {
+       // ...
+       /**
+        * @param string|null $vendorDir
+        */
+       public function __construct($vendorDir = null)
+       {
+           $this->vendorDir = $vendorDir;
+           self::initializeIncludeClosure();
+       }
+       
+       // ...
+       
+       /**
+        * @return void
+        */
+       private static function initializeIncludeClosure()
+       {
+           if (self::$includeFile !== null) {
+               return;
+           }
 
-As this now emits an E_WARNING it should be very much discouraged, but
-will still execute without an error as $obj->name will, if undefined,
-evaluate to null.
+           /**
+            * Scope isolated include.
+            *
+            * Prevents access to $this/self from included files.
+            *
+            * @param  string $file
+            * @return void
+            */
+           self::$includeFile = \Closure::bind(static function($file) {
+               include $file;
+           }, null, null);
+       }   
+       
 
-If this RFC were to pass, the developer would need to explicitly specify
-their intent to allow the possibility of accessing an undefined
-property, either via isset, empty or the null coalesce operator:
+If there were a ``__staticConstruct`` method, it could be written like
+this:
 
 .. code:: php
 
-   if (isset($obj->name)) { 
-     echo "Hello " . $obj->name;
+   class ClassLoader
+   {
+       // ...
+       /**
+        * @param string|null $vendorDir
+        */
+       public function __construct($vendorDir = null)
+       {
+           $this->vendorDir = $vendorDir;
+       }
+       
+       private static function __staticConstruct()
+       {
+            /**
+            * Scope isolated include.
+            *
+            * Prevents access to $this/self from included files.
+            *
+            * @param  string $file
+            * @return void
+            */
+           self::$includeFile = \Closure::bind(static function($file) {
+               include $file;
+           }, null, null);
+       }
+       
+       // ...    
    }
 
-To provide the most consistent handling, this RFC proposes that stdClass
-will also throw an error if an undefined property is accessed.
+This case demonstrates how introducing a static constructor in PHP would
+not only simplify the initialization of static properties but also
+improve code readability and maintainability. This RFC aims to enhance
+PHP's object-oriented capabilities by providing a cleaner mechanism for
+initializing static properties.
+
+What this RFC is not
+--------------------
+
+This RFC does not intend to promote the indiscriminate usage of static
+properties but rather to provide a way to properly initialize them when
+they are useful.
+
+Implementation on other programming languages
+---------------------------------------------
+
+Java
+~~~~
+
+Java does not have a so-called static constructor, but it provides other
+ways to initialize static properties:
+
+1 - static blocks:
+^^^^^^^^^^^^^^^^^^
+
+.. code:: java
+
+   import java.util.*;
+   import java.lang.*;
+   import java.io.*;
+
+   class Whatever {
+       public static int myVar;
+
+       static {
+           myVar = 10;
+       }
+   }
+
+   class Main {
+       public static void main(String[] args) {
+           System.out.println("Hello world (" + Whatever.myVar + ")!");
+       }
+   }
+
+2 - Initialization using method calls:
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: java
+
+   import java.util.*;
+   import java.lang.*;
+   import java.io.*;
+
+   class Whatever {
+       public static int myVar = initializeInstanceVariable();
+           
+       protected static int initializeInstanceVariable() {
+           return 20;
+       }
+   }
+
+   class Main {
+       public static void main(String[] args) {
+           System.out.println("Hello world (" + Whatever.myVar + ")!");
+       }
+   }
+
+https://docs.oracle.com/javase/tutorial/java/javaOO/initial.html
+
+Kotlin
+~~~~~~
+
+Kotlin, strictly speaking, does not offer static members/methods.
+However, they can be implemented using companion objects and the
+``@JvmStatic`` annotation:
+
+.. code:: kotlin
+
+   class Whatever {
+       companion object {
+           @JvmStatic
+           var myVar: Int
+
+           init {
+               myVar = 10
+           }
+       }
+   }
+
+   fun main() {
+       println("Hello, world(" + Whatever.myVar + ")!")
+   }
+
+https://kotlinlang.org/docs/object-declarations.html#companion-objects
+
+C#
+~~
+
+C# implements a mechanism called "static constructor". It's a method
+with no modifiers and has even more restrictions than the private access
+modifier. It can only be called by the CLR (Common Language Runtime),
+which gives guarantees about its execution:
+
+#. Static constructor is called at most one time by the CLR;
+#. Static constructor is called before any instance constructor is
+   invoked or member is accessed;
+
+.. code:: csharp
+
+   using System;
+   using System.Reflection;
+
+   public class C1
+   {
+       public static int myVar;
+       
+       static C1()
+       {
+           C1.initStaticProps();
+           Console.WriteLine("C1::__staticConstructor");
+       }
+       
+       public static void initStaticProps()
+       {
+           C1.myVar = 10;
+           Console.WriteLine("Initializing C1::test");
+       }
+       
+       public static void test()
+       {
+           Console.WriteLine("C1::test");
+       }
+   }
+
+   public class Program
+   {
+       public static void Main()
+       {
+           /// Any reference to the C1 class will trigger the static constructor: ///
+           
+           // Reflection
+           //Type c1Type = typeof(C1);
+           
+           // Instance constructor
+           //var c = new C1();
+           
+           // Static method call
+           //C1.test();
+           
+           // Property access
+           Console.WriteLine("C1::myVar:" + C1.myVar);
+       }
+   }
+
+https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors
+
+.. _c-1:
+
+C++
+~~~
+
+Since its 2017 specification "C++17", C++ provides a way to declare
+constant expression lambdas (equivalent to PHP's closures). This allows
+leveraging this feature to initialize complex values for static
+properties using an ``inline`` with ``constexpr`` lambda:
+
+.. code:: c++
+
+   #include <iostream>
+   #include <vector>
+
+   class Example {
+       public:
+           inline static const std::vector<char> letters = [] {
+               std::vector<char> letters;
+               
+               for (char c = 'a'; c <= 'z'; c++) {
+                   letters.push_back(c);
+               }
+       
+               return letters;
+           }();
+   };
+
+   int main() {
+       for (auto i = 0; i < Example::letters.size(); i++) {
+           std::cout << "Example::letters[" << i << "]: " << MyClass::letters[i] << std::endl;    
+       }
+       
+       return 0;
+   }
+
+Swift
+~~~~~
+
+Just like C++, Swift allows properties to be initialized by the return
+values of closures:
+
+.. code:: swift
+
+   class Example {
+       static var myVar: Int = {
+           print("Static initializer called")
+           return 42
+       }()
+
+       static func display() {
+           print("Example::myVar: \(myVar)")
+       }
+   }
+
+   Example.display()
+
+Design decisions
+----------------
+
+This implementation draws inspiration from the C# implementation but is
+less restrictive. Programmers have the option to call the
+``__staticConstruct`` method to reset static properties values if
+desired.
+
+The implementation enforces the ``private`` access modifier on the
+``__staticConstruct`` method intentionally to prevent inheritance of the
+static constructor. This prevents unintended re-initialization of parent
+class static properties, which is often not desired. If a programmer
+wants to share code from a parent class, they can create a new method
+and call it within ``__staticConstruct``.
+
+The static constructor in this RFC supports two possible signatures:
+
+| 1. ``private static __staticConstruct();``
+| 2. ``private static __staticConstruct(): void;``
+| Similar to the C# implementation, the static constructor can take no
+  arguments.
+
+Implementation notes
+--------------------
+
+-  Unlike C#, this implementation of the static constructor does not get
+   triggered at the first reference to the class in the code. Instead,
+   it utilizes the existing lazy initialization logic for static
+   properties implemented in the ``zend_class_init_statics`` function
+   within the ``zend_object_handlers.c`` file. Initialization occurs
+   upon the first reference to any static property of the class;
+
+-  Even if the method were ``protected`` or ``public``, it would not be
+   automatically called by the engine if not explicitly declared. Unlike
+   the ``__construct`` method, the static constructor method is
+   intentionally not copied to the correspondent "shortcut" variable
+   dedicated to this magic method during inheritance operations
+   (performed at the ``do_inherit_parent_constructor`` function of the
+   ``zend_inheritance.c`` file).
+
+Examples
+--------
+
+1 - No code sharing to the child class:
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+   class MyClass
+   {
+       protected static \DatetimeImmutable $minDate;
+       
+       public function __construct(
+           private \DateTimeInterface $scheduledDate
+       ) {
+           if ($scheduledDate < self::$minDate) {
+               $errMsg = 'Cannot set a scheduledDate before [' . self::$minDate->format('d/m/Y H:i:s') . ']';
+               
+               throw new \DomainException($errMsg);
+           }
+       }
+       
+       public static function getMinDate()
+       {        
+           return self::$minDate;
+       }
+
+       private static function __staticConstruct(): void
+       {
+           // could get it from config, database or whatever 
+           self::$minDate = new \DatetimeImmutable('2024-01-01 00:00:00');
+       }
+       
+       // ...
+   }
+
+   // No more "Boom!", as MyClass::$minDate was initialized on the __staticConstruct method
+   echo MyClass::getMinDate()->format('d/m/Y H:i:s') . PHP_EOL;
+
+2 - Sharing code to the child class:
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code:: php
+
+   class MyClass1
+   {
+       protected static \DateTimeImmutable $minDate;
+
+       public function __construct(
+           private \DateTimeImmutable $scheduledDate
+       ) {
+           if ($scheduledDate < self::$minDate) {
+               $errMsg = 'Cannot set a scheduledDate before [' . self::$minDate->format('d/m/Y H:i:s') . ']';
+
+               throw new \DomainException($errMsg);
+           }
+       }
+
+       public static function getMinDate()
+       {
+           return static::$minDate;
+       }
+
+       public function getScheduledDate(): \DateTimeImmutable
+       {
+           return $this->scheduledDate;
+       }
+
+       protected static function initMinDate(): \DateTimeImmutable
+       {
+           // could get it from config, database or whatever 
+           return new \DatetimeImmutable('2024-01-01 00:00:00');
+       }
+
+       private static function __staticConstruct(): void
+       {
+           self::$minDate = self::initMinDate();
+       }
+
+       // ...
+   }
+
+   class MyClass2 extends MyClass1
+   {
+       protected static \DateTimeImmutable $minDate;
+
+       private static function __staticConstruct(): void
+       {
+           self::$minDate = parent::initMinDate()->modify('+1 day');
+       }
+   }
+
+   echo MyClass1::getMinDate()->format('d/m/Y H:i:s') . PHP_EOL;
+   echo MyClass2::getMinDate()->format('d/m/Y H:i:s') . PHP_EOL;
+   // prints:
+   // 01/01/2024 00:00:00
+   // 02/01/2024 00:00:00
 
 Backward Incompatible Changes
 -----------------------------
 
-Accessing an undefined property in a manner that currently results in an
-"undefined property" warning will in future result in an Error exception
-being thrown.
+This RFC introduces backward incompatible changes only for projects that
+have defined a ``__staticConstruct`` method. It's worth noting that
+methods starting with ``__`` are discouraged in userland codebases. A
+search conducted on GitHub did not yield any results for projects with
+such a method.
 
-Proposed PHP Version(s)
------------------------
+Version
+-------
 
-This change is targeted for PHP 9.0.
+Next minor version, PHP 8.4
 
-Although the target version is mandated by our traditional breaking
-changes policy, it is also the intent of this RFC to give multiple years
-of notice that this change will be coming, affording the greatest
-opportunity for developers to modify their code in anticipation of this
-change.
+Vote
+----
 
-A minor change will be included in the next minor version to alter the
-existing warning message to indicate the warning will become an error in
-9.0.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Voting
-------
+Implementation
+--------------
 
-Voted started on 2022-04-22, ending 2022-05-05
+https://github.com/php/php-src/compare/master...erickcomp:php-src_static-constructor:master
 
-Question: Promote Undefined Property Access to Throw an Error?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Note: This implementation still needs tests
 
-Voting Choices
-^^^^^^^^^^^^^^
+Future scope
+------------
 
--  Yes
--  No
+In case any use cases for early execution of the static constructor
+arise (such as during class load, as implemented in C#), an opt-in
+mechanism for even earlier initialization can be considered.
 
-Meta vote:
+References
+----------
 
-Question: Main reason for voting against undefined_property_error_promotion if you did?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Composer's ClassLoader class:
+https://github.com/composer/composer/blob/main/src/Composer/Autoload/ClassLoader.php
 
-.. _voting-choices-1:
+Java's approach on "properties" initialization:
+https://docs.oracle.com/javase/tutorial/java/javaOO/initial.html
 
-Voting Choices
-^^^^^^^^^^^^^^
+Kotlin's companion objects:
+https://kotlinlang.org/docs/object-declarations.html#companion-objects
 
--  Backwards compatibility breaks
--  Would be in favour, but not in 9.0
--  Do not like stdClass behaviour
--  Something else
+C#'s static constructors:
+https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-constructors
 
 Additional Metadata
 -------------------
 
-:Original Authors: Mark Randall, marandall@php.net
-:Slug: undefined_property_error_promotion
-:Wiki URL: https://wiki.php.net/rfc/undefined_property_error_promotion
+:Implementation: https://github.com/php/php-src/compare/master...erickcomp:php-src_static-constructor:master
+:Original Authors: Erick de Azevedo Lima ericklima.comp@gmail.com
+:Original PHP Version: PHP 8.4
+:Original Status: Under Discussion
+:Slug: static_constructor
+:Wiki URL: https://wiki.php.net/rfc/static_constructor
