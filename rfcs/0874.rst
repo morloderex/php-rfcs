@@ -1,302 +1,82 @@
-PDO Driver Specific Sub-classes
-===============================
+Multibyte For Ucfirst, Lcfirst Functions, Mb_ucfirst Mb_lcfirst
+===============================================================
 
 :PHP-RFC: 0874
-:Title: PDO Driver Specific Sub-classes
-:Author: Danack
+:Title: Multibyte For Ucfirst, Lcfirst Functions, Mb_ucfirst Mb_lcfirst
+:Author: Author: Yuya Hamadahttps://github.com/youkidearitai <youkidearitai@gmail.com>
 :Status: Accepted
-:Type: Unknown
-:Created: 2022-06-20
-:Version: 1.0
+:Type: Standards Track
+:Created: 2024-01-16
+:PHP-Version: 8.4
+:Version: 0.1.2
 
 Introduction
 ------------
 
-PDO is a generic database class. Some of the databases it supports have
-functionality that is specific to that database. For example, when
-connected to an SQLite database, the sqlite specific function
-PDO::sqliteCreateFunction is available.
+PHP does not have a multibyte equivalent of ucfirst, lcfirst functions.
+It is possible to get close enough behavior below:
 
-Having methods exist on a class depending on how the program was
-compiled and/or what database it is connecting to is quite surprising.
-It would make the code be easier to reason about if there were
-subclasses of the PDO class, specific to each database that has specific
-functionality available.
+::
+
+   function mb_ucfirst(string $str, ?string $encoding = null): string
+   {
+       return mb_convert_case(mb_substr($str, 0, 1, $encoding), MB_CASE_TITLE, $encoding) . mb_substr($str, 1, null, $encoding);
+   }
+
+::
+
+   function mb_lcfirst(string $str, ?string $encoding = null): string
+   {
+       return mb_strtolower(mb_substr($str, 0, 1, $encoding), $encoding) . mb_substr($str, 1, null, $encoding);
+   }
+
+However adding a pre-built functions to do this will implobe the
+readability and clarify of PHP code. And it will standardize how it is
+done as it can be tricky.
 
 Proposal
 --------
 
-The proposal has two parts:
+Add mb_ucfirst function, mb_lcfirst function.
 
--  Add new subclasses of PDO with driver specific methods.
--  Add PDO::connect to be able to create the specific subclasses.
+::
 
-Add new subclasses of PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~
+   function mb_ucfirst(string $string, ?string $encoding = null): string
 
-All of the PDO extensions that are part of the PHP src repository will
-have subclasses created for them.
+The first character in mb_ucfirst uses Unicode title case.
 
-Some of these subclasses will expose functionality that exists that is
-peculiar to that DB, and not present in the generic PDO class. e.g.
-PdoSqlite::createFunction() should be there rather than on the generic
-PDO class PDO::sqliteCreateFunction.
+::
 
-.. code:: php
+   function mb_lcfirst(string $string, ?string $encoding = null): string
 
-   class PdoDblib extends PDO
-   {
+From what I've researched with Unicode, it may not behave as expected in
+some languages. In that case, please deal with it in userland.
 
-   }
+For example, In Vietnamese, the first letter is not always capitalized.
 
-.. code:: php
+-  ngày Quốc khánh 2-9 (September 2nd National Day)
+-  tiếng Nhật (Japanese)
 
-   class PdoFirebird extends PDO
-   {
-    
-   }
+Another example, In Georgian should uses title case.
 
-.. code:: php
+-  mb_strtoupper("აბგ") (ani bani gani, U+10D0 U+10D1 U+10D2) ->
+   ᲐᲑᲒ(U+1C90 U+1C91 U+1C92)
+-  mb_strtoupper("ǉ")(U+01C9) -> "Ǉ" (U+01C7)
 
-   class PdoMySql extends PDO
-   {
-       public function getWarningCount(): int {}
-   }
+Correct case.
 
-.. code:: php
-
-   class PdoOci extends PDO
-   {
-     
-   }
-
-.. code:: php
-
-   class PdoOdbc extends PDO
-   {
-
-   }
-
-.. code:: php
-
-   class PdoPgsql extends PDO
-   {
-       /**
-        * @var int
-        * @cname PDO_PGSQL_ATTR_DISABLE_PREPARES
-        */
-       public const ATTR_DISABLE_PREPARES = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_IDLE
-        */
-       public const TRANSACTION_IDLE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_ACTIVE
-        */
-       public const TRANSACTION_ACTIVE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INTRANS
-        */
-       public const TRANSACTION_INTRANS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INERROR
-        */
-       public const TRANSACTION_INERROR = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_UNKNOWN
-        */
-       public const TRANSACTION_UNKNOWN = UNKNOWN;
-
-       public function escapeIdentifier(string $input): string {}
-
-       public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): array|false {}
-
-       public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function lobCreate(): string|false {}
-
-       // Opens an existing large object stream.  Must be called inside a transaction.
-       /** @return resource|false */
-       public function lobOpen(string $oid, string $mode = "rb"){}
-
-       public function lobUnlink(string $oid): bool {}
-
-       public function getNotify(int $fetchMode = PDO::FETCH_USE_DEFAULT, int $timeoutMilliseconds = 0): array|false {}
-
-       public function getPid(): int {}
-   }
-
-.. code:: php
-
-   class PdoSqlite extends PDO
-   {
-       /**
-        * @var int
-        * @cname SQLITE_DETERMINISTIC
-        */
-       public const DETERMINISTIC = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_OPEN_FLAGS
-        */
-       public const ATTR_OPEN_FLAGS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READONLY
-        */
-       public const OPEN_READONLY = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READWRITE
-        */
-       public const OPEN_READWRITE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_CREATE
-        */
-       public const OPEN_CREATE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_READONLY_STATEMENT
-        */
-       public const ATTR_READONLY_STATEMENT = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname
-        */
-       public const ATTR_EXTENDED_RESULT_CODES = UNKNOWN;
-
-       // Registers an aggregating User Defined Function for use in SQL statements
-       public function createAggregate(
-           string $name,
-           callable $step,
-           callable $finalize,
-           int $numArgs = -1
-       ): bool {}
-
-       // Registers a User Defined Function for use as a collating function in SQL statements
-       public function createCollation(string $name, callable $callback): bool {}
-
-       public function createFunction(
-           string $function_name,
-           callable $callback,
-           int $num_args = -1,
-           int $flags = 0
-       ): bool {}
-
-   // Whether SQLITE_OMIT_LOAD_EXTENSION is defined or not depends on how
-   // SQLite was compiled: https://www.sqlite.org/compile.html
-   #ifndef SQLITE_OMIT_LOAD_EXTENSION
-       public function loadExtension(string $name): bool {}
-   #endif
-
-       public function openBlob(
-           string $table,
-           string $column,
-           int $rowid,
-           ?string $dbname = "main", //null,
-           int $flags = PdoSqlite::OPEN_READONLY
-       ): mixed /* resource|false */ {}
-   }
-
-Although there may be DB specific functionality that could be exposed
-for the other database types that PDO supports, this RFC does not intend
-to expose them.
-
-Add a way of creating them through PDO static factory method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Add a static factory method to PDO called connect. During the connect
-process, the exact type of database being connected to will be checked,
-and if it is a DB that has a specific sub-class (i.e. all of those
-extension that ship with PHP core), return that sub-class instead of a
-generic PDO object
-
-.. code:: php
-
-   class PDO
-   {
-       public static function connect(string $dsn [, string $username [, string $password [, array $options ]]]) {
-
-           if (connecting to SQLite DB) {
-               return new PdoSqlite(...);
-           }
-
-
-           return new PDO(...);
-       }
-   }
-
-PDO::connect will return the appropriate sub-class when connecting to
-specific type of DB.
-
-Users will also be able to create the DB specific classes directly,
-through the appropriate constructor e.g.
-
-.. code:: php
-
-   $db = new PdoSqlite($dsn, $username, $password, $options);
-
-The code will throw an exception if the type of database being connected
-to isn't of the correct type for the class.
-
-Sqlite Extension directory ini setting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The Sqlite3 extension requires users to set an ini setting to allow
-SQLite extensions to be loaded, presumably from a desire to keep things
-'secure'. However, as this appears to only be a vulnerability if someone
-is able to upload and execute PHP code on a server, in which case the
-box is completely compromised any way, it doesn't seem to be necessary.
-
-Additionally, in the proposed PdoSqlite class this code:
-
-.. code:: c
-
-   sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1);
-
-is used to temporarily enable extension loading, before loading the
-extension, which only enables it through the C api, whereas the Sqlite3
-extension uses the code:
-
-.. code:: c
-
-   sqlite3_enable_load_extension(sqlite_handle, 1);
-
-which affects both the C api and loading extensions through SQL code.
+-  mb_ucfirst("აბგ") -> "აბგ" (U+10D0 U+10D1 U+10D2)
+-  mb_ucfirst("ǉ") -> "ǈ" (U+01C9 -> U+01C8)
 
 Backward Incompatible Changes
 -----------------------------
 
-None known. It might be inconvenient for people who are extending PDO
-class directly, and would like to extend the specific types. They would
-need to write their own connect functions, that wrap and proxy those
-specific types.
+This could break a function existing in userland with the same name.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3
+next PHP 8.x
 
 RFC Impact
 ----------
@@ -304,90 +84,44 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-Describe the impact to CLI, Development web server, embedded PHP etc.
+To SAPIs Will add the aforementioned functions to all PHP environments.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Adds mb_ucfirst(), mb_lcfirst() to the mbstring extension.
+
+To Opcache
+~~~~~~~~~~
+
+No effect.
+
+New Constants
+~~~~~~~~~~~~~
+
+No new constants.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No changed php.ini settings.
 
 Open Issues
 -----------
 
-These are the known current issues.
-
-Unaffected PHP Functionality
-----------------------------
-
-Everything not PDO
-
-Frequently asked questions
---------------------------
-
-if someone does 'new PDO(...)' will they now get back 'PdoPgsql'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-No.
+https://github.com/php/php-src/issues/13075
 
 Future Scope
 ------------
 
-When to deprecate old function on PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This section details areas where the feature might be improved in
+future, but that are not currently proposed in this RFC.
 
-The method PDO::sqliteCreateFunction and other driver specific methods
-should probably be deprecated and removed at 'some point'. Although this
-cleanup should happen, the position of this RFC is that it's very low
-priority, as that code has sat there for years not requiring much
-maintainance.
+Voting
+------
 
-Removing the methods that magically exist or not depending on the
-specific driver created would save some complication in the PDO code. So
-although there's no benefit in userland for deprecating the existing
-magic methods, there may be a complexity saving in maintenance.
-
-Choosing the version for them to be deprecated in can be left until the
-future.
-
-Quoting identifiers
-~~~~~~~~~~~~~~~~~~~
-
-During the discussion, a point was raised that currently there is no
-"escape identifier" method on the base PDO class. Postgres at least has
-a specific method for escaping identifiers as the rules for escaping
-those are different from escaping values. It sounds valuable to add an
-escape method to the base PDO class, but that needs to be done by
-someone familiar with all of the database drivers.
-
-SQLite constants
-~~~~~~~~~~~~~~~~
-
-There are SQLite constants that are not currently exposed in the SQLite3
-extension including:
-
--  SQLITE_DIRECTONLY
--  SQLITE_INNOCUOUS
--  SQLITE_SUBTYPE
-
-I don't intend to add these as I don't understand them.
-
-PdoSqlite aggregations, collations and functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The code for these functions has been copied from the Sqlite3 extension.
-Although SQLite allows creating these with different flags to indicate
-what character set data should be in, the implementation is hard-coded
-to use the SQLITE_UTF8 flag.
-
-It would be possible to expose, and allow users to set, the flags of
-SQLITE_UTF16, SQLITE_UTF16BE, SQLITE_UTF16LE, SQLITE_UTF16_ALIGNED, and
-SQLITE_UTF8, however what the API should look like for that is 'not
-obvious', aka I have no idea what it should be like, despite having
-thought about it for a few hours. So, I'm planning to leave it out of
-this RFC.
-
-Proposed Voting Choices
------------------------
-
-Accept the RFC or not.
-
-Question: PDO driver specific subclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Add mb_ucfirst and mb_lcfirst functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -395,31 +129,10 @@ Voting Choices
 -  Yes
 -  No
 
-Voting closes at 2023-07-17T17:00:00Z
-
-Patches and Tests
------------------
-
-WIP code https://github.com/php/php-src/pull/8707
-
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-References
-----------
-
-A proposal to add `sqlite openblob
-functionality </rfc/implement_sqlite_openblob_in_pdo>`__ previously
-failed to pass. The discussion gave the impression that the sub-classing
-`approach would be more
-acceptable <https://externals.io/message/100773#100813>`__.
+https://github.com/php/php-src/pull/13161
 
 Rejected Features
 -----------------
@@ -429,6 +142,6 @@ Keep this updated with features that were discussed on the mail lists.
 Additional Metadata
 -------------------
 
-:Original Authors: Danack
-:Slug: pdo_driver_specific_subclasses
-:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_subclasses
+:Original Authors: Author: Yuya Hamada(https://github.com/youkidearitai), youkidearitai@gmail.com
+:Slug: mb_ucfirst
+:Wiki URL: https://wiki.php.net/rfc/mb_ucfirst
