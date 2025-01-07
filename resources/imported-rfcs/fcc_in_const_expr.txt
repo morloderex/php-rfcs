@@ -13,7 +13,10 @@ Given that FCCs effectively act as syntax sugar, the same use cases as with Clos
 
 ===== Proposal =====
 
-This RFC proposes that it shall be legal to use the FCC syntax in constant expressions.
+This RFC proposes that it shall be legal to use the FCC syntax in constant expressions. The semantics match the existing semantics of FCCs and of constant expressions. Aside from the obvious, this means:
+
+  * If a referenced class does not yet exist, the autoloader is triggered, as with <php>new</php>-expressions in constant expressions.
+  * If a relative reference to a free-standing function is used in a namespaced context, the function will first be looked up within the namespace, falling back to the global namespace if it does not exist.
 
 ==== Constraints ====
 
@@ -27,6 +30,35 @@ All the constraints imposed on FCCs outside of constant expressions naturally al
 
 As with other constant-expressions, FCC defined in constant expressions follow the expected scoping rules of the context they are placed in.
 All the features and examples of the proposal. This means that FCC in property default values //may// reference <php>private</php> methods of the class where they are defined, similarly to how a FCC defined in the constructor and stored in a property may access those <php>private</php> methods. Likewise are FCC in attribute parameters allowed to access <php>private</php> methods of the surrounding class.
+
+==== Examples ====
+
+<PHP>
+<?php
+
+#[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
+class Attr {
+    public function __construct(public Closure $value) {}
+}
+
+#[Attr(self::myMethod(...))]
+#[Attr(strrev(...))]
+class C {
+    private static function myMethod(string $foo) {
+        return "XXX";
+    }
+}
+
+foreach ((new ReflectionClass(C::class))->getAttributes() as $reflectionAttribute) {
+    $closure = $reflectionAttribute->newInstance()->value;
+    var_dump($closure('abc'));
+}
+
+// Prints:
+//
+// string(3) "XXX"
+// string(3) "cba"
+</PHP>
 
 ===== Backward Incompatible Changes =====
 
