@@ -45,15 +45,6 @@ namespace Uri {
 namespace Uri\Rfc3986 {
     readonly class Uri
     {
-        private ?string $scheme;
-        private ?string $user;
-        private ?string $password;
-        private ?string $host;
-        private ?int $port;
-        private ?string $path;
-        private ?string $query;
-        private ?string $fragment;
-
         public static function parse(string $uri, ?string $baseUrl = null): ?static {}
 
         public function __construct(string $uri, ?string $baseUrl = null) {}
@@ -113,15 +104,6 @@ namespace Uri\Rfc3986 {
 namespace Uri\WhatWg {
     readonly class Url
     {
-        private ?string $scheme;
-        private ?string $user;
-        private ?string $password;
-        private ?string $host;
-        private ?int $port;
-        private ?string $path;
-        private ?string $query;
-        private ?string $fragment;
-
         /** @param array<int, \Uri\WhatWgError> $errors */
         public static function parse(string $uri, ?string $baseUrl = null, &$errors = null): ?static {}
 
@@ -235,10 +217,31 @@ $url = new Uri\WhatWg\Url("https://example.com"); // A WHATWG URL instance is cr
 $url = Uri\WhatWg\Url::parse("https://example.com"); // A WHATWG URL instance is created
 
 $url = new Uri\WhatWg\Url("invalid uri"); // A Uri/InvalidUriException is thrown
-$url = Uri\WhatWg\Url::parse("invalid uri", $errors); // null is returned, and an array of WhatWgError objects are passed by reference to $errors
+$url = Uri\WhatWg\Url::parse("invalid uri", null, $errors); // null is returned, and an array of WhatWgError objects are passed by reference to $errors
 </code>
 
-As it can be seen in the example above, 'Uri\WhatWg\Url::parse()' returns additional information about the triggered validation errors, [[https://url.spec.whatwg.org/#validation-error|as specified by WHATWG]]. But not all validation errors result in a parsing failure. These are called "soft-errors".
+As it can be seen, ''Uri\WhatWg\Url::parse()'' can pass additional information about the triggered validation errors by reference, [[https://url.spec.whatwg.org/#validation-error|as specified by WHATWG]]. In the example above, ''$errors'' will contain the following value:
+
+<code PHP>
+array(1) {
+  [0]=>
+  object(Uri\WhatWg\WhatWgError)#1 (2) {
+    ["context"]=>
+    string(11) "invalid uri"
+    ["type"]=>
+    enum(Uri\WhatWg\WhatWgErrorType::MissingSchemeNonRelativeUrl)
+  }
+}
+</code>
+
+However, it is also possible that a WHATWG URL can be parsed successfully with some validation errors. When using the constructor, only soft errors are passed by reference, while hard errors are thrown. The following example demonstrates a soft error:
+
+<code PHP>
+$softErrors = [];
+$url = new Uri\WhatWg\Url(" https://example.org", null, $softErrors);
+var_dump($url->toString());                       // https://example.org 
+var_dump($softErrors[0]->type);                   // enum(Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit)
+</code>
 
 The two built-in URI implementations are [[rfc:readonly_classes|readonly]], and they have a respective private property for each URI component. These URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] would make it possible to get rid of the getters, the position of this RFC is to still go with regular ''get*()'' method calls as the conservative option, especially because hooked properties cannot be readonly: the author of this RFC believes that it's more important to guarantee the immutability of URI implementations than to optimize performance via eliminating (getter) method calls. Not to mention the fact that getters may benefit from additional optional parameters in the future, if we would like to have [[rfc:url_parsing_api#how_special_characters_are_handled|more control on the encoding of the output]].
 
