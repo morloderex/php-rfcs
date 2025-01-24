@@ -14,11 +14,72 @@ Despite the ubiquitous nature of URLs and URIs, they are not so unequivocal as p
 
 <blockquote>This function may not give correct results for relative or invalid URLs, and the results may not even match common behavior of HTTP clients. ...</blockquote>
 
-Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in bugs which are difficult to notice. For example, cURL's URL parsing implementation is based on RFC 3986, that's why URLs validated by [[https://www.php.net/manual/en/filter.constants.php#constant.filter-validate-url|FILTER_VALIDATE_URL]] may not necessarily be accepted when passed to cURL.
+Incompatibility with current standards is a serious issue, as it hinders interoperability with different tools (i.e. HTTP clients), or it can result in subtle bugs. For example, cURL's URL parsing implementation is based on RFC 3986, that's why URLs validated by [[https://www.php.net/manual/en/filter.constants.php#constant.filter-validate-url|FILTER_VALIDATE_URL]] may not necessarily be accepted when passed to cURL. And that's exactly what the [[https://claroty.com/team82/research/exploiting-url-parsing-confusion|parsing confusion]] security vulnerability exploits.
+
+===== URIs, IRIs, URLs, URNs =====
+
+First of all, we should define what URIs, IRIs, URLs, and URNs are, and what their relation is to each other, in order to have a better understanding of the terms used in the current RFC. It should be noted that different specifications use different definitions, so there is not a single definitive answer. However, the RFC tries to use these terms consistently according to the definitions below:
+
+  * URI: A unique identifier that relates to an abstract or physical resource (i.e. ''www.google.com'')
+  * IRI: A superset of URIs defined by [[https://datatracker.ietf.org/doc/html/rfc3987|RFC 3987]] which allow Unicode characters, therefore supporting IDNA (internationalized domain names)
+  * URL: A subset of URIs that specify their location (i.e. ''https://www.google.com'')
+  * URN: A subset of URIs that are globally unique within defined namespaces (i.e. ''urn:isbn:0451450523'')
+
+Their relation can be best illustrated via a Venn diagram:
+
+{{ :rfc:iri_venn_diagramm.svg |}}
+
+* The image is reused from https://wiki.selfhtml.org/wiki/URN.
+
+===== Relevant URI specifications =====
+
+Before discussing the proposal itself, we should also briefly touch the URI specifications the present RFC implements.
+
+==== RFC 3986 ====
+
+[[https://datatracker.ietf.org/doc/html/rfc3986|RFC 3986]] is a generic specification for URIs. Therefore, it is relatively permissive in the sense that it doesn't include scheme-specific processing rules. I.e. the [[https://datatracker.ietf.org/doc/html/rfc4516|LDAP specification]] builds upon RFC 3986 and extends it with additional rules (i.e. the ''?'' and the '','' characters have to be percent-encoded at certain positions).
+
+RFC 3986 doesn't support IDNA (as it is reserved for RFC 3987), and it only accepts Unicode character if they are properly encoded.
+
+==== WHATWG URL ====
+
+It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with URIs having a scheme component (i.e. ''https''). WHATWG supports IDNA, and it accepts Unicode characters in each component.
+
+===== Important concepts related to URIs =====
+
+URIs have some important concepts and capabilities that are needed to effectively work with them.
+
+==== Parsing ====
+
+Parsing is the single most important operation to use with URIs where a URI string is decomposed into multiple components during the process.
+
+As opposed to RFC 3986, WHATWG automatically transforms the input URI string during parsing (e.g. removes superfluous ''/'' characters after the scheme).
+
+==== Reference resolution ====
+
+Reference resolution is a process which turns a relative URI into an absolute one by applying it to a base URI. I.e. resolving ''/foo'' on ''https://example.com/'' would result in ''https://example.com/foo''. Both RFC 3986 and WHATWG support this concept.
+
+==== Component recomposition ====
+
+It is the process of recomposing the distinct URI components to an URI string. While RFC 3986 uses the following algorithm: [[https://datatracker.ietf.org/doc/html/rfc3986#section-5.3|https://datatracker.ietf.org/doc/html/rfc3986#section-5.3]], WHATWG applies the algorithm described at [[https://url.spec.whatwg.org/#url-serializing|https://url.spec.whatwg.org/#url-serializing]] for the purpose.
+
+==== Normalization ====
+
+Normalization is an optional process supported by RFC 3986 for canonizing different URIs identifying the same resource to the same URI. E.g. the https://EXAMPLE.com and the HTTPS://example.com/ URIs both refer to the same resource, so they can be normalized to https://example.com. As we will see, normalization is very useful in multiple cases.
+
+WHATWG doesn't have this concept, as all transformations are applied during parsing.
+
+==== URI comparison ====
+
+Normalization and required transformations during parsing are especially important when it comes to comparing URIs because they reduce the likelihood of false positive results, as URI comparison is effectively checking whether two URIs represent the same resource.
+
+In practice, this means that two URIs are normalized (when possible) and then the components are recomposed. If the resulting URI strings are equal, then the 2 URIs are equal too. Usually, it's a good idea to disregard the fragment component.
+
+==== Percent-encoding ====
 
 ===== Proposal =====
 
-In order to address the above mentioned problems, a new, always available ''URI'' extension is to be added to the standard library. The extension would support parsing, validating, modifying, and recomposing (converting the parsed structures back to strings) URIs based on both RFC 3986 and the WHATWG URL specifications, as well as resolving references (turning a (relative) URI to an absolute one by applying a base URI to it). For this purpose, the following internal classes and methods are added:
+A new, always available ''URI'' extension is to be added to the standard library. The extension would support parsing, validating, modifying, and recomposing (converting the parsed structures back to strings) URIs based on both RFC 3986 and the WHATWG URL specifications, as well as resolving references (turning a (relative) URI to an absolute one by applying a base URI to it). For this purpose, the following internal classes and methods are added:
 
 <code php>
 namespace Uri {
@@ -264,18 +325,36 @@ array(1) {
 }
 </code>
 
-However, it is also possible that a WHATWG URL can be parsed successfully with some (soft) validation errors. When instantiating a WHATWG URI via its constructor, only soft errors are passed by reference, while hard errors are thrown. The following example demonstrates the former case:
+However, it is also possible that a WHATWG URL can be parsed successfully with some (soft) validation errors. When instantiating a WHATWG ''Url'' via its constructor, only soft errors are passed by reference, while hard errors are thrown. The ''Uri\WhatWg\Url::parse()'' method also returns soft error. The following example demonstrates these cases:
 
 <code PHP>
+$errors = [];
+
+// Soft errors when using the parse() method
+
+$url = Uri\WhatWg\Url::parse(" https://example.org", null, $errors);
+var_dump($url->toMachineFriendlyString());        // https://example.org
+var_dump($errors[0]->type);                       // enum(Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit)
+
+// Soft errors when using the constructor
+
 $softErrors = [];
+
 $url = new Uri\WhatWg\Url(" https://example.org", null, $softErrors);
 var_dump($url->toMachineFriendlyString());        // https://example.org
 var_dump($softErrors[0]->type);                   // enum(Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit)
 </code>
 
+Even though pass by reference is not a very desirable language construct, it is actually the least bad option to use with WHATWG errors which can happen even when parsing is successful. As PHP doesn't have native support for [[https://en.wikipedia.org/wiki/Monad_(functional_programming)|monads]], reimplementing something similar in advance would be an unwise choice (i.e. a ''ParsingResult'' interface with three implementations: ''Success'', ''PartialSuccess'', ''Error'').
+
+However, if successful parsing and errors were mutually exclusive, then it would be possible to make the method return either a ''Uri\WhatWg\Url'' in case of success, or an array of ''Uri\WhatWg\WhatWgError''s in case of failure, but since it's not the case, we had to reject the idea.
+
 ==== Accessing URI components ====
 
-The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually needs multiple getters in order to best serve the vastly different needs users may have. This topic is discussed in details [[https://wiki.php.net/rfc/url_parsing_api#how_special_characters_are_handled|below]]. For now, let's see a very basic example for accessing URI components:
+The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually needs multiple getters in order to best serve the vastly different needs users may have. In order to best understand why this is necessary
+
+
+This topic is discussed in details [[https://wiki.php.net/rfc/url_parsing_api#how_special_characters_are_handled|below]]. For now, let's see a very basic example for accessing URI components:
 
 <code php>
 $uri1 = new Uri\Rfc3986\Uri("https://example.com");
@@ -294,11 +373,9 @@ $uri->withHost("/");                              // A Uri/InvalidUriException i
 
 ==== Recomposition ====
 
-Besides accessors, URI implementations contain various "''toString''" methods as well. They can be used for recomposing the URI components back to a string. Why such methods are necessary at all instead of simply returning the input URI string? It's because URI parsers may have applied some modifications to the input during parsing. This is specifically the case for the WHATWG specification, since it mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). On the other hand, RFC 3986 leaves the originally supplied URI intact by default. For reference, the following algorithms are implemented:
-  * RFC 3986: https://datatracker.ietf.org/doc/html/rfc3986#section-5.3
-  * WHATWG: https://url.spec.whatwg.org/#url-serializing
+Besides accessors, URI implementations contain various "''toString''" methods as well. They can be used for recomposing the URI components back to a string. Why such methods are necessary at all instead of simply returning the input URI string? It's because URI parsers may have applied some modifications to the input during parsing. This is specifically the case for the WHATWG specification, since it mandates the usage of quite some transformations (i.e. removal of extraneous ''/'' characters in the scheme, lowercasing some URI components, application of IDNA encoding). On the other hand, RFC 3986 leaves the originally supplied URI intact by default.
 
-Peculiarly, ''Uri\WhatWg\Url'' has two "toString" methods in order to properly and safely support IDNA (internationalized domain names):
+It may seem peculiar, but ''Uri\WhatWg\Url'' has two "toString" methods in order to properly and safely support IDNA (internationalized domain names):
 
 <code php>
 $url = new Uri\WhatWg\Url("HTTPS://////EXAMPLE.com");
@@ -311,11 +388,15 @@ echo $url->toHumanFriendlyString();               // https://你好你好/
 
 The ''toMachineFriendlyString()'' method recomposes the URI in a format which is most suitable for machine processing (domains using IDNA characters are translated to ASCII characters), while the ''toHumanFriendlyString()'' method is a much more user-friendly representation that displays the host as a Unicode string. Besides just user-friendliness, this is important for security reasons, alleviating the human risk factor in exploits. E.g. "xn--google.com" could deceive the uninitiated reader that it is a Google domain, however the IDNA domain decodes to "䕮䕵䕶䕱.com” in fact.
 
-As RFC 3986 doesn't support IDNA (only [[https://datatracker.ietf.org/doc/html/rfc3987|RFC 3987 does]]), it's not a concern for ''Uri\Rfc3986\Uri''. Therefore, it misses the above methods, but it has a regular "toString" method:
+As RFC 3986 doesn't support IDNA (only [[https://datatracker.ietf.org/doc/html/rfc3987|RFC 3987 does]]), it's not a concern for ''Uri\Rfc3986\Uri''. Therefore, it misses the above methods, although it has a "toString()" and a "toNormalizedString()" method:
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.com");
-echo $uri->toString();                             // https://EXAMPLE.com/
+echo $uri->toString();                             // HTTPS://EXAMPLE.com
+
+
+$uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.com");
+echo $uri->toNormalizedString();                   // https://example.com
 
 $uri = new Uri\Rfc3986\Uri("HTTPS://你好你好.com");
 var_dump($uri);                                    // NULL
@@ -329,38 +410,11 @@ $uri = new Uri\Rfc3986\Uri("https://EXAMPLE.com");
 var_dump($uri == 'HTTPS://example.com/');
 </code>
 
-The output would be ''bool(false)'' if ''Uri\Rfc3986\Uri'' contained a ''%%__toString()%%'' method, because of the ''$uri'' object being automatically converted to its string representation (''https://example.com/'') which is then compared against ''HTTPS://example.com''. However, as we will see in the following section, the two URIs should be indeed equal, as a result of normalization. Furthermore, equality of URIs usually disregards the fragment component, thus a ''https://example.com#foo'' URI would also yield a false positive result in the example.
-
-==== Normalization ====
-
-As mentioned above, RFC 3986 has the notion of [[https://datatracker.ietf.org/doc/html/rfc3986#section-6.2.2|normalization]], which is an optional process for canonizing different URI identifying the same resource to the same URI. E.g. the ''https://EXAMPLE.com'' and the ''HTTPS://example.com/'' URIs both refer to the same resource, so they can be normalized to ''https://example.com''. WHATWG doesn't have this concept (all transformations are applied during parsing), therefore neither ''Uri\WhatWg\Url'' supports any such capabilities. However, ''Uri\Rfc3986\Uri'' supports normalization the following way:
-
-  * Recomposition:
-  * Accessing URI components
-
-Let's see an example for retrieving the normalized path component (''foo/../bar'' becomes ''bar''):
-
-<code php>
-$uri1 = new Uri\Rfc3986\Uri("https://EXAMPLE.COM/foo/../bar");
-$uri2 = $uri1->normalize();
-
-echo $uri1->getPath();                           // foo/../bar
-echo $uri2->getPath();                           // bar
-</code>
-
-Another example for the two ways to return the normalized string representation of an URI:
-
-<code php>
-$uri = new Uri\Rfc3986\Uri("https://EXAMPLE.COM/foo/../bar");
-
-echo $uri->toString();                          // https://EXAMPLE.COM/foo/../bar"
-echo $uri->normalize()->toString();             // https://example.com/bar
-echo $uri->toNormalizedString();                // https://example.com/bar
-</code>
+The output would be ''bool(false)'' if ''Uri\Rfc3986\Uri'' contained a ''%%__toString()%%'' method, because of the ''$uri'' object being automatically converted to its string representation (''https://example.com/'') which is then compared against ''HTTPS://example.com''. However, the two URIs should be indeed equal, as a result of normalization. Furthermore, equality of URIs disregards the fragment component by default, thus a ''https://example.com#foo'' URI would also yield a false positive result in the example.
 
 ==== Comparison ====
 
-Normalization is especially important when it comes to comparing URIs because it reduces the likelihood of false positive results, since URI comparison is based on checking whether the URIs represent the same resources. Therefore, the ''equals()'' method can be used for comparing URIs. First, the method only accepts URI objects of the same specification, since it doesn't make sense to compare URIs of different standards. Then they normalize (if applicable) and recompose the URI represented by the object as well as the URI received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
+The ''equals()'' method only accepts URI objects of the same specification, since it doesn't make sense to compare URIs of different standards. Then it normalizes (if applicable) and recomposes the URI represented by the object as well as the URI received in the argument list to a string, and checks whether the two strings match. By default, the fragment component is disregarded.
 
 <code php>
 // An RFC 3986 URI equals another RFC 3986 URI that has the same string representation after normalization
