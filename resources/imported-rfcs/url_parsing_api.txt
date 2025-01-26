@@ -39,11 +39,9 @@ Before discussing the proposal itself, we should also briefly touch the URI spec
 
 [[https://datatracker.ietf.org/doc/html/rfc3986|RFC 3986]] is a generic specification for URIs. Therefore, it is relatively permissive in the sense that it doesn't include scheme-specific processing rules. I.e. the [[https://datatracker.ietf.org/doc/html/rfc4516|LDAP specification]] builds upon RFC 3986 and extends it with additional rules (i.e. the ''?'' and the '','' characters have to be percent-encoded at certain positions).
 
-RFC 3986 doesn't support IDNA (as it is reserved for RFC 3987), and it only accepts Unicode character if they are properly encoded.
-
 ==== WHATWG URL ====
 
-It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with URIs having a scheme component (i.e. ''https''). WHATWG supports IDNA, and it accepts Unicode characters in each component.
+It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with absolute URIs that have a scheme component (i.e. ''https'').
 
 ===== Important concepts related to URIs =====
 
@@ -75,13 +73,21 @@ Normalization and transformations during parsing are especially important when i
 
 In practice, this means that two URIs are normalized (when possible) and then the components are recomposed. If the resulting URI strings are equal, then the 2 URIs are equal too. Usually, the fragment component is disregarded, since it refers to a secondary resource within the primary one.
 
-==== Percent-encoding ====
+==== Percent-encoding =====
 
 Encoding and decoding special characters is a crucial aspect of URI parsing. For this purpose, both RFC 3986 and WHATWG use [[https://en.wikipedia.org/wiki/Percent-encoding|percent-encoding]] (i.e. the ''%'' character is encoded as ''%25''). However, the two standards differ significantly in this regard:
 
 RFC 3986 defines that "URIs that differ in the replacement of an unreserved character with its corresponding percent-encoded US-ASCII octet are equivalent", which means that percent-encoded characters and their decoded form are equivalent. On the contrary, WHATWG defines URL equivalence by the equality of the recomposed URL string, and never decodes percent-encoded characters, except in the host. This implies that percent-encoded characters are not equivalent to their decoded form (except in the host).
 
 The difference between RFC 3986 and WHATWG comes from the fact that the point of view of a maintainer of the WHATWG specification is that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
+
+==== Unicode & IDNA =====
+
+IDNA (internationalized domain names) allow people around the world to register domain names in their native languages and scripts. This is made possible by encoding Unicode characters using the [[https://en.wikipedia.org/wiki/Punycode|Punycode transcription]].
+
+RFC 3986 neither supports IDNA, nor non-ASCII characters. WHATWG supports IDNA and Unicode characters, and it [[https://url.spec.whatwg.org/#url-rendering-i18n|explicitly suggests]] that browsers should render the host component by displaying Unicode characters.
+
+The recommendation is not just for user-friendliness: it's necessary for security reasons, alleviating the human risk factor in exploits. E.g. "xn--google.com" could deceive the uninitiated reader that it is a Google domain, however the IDNA domain decodes to "䕮䕵䕶䕱.com” in fact.
 
 ===== Proposal =====
 
@@ -391,7 +397,7 @@ This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())'
 
 The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
 
-For now, let's see a very basic example for accessing URI components:
+For now, let's see a very basic example for modifying and retrieving the host URI component:
 
 <code php>
 $uri1 = new Uri\Rfc3986\Uri("https://example.com");
@@ -408,7 +414,62 @@ $uri = new Uri\Rfc3986\Uri("https://example.com");
 $uri->withHost("/");                               // Throws Uri\InvalidUriException
 </code>
 
-In case of ''Uri\WhatWg\Url'', the host field can also be retrieved in a human-friendly way. This is needed to safely support IDNA (internationalized domain names).
+All the components - with the exception of host - can be retrieved in two formats:
+
+* "raw" representation: it's how the URI component is natively represented without any post-processing. 
+* "decoded-normalized" representation: the URI is normalized, and the component is percent-decoded.
+
+Given the ''http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''http://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components are represented in case of RFC 3986:
+
+<code php>
+$uri = new Uri\Rfc3986\Uri("http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+
+echo $uri->getUser();                            // apple
+echo $uri->getRawUser();                         // %61pple
+
+echo $uri->getPassword();                        // pass
+echo $uri->getRawPassword();                     // p%61ss
+
+echo $uri->getHost();                            // example.com
+echo $uri->getRawHost();                         // ex%61mple.com
+
+echo $uri->getPath();                            // foobar
+echo $uri->getRawPath());                        // foob%61r
+
+echo $uri->getQuery());                          // abc=abc
+echo $uri->getRawQuery());                       // %61bc=%61bc
+
+echo $uri->getFragment());                       // abc
+echo $uri->getRawFragment());                    // %61bc
+</code>
+
+In case of WHATWG, we'll get the following results:
+
+<code php>
+$url = new Uri\Whatwg\Url("http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+
+echo $url->getUser();                            // apple
+echo $url->getRawUser();                         // %61pple
+
+echo $url->getPassword();                        // pass
+echo $url->getRawPassword();                     // p%61ss
+
+echo $url->getHost();                            // example.com
+echo $url->getHumanFriendlyHost();               // example.com
+
+echo $url->getPath();                            // foobar
+echo $url->getRawPath());                        // foob%61r
+
+echo $url->getQuery());                          // abc=abc
+echo $url->getRawQuery());                       // %61bc=%61bc
+
+echo $url->getFragment());                       // abc
+echo $url->getRawFragment());                    // %61bc
+</code>
+
+This script gave the very same result as the previous one did, except for the host.
+
+In case of ''Uri\WhatWg\Url'', the host field can be retrieved in both a machine-friendly and a human-friendly format:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://🐘.com");
@@ -431,9 +492,9 @@ echo $url->toMachineFriendlyString();             // https://xn--6qqa088eba/
 echo $url->toHumanFriendlyString();               // https://你好你好/
 </code>
 
-The ''toMachineFriendlyString()'' method recomposes the URI in a format which is most suitable for machine processing (domains using IDNA characters are translated to ASCII characters), while the ''toHumanFriendlyString()'' method is a much more user-friendly representation that displays the host as a Unicode string. Besides just user-friendliness, this is important for security reasons, alleviating the human risk factor in exploits. E.g. "xn--google.com" could deceive the uninitiated reader that it is a Google domain, however the IDNA domain decodes to "䕮䕵䕶䕱.com” in fact.
+The ''toMachineFriendlyString()'' method recomposes the URI in a format which is most suitable for machine processing (host names using IDNA characters are translated to ASCII characters), while the ''toHumanFriendlyString()'' method is a user-friendly representation that displays the host as a Unicode string.
 
-As RFC 3986 doesn't support IDNA (only [[https://datatracker.ietf.org/doc/html/rfc3987|RFC 3987 does]]), it's not a concern for ''Uri\Rfc3986\Uri''. Therefore, it misses the above methods, although it has a "toString()" and a "toNormalizedString()" method:
+As RFC 3986 doesn't support IDNA, its two "toString" methods don't differentiate based on the target audience, but rather whether normalization is performed.
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.com");
@@ -441,11 +502,17 @@ echo $uri->toString();                             // HTTPS://EXAMPLE.com
 
 $uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.com");
 echo $uri->toNormalizedString();                   // https://example.com
+</code>
 
-$uri = new Uri\Rfc3986\Uri("https://你好你好.com");
+The ''Uri\Rfc3986\Uri::toString()'' returns the unnormalized URI string, while ''Uri\Rfc3986\Uri::toNormalizedString()'' does normalize its return value.
+
+Another example showcasing how ''Uri\Rfc3986\Uri'' deals with IDNA:
+
+<code php>
+$uri = Uri\Rfc3986\Uri::parse("https://你好你好.com");
 var_dump($uri);                                    // NULL
 
-$uri = new Uri\Rfc3986\Uri("https://%e4%bd%a0%e5%a5%bd%e4%bd%a0%e5%a5%bd.com"); // percent-encoded form of https://你好你好.com
+$uri = Uri\Rfc3986\Uri::parse("https://%e4%bd%a0%e5%a5%bd%e4%bd%a0%e5%a5%bd.com"); // percent-encoded form of https://你好你好.com
 echo $uri->toString();                             // https://%e4%bd%a0%e5%a5%bd%e4%bd%a0%e5%a5%bd.com
 </code>
 
@@ -565,21 +632,21 @@ However, there are other much more convenient approaches, but the current RFC st
 
 ===== Performance Considerations =====
 
-The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A fully standard compliant parser will generally be slower than ''parse_url()'', because it has to execute more code. Fortunately, this overhead is minimal for complex URLs thanks to the huge efforts of the maintainers of the Lexbor and the uriparser libraries.
+The implementation of ''parse_url()'' is optimized for performance. This also means that it doesn't deal with validation properly and disregards some edge cases. A fully standard compliant parser will generally be slower than ''parse_url()'', because it has to execute more code. Fortunately, this overhead is acceptable thanks to the efforts of the maintainers of the Lexbor and the uriparser libraries.
 
 According to the rough benchmarks performed on a Linux instance in GitHub Actions, the following results were measured:
 
 ==== Time of parsing of a basic URL (1000 times) ====
 
-  * ''parse_url()'': ''0.000208 sec''
-  * ''Uri\Rfc3986\Uri'': ''0.000711 sec''
+  * ''parse_url()'': ''0.000233 sec''
+  * ''Uri\Rfc3986\Uri'': ''0.000298 sec''
   * ''Uri\WhatWg\Url'': ''0.000394 sec''
 
 ==== Time of parsing of a complex URL (1000 times) ====
 
-  * ''parse_url()'': ''0.000813''
-  * ''Uri\Rfc3986\Uri'': ''0.000902 sec''
-  * ''Uri\WhatWg\Url'': ''0.000813 sec''
+  * ''parse_url()'': ''0.000538''
+  * ''Uri\Rfc3986\Uri'': ''0.000817 sec''
+  * ''Uri\WhatWg\Url'': ''0.000917 sec''
 
 ===== Examples in Other Languages =====
 
@@ -631,6 +698,7 @@ None.
 
 ===== Future Scope =====
 
+  * Support for a ''UriBuilder'' class, similarly to the [[https://learn.microsoft.com/en-us/dotnet/api/system.uribuilder|one implemented by C#]]
   * Support for [[https://datatracker.ietf.org/doc/html/rfc3987|RFC 3987 (Internationalized Resource Identifiers)]]
   * Support for new parser backends so that other libraries (like [[https://www.ada-url.com/|Ada URL]], or [[https://curl.se/libcurl/c/libcurl-url.html|cURL]]) could also be used in addition to uriparser and Lexbor.
   * Support for an abstraction for manipulating query parameters, like [[https://url.spec.whatwg.org/#urlsearchparams|URLSearchParams]] defined by WHATWG
