@@ -5,38 +5,94 @@
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/marking_return_value_as_important
 
-This is a suggested template for PHP Request for Comments (RFCs). Change this template to suit your RFC.  Not all RFCs need to be tightly specified.  Not all RFCs need all the sections below.
-Read https://wiki.php.net/rfc/howto carefully!
-
-
-Quoting [[http://news.php.net/php.internals/71525|Rasmus]]:
-
-> PHP is and should remain:
-> 1) a pragmatic web-focused language
-> 2) a loosely typed language
-> 3) a language which caters to the skill-levels and platforms of a wide range of users
-
-Your RFC should move PHP forward following his vision. As [[http://news.php.net/php.internals/66065|said by Zeev Suraski]] "Consider only features which have significant traction to a
-large chunk of our userbase, and not something that could be useful in some
-extremely specialized edge cases [...] Make sure you think about the full context, the huge audience out there, the consequences of  making the learning curve steeper with
-every new feature, and the scope of the goodness that those new features bring."
-
 ===== Introduction =====
-The elevator pitch for the RFC. The first paragraph of this section will be slightly larger to give it emphasis; please write a good introduction.
+
+PHP’s error handling mechanism of choice in newer APIs is the use of Exceptions, where forgetting to handle the failure case results in a very obvious error, when the functionality fails. However not all functionality maps to a binary result of either succeeding or failing, instead also supporting a “partial success” state.
+
+This kind of “partial success” can only be reliably communicated by means of a return value, where forgetting to check the return value might result in silent failure. Depending on the nature of the API, the failure case might be rare or non-deterministic, making it hard to notice the issue on a cursory glance.
 
 ===== Proposal =====
-All the features and examples of the proposal.
 
-To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain how the proposal brings substantial value to be considered
-for inclusion in one of the world's most popular programming languages.
+This RFC proposes a new attribute <php>#[\NoDiscard]</php> that allows to indicate that the return value of a function or method is “important” and that not doing anything with the return value is likely to be a bug. In the interest of readability, the term “function” shall mean “function or method” in the rest of the proposal text.
 
-Remember that the RFC contents should be easily reusable in the PHP Documentation.
+<PHP>
+#[Attribute(Attribute::TARGET_METHOD|Attribute::TARGET_FUNCTION)]
+final class NoDiscard
+{
+    public readonly ?string $message;
 
-If applicable, you may wish to use the language specification as a reference.
+    public function __construct(?string $message = null) {}
+}
+</PHP>
+
+When calling a function with the <php>#[\NoDiscard]</php> attribute, the engine shall validate whether or not the return value of the function is used and emit a <php>E_WARNING</php> (for native functions) or <php>E_USER_WARNING</php> (for userland functions) if the return value is not used.
+
+The <php>$message</php> property of the <php>#[\NoDiscard]</php> attribute shall be part of the emitted warning, similar to the functionality of the [[rfc:deprecated_attribute|#[\Deprecated] attribute]].
+
+“Using the return value” means that the returned value is part of any other expressions, it does not require the expression to be useful. As an example, assigning the return value to a dummy variable will be considered using the return value, as will casting the return value and not using the result of the cast. It should however be noted that OPcache might optimize away this kind of useless operations. Therefore this RFC also proposes a new <php>(void)</php> cast that may be used to make indicate that not using the value of an expression (or more specifically of a function call) is intentional. The <php>(void)</php> cast may only use used as part of a statement, not as part of an expression, using it within an expression will result in a syntax error.
+
+==== Examples ====
+
+<PHP>
+<?php
+
+enum Status {
+	case Success;
+	case Failure;
+}
+
+/**
+ * Processes all the given items.
+ * 
+ * @param array<string> $items
+ * @return array<Status>
+ */
+#[\NoDiscard("as processing might fail for individual items")]
+function bulk_process(array $items): array
+{
+	$results = [];
+	foreach ($items as $key => $item) {
+		// Pretend to do something useful with $item, which will succeed in 99.9% of cases.
+
+		if (\random_int(0, 999) < 999) {
+			$status = Status::Success;
+		} else {
+			$status = Status::Failure;
+		}
+
+		$results[$key] = $status;
+	}
+
+	return $results;
+}
+
+// Warning: The return value of function bulk_process() is expected to be consumed, as processing might fail for individual items in test.php on line 33
+bulk_process([
+	'foo',
+	'bar',
+	'baz',
+]);
+
+// No warning, because the return value is consumed.
+$results = bulk_process([
+	'foo',
+	'bar',
+	'baz',
+]);
+
+// No warning, because the (void) cast is used.
+(void)bulk_process([
+	'foo',
+	'bar',
+	'baz',
+]);
+
+?>
+</PHP>
 
 ==== Native functions where the attribute is applied ====
 
-As part of this RFC, the following native functions and methods shall have the attribute applied:
+As part of this RFC, the following native functions shall have the attribute applied:
 
   * <php>flock()</php>: Ignoring the failure to obtain a lock might result in silent data corruption. Exception-based error handling cannot be used, due to the <php>LOCK_NB</php> flag, which is meant to gracefully handle files that are already locked. Furthermore issues in locking will only appear under heavy contention, making it hard to find issues by automated testing.
   * <php>DateTimeImmutable::set*()</php>: The methods are badly named, because they do not actually set the updated value the <php>DateTimeImmutable</php> object itself, but return a new instance instead. An established naming scheme for this kind of method would nowadays be <php>with*()</php>. This naming can lead to subtle issues when forgetting to use the return value when migrating from <php>DateTime</php> to <php>DateTimeImmutable</php>.
@@ -45,7 +101,7 @@ As part of this RFC, the following native functions and methods shall have the a
 
 The class-name <php>NoDiscard</php> will no longer be available within the global namespace. A GitHub search for [[https://github.com/search?q=language%3APHP%20symbol%3ANoDiscard&type=code|language:PHP symbol:NoDiscard]] does not reveal any use of this class-name, making this a theoretical issue.
 
-Functions and methods having the attribute might emit a <php>E_WARNING</php> if they are unsafely used. If a throwing error handler is used this may result in a breaking change. As the attribute shall only be applied to functions and methods were not using the return value has a significant impact on correct functionality, we consider the benefit of pointing out the error to the user to outweigh the drawbacks, since suppressing the error by assigning to a dummy variable can be reliably performed in a way that is compatible with older PHP versions.
+Functions having the attribute might emit a <php>E_WARNING</php> if they are unsafely used. If a throwing error handler is used this may result in a breaking change. As the attribute shall only be applied to functions where not using the return value has a significant impact on correct functionality, we consider the benefit of pointing out the error to the user to outweigh the drawbacks, since suppressing the error by assigning to a dummy variable can be reliably performed in a way that is compatible with older PHP versions.
 
 ===== Proposed PHP Version(s) =====
 
