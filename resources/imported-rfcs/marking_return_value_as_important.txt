@@ -31,6 +31,12 @@ The <php>$message</php> property of the <php>#[\NoDiscard]</php> attribute shall
 
 “Using the return value” means that the returned value is part of any other expressions, it does not require the expression to be useful. As an example, assigning the return value to a dummy variable will be considered using the return value, as will casting the return value and not using the result of the cast. It should however be noted that OPcache might optimize away this kind of useless operations. Therefore this RFC also proposes a new <php>(void)</php> cast that may be used to make indicate that not using the value of an expression (or more specifically of a function call) is intentional. The <php>(void)</php> cast may only use used as part of a statement, not as part of an expression, using it within an expression will result in a syntax error.
 
+Adding the <php>#[\NoDiscard]</php> attribute will result in a compile-time error for the following cases:
+
+  * If the function is //explicitly// typed with the <php>: void</php> or <php>: never</php> return type.
+  * For magic methods that are required to be <php>: void</php> or not have a return type at all (e.g. <php>__construct</php> or <php>__clone</php>).
+  * For property hooks.
+
 ==== Implementation Details ====
 
 The engine will verify whether the return value is used right //before// calling the function, and //after// evaluating the parameters. This means that using a throwing error handler will result in the function not being called. This is for two reasons:
@@ -150,6 +156,28 @@ try {
 	// Prints: The return value of function bulk_process() is expected to be consumed, as processing might fail for individual items
 	echo $e->getMessage(), PHP_EOL;
 }
+</PHP>
+
+<PHP>
+<?php
+
+#[\NoDiscard]
+function bulk_process(array $items): void
+{
+}
+
+// Fatal error: A void function does not return a value, but #[\NoDiscard] requires a return value in test.php on line 4
+</PHP>
+
+<PHP>
+<?php
+
+#[\NoDiscard]
+function bulk_process(array $items): never
+{
+}
+
+// Fatal error: A never returning function does not return a value, but #[\NoDiscard] requires a return value in test.php on line 4
 </PHP>
 
 ==== Recommended usage ====
