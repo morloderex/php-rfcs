@@ -13,7 +13,7 @@ This kind of “partial success” can only be reliably communicated by means of
 
 ===== Proposal =====
 
-This RFC proposes a new attribute <php>#[\NoDiscard]</php> that allows to indicate that the return value of a function or method is “important” and that not doing anything with the return value is likely to be a bug. In the interest of readability, the term “function” shall mean “function or method” in the rest of the proposal text.
+This RFC proposes a new attribute <php>#[\NoDiscard]</php> that allows to indicate that the return value of a function or method is “important” and that not doing anything with the return value is likely to be a bug. In the interest of readability, the term “function” shall mean “function or method” in the rest of the RFC text.
 
 <PHP>
 #[Attribute(Attribute::TARGET_METHOD|Attribute::TARGET_FUNCTION)]
@@ -30,6 +30,13 @@ When calling a function with the <php>#[\NoDiscard]</php> attribute, the engine 
 The <php>$message</php> property of the <php>#[\NoDiscard]</php> attribute shall be part of the emitted warning, similar to the functionality of the [[rfc:deprecated_attribute|#[\Deprecated] attribute]].
 
 “Using the return value” means that the returned value is part of any other expressions, it does not require the expression to be useful. As an example, assigning the return value to a dummy variable will be considered using the return value, as will casting the return value and not using the result of the cast. It should however be noted that OPcache might optimize away this kind of useless operations. Therefore this RFC also proposes a new <php>(void)</php> cast that may be used to make indicate that not using the value of an expression (or more specifically of a function call) is intentional. The <php>(void)</php> cast may only use used as part of a statement, not as part of an expression, using it within an expression will result in a syntax error.
+
+==== Implementation Details ====
+
+The engine will verify whether the return value is used right *before* calling the function, after evaluating the parameters. This means that using a throwing error handler will result in the function not being called. This is for two reasons:
+
+  * The primary reason is performance: Performing this check before calling the function allows to merge the check with the deprecation check and allowing to make use of “opcode specialization” to remove the check if the return value is known to be used.
+  * As the attribute is intended to be used on functions where not using the return value is “unsafe”, not calling the function if the return value is not used and a throwing error handler is active results in a “fail-closed” mechanism, implicitly doing the “safer” thing.
 
 ==== Examples ====
 
@@ -103,6 +110,41 @@ $items = [
 // Parse error: syntax error, unexpected token "(void)" in test.php on line 16
 if ((void)bulk_process($items)) {
 	// …
+}
+</PHP>
+
+<PHP>
+<?php
+
+set_error_handler(function (int $errno, string $errstr, ?string $errfile = null, ?int $errline = null) {
+	throw new \ErrorException($errstr, 0, $errno, $errfile, $errline);
+});
+
+#[\NoDiscard("as processing might fail for individual items")]
+function bulk_process(array $items): array
+{
+	echo __FUNCTION__, PHP_EOL;
+
+	return [];
+}
+
+function get_items(): array
+{
+	echo __FUNCTION__, PHP_EOL;
+
+	return [
+		'foo',
+		'bar',
+		'baz',
+	];
+}
+
+try {
+	// Prints: get_items
+	bulk_process(get_items());
+} catch (\Exception $e) {
+	// Prints: The return value of function bulk_process() is expected to be consumed, as processing might fail for individual items
+	echo $e->getMessage(), PHP_EOL;
 }
 </PHP>
 
