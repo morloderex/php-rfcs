@@ -416,13 +416,16 @@ $uri->withHost("/");                               // Throws Uri\InvalidUriExcep
 
 All the components - with the exception of host - can be retrieved in two formats:
 
-* "raw" representation: it's how the URI component is natively represented without any post-processing. 
-* "decoded-normalized" representation: the URI is normalized, and the component is percent-decoded.
+  * "raw" representation: it's how the URI component is natively represented without any post-processing. 
+  * "decoded-normalized" representation: the URI is normalized, and the component is percent-decoded.
 
-Given the ''http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''http://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components are represented in case of RFC 3986:
+Given the ''https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''https://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components can be represented in case of ''Uri\Rfc3986\Uri'':
 
 <code php>
-$uri = new Uri\Rfc3986\Uri("http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+$uri = new Uri\Rfc3986\Uri("https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+
+echo $uri->getScheme();                          // https
+echo $uri->getRawScheme();                       // https
 
 echo $uri->getUser();                            // apple
 echo $uri->getRawUser();                         // %61pple
@@ -434,19 +437,37 @@ echo $uri->getHost();                            // example.com
 echo $uri->getRawHost();                         // ex%61mple.com
 
 echo $uri->getPath();                            // foobar
-echo $uri->getRawPath());                        // foob%61r
+echo $uri->getRawPath();                         // foob%61r
 
-echo $uri->getQuery());                          // abc=abc
-echo $uri->getRawQuery());                       // %61bc=%61bc
+echo $uri->getQuery();                           // abc=abc
+echo $uri->getRawQuery();                        // %61bc=%61bc
 
-echo $uri->getFragment());                       // abc
-echo $uri->getRawFragment());                    // %61bc
+echo $uri->getFragment();                        // abc
+echo $uri->getRawFragment();                     // %61bc
 </code>
 
-In case of WHATWG, we'll get the following results:
+Let's have a look at another example where normalization kicks in:
 
 <code php>
-$url = new Uri\Whatwg\Url("http://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+$uri = new Uri\Rfc3986\Uri("HTTPS://example.COM/foo/../bar/");
+
+echo $uri->getScheme();                          // https
+echo $uri->getRawScheme();                       // HTTPS
+
+echo $uri->getHost();                            // example.com
+echo $uri->getRawHost();                         // example.COM
+
+echo $uri->getPath();                            // bar/
+echo $uri->getRawPath();                         // foo/../bar/
+</code>
+
+In case of ''Uri\Whatwg\Url'', we'll get the following results:
+
+<code php>
+$url = new Uri\Whatwg\Url("https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+
+echo $url->getScheme();                          // https
+echo $url->getRawScheme();                       // HTTPS
 
 echo $url->getUser();                            // apple
 echo $url->getRawUser();                         // %61pple
@@ -458,18 +479,16 @@ echo $url->getHost();                            // example.com
 echo $url->getHumanFriendlyHost();               // example.com
 
 echo $url->getPath();                            // foobar
-echo $url->getRawPath());                        // foob%61r
+echo $url->getRawPath();                         // foob%61r
 
-echo $url->getQuery());                          // abc=abc
-echo $url->getRawQuery());                       // %61bc=%61bc
+echo $url->getQuery();                           // abc=abc
+echo $url->getRawQuery();                        // %61bc=%61bc
 
-echo $url->getFragment());                       // abc
-echo $url->getRawFragment());                    // %61bc
+echo $url->getFragment();                        // abc
+echo $url->getRawFragment();                     // %61bc
 </code>
 
-This script gave the very same result as the previous one did, except for the host.
-
-In case of ''Uri\WhatWg\Url'', the host field can be retrieved in both a machine-friendly and a human-friendly format:
+This script gave the very same results as the previous one did, except for the host component. Most notably, ''Uri\Whatwg\Url'' doesn't have a ''getRawHost()'' method. This may sound surprising, but the reason is that WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHumanFriendlyHost()'' method comes handy to retrieve the host in a human-friendly format:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://🐘.com");
@@ -481,7 +500,7 @@ echo $url->getHumanFriendlyHost();                 // 🐘.com
 
 Besides accessors, URI implementations contain various "''toString''" methods as well. They can be used for recomposing the URI components back to a string. Why such methods are necessary at all instead of simply returning the input URI string? It's because URI parsers may have applied some modifications to the input during parsing. This is specifically the case for the WHATWG specification, since it mandates the usage of quite some transformations.
 
-It may seem peculiar, but ''Uri\WhatWg\Url'' has two "toString" methods due to the same reason as it has two getters for the host component.
+''Uri\WhatWg\Url'' has two "toString" methods to provide both a machine-friendly and a human-friendly format:
 
 <code php>
 $url = new Uri\WhatWg\Url("HTTPS://////EXAMPLE.com");
@@ -494,7 +513,7 @@ echo $url->toHumanFriendlyString();               // https://你好你好/
 
 The ''toMachineFriendlyString()'' method recomposes the URI in a format which is most suitable for machine processing (host names using IDNA characters are translated to ASCII characters), while the ''toHumanFriendlyString()'' method is a user-friendly representation that displays the host as a Unicode string.
 
-As RFC 3986 doesn't support IDNA, its two "toString" methods don't differentiate based on the target audience, but rather whether normalization is performed.
+As RFC 3986 doesn't support IDNA, its two "toString" methods don't differentiate based on the target audience, but rather whether normalization is performed:
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.com");
