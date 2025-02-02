@@ -1,0 +1,170 @@
+<!DOCTYPE markdown>
+====== PHP RFC: Return, break and continue expressions ======
+  * Version: 0.1
+  * Date: 2025-02-02
+  * Author: Dmitrii Derepko, xepozzd@gmail.com
+  * Status: Draft
+
+===== Introduction =====
+
+Allows to write **return**, **break** and **continue** with any conditions, shrinking long conditions.
+
+You would be able to make such constructions as: 
+
+- Nullable action
+  - `$value = $nullableValue ?? return;` or **break** or **continue**
+  - `$element = $element->getParent() ?? return;` or **break** or **continue**
+- Otherwise action
+  - `$condition ?: return;` or **break** or **continue**
+  - `$var = $condition ? $value ? return false;` or **break** or **continue**
+
+That would make these constructions be consistent with current `throws` flow, which is possible to use in any cases above.
+
+===== Proposal =====
+
+4 years ago there was proposal https://wiki.php.net/rfc/throw_expression about making "throws" statement as an expression,
+that gave users an ability to write some "guarding" constructions **shortly**.
+
+This is another one round to make the whole PHP be more consistent:
+Making **return**, **break** and **continue** control operators be able to use as an expression.
+
+## Examples
+
+```php
+while ($condition) {
+    $currentElement = $currentElement->getParent() ?? break; // is a new way
+    // $currentElement = $currentElement->getParent(); 
+    // if ($currentElement == null) return; // is an old way
+    ....
+}
+```
+
+```php
+function doSmth($nullableValue) {
+    $value = $nullableValue ?? return; // is a new way
+    // $value = $nullableValue;
+    // if ($value == null) return; // is an old way
+    ....
+}
+```
+
+```php
+function doSmth($value) {
+    guard($value) ?: return; // is a new way
+    // if (guard($value)) return; // is an old way
+    ....
+}
+```
+
+```php
+function doSmth(MyInterface $value) {
+    $value instanceof MyImplementation ?: return; // is a new way
+    // if (!$value instanceof MyImplementation) return; // is an old way
+    ....
+}
+```
+
+```php
+function doSmth(int $value) {
+    $value >= 0 ?: return; // is a new way
+    // if ($value < 0) return; // is an old way
+    ....
+}
+```
+
+Typical "early return" cases in some instructions with state preparations:
+
+New way:
+```php
+function doSmth($id): Result {
+    $user = $this->finder->findUserById($id) ?? return null;
+    $account = $this->finder->findAccountByUserId($user->id) ?? return null;
+    
+    $result = $this->doSmthInternal($user, $account) ?: return Result::internalError();
+    
+    return $result->isOk ? Result::success($result->resultJson) : Result::error($result->errorText);
+}
+```
+
+Old way:
+```php
+function doSmth($id): Result {
+    $user = $this->finder->findUserById($id);
+    if ($user === null) {
+        return null;
+    }
+    $account = $this->finder->findAccountByUserId($user->id);
+    if ($account === null) {
+        return null;
+    }
+    
+    $result = $this->doSmthInternal($user, $account);
+    if ($result === null) {
+        return Result::internalError();
+    }
+    
+    return $result->isOk ? Result::success($result->resultJson) : Result::error($result->errorText);
+}
+```
+
+One more interesting point that the most PHP codestyle variations translate one-liner `if ($cond) return;` into 3 lines.
+
+===== Backward Incompatible Changes =====
+
+Fully compatible
+
+===== Proposed PHP Version(s) =====
+next PHP 8.5 or next PHP 9.x versions
+
+==== To Opcache ====
+It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
+
+Please explain how you have verified your RFC's compatibility with opcache.
+
+===== Open Issues =====
+
+Make sure there are no open issues when the vote starts!
+
+===== Unaffected PHP Functionality =====
+
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
+===== Future Scope =====
+
+This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+===== Proposed Voting Choices =====
+
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+
+Links to any external patches and tests go here.
+
+If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+
+Make it clear if the patch is intended to be the final patch, or is just a prototype.
+
+For changes affecting the core language, you should also provide a patch for the language specification.
+
+===== Implementation =====
+
+After the project is implemented, this section should contain
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+https://news-web.php.net/php.internals/122253
+
+https://github.com/php/php-src/pull/17647
+
+Links to external references, discussions or RFCs
+
+===== Rejected Features =====
+
+Keep this updated with features that were discussed on the mail lists.
