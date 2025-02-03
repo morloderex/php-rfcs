@@ -41,7 +41,7 @@ Before discussing the proposal itself, we should also briefly touch the URI spec
 
 ==== WHATWG URL ====
 
-It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with absolute URIs that have a scheme component (i.e. ''https'').
+It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with URLs, rather than (that have a scheme component (i.e. ''https'').
 
 ===== Important concepts related to URIs =====
 
@@ -55,7 +55,7 @@ While RFC 3986 leaves the input URI string intact during parsing, WHATWG automat
 
 ==== Reference resolution ====
 
-Reference resolution is a process which turns a relative URI into an absolute one by applying it to a base URI: resolving "''/foo''" on ''https://example.com/'' results in ''https://example.com/foo''. Both RFC 3986 and WHATWG support this concept.
+Reference resolution is a process which turns a potentially relative URI reference into a URL by applying it to an absolute URL (a URL that has no fragment component): resolving "''/foo''" on ''https://example.com/'' results in ''https://example.com/foo''. Both RFC 3986 and WHATWG support this concept.
 
 ==== Component recomposition ====
 
@@ -91,7 +91,7 @@ The recommendation is not just for user-friendliness: it's necessary for securit
 
 ===== Proposal =====
 
-A new, always available ''URI'' extension is to be added to the standard library. The extension would support parsing, validating, modifying, and recomposing (converting the parsed structures back to strings) URIs based on both RFC 3986 and the WHATWG URL specifications, as well as resolving references (turning a (relative) URI to an absolute one by applying a base URI to it). For this purpose, the following internal classes and methods are added:
+A new, always available ''URI'' extension is to be added to the standard library. The extension would support parsing, validating, modifying, and recomposing URIs based on both RFC 3986 and the WHATWG URL specifications, as well as resolving references. For this purpose, the following internal classes and methods are added:
 
 <code php>
 namespace Uri {
@@ -215,7 +215,7 @@ namespace Uri\WhatWg {
 
         public function getHost(): string {}
 
-        public function getHumanFriendlyHost(): string {}
+        public function getHostForDisplay(): string {}
 
         public function withHost(string $encodedHost): static {}
 
@@ -243,7 +243,7 @@ namespace Uri\WhatWg {
 
         public function equals(Url $uri, bool $excludeFragment = true): bool {}
 
-        public function toMachineFriendlyString(): string {}
+        public function toString(): string {}
 
         public function toHumanFriendlyString(): string {}
 
@@ -292,8 +292,9 @@ namespace Uri\WhatWg {
     {
         public string $context;
         public WhatWgErrorType $type;
+        public bool $softError;
 
-        public function __construct(string $context, WhatWgErrorType $type) {}
+        public function __construct(string $context, WhatWgErrorType $type, bool $softError) {}
     }
 }
 </code>
@@ -333,25 +334,31 @@ array(1) {
     string(11) "invalid uri"
     ["type"]=>
     enum(Uri\WhatWg\WhatWgErrorType::MissingSchemeNonRelativeUrl)
+    ["failure"]=>
+    bool(true)
   }
 }
 </code>
 
-However, it is also possible that a WHATWG URL can be parsed successfully with some (soft) validation errors. When instantiating a WHATWG ''Url'' via its constructor, only soft errors are passed by reference, while hard errors are thrown. The ''Uri\WhatWg\Url::parse()'' method also returns soft error. The following example demonstrates these cases:
+The ''$context'' property refers to the substring where the error happened, while the ''$type'' property is a ''Uri\WhatWg\WhatWgErrorType'' enum storing the exact cause of the error. Last, the ''$failure'' field stores whether the error caused a failure, or processing could continue. Therefore, the ''true'' value refers to a hard error, while the ''false'' value means a soft error.
+
+When trying to instantiate a WHATWG ''Url'' via its constructor, a ''Uri\InvalidUriException'' is thrown, with the ''$errors'' property containing an array of ''Uri\WhatWg\WhatWgError'' instances when parsing is unsuccessful. When parsing is successful, the ''$softErrors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances, referring to soft errors, if any.
+
+When trying to instantiate a WHATWG ''Url'' via its ''parse()'' method, a ''null'' return value indicates that parsing is unsuccessful, and the ''$errors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances. When parsing is successful, the ''$errors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances referring to only soft errors. The following example demonstrates some cases when a soft error is triggered:
 
 <code PHP>
-// Soft errors when using the parse() method
+// Soft error due to the leading " " character when using the parse() method
 $errors = [];
 
 $url = Uri\WhatWg\Url::parse(" https://example.org", null, $errors);
-echo $url->toMachineFriendlyString();             // https://example.org
+echo $url->toString();                            // https://example.org
 var_dump($errors[0]->type);                       // enum(Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit)
 
-// Soft errors when using the constructor
+// Soft error due to the leading " " character when using the constructor
 $softErrors = [];
 
 $url = new Uri\WhatWg\Url(" https://example.org", null, $softErrors);
-echo $url->toMachineFriendlyString();             // https://example.org
+echo $url->toString();                            // https://example.org
 var_dump($softErrors[0]->type);                   // enum(Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit)
 </code>
 
@@ -373,22 +380,22 @@ echo $uri->toString();                                        // https://test.co
 $uri = new Uri\Rfc3986\Uri("/foo", ".com");                   // Throws Uri\InvalidUriException because $baseUri is invalid
 
 $url = Uri\WhatWg\Url::parse("/foo", "https://example.com");
-echo $url->toMachineFriendlyString();                         // https://example.com/foo
+echo $url->toString();                                        // https://example.com/foo
 
 $url = Uri\WhatWg\Url::parse("https://test.com/foo", "https://example.com");
-echo $url->toMachineFriendlyString();                         // https://test.com/foo
+echo $url->toString();                                        // https://test.com/foo
 
 $url = Uri\WhatWg\Url::parse("/foo", ".com");                 // Throws Uri\InvalidUriException because of $baseUri
 </code>
 
-Additionally, URIs support a ''resolve()'' method that is able to resolve potentially relative URI strings with the current object as the base URI:
+Additionally, URIs support a ''resolve()'' method that is able to resolve potentially relative URI strings with the current object as the base URL:
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://example.com");
 echo $uri->resolve("/foo")->toString();                 //  https://example.com/foo
 
 $url = new Uri\WhatWg\Url("https://example.com");
-echo $url->resolve("/foo")->toMachineFriendlyString();  //  https://example.com/foo
+echo $url->resolve("/foo")->toString();                 //  https://example.com/foo
 </code>
 
 This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
@@ -476,7 +483,7 @@ echo $url->getPassword();                        // pass
 echo $url->getRawPassword();                     // p%61ss
 
 echo $url->getHost();                            // example.com
-echo $url->getHumanFriendlyHost();               // example.com
+echo $url->getHostForDisplay();                  // example.com
 
 echo $url->getPath();                            // foobar
 echo $url->getRawPath();                         // foob%61r
@@ -488,12 +495,12 @@ echo $url->getFragment();                        // abc
 echo $url->getRawFragment();                     // %61bc
 </code>
 
-This script gave the very same results as the previous one did, except for the host component. Most notably, ''Uri\Whatwg\Url'' doesn't have a ''getRawHost()'' method. This may sound surprising, but the reason is that WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHumanFriendlyHost()'' method comes handy to retrieve the host in a human-friendly format:
+This script gave the very same results as the previous one did, except for the host component. Most notably, ''Uri\Whatwg\Url'' doesn't have a ''getRawHost()'' method. This may sound surprising, but the reason is that WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHostForDisplay()'' method comes handy to retrieve the host in a display-friendly format:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://🐘.com");
 echo $url->getHost();                              // xn--go8h.com
-echo $url->getHumanFriendlyHost();                 // 🐘.com
+echo $url->getHostForDisplay();                    // 🐘.com
 </code>
 
 ==== Component recomposition ====
@@ -504,14 +511,14 @@ Besides accessors, URI implementations contain various "''toString''" methods as
 
 <code php>
 $url = new Uri\WhatWg\Url("HTTPS://////EXAMPLE.com");
-echo $url->toMachineFriendlyString();             // https://example.com/
+echo $url->toString();                            // https://example.com/
 
 $url = new Uri\WhatWg\Url("HTTPS://////你好你好.com");
-echo $url->toMachineFriendlyString();             // https://xn--6qqa088eba/
-echo $url->toHumanFriendlyString();               // https://你好你好/
+echo $url->toString();                            // https://xn--6qqa088eba/
+echo $url->toDisplayString();                    // https://你好你好/
 </code>
 
-The ''toMachineFriendlyString()'' method recomposes the URI in a format which is most suitable for machine processing (host names using IDNA characters are translated to ASCII characters), while the ''toHumanFriendlyString()'' method is a user-friendly representation that displays the host as a Unicode string.
+The ''toString()'' method recomposes the URI in a format which is most suitable for machine processing (host names using IDNA characters are translated to ASCII characters), while the ''toDisplayString()'' method is a user-friendly representation that displays the host as a Unicode string.
 
 As RFC 3986 doesn't support IDNA, its two "toString" methods don't differentiate based on the target audience, but rather whether normalization is performed:
 
@@ -552,19 +559,19 @@ The ''equals()'' method only accepts URI objects of the same specification, sinc
 <code php>
 // An RFC 3986 URI equals another RFC 3986 URI that has the same string representation after normalization.
 $uri = new Uri\Rfc3986\Uri("https://example.COM#foo");
-$uri->equals(new Uri\Rfc3986\Uri("https://EXAMPLE.COM")));   // true
+$uri->equals(new Uri\Rfc3986\Uri("https://EXAMPLE.COM"));      // true
 
 // The fragment component of Uri\Rfc3986\Uri can also be taken into account
 $uri = new Uri\Rfc3986\Uri("https://example.com#foo");
-$uri->equals(new Uri\Rfc3986\Uri("https://example.com")));   // false
+$uri->equals(new Uri\Rfc3986\Uri("https://example.com", true)) // false
 
 // A WHATWG URL equals another WHATWG URL that has the same string representation
 $url = new Uri\WhatWg\Url("https:////example.COM/");
-$url->equals(new Uri\WhatWg\Url("https://EXAMPLE.COM")));    // true
+$url->equals(new Uri\WhatWg\Url("https://EXAMPLE.COM"));       // true
 
 // The fragment component of Uri\WhatWg\Url can also be taken into account
 $url = new Uri\WhatWg\Url("https://example.com#foo");
-$url->equals(new Uri\WhatWg\Url("https://example.com")));   // false
+$url->equals(new Uri\WhatWg\Url("https://example.com"), true); // false
 
 // A URI cannot be compared against another URI of a different specification
 $url = new Uri\Rfc3986\Uri("https://example.com/");
@@ -580,7 +587,7 @@ The same question - combined with the fact that the construct is not supported i
 After multiple iterations, the RFC settled on using the ''Uri\Rfc3986\Uri'' and the ''Uri\WhatWg\Url'' class names at last. By having different subnamespaces for the two specifications, it became possible to group together all the WHATWG related classes (''Uri\WhatWg\WhatWgErrorType'', ''Uri\WhatWg\WhatWgError''). Additionally, the chosen class names (''Uri'' and ''Url'') try to disambiguate how the two specifications actually work:
 
   * RFC 3986 works with actual relative URIs which don't have a scheme
-  * WHATWG can only work with URLs (absolute URIs having a scheme)
+  * WHATWG can only work with URLs (URIs that have a scheme)
 
 The additional benefit of using different class names is that there is no clash when both classes are imported into the same PHP file.
 
