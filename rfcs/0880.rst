@@ -1,92 +1,302 @@
-Random Migration
-================
+Operator Overrides -- Lite Edition
+==================================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
+:Title: Operator Overrides -- Lite Edition
+:Author: Robert Landers <landers.robert@gmail.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-12-22
+:Created: 2024-06-28
 :Version: 0.1
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+Nearly three years ago, `PHP RFC: User Defined Operator
+Overloads </rfc/user_defined_operator_overloads>`__ was declined due to
+scope and new syntax concerns. However, the GMP class, which represents
+integer numbers in the GMP extension, was (accidentally) left non-final.
+This RFC explores the potential of extending GMP with a limited form of
+operator overriding, providing cleaner expressions for mathematical
+constructs and allowing new types of numerical representations such as
+units, complex numbers, and more.
+
+This is to integers as ArrayAccess is to arrays, and Stringable is to
+strings, providing a simplified framework for defining integer
+mathematics, such as units.
+
+What this is not
+----------------
+
+This is not a full operator overrides implementation; it is much simpler
+and it does not stop us from implementing that in the future. It, does,
+however seek to be a polar opposite of the `PHP RFC: User Defined
+Operator Overloads </rfc/user_defined_operator_overloads>`__ RFC.
+
+Why the GMP extension?
+----------------------
+
+Several curious people have wondered why this is focused on the GMP
+extension. The reasons are quite simple:
+
+#. Numbers are surprisingly hard to implement "from scratch" (which is
+   required if implemented in another extension) and libraries like
+   GMP/BCMath are great libraries that make this simple.
+#. GMP has a practically infinite numerical range, meaning if you wanted
+   to write a "Duration" library that counted in nanoseconds, you could
+   have a range larger than 292 years (the limit for 64 bit machines
+   using PHP_INT_MAX).
+#. People using the GMP extension are already familiar with the way
+   overloading works in the engine.
+#. The extension already has all the plumbing in-place to handle
+   casting, operator overloads, and all in an OOP oriented way.
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
-
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
-
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-The following functions to deprecated:
-
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
-
-All of these functions have global scope issues described in the Random
-Extension RFC.
-
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
-
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
-
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
-
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
-
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
+The \\GMP class will be changed to the following signature:
 
 .. code:: php
 
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
+   readonly class GMP
+   {
+       public function __construct(int|string|GMP $num = 0, int $base = 0) {}
+
+       public function __serialize(): array {}
+
+       public function __unserialize(array $data): void {}
+
+       protected function add(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {}
+
+       protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {}
+
+       protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {}
+   }
+
+The changes are listed below:
+
+#. The class is made ``readonly`` to prevent developers from using state
+   in inherited types.
+#. The constructor accepts another GMP instance instead of only
+   ``string|int``
+#. Mathematical methods are added to the class as protected. It is
+   expected that developers wanting to support an operation make the
+   associated operation ``public``.
+
+For any existing GMP code, absolutely nothing changes. The extension's
+behavior ONLY changes when the developer extends the GMP class and uses
+it mathematically. To be usable, the developer must override the desired
+operations and make them public. This ensures the class can be used even
+if the GMP extension is unavailable. A polyfill is included in the
+example below, which can be included in libraries that use this
+functionality.
+
+Note the lack of equals, less-than, and greater-than operators. These
+are deliberately left out and replaced by a "comparable" method where
+the developer can indicate whether the two objects are compatible. They
+are left out for several reasons:
+
+#. PHP reorders comparables as needed
+#. The core tenant here is that these objects should represent types of
+   integers, and it is expected that they are internally comparable but
+   possibly not comparable to other types. For example, the number of
+   goats on a farm may not be comparable to the speed of a car.
+
+Shift and bitwise operations are also left out of the class because it
+is expected that these behaviors won't change for any type of number
+that could be implemented here.
+
+Below is a listing showing a polyfill, a Duration class that only allows
+adding, multiplying, and exponentiation with scalars and is only
+comparable to Durations. Further, it cannot be negative.
+
+.. code:: php
+
+   <?php
+
+   if(!class_exists('GMP')) {
+       // polyfill for completion
+       readonly class GMP {
+           public function __construct(private int|string|GMP $num) {}
+
+           protected function add(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num + $right?->num);
+           }
+
+           protected function multiply(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num * $right?->num);
+           }
+
+           protected function subtract(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num - $right?->num);
+           }
+
+           protected function divide(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num / $right?->num);
+           }
+
+           protected function mod(GMP|int|string $left, GMP|int|string $right): GMP {
+               return new self($left?->num % $right?->num);
+           }
+
+           protected function pow(GMP|int|string $base, GMP|int|string $exp): GMP {
+               return new self($base?->num ** $exp?->num);
+           }
+
+           protected function comparable(GMP|int|string $op1, GMP|int|string $op2): bool {
+               return is_numeric($op1) && is_numeric($op2);
+           }
+       }
+   }
+
+   readonly class Duration extends GMP {
+       public function __construct(int|string|GMP $num = 0)
+       {
+           if($num < 0) {
+               throw new ArithmeticError('Duration cannot be negative.');
+           }
+
+           parent::__construct($num);
+       }
+
+       private function assertValidScalar(mixed $maybeScalar, string $operation): void {
+           if(is_numeric($maybeScalar)) {
+               return;
+           }
+
+           if(get_class($maybeScalar) === 'GMP') {
+               return;
+           }
+
+           throw new ValueError("Can only perform $operation on GMP or int. Got " . get_debug_type($maybeScalar) . " instead.");
+       }
+
+       private function guardScalars(GMP|int|string $left, GMP|int|string $right, string $operation): void
+       {
+           if($left === $this) {
+               $this->assertValidScalar($right, $operation);
+               return;
+           }
+
+           if($right === $this) {
+               $this->assertValidScalar($left, $operation);
+               return;
+           }
+
+           throw new LogicException('$left or $right must be the same instance as $this.');
+       }
+
+       private function getResult(GMP $result): self {
+           return new self($result);
+       }
+
+       public function add(GMP|int|string $left, GMP|int|string $right): static
+       {
+           $this->guardScalars($left, $right, 'addition');
+
+           return $this->getResult(parent::add($left, $right));
+       }
+
+       public function multiply(GMP|int|string $left, GMP|int|string $right): GMP
+       {
+           $this->guardScalars($left, $right, 'multiplication');
+
+           return $this->getResult(parent::multiply($left, $right));
+       }
+
+       public function pow(GMP|int|string $base, GMP|int|string $exp): GMP
+       {
+           $this->assertValidScalar($exp, 'exponentiation');
+
+           if($base !== $this) {
+               throw new LogicException('$base must be the same instance as $this.');
+           }
+
+           return $this->getResult(parent::pow($base, $exp));
+       }
+
+       public function comparable(GMP|int|string $op1, GMP|int|string $op2): bool
+       {
+           return $op1 instanceof self && $op2 instanceof self;
+       }
+   }
+
+   $duration = new Duration(10);
+   $other = new Duration(200);
+   $regular = new GMP(10);
+
+   function do_op($description, $op): void {
+       global $duration, $other, $regular;
+       try {
+           $result = eval('return ' . $op . ';');
+           echo "$description: $op = $result" . PHP_EOL;
+       } catch (Throwable $exception) {
+           echo "$description: $op = [" . get_class($exception) . ': ' . $exception->getMessage() . ']' . PHP_EOL;
+       }
+   }
+
+   do_op('Duration', '$duration');
+   do_op('Regular', '$regular');
+   do_op('Other', '$other');
+
+   do_op('Regular', '$regular + 10');
+   do_op('Duration', '$duration + 10');
+   do_op('Duration + Duration', '$duration + $other');
+   do_op('Duration + Regular', '$duration + $regular');
+   do_op('Division not allowed', '$duration / 10');
+   do_op('Multiplication', '$regular * 10');
+   do_op('No negatives', '$duration + -20');
+   do_op('Comparison', '$duration < $other');
+   do_op('Comparison failure', '$duration < 20');
+
+   /**
+    * Output:
+    * Duration: $duration = 10
+    * Regular: $regular = 10
+    * Other: $other = 200
+    * Regular: $regular + 10 = 20
+    * Duration: $duration + 10 = 20
+    * Duration + Duration: $duration + $other = [ValueError: Can only perform addition on GMP or int. Got Duration instead.]
+    * Duration + Regular: $duration + $regular = 20
+    * Division not allowed: $duration / 10 = [Error: Invalid callback Duration::divide, cannot access protected method Duration::divide()]
+    * Multiplication: $regular * 10 = 100
+    * No negatives: $duration + -20 = [ArithmeticError: Duration cannot be negative.]
+    * Comparison: $duration < $other = 1
+    * Comparison failure: $duration < 20 = [ArithmeticError: Can't compare incompatible types]
+    */
+
+The following exceptions can be thrown by the engine while attempting to
+perform mathematical operations:
+
+-  Error: when trying to perform an unsupported operation, which shows
+   as "Invalid callback Duration::divide, cannot access protected method
+   Duration::divide()"
+-  ArithmeticError: when ANY participating comparison indicates that it
+   is not comparable: "Can't compare incompatible types: Duration to
+   int"
+
+Additionally, the implementor may throw additional exceptions, such as a
+ValueError in the example above, to indicate that something is not
+possible to the developer.
 
 Backward Incompatible Changes
 -----------------------------
 
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
-
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
-
-The following function names are no longer available:
-
--  random_float()
+There are no backward incompatible changes. Existing GMP-based code will
+remain unaffected.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3 and next version
+8.4 if time allows, or the next version.
 
 RFC Impact
 ----------
@@ -94,66 +304,101 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-none
+No impact.
 
 To Existing Extensions
 ~~~~~~~~~~~~~~~~~~~~~~
 
-ext-random
+Only GMP will be affected.
 
 To Opcache
 ~~~~~~~~~~
 
-none
-
-New Constants
-~~~~~~~~~~~~~
-
-none
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-none
+There should be no impact to Opcache.
 
 Open Issues
 -----------
 
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+None, yet.
+
+Unaffected PHP Functionality
+----------------------------
+
+Code using the GMP extension without extending it will remain unchanged.
+
+Future Scope
+------------
+
+-  support for other operators
+-  serialization/unserialization
+-  support for non-integers via BCMath
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-  2/3 YES|NO vote: Allow extending the \\GMP class and use a form of
+   operator overloading
+-  2/3 YES|NO secondary vote: Disallow extending the \\GMP class if this
+   RFC fails
 
-Voting Choices
-^^^^^^^^^^^^^^
+Patches and Tests
+-----------------
 
--  Yes
--  No
-
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+Prototype patch: `PR
+14730 <https://github.com/php/php-src/pull/14730>`__
 
 Implementation
 --------------
 
-WIP
+After the project is implemented, this section should contain
+
+::
+
+   - 
+   - a link to the git commit(s)
+   - a link to the PHP manual entry for the feature
+   - a link to the language specification section (if any)
+
+References
+----------
+
+Links to external references, discussions or RFCs
+
+Rejected Features and Concerns
+------------------------------
+
+A separate extension
+^^^^^^^^^^^^^^^^^^^^
+
+On paper, a separate extension sounds like a good idea. However, I've
+attempted this with varying degrees of success. Reimplementing
+mathematics is not straightforward or a good idea when libraries like
+GMP do a much better job. Since there is already a GMP extension, it
+makes sense to merge it with that extension instead of forking it. If
+this RFC is rejected, it is rather straightforward to fork the extension
+and create a new one. However, that will certainly cause problems in
+environments where the standard GMP extension is installed instead.
+
+Full Operator Overloading
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some people on the list have voiced their opinion that we should revisit
+full operator overloading. This RFC does not prevent us from revisiting
+that in the future, but it is outside the scope of this RFC.
+
+More Operators
+^^^^^^^^^^^^^^
+
+There are many more operators that could be implemented. However,
+another concern was raised that people may "abuse" this feature to
+implement arbitrary objects that do strange things with operators. Thus,
+the scope is kept to "obviously integer-y things," and the GMP extension
+goes to great lengths to have the engine treat its objects as numbers.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Original Authors: Robert Landers, landers.robert@gmail.com
+:Original Status: Under Discussion (or Under Discussion or Accepted or Declined)
+:Slug: operator_overrides_lite
+:Wiki URL: https://wiki.php.net/rfc/operator_overrides_lite

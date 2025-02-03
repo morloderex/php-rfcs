@@ -1,99 +1,132 @@
-Structural Typing For Closures
-==============================
+Raising Zero To The Power Of Negative Number
+============================================
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
+:Title: Raising Zero To The Power Of Negative Number
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2024-01-11
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
+Raising a number to the power of a negative number is equivalent to
+taking the reciprocal of the number raised to the positive opposite of
+the power.
+
+If we raise the number zero to the power of a negative number we end up
+with the one divided by zero, which gives an undefined result. Currently
+in PHP, such operation results in ``INF``, while explicit division by
+zero gives a ``DivisionByZeroError``.
+
+.. code:: php
+
+   var_dump(0 ** -1); //float(INF)
+   var_dump(0 ** -1.1); //float(INF)
+
+   var_dump(pow(0, -1)); //float(INF)
+   var_dump(pow(0, -1.1)); //float(INF)
+
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
-
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
-
-Example
-~~~~~~~
+The RFC proposes to change the behavior of this operation to match the
+division by zero operation. In the next minor version raising a number
+to the power of a negative number will throw a Deprecation, and in the
+major version, this operation will throw DivisionByZeroError.
 
 .. code:: php
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
-   }
+   //PHP 8.4
+   var_dump(0 ** -1); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(0 ** -1.1); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(pow(0, -1)); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(pow(0, -1.1)); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
-   }
+.. code:: php
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+   //PHP 9.0
+   var_dump(0 ** -1); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(0 ** -1.1); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(pow(0, -1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(pow(0, -1.1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+To provide a way to compute the numbers according to the IEEE 754 rules,
+the RFC proposes adding the function ``fpow`` similarly to the function
+``fdiv`` that exists for the division operation, and ``fmod`` for the
+module operation for floating numbers.
+
+.. code:: php
+
+   //PHP 8.4
+   var_dump(fpow(0, -1)); //float(INF)
+   var_dump(fpow(0, -1.1)); //float(INF)
 
 Backward Incompatible Changes
 -----------------------------
 
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
+This change will break code including raising the zero number to a
+negative power. Such cases may keep their current behavior by using the
+new ``fpow`` function.
 
-Open Questions
---------------
+Proposed PHP Version(s)
+-----------------------
 
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
+Deprecation Notice in the next minor PHP version 8.4.
 
-Future Scope
-------------
+Function ``fpow`` in the next minor PHP version 8.4.
 
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+Throwing ``DivisionByZeroError`` in the next major PHP version: 9.0.
 
 Proposed Voting Choices
 -----------------------
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+As per the voting RFC, a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2024-04-05 and will end on 2024-04-20 00:00 GMT.
+
+Question: RFC: Raising zero to the power of negative number
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Implementation
+--------------
+
+Commit:
+https://github.com/php/php-src/commit/23afe57f01e0915eef246eba60e60fda74fd2dcf
+PR: https://github.com/php/php-src/pull/13128
+
+The implementation is based on Ilija Tovilo's PoC:
+https://github.com/php/php-src/issues/8015#issuecomment-1193391843
+
+References
+----------
+
+Issue GH-8015: https://github.com/php/php-src/issues/8015 RFC Division
+by zero: https://wiki.php.net/rfc/engine_warnings
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Implementation: `see Implementation section </rfc/raising_zero_to_power_of_negative_number#Implementation>`__
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: raising_zero_to_power_of_negative_number
+:Wiki URL: https://wiki.php.net/rfc/raising_zero_to_power_of_negative_number
