@@ -342,9 +342,9 @@ array(1) {
 
 The ''$context'' property refers to the substring where the error happened, while the ''$type'' property is a ''Uri\WhatWg\WhatWgErrorType'' enum storing the exact cause of the error. Last, the ''$failure'' field stores whether the error caused a failure, or processing could continue. Therefore, the ''true'' value refers to a hard error, while the ''false'' value means a soft error.
 
-When trying to instantiate a WHATWG ''Url'' via its constructor, a ''Uri\InvalidUriException'' is thrown, with the ''$errors'' property containing an array of ''Uri\WhatWg\WhatWgError'' instances when parsing is unsuccessful. When parsing is successful, the ''$softErrors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances, referring to soft errors, if any.
+When trying to instantiate a WHATWG ''Url'' via its constructor, a ''Uri\InvalidUriException'' is thrown when parsing results in a failure. In this case, the ''Uri\InvalidUriException::$errors'' property will contain an array of ''Uri\WhatWg\WhatWgError'' instances. When parsing is successful, but soft errors were triggered, an array of ''Uri\WhatWg\WhatWgError'' will be passed by reference to the ''$softErrors'' parameter.
 
-When trying to instantiate a WHATWG ''Url'' via its ''parse()'' method, a ''null'' return value indicates that parsing is unsuccessful, and the ''$errors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances. When parsing is successful, the ''$errors'' by-ref parameter contains an array of ''Uri\WhatWg\WhatWgError'' instances referring to only soft errors. The following example demonstrates some cases when a soft error is triggered:
+When trying to instantiate a WHATWG ''Url'' via its ''parse()'' method, a ''null'' return value indicates that parsing results in a failure. In this case, the ''$errors'' by-ref parameter will contain an array of ''Uri\WhatWg\WhatWgError'' instances. When parsing is successful, but soft errors were triggered, the ''$errors'' by-ref parameter will contain an array of ''Uri\WhatWg\WhatWgError'' instances referring to only soft errors. The following example demonstrates how a soft error is triggered:
 
 <code PHP>
 // Soft error due to the leading " " character when using the parse() method
@@ -402,7 +402,7 @@ This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())'
 
 ==== Accessors ====
 
-The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
+The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has to be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
 
 For now, let's see a very basic example for modifying and retrieving the host URI component:
 
@@ -610,6 +610,57 @@ It would be very useful for a URI implementation to support direct query paramet
 
 For all these reasons, the topic of query parameter manipulation should be discussed as a followup to the current RFC.
 
+===== How should URI modification work? =====
+
+Since URIs are [[https://martinfowler.com/bliki/ValueObject.html|value objects]] inherently, this RFC models them as immutable classes that support modification through withers. Using withers come with some performance penalty - as a new instance is created for each modification -, but this is a necessity in order to hold identity constraints.
+
+Alternatively, it would be possible to make URIs completely immutable by using the builder pattern to construct and modify URIs (''Uri\Rfc3986\UriBuilder'' and ''Uri\WhatWg\UrlBuilder''). This way, new ''Uri'' instances should only be created once: after the very last modification. This is especially true when one wants to construct a completely new URI. That's why this solution seems more optimized than the wither based approach.
+
+However, this is not always true. When one wants to modify only a single detail of a URI, then withers are not only easier to use but are more efficient as well:
+
+<code php>
+// Redirection of HTTP traffic to HTTPS by using withers
+
+$uri = new Uri\Rfc3986\Uri("http://example.com");
+
+$uri = $uri->withScheme("https");                        // a new URI instance is created at this point
+</code>
+
+Whereas, the following piece of code should be used if URIs didn't support modification (given a hypothetical ''Uri\Rfc3986\UriBuilder'' class):
+
+<code php>
+// Redirection of HTTP traffic to HTTPS by using the builder pattern
+
+$uri = new Uri\Rfc3986\Uri("http://example.com/foo");
+
+$builder = Uri\Rfc3986\UriBuilder::fromUri($uri);
+$builder->setScheme("https");                           // overwrites the URI scheme
+$uri = $builder->build();                               // a new URI instance is created at this point
+</code>
+
+The above example makes it clear that the builder pattern mostly shines when it can save multiple instance creations, and it's especially true if a URI has to be constructed from the scratch:
+
+<code php>
+// Redirection of HTTP traffic to HTTPS by using the builder pattern
+
+$builder = Uri\Rfc3986\UriBuilder();
+$builder->setScheme("https")
+        ->setHost("example.com")
+        ->setPath("/foo");
+
+$uri = $builder->build();                               // a new URI instance is created at this point
+</code>
+
+Builder classes are not offered by the present RFC just yet. They definitely have their use-case, as they can help write more optimized code, but they are not essential at the get go. Therefore, this feature is one of the top candidates of a followup RFC.
+
+===== What about the user:password components of RFC 3986? =====
+
+This has always been a source of contention. RFC 3986 states the following:
+
+<blockquote>Use of the format "user:password" in the userinfo field is deprecated. Applications should not render as clear text any data after the first colon (":") character found within a userinfo subcomponent unless the data after the colon is the empty string (indicating no password)</blockquote>
+
+TBD
+
 ===== Parser Library Choice =====
 
 Adding a WHATWG compliant URL parser to the standard library [[https://github.com/php/php-src/pull/11315|was originally attempted in 2023]]. The implementation used [[https://www.ada-url.com|ADA URL parser]] as its parser backend which is known for its ultimate performance. At last, the proof of concept was abandoned due to some technical limitations that weren't possible to resolve.
@@ -654,7 +705,7 @@ $context = stream_context_create([
 $contents = file_get_contents($url, context: $context);
 </code>
 
-However, there are other much more convenient approaches, but the current RFC still goes with the current, less ergonomic one, as going either way would need more discussion, and a scope creep. The improvement possibilities include passing URI instances to the functions in question, or converting URIs to streams based on [[https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/URL.html#openStream()|Java's example]].
+Even though there are other much more convenient approaches, the current RFC still goes with the current, less ergonomic one, as going either way would need more discussion, resulting in a scope creep. The improvement possibilities include passing URI instances to the functions in question, or converting URIs to streams based on [[https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/net/URL.html#openStream()|Java's example]].
 
 ===== Performance Considerations =====
 
