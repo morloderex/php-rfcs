@@ -1,188 +1,129 @@
-Make The Iterator_*() Family Accept All Iterables
-=================================================
+Make The GMP Class Final
+========================
 
 :PHP-RFC: 0859
-:Title: Make The Iterator_*() Family Accept All Iterables
-:Author: Tim Düsterhus <duesterhus@woltlab.com>
-:Status: Implemented
+:Title: Make The GMP Class Final
+:Author: Gina Peter Banyard <girgias@php.net>
+:Status: Unknown
 :Type: Standards Track
-:Created: 2022-06-21
-:PHP-Version: 8.2
-:Version: 1.0
+:Created: 2024-06-29
+:PHP-Version: 8.4
+:Version: 0.1
 
 Introduction
 ------------
 
-PHP's ``iterator_*()`` family currently only accept ``\Traversable``\ s
-(i.e. they reject plain ``array``\ s). This is unnecessarily limiting.
+The ``GMP`` class was introduced as part of the `Internal operator
+overloading and GMP improvements </rfc/operator_overloading_gmp>`__ RFC.
 
-Specifically this concerns the ``iterator_to_array()`` and
-``iterator_count()`` functions. While each of them has an array-specific
-counterpart, the fact that one needs to choose either the array-specific
-variant or the everything-but-array variant makes writing code the deals
-with arbitrary ``iterable``\ s unnecessarily verbose.
+This RFC also converted the GMP extension to use an object instead of a
+resource. One of the first proposals of its kind. Since then numerous
+resources have been converted to what we call opaque objects. [1][2][3]
+And the finalization of the process was codified in the `Resource to
+object conversion </rfc/resource_to_object_conversion>`__ RFC which was
+accepted in late 2023.
 
-As an example: Allowing ``iterator_to_array()`` to take an array, makes
-it much easier to write functions accepting an ``iterable`` and
-processing it using ``array_map()`` et al:
+One element of the resource to object migration is to make the object
+opaque, which in general implied, being ``final``, being not
+serializable, not constructible via ``new``, cannot be cast, and to not
+implement any methods.
 
-.. code:: php
+The ``GMP`` class is a notable exception to many of the above
+restrictions. It is a non-final class, that can be instantiated via
+``new``, and is serializable. The serialization aspect was intended as
+part of the initial RFC, but the other aspects were not. Indeed, the
+``GMP`` class did not have a proper constructor to initialize the object
+until PHP 8.2.4 after this fact was discovered and discussed on the
+mailing list in late December 2022. [4]
 
-   function before(iterable $foo) {
-       if (!is_array($foo)) {
-           $foo = iterator_to_array($foo);
-       }
-
-       return array_map(strlen(...), $foo);
-   }
-   function after(iterable $foo) {
-       $foo = iterator_to_array($foo);
-
-       return array_map(strlen(...), $foo);
-   }
+As such, we deem the fact that ``GMP`` was not made ``final`` an
+oversight and want to correct this.
 
 Proposal
 --------
 
-The ``$iterator`` parameter of ``iterator_to_array()`` and
-``iterator_count()`` should be widened from ``\Traversable`` to
-``iterable`` (i.e. to ``\Traversable|array``).
-
-Specifically if this RFC is accepted the following shall hold:
-
-iterator_to_array
-~~~~~~~~~~~~~~~~~
-
-.. code:: php
-
-   iterator_to_array($array, true) == $array
-   iterator_to_array($array, false) == array_values($array)
-
-iterator_count
-~~~~~~~~~~~~~~
-
-.. code:: php
-
-   iterator_count($array) == count($array)
-
-iterator_apply
-~~~~~~~~~~~~~~
-
-This function is **not** part of this proposal, because it is
-non-obvious how to define the behavior for ``array``\ s, given that it
-does not pass the ``Iterator`` to the callback by default.
+Make the ``GMP`` class final.
 
 Backward Incompatible Changes
 -----------------------------
 
-None, this is a purely type widening change.
+Any userland class that extends ``GMP`` would now throw a compile time
+error.
 
-Proposed PHP Version(s)
------------------------
+From an analysis of private and publicly available code bases with
+`Exakat <https://www.exakat.io/en/>`__ no one has ever extended this
+class, as such the BC Break is mostly theoretical.
 
-next PHP 8.x
+Further Motivation
+------------------
 
-RFC Impact
-----------
+In the discussion of the new ``BCMath\Number`` class introduced via the
+`Support object type in BCMath </rfc/support_object_type_in_bcmath>`__
+RFC, it was *explicitly* discussed if the class should be ``final`` or
+not. And the consensus was that it should be ``final`` due to concerns
+about overloading the methods.
 
-To SAPIs
-~~~~~~~~
+However, people seemingly want to "enhance" ``GMP`` to achieve userland
+operator overloading by hooking into it's logic when extending it. This
+is in total contradiction with the above RFC discussion which happened a
+few months ago. This resembles more of a "hack" than anything else and
+support for a proper form of operator overloading [5][6] should be
+revisited instead. Another alternative would be to create a dedicated
+PHP extension with an object that overloads the ``do_operator`` object
+handler.
 
-none
+Therefore, we think it is crucial to close this avenue for discussion
+once and for all.
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+Version
+-------
 
-none
+Next minor version, which is PHP 8.4.
 
-To Opcache
-~~~~~~~~~~
+Vote
+----
 
-none
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-New Constants
-~~~~~~~~~~~~~
+Voting started on 2024-07-13 and will end on 2024-07-27.
 
-none
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-none
-
-Open Issues
------------
-
-none
-
-Unaffected PHP Functionality
-----------------------------
-
-Anything that isn't ``iterator_to_array()`` or ``iterator_count()``.
-
-Future Scope
-------------
-
-none
-
-Proposed Voting Choices
------------------------
-
-Each vote requires a 2/3 majority.
-
-Voting opened 2022-07-05 14:30 UTC and closes on 2022-07-19 14:45 UTC.
-
-Question: iterator_to_array: Change the type of iterator_to_array()’s $iterator parameter from \\Traversable to iterable?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Accept Make the GMP class final RFC?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
 -  Yes
 -  No
-
-Question: iterator_count: Change the type of iterator_count()’s $iterator parameter from \\Traversable to iterable?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Patches and Tests
------------------
-
-https://github.com/php/php-src/pull/8819
-
-Implementation
---------------
-
-https://github.com/php/php-src/commit/7ae7df5b4601f3f0ce45a27324fb9c6ebcbfc9ed
 
 References
 ----------
 
--  Pre-RFC discussion: https://externals.io/message/117979
--  PoC implementation: https://github.com/php/php-src/pull/8819
--  Similar previous RFC that proposed adding **new** functions with an
-   ``iterable_*`` prefix:
-   https://wiki.php.net/rfc/iterable_to_array-and-iterable_count
--  Stack Overflow asking for ``iterable_to_array()``:
-   https://stackoverflow.com/q/44587973/782822
+[1] "PHP RFC: Migration Hash Context from Resource to Object":
+https://wiki.php.net/rfc/hash-context.as-resource
 
-Rejected Features
------------------
+[2] "Convert ext/xml to use an object instead of resource" PHP Internals
+Mailing List thread: https://externals.io/message/104361
 
-none
+[3] "Resource to opaque object migration" php/php-tasks issue:
+https://github.com/php/php-tasks/issues/6
+
+[4] "What to do with opaque GMP objects which allows instantiation" PHP
+Internals Mailing List thread: https://externals.io/message/119216
+
+[5] "PHP RFC: Userspace operator overloading":
+https://wiki.php.net/rfc/userspace_operator_overloading
+
+[6] "PHP RFC: User Defined Operator Overloads":
+https://wiki.php.net/rfc/user_defined_operator_overloads
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/commit/7ae7df5b4601f3f0ce45a27324fb9c6ebcbfc9ed
-:Original Authors: Tim Düsterhus, duesterhus@woltlab.com
-:Original PHP Version: PHP 8.2
-:Slug: iterator_xyz_accept_array
-:Wiki URL: https://wiki.php.net/rfc/iterator_xyz_accept_array
+:Implementation: TBD
+:Original Authors: Gina Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Original Status: Pending Implementation
+:Slug: gmp-final
+:Wiki URL: https://wiki.php.net/rfc/gmp-final
