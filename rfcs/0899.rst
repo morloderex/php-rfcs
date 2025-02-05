@@ -1,170 +1,198 @@
-Undefined Property Error Promotion
-==================================
+Support For Floats In Sleep Function
+====================================
 
 :PHP-RFC: 0899
-:Title: Undefined Property Error Promotion
-:Author: Mark Randall <marandall@php.net>
-:Status: Accepted
+:Title: Support For Floats In Sleep Function
+:Author: Hans Henrik Bergan <hans@loltek.net>, Michael Voříšek ?
+:Status: Draft
 :Type: Unknown
-:Created: 2022-04-04
-:Version: 1
+:Created: 2024-02-25
+:Version: 0.2
 
 Introduction
 ------------
 
-Undefined properties are those that have not yet been defined either by
-the presence of a property declaration, or by adding them to the
-properties hashmap through direct assignment, or by having them assigned
-by an internal function such as json_decode. Accessing an undefined
-property emits an E_WARNING "Undefined property <className>::$varName"
-and treats the value as if it were null, but does not otherwise interupt
-execution, allowing code execution to continue unabated, but potentially
-in an unintended state.
+This RFC introduces 3 enhancements to the PHP \`sleep()\` function,
+aimed at increasing its flexibility, precision, and cross-platform
+consistency.
 
-Undefined properties previously triggered an E_NOTICE, however this was
-upgraded to E_WARNING as part of the PHP 8.0 Engine Warnings RFC:
-https://wiki.php.net/rfc/engine_warnings - By the time this RFC would
-come into effect, if passed, undefined properties would have emitted a
-warning for 5+ years.
+1/3: **Enhancement of Precision**: The first proposal seeks to extend
+the PHP \`sleep()\` function to accept both integers and floats,
+enabling delays with sub-second precision.
+
+2/3: **Normalized Return Values on Windows**: Make sleep's return value
+consistent across operating systems (specifically Windows)
+
+3/3: **Enhanced Return Value Precision**: This RFC proposes to refine
+the return value of \`sleep()\` to include sub-second precision.
 
 Proposal
 --------
 
-This RFC proposes that accessing an undefined property is rendered
-illegal behaviour in the next major version of PHP, and will result in
-an error exception being thrown if it occurs.
+The proposed changes are designed to make \`sleep()\` more versatile,
+precise, and consistent across different operating systems.
 
-For the purposes of this RFC, accessing an property means to use the
-property in such a way that the engine attempts to read its value for
-use in an expression, without accounting for the possibility of it being
-unset. These can be identified by the warning Undefined property
-<className>::$varName.
+1/3: **Acceptance of Float Arguments for Sub-Second Precision**: The
+core of this proposal is to extend the \`sleep()\` function to accept
+both integers and floats as arguments. This modification will enable
+developers to specify sleep durations with sub-second precision, a
+feature currently unavailable with the integer-only parameter. By
+adopting float values, \`sleep()\` will become a more powerful tool for
+precise timing operations, eliminating the need to resort to the more
+complex \`usleep()\` and \`time_nanosleep()\` functions for
+finer-grained delays. This change will maintain the simplicity and ease
+of use of \`sleep()`, while expanding its functionality.
 
-isset / empty / null coalesce DO account for undefined properties and as
-such are not covered by this RFC.
+2/3: **Normalized Return Values on Windows**: Presently, when a
+\`sleep()\` operation is interrupted on Windows, it returns a static
+value of 192, reflecting the WAIT_IO_COMPLETION constant from the
+Windows API. This behavior diverges from that on other platforms, where
+\`sleep()\` returns the number of seconds left if interrupted. To
+address this inconsistency, we propose to standardize the return value
+of \`sleep()\` across all platforms by making it return the number of
+seconds remaining, even on Windows. This adjustment will enhance the
+portability of PHP scripts and ensure consistent behavior of the
+\`sleep()\` function in cross-platform development.
 
-The presence of magical \`get\` will continue to work as it does now,
-and unknown properties will route to the magical \`get\` handler rather
-than cause an error (unless called within \`get\` on itself).
+3/3: **Return Value Precision Enhancement**: The current implementation
+of \`sleep()\` returns the number of seconds remaining upon interruption
+with an integer precision. This proposal seeks to improve the precision
+of the return value to include fractions of a second. Enhancing the
+return value precision will allow developers to have a more accurate
+understanding of the timing and duration of interruptions.
 
-Considerations
---------------
-
-PHP has traditionally been quite lax in its enforcement of accessing
-undefined values that are stored within various data structures.
-
-There are 3 primary storage locations for values within PHP, these are:
-
-#. **Variables** (compiled variables) which are stored within the stack
-   frame.
-#. **Properties** which are stored within a zend_object instance within
-   the properties HashTable and the properties_table (which identifies
-   their location by their slot number sourced from the class entry).
-#. **Arrays** stored within the bucket.
-
-With the passing of the undefined variable error promotion RFC
-(https://wiki.php.net/rfc/undefined_variable_error_promotion) the first
-of these, variables, is scheduled for promotion to an error in PHP 9.0.
-
-The next natural target is properties, this is in line in line with
-additional changes targeted at PHP 9.0 that will promote **WRITING** to
-undefined properties to be an Error
-(https://wiki.php.net/rfc/deprecate_dynamic_properties) unless the
-#[AllowDynamicProperties] attribute is set upon the class definition
-(stdClass includes this capability as standard).
-
-It seems to be the natural progression that if writing to an undefined
-property will throw, reading from one should do likewise, to protect the
-user against unintended behaviour.
-
-However, there is a potential exception to this rule, and that is the
-presence of stdClass, which is intended to exclusively hold unknown (to
-the class entry) properties, often those sourced from casting an array
-to an object, or from an internal function decoding some other data such
-as json_decode when it encounters an object, without the assoc parameter
-set.
-
-While reading an undefined property on a user defined class will almost
-always be programmer error, historically it would not be entirely
-unexpected to see similar to the following code when dealing with json:
-
-.. code:: php
-
-   if ($obj->name) { 
-     echo "Hello " . $obj->name;
-   }
-
-As this now emits an E_WARNING it should be very much discouraged, but
-will still execute without an error as $obj->name will, if undefined,
-evaluate to null.
-
-If this RFC were to pass, the developer would need to explicitly specify
-their intent to allow the possibility of accessing an undefined
-property, either via isset, empty or the null coalesce operator:
-
-.. code:: php
-
-   if (isset($obj->name)) { 
-     echo "Hello " . $obj->name;
-   }
-
-To provide the most consistent handling, this RFC proposes that stdClass
-will also throw an error if an undefined property is accessed.
+These proposed enhancements are intended to bolster the \`sleep()\`
+function's capability. By increasing precision, ensuring consistency
+across platforms, and maintaining simplicity, we aim to significantly
+improve the utility of \`sleep()`.
 
 Backward Incompatible Changes
 -----------------------------
 
-Accessing an undefined property in a manner that currently results in an
-"undefined property" warning will in future result in an Error exception
-being thrown.
+Minimal impact is expected on existing codebases. However, there are
+specific areas where changes in behavior should be noted:
+
+1/3: **Handling of Float Arguments**: The extension of \`sleep()\` to
+accept float arguments represents a change from its current integer-only
+input. Previously, under \`strict_types=0`, passing a float to
+\`sleep()\` would result in an E_DEPRECATED warning due to the implicit
+conversion of the float to an integer, causing a loss of precision and
+initiating a sleep for the truncated integer value. Under
+\`strict_types=1`, passing a float would lead to a TypeError, as
+\`sleep()\` strictly expected an integer. With the proposed changes,
+\`sleep()\` will accept float values directly, enabling precise sleep
+durations without generating warnings or errors. This modification
+enhances the function's usability without disrupting existing
+integer-based usage.
+
+2/3: **Windows Platform Behavior**: The current return value of 192 on
+Windows when \`sleep()\` is interrupted (reflecting the
+WAIT_IO_COMPLETION constant) will be changed to return the actual number
+of seconds remaining, aligning with the behavior on other platforms.
+This change ensures consistency across operating systems but alters the
+specific return value Windows developers might have previously expected
+in their interrupt handling logic.
+
+3/3: **Return Value Precision**: Enhancing the return value precision of
+\`sleep()\` to include fractions of a second (when the sleep is
+interrupted) modifies the current behavior, which returns an integer.
+While this change provides more detailed information, it may affect
+existing code that expects an integer return value.
 
 Proposed PHP Version(s)
 -----------------------
 
-This change is targeted for PHP 9.0.
+Next PHP Minor (currently 8.4) and next PHP Major (currently PHP9)
 
-Although the target version is mandated by our traditional breaking
-changes policy, it is also the intent of this RFC to give multiple years
-of notice that this change will be coming, affording the greatest
-opportunity for developers to modify their code in anticipation of this
-change.
+RFC Impact
+----------
 
-A minor change will be included in the next minor version to alter the
-existing warning message to indicate the warning will become an error in
-9.0.
+To SAPIs
+~~~~~~~~
 
-Voting
-------
+No impact on SAPIs is anticipated.
 
-Voted started on 2022-04-22, ending 2022-05-05
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
 
-Question: Promote Undefined Property Access to Throw an Error?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+No existing extensions are expected to be affected by this change.
 
-Voting Choices
-^^^^^^^^^^^^^^
+To Opcache
+~~~~~~~~~~
 
--  Yes
--  No
+No impact on Opcache is anticipated.
 
-Meta vote:
+New Constants
+~~~~~~~~~~~~~
 
-Question: Main reason for voting against undefined_property_error_promotion if you did?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+No new constants will be introduced by this RFC.
 
-.. _voting-choices-1:
+php.ini Defaults
+~~~~~~~~~~~~~~~~
 
-Voting Choices
-^^^^^^^^^^^^^^
+This RFC does not introduce or alter any php.ini settings.
 
--  Backwards compatibility breaks
--  Would be in favour, but not in 9.0
--  Do not like stdClass behaviour
--  Something else
+Open Issues
+-----------
+
+There are no open issues related to this RFC.
+
+Proposed Voting Choices
+-----------------------
+
+The voting will be organized into three main questions. Each question
+aims to gather community consensus on whether to implement the proposed
+enhancements and, if so, in which version of PHP these changes should be
+applied.
+
+**1. Float Arguments for Sub-Second Precision**
+
+**Extend \`sleep()\` to accept floats for sub-second delays?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
+
+**2. Normalized Return Values on Windows**
+
+**Modify \`sleep()\` on Windows for consistent return values?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
+
+**3. Enhanced Return Value Precision**
+
+**Increase \`sleep()\` return value precision to include fractions of a
+second?**
+
+#. No
+#. PHP 8.4
+#. PHP 9.0
+
+Patches and Tests
+-----------------
+
+A pull request has already been submitted and is available for review
+at: https://github.com/php/php-src/pull/13401
+
+Implementation
+--------------
+
+Upon acceptance, the feature will be merged into the specified PHP
+version, and all relevant documentation will be updated accordingly.
+
+References
+----------
+
+- Discussion on the PHP Internals mailing list:
+https://externals.io/message/122388 - PHP Manual on \`sleep()`:
+https://www.php.net/manual/en/function.sleep.php
 
 Additional Metadata
 -------------------
 
-:Original Authors: Mark Randall, marandall@php.net
-:Slug: undefined_property_error_promotion
-:Wiki URL: https://wiki.php.net/rfc/undefined_property_error_promotion
+:Original Authors: Hans Henrik Bergan (hans@loltek.net), Michael Voříšek (?)
+:Original Version: 0.2-dev
+:Slug: sleep_function_float_support
+:Wiki URL: https://wiki.php.net/rfc/sleep_function_float_support

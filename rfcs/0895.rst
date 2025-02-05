@@ -1,124 +1,67 @@
-Treat Enum Instances As Values
-==============================
+Remove Disable_classes INI Setting
+==================================
 
 :PHP-RFC: 0895
-:Title: Treat Enum Instances As Values
-:Author: Garet Claborn <garet@suiteux.com>
+:Title: Remove Disable_classes INI Setting
+:Author: George Peter Banyard <girgias@php.net>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-04-28
+:Type: Standards Track
+:Created: 2023-09-29
+:PHP-Version: 8.4
 :Version: 0.1
 
 Introduction
 ------------
 
-From the RFC template's opening quote, this RFC aims to be "pragmatic",
-"loosely typed" and cater to all camps observed in the debate (as found
-to date.)
+The ``disable_classes`` INI setting is fundamentally useless and cause
+various issues in the engine, as using it will result in unexpected
+states for the engine to deal with.
 
-This RFC proposes to allow the use of enum instances as array keys in
-PHP. More specifically, where errors are produces in any context where
-an enum instance is used without ->value or ->name, the engine should
-instead assume ->value.
+Only internal classes can be disabled, which brings the following
+observation. On a minimal build of PHP, with only the mandatory
+extensions enabled, there are 148 classes/interfaces/traits defined. [2]
 
-This change aims to enhance the usability and consistency of enums in
-PHP by treating enum instances as symbols of their respective values -
-especially in the context of array keys. This will allow large amounts
-of existing code in various C-style languages to be compatible with PHP
-usage without affecting current projects.
+Other than a specific subset of classes defined in the SPL extension,
+disabling any of these classes will cause issues within the engine.
+Moreover, the subset of SPL classes that could be disabled are not a
+security concern.
 
-Further, this proposal provides potential future RFC a path to enable
-array key type constraints in line with present == vs === semantics and
-ArrayAccess, without drastic engine overhauls.
+Therefore, any other class that can be disabled must come from an
+extension that can be disabled altogether. And "disabling" a class from
+an extension without disabling said extension will, other than rendering
+it useless, cause various issues that the extension is not prepared to
+handle as they expect the classes they defined to exist.
+
+If a hosting provided is concerned about an extension, then it should
+not enable it in the first place. Not break it ad hoc.
+
+Considering the above, the usefulness of this feature has always been
+dubious.
+
+This is in stark contrast to the ``disable_functions`` INI setting,
+which can be used to selectively remove functionality of an extension
+without breaking it overall.
+
+What makes this setting particularly broken is that it does not
+unregister the class, it only overwrites the create CE handler to emit a
+warning and purge the properties and function hash tables. This leads to
+various use after free, segfaults, and broken expectations for the
+engine and extensions which define said classes. On top of that, it is
+possible to actually instantiate such a class (and even classes which
+actually disallow this like ``ext/imap``) in userland, and pass it to
+function that are typed against said class without raising a TypeError.
+However, when trying to do anything with said object, stuff is going to
+explode in countless ways.
 
 Proposal
 --------
 
-Given that enums already exist in PHP and enum cases are mapped to
-either ints or strings exclusively, we propose the following changes:
-
-Enum instances should be allowed to be used as array keys without
-producing an error. When an enum instance is used as an array key, it
-should be treated as a symbol of its value. UnitEnum , not backed as an
-int or string, should treat value as an unsigned integer iterating from
-0, more specifically modeling the relationship of enumeration (as a
-mathematical construct) with the natural numbers.
-
-Example: Consider the following enum and array:
-
-::
-
-    enum Color: int {
-        case red = 1;
-        case green = 2;
-        case blue = 3;
-    }
-
-::
-
-    enum WeekDays: int {
-        case monday = 1;
-        case tuesday = 2;
-        case wednesday = 3;
-    }
-
-::
-
-    $palette = [
-        1 => 'Red',
-        2 => 'Green',
-        3 => 'Blue',
-    ];
-
-Currently, the following code produces an error:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // Error
-
-With this proposal, the code above should not produce an error and
-should work as expected:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // 'Red'
-
-Last on a more opinionated note; the author suggests that enum cases are
-userland symbols and should imply value. Just as there is no need in the
-following scenario:
-
-::
-
-    $a = 1;
-    $b = '2';
-
-::
-
-    $list = [
-      $a => 'some value',
-      $b => $some_value;
-    ];
-
-vs
-
-::
-
-    $list = [
-      $a->value => 'some value',
-      $b->value => $some_value;
-    ];
-
-Backward Incompatible Changes
------------------------------
-
-There are no backward-incompatible changes introduced by this proposal.
+Remove the ``disable_classes`` INI setting.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.y
+Next minor version, i.e. PHP 8.4.0.
 
 RFC Impact
 ----------
@@ -126,125 +69,48 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-None
+The Fuzzer SAPI uses this setting to remove the ``InfiniteIterator``
+class.
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+The fix for this is to manually change the create handler of the
+``InfiniteIterator`` CE to throw.
 
-None
+Unaffected PHP Functionality
+----------------------------
 
-To Opcache
-~~~~~~~~~~
-
-Implementation being studied. None expected. Enums may not need some
-checks.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-Could be a toggle if community desired
-
-Future Scope
-------------
-
-While this proposal originated in a issue with wide support, referenced
-below, we consider strongly the negative feedback which all surrounded
-adding greater type mechanics to keys.
-
-Presently there are many proposals in the history of PHP regarding
-object keys, direct overloading of the [ ] operators and a wide
-arrangement of considerations around typing. We propose that many of
-these wishes can be addressed with much less effort if we begin at the
-loose typing and iteratively add stronger typing.
-
-From present knowledge, the PHP internals teams have found methods of
-using specific classes of objects as keys but not a road to generic
-objects. If enum labels ever meet this criteria in their own right, as
-references to enum instances, such an implementation will take
-precedence over this RFC. Semantics would be the same in either case,
-however userland glue code can enable usage patterns which inform future
-development by enabling this present RFC.
-
-Future RFCs are recommended to enable
-
-::
-
-    Day::Monday == Color::Red  //true
-    Day::Monday === Color::Red //false
-
-Which could in turn allow
-
-::
-
-    class MyType implements ArrayAccess
-    //...
-    
-       public function offsetGet(Month $which){
-          //...
-       }
-    
-    //...
-    }
-    class YourType implements ArrayAccess
-    //...
-    
-       public function offsetGet(mixed $which){
-          //...
-       }
-    
-    //...
-    }
-
-Making the desirable
-
-::
-
-    $myobj = new MyType();
-    $yourobj = new YourType();
-    $x = $myobj[Color::Yellow];   // error
-    $y = $yourobj[Color::Yellow]; // fine
-
-Such a roadmap finally enables users to user to simply use match($this)
-and other userland syntactic sugar to simulate object keys. This gap can
-be further reduced and optimized from there.
+The ``disable_functions`` INI setting is not affected.
 
 Proposed Voting Choices
 -----------------------
 
-A two-thirds majority is required for this proposal to be accepted.
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Patches and Tests
------------------
-
-Pending
+Voting started on 2023-XX-XX and will end on 2023-XX-XX.
 
 Implementation
 --------------
 
-Author's org has committed work on this issue and having it implemented,
-assuming community is in favor and this is not trivial for an existing
-member. Any guidance from those who have worked previously with enums is
-appreciated.
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
 
 References
 ----------
 
-A robust discussion about further pros/cons/considerations at the
-original issue - https://github.com/php/php-src/issues/9208
-
-Mailing list introduction and opening RFC-
-https://news-web.php.net/php.internals/120117
-
-Mailing list post-RFC discussion: TBD
-
-Rejected Features
------------------
-
-None to date
+#. [1] Initial Mailing List discussion:
+   https://news-web.php.net/php.internals/120896
+#. [2] Gist containing all mandatory classes:
+   https://gist.github.com/Girgias/63d55ba1e50b580412b004046daed02b
 
 Additional Metadata
 -------------------
 
-:Original Authors: Garet Claborn, garet@suiteux.com
-:Slug: treat_enum_instances_as_values
-:Wiki URL: https://wiki.php.net/rfc/treat_enum_instances_as_values
+:Implementation: https://github.com/php/php-src/pull/12043
+:Original Authors: George Peter Banyard girgias@php.net
+:Original PHP Version: PHP 8.4
+:Slug: remove_disable_classes
+:Wiki URL: https://wiki.php.net/rfc/remove_disable_classes
