@@ -2,7 +2,7 @@
   * Version: 0.9
   * Date: 2025-02-05
   * Author: Larry Garfield (larry@garfieldtech.com)
-  * Status: Draft
+  * Status: In Discussion
   * First Published at: http://wiki.php.net/rfc/pipe-operator-v3
 
 
@@ -76,65 +76,6 @@ For that reason, pass-by-ref callables are disallowed on the right-hand side of 
 ==== Syntax choice ====
 
 The use of ''|>'' for pipe is obvious.  F#, [[https://elixirschool.com/en/lessons/basics/pipe-operator/|Elixir]], and OCaml all use that operator already for the exact same behavior.  There has been a long-standing [[https://github.com/tc39/proposal-pipeline-operator/wiki|discussion in JavaScript]] about adding a ''|>'' operator as described here.  It is the standard operator for this task.
-
-==== Compose ====
-
-The compose operator (''+'') is very similar conceptually to pipe, but does not invoke immediately.  Rather, it creates a new callable (Closure) that composes two or more other callables.  That allows a new operation to be defined simply and easily and then saved for later in a variable.  Because it is "just" an operator, it is compatible with all other language features.  That means, for example, conditionally building up a pipeline is just a matter of throwing ''if'' statements around as appropriate.
-
-Additionally, ''+='' will work as well, as it is just a shorthand for adding two values and assigning the result to the first variable.
-
-To reuse the example from pipes:
-
-<code php>
-$processor = htmlentities(...)
-    + str_split(...)
-    + fn($x) => array_map(strtoupper(...), $x);
-    
-if ($some_flag) {
-    $processor += fn($x) => array_filter($x, fn($v) => $v != 'O');
-}
-
-$result1 = $processor('some string');
-$result2 = $processor('other string');
-</code>
-
-This is far more flexible than the method chaining and embedded-conditional methods often used in user-space implementations today (see below).
-
-Both the left and right side of the compose operator may be any valid PHP callable that takes a single parameter, or any expression that evaluates to such a callable.  Functions with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a valid callable it will throw an Error.
-
-As compose is an expression, it may be used anywhere an expression is valid.
-
-The result of adding two callables is an object approximately equivalent to (though this isn't quite the implementation):
-
-<code php>
-readonly class ComposedClosure
-{
-    private array $callables = [];
-    
-    // This is called when the left-side variable is not a ComposedClosure yet.
-    public static function make(callable $left, callable $right)
-    {
-        $this->callables[] = $left;
-        $this->callables[] = $right;
-    }
-    
-    public function __invoke(mixed $arg): mixed
-    {
-        foreach ($this->callables as $fn) {
-            $arg = $fn($arg);
-        }
-        return $arg;
-    }
-    
-    // This is an operator.
-    public function add(callable $next): self
-    {
-        $new = new self();
-        $new->callables = [...$this->callables, $next];
-        return $new;
-    }
-}
-</code>
 
 ==== Existing implementations ====
 
