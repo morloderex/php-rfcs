@@ -8,63 +8,23 @@
 
 ===== Introduction =====
 
-In object-oriented code, "composition" generally means "one object having a reference to another."  In functional programming, "composition" generally means "sticking two functions together end-to-end to make a new function."  Both are valid and useful techniques, especially in a multi-paradigm language like PHP.  However, the latter is currently not directly supported by the language.  This RFC aims to correct that gap, with two new operators that work on ''callables''.
+In object-oriented code, "composition" generally means "one object having a reference to another."  In functional programming, "composition" generally means "sticking two functions together end-to-end to make a new function."  Both are valid and useful techniques, especially in a multi-paradigm language like PHP.  However, the latter is currently not directly supported by the language.  This RFC aims to correct that gap, with a new function composition operator for closures.
 
 This RFC cleanly enables “point-free style,” an approach to programming that limits the use of unnecessary intermediary variables. Point-free style has been gaining popularity in JavaScript circles, so will be familiar to JavaScript developers using that style. 
 
+This RFC is a natural follow-on to its sister RFC, [[rfc:pipe-operator-v3|the Pipe operator]]
+
 ===== Proposal =====
 
-This RFC proposes two new operators
+This RFC proposes a new operator
 
 <code php>
-mixed |> callable;
-
-callable + callable;
+closure + closure;
 </code>
 
+The compose operator (''+'') is very similar conceptually to pipe, but does not invoke immediately.  When applied to two single-parameter closures, evaluates to a new Closure object that contains the two referenced closures.  When invoked with a single argument, it will pass that argument to the first closure, then the result of that will be passed to the second closure, and return the result.  If either closure is already such a composed Closure, it will be "flattened" into just being a longer array of closures.
 
-The ''|>'' operator, or "pipe," accepts a single-parameter callable on the right and passes the left-side value to it, evaluating to the callable's result.
-
-The ''+'' operator, or "compose," when applied to two single-parameter callables, evaluates to a new Closure object that contains the two referenced callables.  When invoked with a single argument, it will pass that argument to the first callable, then the result of that will be passed to the second callable, and return the result.  If either callable is already such a composed Closure, it will be "flattened" into just being a longer array of callables.
-
-==== Pipe ====
-
-Pipe (''|>'') evaluates left to right by passing the value (or expression result) on the left as the first and only parameter to the callable on the right.  That is, the following two code fragments are exactly equivalent:
-
-<code php>
-$result = "Hello World" |> strlen(...);
-</code>
-
-<code php>
-$result = strlen("Hello World");
-</code>
-
-For a single call that is not especially useful.  It becomes useful when multiple calls are chained together.  That is, the following two code fragments are also exactly equivalent:
-
-<code php>
-$result = "Hello World"
-    |> 'htmlentities'
-    |> str_split(...)
-    |> fn($x) => array_map(strtoupper(...), $x)
-    |> fn($x) => array_filter($x, fn($v) => $v != 'O');
-</code>
-
-<code php>
-$temp = "Hello World";
-$temp = htmlentities($temp);
-$temp = str_split($temp);
-$temp = array_map(strtoupper(...), $temp);
-$temp = array_filter($temp, fn($v) => $v != 'O');
-$result = $temp;
-</code>
-
-The left-hand side of the pipe may be any value or expression.  The right-hand side may be any valid PHP callable that takes a single parameter, or any expression that evaluates to such a callable.  Functions with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a valid callable it will throw an Error.
-
-A pipe chain is an expression, and therefore may be used anywhere an expression is valid.
-
-==== Compose ====
-
-The compose operator (''+'') is very similar conceptually to pipe, but does not invoke immediately.  Rather, it creates a new callable (Closure) that composes two or more other callables.  That allows a new operation to be defined simply and easily and then saved for later in a variable.  Because it is "just" an operator, it is compatible with all other language features.  That means, for example, conditionally building up a pipeline is just a matter of throwing ''if'' statements around as appropriate.
+  Rather, it creates a new callable (Closure) that composes two or more other callables.  That allows a new operation to be defined simply and easily and then saved for later in a variable.  Because it is "just" an operator, it is compatible with all other language features.  That means, for example, conditionally building up a pipeline is just a matter of throwing ''if'' statements around as appropriate.
 
 Additionally, ''+='' will work as well, as it is just a shorthand for adding two values and assigning the result to the first variable.
 
@@ -85,11 +45,21 @@ $result2 = $processor('other string');
 
 This is far more flexible than the method chaining and embedded-conditional methods often used in user-space implementations today (see below).
 
-Both the left and right side of the compose operator may be any valid PHP callable that takes a single parameter, or any expression that evaluates to such a callable.  Functions with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a valid callable it will throw an Error.
-
 As compose is an expression, it may be used anywhere an expression is valid.
 
-The result of adding two callables is an object approximately equivalent to (though this isn't quite the implementation):
+==== Allowed arguments ====
+
+The left and right sides of the compose operator may be any unary PHP closure object, including a first-class-callable (''foo(...)'').  It may also be an invokable object (that is, an object with an ''%%__invoke()%%'' method).
+
+The reason to disallow non-closures is largely for simplicity.  PHP has many other callable syntaxes that are already very hard to distinguish from a random string or array, and both strings and arrays already have behavior associated with the ''+'' operator.  As creating Closures these days is pretty easy (either first-class-callables or a short-lambda), this is not a significant limitation.
+
+Should further improvements be made to closure-generation in the future, such as a revised [[rfc:partial_function_application|Partial Function Application RFC]], it would be supported naturally.
+
+Closures with more than one required parameter are not allowed and will fail as if the function were called normally with insufficient arguments.  If the right-hand side does not evaluate to a supported value it will throw an Error.
+
+==== Logic description ====
+
+The result of adding two closures is an object approximately equivalent to (though this isn't quite the implementation):
 
 <code php>
 readonly class ComposedClosure
@@ -123,23 +93,23 @@ readonly class ComposedClosure
 
 ==== Callable styles ====
 
-Both pipe and compose support any callable syntax supported by PHP.  At present, the most common form is first-class-callables (eg, ''strlen(...)''), which dovetails with this syntax very cleanly.  Should further improvements be made in the future, such as a revised [[rfc:partial_function_application|Partial Function Application RFC]], it would be supported naturally.
+Both pipe and compose support any callable syntax supported by PHP.  At present, the most common form is first-class-callables (eg, ''strlen(...)''), which dovetails with this syntax very cleanly.  
 
 ==== Syntax choice ====
 
-The use of ''|>'' for pipe is obvious.  F#, [[https://elixirschool.com/en/lessons/basics/pipe-operator/|Elixir]], and OCaml all use that operator already for the exact same behavior.  There has been a long-standing [[https://github.com/tc39/proposal-pipeline-operator/wiki|discussion in JavaScript]] about adding a ''|>'' operator as described here.  It is the standard operator for this task.
+The use of ''|>'' for pipe is obvious, as discussed in that RFC.
 
 For composition, there is a bit less standardization.  [[https://wiki.haskell.org/Function_composition|Haskell]] uses ''.'', but it reads "backwards" from what is proposed here.  F# uses ''>>'', as does Ruby.  
 
-The main limitation is that both strings and arrays may be valid callables in PHP, so the operator chosen must be distinguishable from those use cases.  
+''>>'' is a bit-wise shift operator, which is currently useless except on numeric values.  It provides no behavior objects (eg, Closures), making it a safe option.  However, it has no natural "append" behavior to update a ComposedClosure in place.  The natural first choice would be ''>>''=, but that is well-known as the "bind" operator in Haskell, which does something more advanced.  We're hesitant to claim that operator for a different behavior, especially when it may be useful for a bind operator in the future.
 
-''.'' is the string concatenation operator, meaning 'htmlentities' . 'strlen' would be ambiguous.  Does that concatenate two strings, or compose two functions?  It's unclear, and therefore not a viable option.
+Both ''.'' and ''+'' are available, and currently have no meaning on objects, making them safe options.  Both also have a natural append operation (''.='' and ''+''').
 
-''>>'' is a bit-wise shift operator, which is currently useless except on numeric values.  It provides no behavior for strings, arrays, or objects (eg, Closures), making it a safe addition.  However, it has no natural "append" behavior to update a ComposedClosure in place.  The natural first choice would be >>=, but that is well-known as the "bind" operator in Haskell, which does something more advanced.  We're hesitant to claim that operator for a different behavior, especially when it may be useful for a bind operator in the future.
-
-''+'' naturally provides ''+='' as an append, and is fairly self-evident to read.  It has no defined behavior on strings, either.  However, on arrays, it currently triggers a Warning and renders the string "Array", so <php>[$obj1, 'foo'] + [$obj2, 'bar']</php> would result in the string "ArrayArray", and two triggered warnings.  As the current behavior is functionally useless and already an error condition, we consider it safe to redefine into something meaningful.
+The main reason this RFC favors ''+'' is to avoid confusion with Haskell, which as noted also has a ''.'' operator but it would read the opposite way from PHP's behavior.  (That is, in Haskell you'd write ''foo . bar . baz'', but the equivalent in PHP is ''$baz . $bar . $foo''.)  This RFC's position is that Haskell's ordering is poor DX, but using the same syntax as Haskell in a different way would be needlessly confusing and attract too many "OMG you did it wrong" trolls, of which PHP has enough as is.  ''+'' would have no such confusion.
 
 ==== Existing implementations ====
+
+(This section is the same as in the Pipes RFC, as the arguments, and existing examples, are effectively identical.)
 
 Multiple user-space libraries exist in PHP that attempt to replicate pipe-like or compose-like behavior.  All are clunky and complex by necessity compared to a native solution.  There is clear demand for this functionality, but user-space's ability to provide it is currently limited.  This list has only grown since the Pipes v2 RFC, indicating an even stronger benefit to the PHP ecosystem with a solid built-in composition syntax.
 
@@ -159,7 +129,7 @@ Those libraries would be mostly obsoleted by this RFC, with a more compact, more
 The biggest limitation of any user-space implementation is performance.  Even the most minimal implementation (Crell/fp) requires adding 2-3 function calls to every operation, which is relatively expensive in PHP.  A native implementation would not have that additional overhead.  Crell/fp also results in somewhat awkward function nesting, like this:
 
 <code php>
-pipe($someVal,
+$fn = compose(
     htmlentities(...),
     str_split(...),
     fn($x) => array_map(strtoupper(...), $x),
@@ -173,7 +143,7 @@ More elaborate implementations tend to involve magic methods (which are substant
 
 A native implementation eliminates all of those challenges.
 
-Additionally, a native operator would make it much easier for static analysis tools to ensure compatible types.  The SA tools would know the input value's type, in most cases the callable type on the RHS, and could compare them directly without several layers of obfuscated user-space function calls between them.
+Additionally, a native operator would make it much easier for static analysis tools to ensure compatible types without several layers of obfuscated user-space function calls in the way.
 
 ===== Future Scope =====
 
