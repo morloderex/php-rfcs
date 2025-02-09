@@ -125,9 +125,276 @@ For that reason, pass-by-ref callables are disallowed on the right-hand side of 
 
 F#, [[https://elixirschool.com/en/lessons/basics/pipe-operator/|Elixir]], and OCaml all use the ''|>'' operator already for this exact same behavior.  There has been a long-standing [[https://github.com/tc39/proposal-pipeline-operator/wiki|discussion in JavaScript]] about adding a ''|>'' operator as described here.  It is the standard operator for this task.
 
+==== Use cases ====
+
+The use cases for a pipe operator are varied.  They include, among others, encouraging shallow-function-nesting, encouraging pure functions, expressing a complex process in a single expression, and emulating extension functions.
+
+For example, here are some code fragments from existing projects of mine that use a user-space pipe implementation.
+
+=== From Crell/Serde ===
+
+<code php>
+use function Crell\fp\afilter;
+use function Crell\fp\amap;
+use function Crell\fp\explode;
+use function Crell\fp\flatten;
+use function Crell\fp\implode;
+use function Crell\fp\pipe;
+use function Crell\fp\replace;
+
+enum Cases implements RenamingStrategy
+{
+    case Unchanged;
+    case UPPERCASE;
+    case lowercase;
+    case snake_case;
+    case kebab_case;
+    case CamelCase;
+    case lowerCamelCase;
+
+    public function convert(string $name): string
+    {
+        return match ($this) {
+            self::Unchanged => $name,
+            self::UPPERCASE => strtoupper($name),
+            self::lowercase => strtolower($name),
+            self::snake_case => pipe($name,
+                $this->splitString(...),
+                implode('_'),
+                strtolower(...)
+            ),
+            self::kebab_case => pipe($name,
+                $this->splitString(...),
+                implode('-'),
+                strtolower(...)
+            ),
+            self::CamelCase => pipe($name,
+                $this->splitString(...),
+                amap(ucfirst(...)),
+                implode(''),
+            ),
+            self::lowerCamelCase => pipe($name,
+                $this->splitString(...),
+                amap(ucfirst(...)),
+                implode(''),
+                lcfirst(...),
+            ),
+        };
+    }
+
+    /**
+     * @return string[]
+     */
+    protected function splitString(string $input): array
+    {
+        $words = preg_split(
+            '/(^[^A-Z]+|[A-Z][^A-Z]+)/',
+            $input,
+            -1, /* no limit for replacement count */
+            PREG_SPLIT_NO_EMPTY /* don't return empty elements */
+            | PREG_SPLIT_DELIM_CAPTURE /* don't strip anything from output array */
+        );
+
+        return pipe($words,
+            amap(replace('_', ' ')),
+            amap(explode(' ')),
+            flatten(...),
+            amap(trim(...)),
+            afilter(),
+        );
+    }
+}
+</code>
+
+The various imported functions are higher order functions that return a callable suitable for pipe, and the ''pipe()'' function is essentially a user-space implementation of the operator presented here.  By using the pipe approach, the different case folding options can be laid out in a clean, linear fashion.  The steps of each option are clearly self-evident.  They can also be expressed in a single expression, which both reduces visual clutter and allows each pipe to be used in a ''match()'' arm.  The result is both more compact and more at-a-glance understandable than a multi-statement approach.
+
+=== From Crell/MiDy ===
+
+<code php>
+class PageData
+{
+    public array $tags {
+        get => pipe(
+            array_merge(...$this->values('tags')),
+            array_unique(...),
+            array_values(...),
+        );
+    }
+
+    /**
+     * @param array<string, ParsedFile> $parsedFiles
+     */
+    public function __construct(
+        private array $parsedFiles,
+    ) {}
+
+    private function values(string $property): array
+    {
+        return array_column($this->parsedFiles, $property);
+    }
+}
+
+class ParsedFile
+{
+    public function __construct(public array $tags) {}
+}
+</code>
+
+In this (simplified from the actual code) example, the ''PageData'' class's ''$tags'' property is the aggregation of all tags on the files it contains.  Again, the use of a pipe makes the logic flow trivially easy to see visually.  With a native operator, it could be further simplified to:
+
+<code php>
+    public array $tags {
+        get => $this->values('tags')
+            |> fn($tags) => array_merge(...$tags),
+            |> array_unique(...),
+            |> array_values(...),
+        );
+    }
+</code>
+
+The single-expression alternative today would be:
+
+<code php>
+    public array $tags {
+        get => array_values(array_unique(array_merge(...$this->values('tags'))));
+    }
+</doe>
+
+Which I believe is inarguably worse.  A multi-statement version would require:
+
+<code php>
+    public array $tags {
+        get {
+            $tags = $this->values('tags');
+            $tags = array_merge(...$tags);
+            $uniqueTags = array_unique($tags);
+            return array_values($unique_tags);
+        }
+    }
+</code>
+
+Which is still less readable and less self-evident than the explicit pipe version.
+
+=== Shallow calls ===
+
+The use of a pipe for function composition also helps to separate closely related tasks so they can be developed and tested in isolation.  For a (slightly) contrived and simple example, consider:
+
+<code php>
+function loadWidget($id): Widget
+{
+    $record = DB::query("something");
+    return makeWidget($record);
+}
+
+function loadMany(array $ids): array
+{
+    $data = DB::query("something");
+    $ret = [];
+    foreach ($data as $record) {
+        $ret[] = $this->makeWidget($record);
+    }
+    return $ret;
+}
+
+function makeWidget(array $record): Widget
+    // Assume this is more complicated.
+    return new Widget(...$record);
+}
+</code>
+
+In this code, it is impossible to test ''loadWidget()'' or ''loadMany()'' without also executing ''makeWidget()''.  While in this trivial example that's not a huge problem, in a more complex example it often is, especially if several functions/methods are nested more deeply.  Dependency injection cannot fully solve this problem, unless each step is in a separate class.
+
+By making it easy to chain functions together, however, that can be rebuilt like this:
+
+<code php>
+function loadWidget($id): array
+{
+    return DB::query("something");
+}
+
+function loadMany(array $ids): array
+{
+    return DB::query("something");
+    $ret = [];
+    foreach ($data as $record) {
+        $ret[] = $this->makeWidget($record);
+    }
+    return $ret;
+}
+
+function makeWidget(array $record): Widget
+    // Assume this is more complicated.
+    return new Widget(...$record);
+}
+
+$widget = loadWidget(5) |> makeWidget(...);
+
+$widgets = loadMany([1, 4, 5]) |> fn(array $records) => array_map(makeWidget(...), $records);
+</code>
+
+And the latter could be further simplified with either a higher-order function (like ''amap()'' seen in the Serde example above) or partial function application.  Those chains could also be wrapped up into their own functions/methods for trivial reuse.  They can also be extended, too.  For instance, the result of ''loadMany()'' is most likely going to be used in a ''foreach()'' loop.  That's a simple further step in the chain.
+
+<code php>
+$profit = loadMany([1, 4, 5]) 
+    |> fn(array $records) => array_map(makeWidget(...), $records)
+    |> fn(array $ws) => array_filter(isOnSale(...), $ws)
+    |> fn(array $ws) => array_map(sellWidget(...), $ws)
+    |> array_sum(...);
+</code>
+
+And again, a few simple higher-order utility functions would eliminate the need for the wrapping closures.
+
+<code php>
+$profit = loadMany([1, 4, 5]) 
+    |> amap(makeWidget(...))
+    |> afilter(isOnSale(...))
+    |> amap(sellWidget(...))
+    |> array_sum(...);
+</code>
+
+That neatly encapsulates the entire logic flow of a process in a clear, compact, highly-testable set of operations.
+
+=== Pseudo-extension functions ===
+
+"Extension functions" are a feature of Kotlin and C# (and possibly other languages) that allow for a function to act as though it is a method of another object.  It has only public-read access, but has the ergonomics of a method.  While not a perfect substitute, pipes do offer similar capability with a little more work.
+
+For instance, the above examples included utility functions ''amap()'' and ''afilter()''.  Trivial implementations of those functions are as follows.  (More robust versions that handle any iterable are available in the Crell/fp library.)
+
+<code php>
+function amap(callable $c): \Closure
+{
+    return fn(array $a) => array_map($c, $a);
+}
+
+function afilter(callable $c): \Closure
+{
+    return fn(array $a) => array_filter($a, $c);
+}
+</code>
+
+That allows them to be used, via pipes, in a manner similar to "scalar methods."
+
+<code php>
+$result = $array 
+    |> afilter(is_even(...)) 
+    |> amap(some_transformation(...)) 
+    |> afilter(a_filter(...));
+</code>
+
+Which is not far off from what it would look like with scalar methods:
+
+<code php>
+$result = $array 
+    ->filter(is_even(...)) 
+    ->map(some_transformation(...)) 
+    ->filter(a_filter(...));
+</code>
+
+But can work with //any// value type, object or scalar.  While I do not believe pipes can completely replace extension functions or scalar methods, they provide a reasonable emulation and most of the benefits, for trivial cost.
+
 ==== Existing implementations ====
 
-Multiple user-space libraries exist in PHP that attempt to replicate pipe-like or compose-like behavior.  (See future-scope below for compose.)  All are clunky and complex by necessity compared to a native solution.  There is clear demand for this functionality, but user-space's ability to provide it is currently limited.  This list has only grown since the Pipes v2 RFC, indicating an even stronger benefit to the PHP ecosystem with a solid built-in composition syntax.
+Multiple user-space libraries exist in PHP that attempt to replicate pipe-like or compose-like behavior.  All are clunky and complex by necessity compared to a native solution.  There is clear demand for this functionality, but user-space's ability to provide it is currently limited.  This list has only grown since the Pipes v2 RFC, indicating an even stronger benefit to the PHP ecosystem with a solid built-in composition syntax.
 
   * The PHP League has a [[https://pipeline.thephpleague.com/|Pipeline]] library that encourages wrapping all functions into classes with an ''%%__invoke()%%'' method to allow them to be referenced, and using a ''->pipe()'' call for each step.
   * Laravel includes a [[https://github.com/illuminate/pipeline|Illuminate/Pipeline]] package that has an [[https://agoalofalife.medium.com/pipeline-and-php-d9bb0a6370ca|even more cumbersome syntax]].
