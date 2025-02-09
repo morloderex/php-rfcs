@@ -1,5 +1,5 @@
 ====== PHP RFC: Optional Interfaces ======
-  * Version: 0.1
+  * Version: 0.2
   * Date: 2024-12-28
   * Author: Juris Evertovskis, juris@glaive.pro
   * Status: Under Discussion
@@ -62,6 +62,156 @@ An interface can also be optional when it's in an ''extends'' list of another in
 interface MyInterface extends RequiredInterface, ?OptionalInterface {}
 </PHP>
 
+==== Dynamically defined interfaces ====
+
+The presence of optional interfaces is evaluated when the class is defined.
+
+<PHP>
+// This class does not implement OptionalInterface as it doesn't exist.
+class OldClass implements ?OptionalInterface {}
+$oldClass = new OldClass;
+
+eval('interface OptionalInterface {}');
+
+// This class implements OptionalInterface as it does exist now
+class NewClass implements ?OptionalInterface {}
+
+// The instance of OldClass is unaffected
+class_implements($oldclass); // []
+
+// The definition of OldClass is not affected either
+// New instances will still NOT implement the interface that didn't exist when the class was defined
+$oldClass2 = new OldClass;
+class_implements($oldClass2)); // []
+</PHP>
+
+==== Interface implementation ====
+
+The presence of ''?'' makes interface "optional" only in the sense that it is skipped if the interface does not exist. It does not make the implementation rules softer or "optional" in any other sense.
+
+If an optional interface exists, the implementation is checked as it is with non-optional interfaces. This code would still be invalid:
+
+<PHP>
+interface Iface
+{
+    public function someMethod();
+}
+
+class NaughtyClass implements ?Iface {}
+
+// Fatal error: Class NaughtyClass contains 1 abstract method and must therefore be declared abstract or implement the remaining method (Iface::someMethod) in ...
+</PHP>
+
+If a method is marked as an Override, it must override or implement something in an interface that is actually implemented.
+
+<PHP>
+interface ExistingInterface
+{
+    public function method();
+}
+
+class TestClass implements ?ExistingInterface, ?NonExistantInterface
+{
+    #[\Override]
+    public function method() {} // This is fine as it implements an interface method
+
+    #[\Override]
+    public function other() {} // This is still not allowed
+}
+
+// Fatal error: TestClass::other() has #[\Override] attribute, but no matching parent method exists in ...
+</PHP>
+
+==== Type checks ====
+
+A class only conforms to types that are actually implemented.
+
+<PHP>
+interface ExistingInterface {}
+
+class TestClass implements ?ExistingInterface, ?NonExistantInterface {}
+
+function f1(ExistingInterface $x) { echo "F1"; }
+function f2(NonExistantInterface $x) { echo "F2"; }
+
+$c = new TestClass;
+
+f1($c); // F1
+f2($c); // Fatal error: Uncaught TypeError: f2(): Argument #1 ($x) must be of type NonExistantInterface, TestClass given, called in ...
+</PHP>
+
+==== Example 4: Use case — compatibility with an optional library ===
+
+Consider a package that allows one to build DB expressions with an OOP syntax. On it's own it could be used via PDO like this:
+
+<PHP>
+$expression = new ColumnExpression('url')->unaccent()->append(new StringExpression('/path'));
+
+$statement = $pdo->prepare("
+    update links
+    set url = $expression
+    where id = ?
+");
+
+// merge bindings with other bindings
+$statement->execute([...$expression->bindings, 123]);
+</PHP>
+
+But to use these expressions in Laravel's Eloquent, we would have to implement their Expression interface. But we don't want to Laravel (or illuminate/database) as a dependency of our package because it makes perfect sense without it or with any other ORM. We have to find a workaround.
+
+One of the possibilities observed in the wild is to extract the actual implementation of our expression class to a ''BaseExpressionImplementation'' trait and do this:
+
+<PHP>
+use Illuminate\Contracts\Database\Query\Expression as LaravelExpression;
+
+if (interface_exists(LaravelExpression::class)) {
+    /**
+     * Class description
+     */
+    class BaseExpression implements \Stringable, LaravelExpression
+    {
+        use BaseExpressionImplementation;
+    }
+} else {
+    /**
+     * Class description
+     */
+    class BaseExpression implements \Stringable
+    {
+        use BaseExpressionImplementation;
+    }
+}
+</PHP>
+
+However by utilizing optional interfaces one can create this class in a more clear and straightforward way:
+
+<PHP>
+use Illuminate\Contracts\Database\Query\Expression as LaravelExpression;
+
+/**
+ * Class description
+ */
+class BaseExpression implements \Stringable, ?LaravelExpression
+{
+    // The actual implementation
+}
+</PHP>
+
+==== Example 5: Use case — compatibility with multiple versions ====
+
+Consider you're working on the perfect collections' package. You support all the array access, traversing, jsonization and so on. But suddenly here comes PHP 8.14 and it introduces a couple of new interfaces. And your audience really wants you to support the features of ''Xmlable'' and ''Yamlable''.
+
+What do you do? Should you drop the PHP 8.13 support and add the interfaces? Maintain two versions? Do some kind of conditional class definition like in Example 4? If your library had some kind of booting process, you could define dummy ''Xmlable'' and ''Yamlable'' if they don't exist, but the users just create the instances of your collection and that's it.
+
+With optional interfaces you can add optional support to the optional features:
+
+<PHP>
+class Collection implements ArrayAccess, Iterator, Serializable, Countable, JsonSerializable, Enumable, ?Xmlable, ?Yamlable
+{
+    // the implementation here
+}
+</PHP>
+
 ===== Backward Incompatible Changes =====
 None.
 
@@ -73,18 +223,34 @@ Next PHP 8.x.
 ===== RFC Impact =====
 
 ==== To Opcache ====
-> It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
 
-> Please explain how you have verified your RFC's compatibility with opcache.
-
-I have not verified the compatibility with the opcache yet.
+Opcache will store the interface names along with their optionality information. This means that a cached class will implement an optional interface once it exists even if the interface didn't exist during the request when the class was cached. The opposite is also true — if an optional interface is no longer loaded during the next request, a cached class will stop implementing it.
 
 ==== To Reflection API ====
 
-Currently this RFC does not add the optionality information in the Reflection API.
+This RFC does not add the optionality information in the Reflection API. Reflection will only list the interfaces that are actually implemented.
+
+<PHP>
+interface IfaceA {}
+
+class C implements ?IfaceA, ?IfaceB {}
+
+$reflection = new ReflectionClass('C');
+$reflection->getInterfaceNames(); // ['IfaceA']
+</PHP>
+
+==== To Autoloading ====
+
+The presence of the ''?'' token in the interface list does not affect autoloading. If an optional interface is not loaded, the autoloader will be invoked. An optional interface is only skipped if it still doesn't exist after the autoloading.
 
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
+
+Yes or no vote.  2/3 required to pass.
+
+<doodle title="Add the optional interfaces feature?" auth="tontonsb" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ===== Implementation =====
 
