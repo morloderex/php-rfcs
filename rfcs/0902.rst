@@ -1,179 +1,178 @@
-Make Unserialize() Emit A Warning For Trailing Bytes
-====================================================
+Static Class
+============
 
 :PHP-RFC: 0902
-:Title: Make Unserialize() Emit A Warning For Trailing Bytes
-:Author: Tim Düsterhus <timwolla@php.net>
-:Status: Implemented
+:Title: Static Class
+:Author: Paul Morris <bilge@scriptfusion.com>
+:Status: Declined
 :Type: Standards Track
-:Created: 2023-03-27
-:PHP-Version: 8.3
-:Version: 1.0
+:Created: 2024-06-23
+:PHP-Version: 8.4
+:Version: 1.4
 
 Introduction
 ------------
 
-PHP silently accepts trailing bytes after a valid serialization payload
-when unserializing. This is undesirable.
+A static class is a class that cannot be instantiated, and whose members
+(properties and methods) are all static. Implicit static classes can be
+created today, by simply only including static members. However,
+explicitly marking a class as static has several advantages:
 
-Once PHP’s unserialization parser finds the trailing delimiter of the
-serialized value (\`\ ``;``\ \` for scalars and \`\ ``}``\ \` for arrays
-and objects), parsing terminates, the serialized value is returned, and
-any additional input bytes are silently ignored.
+-  Clear expression of developer intent.
+-  Language-level compile-time checks to verify no instance members are
+   included anywhere in the inheritance chain.
+-  Language-level runtime checks to verify the class is never
+   instantiated by any mechanism.
 
-As ``serialize`` returns a valid serialization payload without trailing
-bytes, having trailing bytes within the input to ``unserialize`` implies
-that the serialization payload was *erroneously modified
-after-the-fact*. Silently accepting such serialization payload therefore
-is likely to mask (serious) issues within the application’s handling of
-(serialized) data and is therefore undesirable.
-
-One such issue would be overwriting existing serialized data with a
-shorter serialization payload, but without properly truncating the
-existing data to the shorter length. The newly written payload will
-properly unserialize, because it is well-formed and because trailing
-bytes are silently ignored. However the old data will still partly be
-visible within the storage location, possibly exposing sensitive
-information that was meant to be deleted.
-
-The recent CVE-2023-21036 (“aCropalypse”) is an example of this issue.
-When cropping screenshots on Google Pixel smartphones, the original
-screenshot file was overwritten in-place, without truncating the file to
-the smaller size of the cropped screenshot. For affected screenshots it
-is possible to restore (parts) of the original pixel data from the
-trailing bytes, exposing the information that is intended to be cropped.
-
-According to `a comment on the GitHub PR implementing this
-RFC <https://github.com/php/php-src/pull/9630#issuecomment-1272157809>`__,
-the “igbinary” serializer already rejects serialization data with
-trailing bytes. Such far there was only one issue report, where the
-warning exposed an issue within the application’s file handling (missing
-'b' flag on fopen). While “igbinary” is likely used much more rarely
-compared to PHP’s native serializer, this indicates that warning for
-trailing bytes exposes real issues, which is a good thing.
-
-Silently accepting trailing bytes can also be confusing to the human
-reader, when needing to debug issues with serialized data. The human
-reader might wonder why some information that is part of the serialized
-payload does not appear within the unserialized return value.
-
-Furthermore emitting a warning for trailing bytes makes it easier to
-extend the serialization format in the future when giving the trailing
-bytes a meaning. Existing serialized data with trailing bytes might
-either change its meaning or fail to unserialize. By emitting a warning
-for trailing bytes, the developer would be able to detect the issue
-before it actually becomes an issue.
+Of these advantages, the first can be somewhat mitigated with a
+`userland
+trait <https://github.com/ScriptFUSION/StaticClass/blob/master/src/StaticClass.php>`__,
+but as such traits are non-standard, there is no consistent way to
+identify them between projects. The ``static`` keyword is a consistent
+way to identify static classes that could also be leveraged by static
+analysis and code-completion tooling. Equally importantly, the
+language-level checks cannot be replicated in userland, thus are better
+suited for inclusion in PHP. In particular, classes with a private
+constructor can still be instantiated via reflection and
+faux-deserialization hacks.
 
 Proposal
 --------
 
-``unserialize()`` shall emit a new E_WARNING whenever the input string
-contains additional bytes once the unserialization parser terminates
-after successfully parsing a value. In other words: A warning shall be
-emitted if bytes can be removed from the end of the input string without
-changing the return value of ``unserialize()`` .
-
-Examples
-~~~~~~~~
+A *static class* is so marked with the existing ``static`` keyword,
+adjacent to the class declaration.
 
 .. code:: php
 
-   <?php
+   static class Foo {}
 
-   var_dump(unserialize('i:5;i:6;'));
-   // Warning: unserialize(): Extra data starting at offset 4 of 8 bytes in %s on line %d
-   // int(5)
+We introduce the ``static`` keyword at the class level to preclude the
+need to create a private constructor. That is,
+``function __construct()`` is a compile-time error in a static class.
+Furthermore, attempting to instantiate a static by any means, whether
+with the ``new`` keyword, ``ReflectionClass::newInstance*`` methods or
+``unserialize()`` hacks, is strictly forbidden and will result in a
+runtime error.
 
-   var_dump(unserialize('N;i:6;'));
-   // Warning: unserialize(): Extra data starting at offset 2 of 6 bytes in %s on line %d
-   // NULL
+Whilst the goals of this RFC so expressed are fairly straightforward, we
+acknowledge there are many finer points to consider. In particular:
 
-   var_dump(unserialize('b:1;i:6;'));
-   // Warning: unserialize(): Extra data starting at offset 4 of 8 bytes in %s on line %d
-   // bool(true)
+#. Should a static class imply ``final`` (as in C#)?
+#. Should a static class prohibit inheritance (as in C#)?
+#. Should a static class permit state?
+#. Should traits be permitted in a static class?
+#. Can a static class be marked abstract?
+#. Which magic methods should be supported?
 
-   var_dump(unserialize('a:1:{s:3:"foo";b:1;}i:6;'));
-   // Warning: unserialize(): Extra data starting at offset 20 of 24 bytes in %s on line %d
-   // array(1) {
-   //   ["foo"]=>
-   //   bool(true)
-   // }
+To answer these questions, we consider the principal reason to mark a
+class static is to move from an implicit declaration to the explicit.
+Ergo, any decision precluding the developer from doing so is invalid,
+since it coerces them to avoid explicit static, defeating its purpose.
+Thus we derive the following razor:
+
+   We cannot remove features from a static class that would otherwise be
+   present in a standard class.
+
+Following this razor we arrive at the following design.
+
+#. A static class may be marked ``final``, but in the absence of such a
+   mark, may still be extended.
+#. A static class may extend other static classes, provided the parents
+   are also marked ``static``.
+#. A static class may have static properties.
+#. A static class may use traits, provided they introduce no instance
+   members.
+#. A static class may be marked abstract, since abstract static
+   functions already exist in PHP.
+#. All static magic methods must be supported, i.e. just
+   ``__callStatic()``.
+
+Static keyword for class members
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One question our razor cannot answer is whether static member
+declarations still require the ``static`` keyword in a static class.
+
+Marking a class ``readonly`` makes marking properties with the same
+*optional*, thus one might argue ``static`` should follow suit. However,
+I opine it should not. Unlike ``readonly``, which typically applies to
+properties declared near the head of the class (by convention) where the
+same modifier is also applied, static members appear throughout the full
+length of the class body. That is, it should be apparent when jumping
+anywhere into a static class that its members are static, without having
+to check the class declaration. Therefore this RFC still requires the
+``static`` modifier for all members regardless of whether the class is
+also marked ``static``, to prevent them appearing as instance members.
+Aside, this is commensurate with the C# approach.
+
+Mutually exclusive modifiers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When ``static`` is applied to a class, the following other class-level
+modifiers become invalid and will raise compile-time errors.
+
+-  ``readonly`` — Read-only properties are only supported for instance
+   properties, but instance properties are forbidden by ``static``.
+
+Inheritance
+~~~~~~~~~~~
+
+-  A static class only permits extending a parent class that is also
+   marked ``static``.
+-  A non-static class cannot extend a static class.
+-  A static class can inherit from an abstract class, provided it is
+   also marked ``static``.
+
+Anonymous classes
+~~~~~~~~~~~~~~~~~
+
+Anonymous classes are always instantiated and thus at odds with the
+concept of a static class. That is, the notion of an *anonymous static
+class* is inherently invalid and not supported.
+
+Dynamic properties
+~~~~~~~~~~~~~~~~~~
+
+Undeclared object properties can be added *dynamically* to object
+instances, but since static classes cannot be instantiated, there is
+nothing to attach such properties to. Static properties must always be
+declared explicitly.
+
+Reflection extensions
+~~~~~~~~~~~~~~~~~~~~~
+
+A new ``ReflectionClass::isStatic`` method will be added, returning
+``true`` when the class is so marked, otherwise ``false``.
 
 Backward Incompatible Changes
 -----------------------------
 
-A new warning will be emitted when the input to ``unserialize()``
-contains unconsumed bytes after successfully unserializing something.
-
-For users that use a throwing error handler, this will result in
-``unserialize()`` failing for this type of modified input string. The
-documentation already states that passing strings that were not created
-by ``serialize()`` must not be passed to ``unserialize()``, because
-doing so might introduce security issues.
-
-Users that do not use a throwing error handler might just see the new
-warning.
-
-Users might not notice anything at all if they suppress unserialize
-warnings (e.g. by calling ``@unserialize()``).
-
-The new warning is the entire purpose of this RFC, thus the
-justification for the possible breaks is the reasoning given before.
-
-Proposed PHP Version(s)
------------------------
-
-Next PHP 8.x (8.3).
-
-RFC Impact
-----------
-
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-The same impact as with userland code.
-
-To Opcache
-~~~~~~~~~~
-
-None.
-
-New Constants
-~~~~~~~~~~~~~
-
-None.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-None.
-
-Open Issues
------------
-
-None.
-
-Unaffected PHP Functionality
-----------------------------
-
-Anything that isn’t ``unserialize()`` or more generally related to
-serialization.
+None known.
 
 Future Scope
 ------------
 
--  Make this an exception.
+These are some possible future extensions, but we don't necessarily
+endorse them.
 
-Proposed Voting Choices
------------------------
+#. As noted in `Readonly properties
+   2.0 <readonly_properties_v2#restrictions>`__, read-only static
+   properties are not supported due to a technical limitation. If that
+   limitation should ever be lifted, we could revisit lifting the
+   restriction on mutual exclusivity with the ``readonly`` modifier.
+#. Static interfaces may be introduced later if there is such a demand.
+#. Static traits may be introduced later if there is such a demand.
 
-Question: Make unserialize() emit a E_WARNING if the input contains trailing bytes?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Vote
+----
+
+As per the `voting RFC <RFC/voting#required_majority>`__ a yes/no vote
+with a 2/3 majority is needed for this proposal to be accepted.
+
+Voting started on 2024-07-15 and ended on 2024-08-09 at 21:00 UTC.
+
+Question: Implement static classes as described?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -181,31 +180,169 @@ Voting Choices
 -  Yes
 -  No
 
-Patches and Tests
------------------
+Discussion
+----------
 
--  https://github.com/php/php-src/pull/9630
+Though this is a fairly straightforward RFC, it is not without its
+detractors. Some view static classes as an anti-pattern; a namespace
+cheat that should instead be presented as namespaced functions
+(sans-class wrapper). That goes double for static classes including
+state, where static properties can be viewed as equivalent to global
+state, which is widely regarded as an anti-pattern. However, this RFC is
+*not* encouraging any particular patterns. On the contrary, we are
+merely returning a small but nevertheless useful tool to the developer's
+toolkit that could have been available since classes were introduced. In
+this humble author's opinion, static classes *should* just be a
+collection of pure functions, but as defined by our opening razor, we
+will *not* remove features from a static class that exist in a
+non-static class because we do not have the liberty of designing a new
+language, we're designing PHP, with all the weight of its past carried
+forward. Anyone wishing to remove features from PHP can submit a
+separate RFC, or perhaps more practically, just add a check to their
+favourite code style tool.
 
-Implementation
---------------
+Some regard namespaced functions as the correct way to implement static
+classes. That is, a file of floating functions under a namespace, as in
+`Amp <https://github.com/amphp/amp/blob/138801fb68cfc9c329da8a7b39d01ce7291ee4b0/src/functions.php>`__.
+This author requested comments that would speak to any technical or
+philosophical reason for why this would be strictly better than a static
+class, but the only technical argument fielded was that classes can be
+autoloaded and functions cannot. Curiously, this fact only speaks *in
+favour* of static classes. One might argue this difference is negligible
+thanks to Composer; files of functions can be loaded by Composer, but in
+this case the file is *always* loaded, not *auto*\ loaded. Still, this
+could be splitting hairs since opcache presumably trivializes this
+difference. Interestingly, the current Amp maintainers commented that
+namespaced functions were something they inherited, and if they had to
+do it all over again, would probably elect for static classes. Thus we
+conclude those preferring one style over the other do so purely out of
+personal preference and not because one is technically nor even
+philosophically superior.
 
--  https://github.com/php/php-src/commit/bf727cf5e206f567bc07fa1b5f331f2f269a6894
+Most importantly, this proposal does nothing to promote any patterns or
+practices not already possible, nor does it block or inhibit development
+of orthogonal approaches, such as autoloading of namespaced functions,
+which some may regard as equivalent.
+
+In the wild
+-----------
+
+Today, implicit static classes are all around us, in proprietary
+projects and some of the largest open source projects in the world,
+often called *utils* or *helpers*, all of these classes would benefit
+from being explicitly marked static. To name a few:
+
+-  PHPUnit
+
+   -  Almost everything under
+      `Util <https://github.com/sebastianbergmann/phpunit/tree/10.5/src/Util>`__
+      including:
+
+      -  `Color <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Color.php>`__
+      -  `Exporter <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Exporter.php>`__
+      -  `Filesystem <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Filesystem.php>`__
+      -  `GlobalState <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/GlobalState.php>`__
+      -  `Json <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Json.php>`__
+      -  `Reflection <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Util/Reflection.php>`__
+
+   -  Interestingly,
+      `Assert <https://github.com/sebastianbergmann/phpunit/blob/10.5/src/Framework/Assert.php>`__
+      would *not* be a static class because, despite being filled
+      entirely with static methods, is intended to be extended by test
+      class instances. In a (future) static class world, the absence of
+      the ``static`` modifier would more clearly communicate this
+      intent.
+
+-  Symfony
+
+   -  `BinaryUtil <https://github.com/symfony/symfony/blob/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/Uid/BinaryUtil.php#L47>`__
+   -  `FormUtil <https://github.com/symfony/symfony/blob/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/Form/Util/FormUtil.php#L33>`__
+   -  Almost everything under
+      `VarDumper/Caster <https://github.com/symfony/symfony/tree/1a16ebc32598faada074e0af12a6a698d2964a5e/src/Symfony/Component/VarDumper/Caster>`__
+
+-  Laravel – half this framework appears to be static, though fewer
+   classes qualify as pure static, including:
+
+   -  Several classes under
+      `Support <https://github.com/laravel/framework/tree/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support>`__
+      including:
+
+      -  `Env <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Env.php>`__
+      -  `Pluralizer <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Pluralizer.php>`__
+      -  `Reflector <https://github.com/laravel/framework/blob/f5f9383af919ef74b00eacb23b4a88fcf390743c/src/Illuminate/Support/Reflector.php>`__
+
+   -  Literally everything under
+      `Facades <https://github.com/laravel/framework/tree/11.x/src/Illuminate/Support/Facades>`__
 
 References
 ----------
 
--  https://github.com/php/php-src/pull/9630
+-  Discussion threads
+
+   -  `This RFC <https://externals.io/message/123769>`__ (Bilge, June
+      23, 2024).
+   -  `Initial proposal <https://externals.io/message/123611>`__ (Bilge,
+      June 15, 2024).
+   -  `Prior proposal <https://externals.io/message/121717>`__ (Lanre
+      Waju, November 19, 2023).
+
+-  Archaic discussion threads
+
+   -  `[VOTE] Abstract final / Static
+      classes <https://externals.io/message/79601>`__ (Guilherme Blanco,
+      December 12, 2014)
+   -  `[RFC] Static classes (Was Abstract final
+      classes) <https://externals.io/message/79338>`__ (Robert Stoll,
+      December 1, 2014)
+   -  `[RFC] Abstract final
+      classes <https://externals.io/message/79211>`__ (Guilherme Blanco,
+      November 27, 2014)
+
+-  Similar RFCs
+
+   -  `RFC: Static classes <rfc/abstract_final_class>`__ (Guilherme
+      Blanco, November 26, 2014)
+   -  `RFC: Static classes for PHP <rfc/static-classes>`__ (Lars
+      Strojny, May 3, 2008)
+
+-  `Static Classes and Static Class Members (C# Programming
+   Guide) <https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/static-classes-and-static-class-members>`__
 
 Rejected Features
 -----------------
 
--  Throw an Exception instead of emitting a warning.
+Forbidding static class type declarations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It should be regarded as an error to use a static class as a type
+declaration, since they cannot be instantiated and thus the requirement
+can never be fulfilled by a matching instance. However, it is not
+technically possible to forbid such declarations within PHP itself
+because type checking is done when an instance is passed at runtime (and
+we can never have such an instance). The engine does not support type
+checking at compile time for function/method signatures. Such a check
+would be a good candidate for third party static analysers instead.
+
+Special thanks
+--------------
+
+I would feel remiss not to give thanks to the following list
+contributors whose high quality feedback made significant contributions
+to this RFC.
+
+-  Mike Schinkel
+-  Alexandru Pătrănescu
+-  Claude Pache
+-  Everyone else who engaged with this proposal.
+
+Thank you!
 
 Additional Metadata
 -------------------
 
-:Implementation: https://github.com/php/php-src/commit/bf727cf5e206f567bc07fa1b5f331f2f269a6894
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Original PHP Version: PHP 8.3
-:Slug: unserialize_warn_on_trailing_data
-:Wiki URL: https://wiki.php.net/rfc/unserialize_warn_on_trailing_data
+:Implementation: https://github.com/php/php-src/pull/14861
+:Original Authors: Paul Morris bilge@scriptfusion.com
+:Original PHP Version: PHP 8.4
+:Original Status: Voting
+:Slug: static_class
+:Wiki URL: https://wiki.php.net/rfc/static_class
