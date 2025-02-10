@@ -199,8 +199,6 @@ namespace Uri\WhatWg {
     
         public function getScheme(): string {}
 
-        public function getRawScheme(): string {}
-
         public function withScheme(string $encodedScheme): static {}
 
         public function getUser(): ?string {}
@@ -426,9 +424,9 @@ $uri->withHost("/");                               // Throws Uri\InvalidUriExcep
 All the components - with the exception of the host - can be retrieved in two formats:
 
   * "raw" representation: it's how the URI component is natively represented without any post-processing. 
-  * "decoded-normalized" representation: the URI is normalized, and the component is percent-decoded.
+  * "decoded-normalized" representation: the URI is normalized (when applicable), and the component is percent-decoded.
 
-Given the ''https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''https://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components can be represented in case of ''Uri\Rfc3986\Uri'':
+Given the ''https://%61pple:p%61ss@ex%61mple.com/foob%61r/baz%2Fbqux?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''https://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components can be represented in case of ''Uri\Rfc3986\Uri'':
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
@@ -448,8 +446,8 @@ echo $uri->getRawPassword();                     // p%61ss
 echo $uri->getHost();                            // example.com
 echo $uri->getRawHost();                         // ex%61mple.com
 
-echo $uri->getPath();                            // foobar
-echo $uri->getRawPath();                         // foob%61r
+echo $uri->getPath();                            // /foobar
+echo $uri->getRawPath();                         // /foob%61r
 
 echo $uri->getQuery();                           // abc=abc
 echo $uri->getRawQuery();                        // %61bc=%61bc
@@ -461,25 +459,24 @@ echo $uri->getRawFragment();                     // %61bc
 Let's have a look at another example which involves normalization:
 
 <code php>
-$uri = new Uri\Rfc3986\Uri("HTTPS://example.COM/foo/../bar/");
+$uri = new Uri\Rfc3986\Uri("HTTPS://EXAMPLE.COM/foo/../bar/");
 
 echo $uri->getScheme();                          // https
 echo $uri->getRawScheme();                       // HTTPS
 
 echo $uri->getHost();                            // example.com
-echo $uri->getRawHost();                         // example.COM
+echo $uri->getRawHost();                         // EXAMPLE.COM
 
-echo $uri->getPath();                            // bar/
-echo $uri->getRawPath();                         // foo/../bar/
+echo $uri->getPath();                            // /bar/
+echo $uri->getRawPath();                         // /foo/../bar/
 </code>
 
 In case of ''Uri\Whatwg\Url'', we'll get the following results:
 
 <code php>
-$url = new Uri\Whatwg\Url("https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+$url = new Uri\Whatwg\Url("HTTPS://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
 
 echo $url->getScheme();                          // https
-echo $url->getRawScheme();                       // HTTPS
 
 echo $url->getUser();                            // apple
 echo $url->getRawUser();                         // %61pple
@@ -490,8 +487,8 @@ echo $url->getRawPassword();                     // p%61ss
 echo $url->getHost();                            // example.com
 echo $url->getHostForDisplay();                  // example.com
 
-echo $url->getPath();                            // foobar
-echo $url->getRawPath();                         // foob%61r
+echo $url->getPath();                            // /foobar
+echo $url->getRawPath();                         // /foob%61r
 
 echo $url->getQuery();                           // abc=abc
 echo $url->getRawQuery();                        // %61bc=%61bc
@@ -500,12 +497,32 @@ echo $url->getFragment();                        // abc
 echo $url->getRawFragment();                     // %61bc
 </code>
 
-This script gave the very same results as the previous one did, except for the host component. Most notably, ''Uri\Whatwg\Url'' doesn't have a ''getRawHost()'' method. This may sound surprising, but the reason is that WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHostForDisplay()'' method comes handy to retrieve the host in a display-friendly format:
+This script gave very similar results as the previous one did, except for the scheme and the host components. For one, ''Uri\Whatwg\Url'' automatically normalizes the scheme as lowercased, that's why it has no ''getRawScheme()'' method. For similar reasons, ''Uri\Whatwg\Url'' has neither a ''getRawHost()'' method because WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHostForDisplay()'' method comes handy to retrieve the host in a display-friendly format:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://🐘.com");
 echo $url->getHost();                              // xn--go8h.com
 echo $url->getHostForDisplay();                    // 🐘.com
+</code>
+
+There is one more edge-case which needs to be highlighted. This is related to percent-decoding of reserved characters:
+
+<code php>
+$uri = new Uri\Rfc3986\Uri("https://example.com/foo/bar%2Fbaz");
+
+echo $uri->getPath();                            // /foo%2Fbar
+echo $uri->getRawPath();                         // /foo%2Fbar
+</code>
+
+In the example above, the second path segment contains the ''%2F'' which is the percent-encoded form of the ''/''. But why does it have to be percent-encoded at all? It's because ''/'' is a [[https://datatracker.ietf.org/doc/html/rfc3986#section-2.2|reserved character]], and there is a semantical difference between ''/'' and ''%2F'' in the path: the former one separates the individual path segments, while ''%2F'' means that the respective ''/'' is part of a single segment (but using the percent-decoded form would be ambiguous). Therefore the example URI has two path segments: ''foo'' and "bar/baz".
+
+Let's see the same example with WHATWG:
+
+<code php>
+$url = new Uri\WhatWg\Url("https://example.com/foo/bar%2Fbaz");
+
+echo $url->getPath();                            // /foo/bar/baz
+echo $url->getRawPath();                         // /foo%2Fbar
 </code>
 
 ==== Component recomposition ====
