@@ -115,6 +115,34 @@ var_dump($i);
 
 ==== Use Cases ====
 
+Reliably unlocking "locks" at the end of processing a lockable resource, without waiting for the entire function to finish:
+
+<PHP>
+<?php
+
+// Using the https://github.com/azjezz/psl library for an object-oriented file API.
+use Psl\File;
+use Psl\File\LockType;
+
+function process_file($path): string {
+    using (
+        $file = File\open_read_only($path),
+        $lock = $file->lock(LockType::Shared),
+    ) {
+        $content = $file->readAll();
+    }
+
+    // $lock and $file will be `unset()` at this point,
+    // ensuring that the file does not remain locked until
+    // the entire processing finishes.
+
+    // Pretend to do hard work.
+    sleep(5);
+
+    return $content;
+}
+</PHP>
+
 Preventing the "foreach with references" gotcha (see [[rfc:foreach_unwrap_ref|RFC: Unwrap reference after foreach]]):
 
 <PHP>
@@ -158,29 +186,6 @@ final class SomeController extends Controller {
 </PHP>
 
 In these examples, the <php>using</php> statement binds one or more variables to values or expressions, and then executes the subsequent statement (or block) with these variables in scope.
-
-<PHP>
-<?php
-
-use Psl\File;
-
-using ($file = File\open_read_only($path)) {
-    $content = $file->readAll();
-}
-</PHP>
-
-is equivalent to:
-
-<PHP>
-use Psl\File;
-
-try {
-    $file = File\open_read_only($path);
-    $content = $file->readAll();
-} finally {
-    unset($file); // `__destruct` is called on the object
-}
-</PHP>
 
 ==== Conclusion ====
 
