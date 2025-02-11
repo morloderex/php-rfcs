@@ -11,39 +11,95 @@ This RFC proposes the introduction of a new language construct, the <php>using</
 
 Resource management is a recurring challenge in PHP applications. Developers often need to ensure that resources (files, database connections, etc.) are properly disposed of, even in the event of exceptions. While PHP’s garbage collection and destructor mechanisms usually suffice, there are scenarios where immediate cleanup is desired. Similar language constructs in other ecosystems (such as Python’s ''with'', Hack’s ''using'', and C#’s ''using'') have proven their utility in writing cleaner, more maintainable code.
 
+<PHP>
+using ($user = $this->getUser()) if ($user !== null) {
+    echo "Logged in as ", $user->getName(), PHP_EOL;
+} else {
+    echo "You are a guest", PHP_EOL;
+}
+
+// `$user` is unset() now. The object may be garbage collected and destructors run,
+// unless referenced elsewhere. IDEs and static analyzers would know that `$user`
+// no longer refers to a valid variable and would no longer autocomplete it and point
+// out any accidental usages.
+</PHP>
+
 ===== Proposal =====
-
-The syntax for the `using` statement is defined as follows:
-
-<code>
-<using_statement> ::= "using" "(" <variable_declarations> ")" <statement>
-<variable_declarations> ::= <variable_declaration> { "," <variable_declarations> }
-<variable_declaration> ::= (<variable> "=" <expression>) | <variable>
-</code>
 
 ==== Examples ====
 
+Simple examples:
+
 <PHP>
 using ($x = 10) {
-    echo "Using block with x: " . $x . "\n";
+    var_dump($x); // int(10)
 }
+
+var_dump($x); // Warning: Undefined variable $x
 
 using ($a = "hello", $b = 20) {
-    echo "Using block with a: " . $a . ", b: " . $b . "\n";
+    // string(5) "hello"
+    // int(20)
+    var_dump($a, $b);
 }
 
-using ($user = $this->getUser()) if ($user !== null) {
-    echo "Using block with user: " . $user->getName() . "\n";
+// Warning: Undefined variable $a
+// Warning: Undefined variable $b
+var_dump($a, $b);
+
+$existing = "foo";
+using ($existing, $fresh) {
+    // string(3) "foo"
+    // NULL
+    var_dump($existing, $fresh);
 }
 
-using ($file = @fopen($path)) if ($file !== false) {
-    // ...
-}
-
-using ($file = @fopen($path))
-    fwrite($file, "hello");
+// Warning: Undefined variable $existing
+// Warning: Undefined variable $fresh
+var_dump($existing, $fresh);
 </PHP>
 
+Combining with control statements:
+
+<PHP>
+using ($choice = random_int(1, 100)) if (($choice % 2) == 0) {
+    echo "The choice {$choice} is even";
+} else {
+    echo "The choice {$choice} is odd";
+}
+
+// Warning: Undefined variable $choice
+var_dump($choice);
+
+using ($i) for ($i = 0; $i < 100; $i++) {
+    echo "{$i} ";
+}
+
+// Warning: Undefined variable $i
+var_dump($i);
+</PHP>
+
+==== Use Cases ====
+
+Preventing the "foreach with references" gotcha (see [[rfc:foreach_unwrap_ref|RFC: Unwrap reference after foreach]]):
+
+<PHP>
+$array = [1, 2, 3];
+
+using ($value) foreach ($array as &$value) {
+    $value *= 2;
+}
+
+// array(3) {
+//   [0]=>
+//   int(2)
+//   [1]=>
+//   int(4)
+//   [2]=>
+//   int(6) <- Not a reference.
+// }
+var_dump($array); 
+</PHP>
 
 Another example using a non-block statement:
 
@@ -74,22 +130,22 @@ In these examples, the <php>using<(php> statement binds one or more variables to
 A <php>using</php> statement such as:
 
 <PHP>
-using ($a = $b, $c) <statement>
+using ($a = $b, $c) /* <statement> */
 </PHP>
 
-is de-sugared at compile time to:
+will effectively behave as if the programmer had written:
 
 <PHP>
 try {
     $a = $b;
-    $c;
-    <statement>
+    $c ??= null;
+    /* <statement> */
 } finally {
     unset($a, $c);
 }
 </PHP>
 
-This guarantees that, regardless of how the ''<statement>'' terminates (normally or via an exception), the declared variables are automatically <php>unset()</php>. Unsetting an object variable will trigger its <php>__destruct()</php> method, thereby releasing resources.
+This guarantees that, regardless of how the ''<statement>'' terminates (normally or via an exception), the variables listed in the <php>using()</php> statement are automatically <php>unset()</php>. Unsetting the last reference will trigger the normal garbage collection mechanism, calling the <php>__destruct()</php> method of objects and will thereby be releasing resources.
 
 More refined example:
 
@@ -115,6 +171,16 @@ try {
     unset($file); // `__destruct` is called on the object
 }
 </PHP>
+
+==== Syntax ====
+
+The full syntax for the `using` statement is defined as follows:
+
+<code>
+<using_statement> ::= "using" "(" <variable_declarations> ")" <statement>
+<variable_declarations> ::= <variable_declaration> { "," <variable_declarations> }
+<variable_declaration> ::= (<variable> "=" <expression>) | <variable>
+</code>
 
 ==== Conclusion ====
 
