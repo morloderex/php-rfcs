@@ -26,9 +26,35 @@ using ($user = $this->getUser()) if ($user !== null) {
 
 ===== Proposal =====
 
+This RFC proposes a new <php>using()</php> statement, which takes a list of variables (with an optional assignment) and a statement (including block statements using curly braces).
+
+Before executing the given statement, <php>using()</php> will define all listed variables, such that they may be accessed within the statement without triggering the "Undefined variable $foo" warning. If the assignment-form is used, the variables will be assigned the result of the given expression. Otherwise if the variable is already defined, it will keep its existing value and if it is not defined, it will be assigned a default value of <php>null</php>.
+
+After the set-up phase, the given statement or list of statements will be executed and after the given statement finished executing, the listed variables will be <php>unset()</php>, independent of whether the statement ran to completion or whether it threw an Exception.
+
+In more technical terms, a <php>using</php> statement such as:
+
+<PHP>
+using ($a = $b, $c) /* <statement> */
+</PHP>
+
+will behave as if the programmer had written:
+
+<PHP>
+try {
+    $a = $b;
+    $c ??= null;
+    /* <statement> */
+} finally {
+    unset($a, $c);
+}
+</PHP>
+
+This guarantees that, regardless of how the ''<statement>'' terminates (normally, via an exception, or by returning from the function), the variables listed in the <php>using()</php> statement are automatically <php>unset()</php> and the reference count of the stored value be decreased. Unsetting the last reference (i.e. decreasing the reference count to zero) will trigger the regular destruction logic, calling the <php>__destruct()</php> method of objects and will thereby be releasing resources.
+
 ==== Examples ====
 
-Simple examples:
+Simple examples showcasing the basic semantics:
 
 <PHP>
 using ($x = 10) {
@@ -59,7 +85,7 @@ using ($existing, $fresh) {
 var_dump($existing, $fresh);
 </PHP>
 
-Combining with control statements:
+Examples combining <php>using()</php> with control statements:
 
 <PHP>
 using ($choice = random_int(1, 100)) if (($choice % 2) == 0) {
@@ -124,30 +150,6 @@ final class SomeController extends Controller {
 </PHP>
 
 In these examples, the <php>using<(php> statement binds one or more variables to values or expressions, and then executes the subsequent statement (or block) with these variables in scope.
-
-==== Semantics ====
-
-A <php>using</php> statement such as:
-
-<PHP>
-using ($a = $b, $c) /* <statement> */
-</PHP>
-
-will effectively behave as if the programmer had written:
-
-<PHP>
-try {
-    $a = $b;
-    $c ??= null;
-    /* <statement> */
-} finally {
-    unset($a, $c);
-}
-</PHP>
-
-This guarantees that, regardless of how the ''<statement>'' terminates (normally or via an exception), the variables listed in the <php>using()</php> statement are automatically <php>unset()</php>. Unsetting the last reference will trigger the normal garbage collection mechanism, calling the <php>__destruct()</php> method of objects and will thereby be releasing resources.
-
-More refined example:
 
 <PHP>
 <?php
