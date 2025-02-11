@@ -1,159 +1,129 @@
-Random Migration
-================
+#[NotSerializable]
+==================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
+:Title: #[NotSerializable]
+:Author: Max Semenik <maxsem.wiki@gmail.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-12-22
-:Version: 0.1
+:Created: 2023-11-26
+:Version: 1.0
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+Some classes aren't supposed to be serialized. Currently, while PHP
+internal classes have a nice way of preventing being
+serialized/unserialized, userspace doesn't. I'm proposing to make them
+equal.
+
+Compare the internals simply slapping
+``ce_flags |= ZEND_ACC_NOT_SERIALIZABLE`` to userspace having to do
+something like this:
+
+.. code:: php
+
+   class MyClass
+   {
+       public function __sleep() // Wait, what its signature is supposed to be? Does it matter?
+       {
+           throw new Exception('This class must not be serialized');
+       }
+       
+       public function __wakeup()
+       {
+           throw new Exception('This class must not be unserialized');
+       }
+   }
+
+Not only is this method bulky, it's also less readable. It also lacks a
+way to indicate the intention to various code analysers so that they
+could detect attempts to serialize such classes.
+
+Analysis
+--------
+
+As of the time I'm writing this, there are 94 uses of
+``@not-serializable`` in php-src. Examples include:
+
+-  Closures
+-  Various connections like ``PDO``, etc.
+-  Reflection
+
+What could userspace use this for?
+
+-  Wrappers for all the above. Imagine a PDO wrapper that creates
+   connections on demand. If the connection hasn't been established yet,
+   its serialization will succeed, which results in unpredictable
+   behavior.
+-  Secret information that shouldn't be accidentally exfiltrated by
+   being serialized.
+-  Security-sensitive classes that are unsafe to unserialize with
+   arbitrary data (`example in the
+   wild <https://github.com/wikimedia/mediawiki-libs-ScopedCallback/blob/master/src/ScopedCallback.php>`__).
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
-
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
-
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-The following functions to deprecated:
-
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
-
-All of these functions have global scope issues described in the Random
-Extension RFC.
-
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
-
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
-
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
-
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
-
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
+Introduce a new attribute that would expose this functionality to
+userspace.
 
 .. code:: php
 
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
+   #[NotSerializable]
+   class MyClass
+   {
+   }
+
+   serialize(new MyClass()); // Exception: Serialization of 'MyClass' is not allowed
+
+This change requires no changes to the engine whatsoever, all
+functionality is already present - it merely gets exposed to userspace.
 
 Backward Incompatible Changes
 -----------------------------
 
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
-
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
-
-The following function names are no longer available:
-
--  random_float()
+The only breaking change is the addition of a new non-namespaced class.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3 and next version
-
-RFC Impact
-----------
-
-To SAPIs
-~~~~~~~~
-
-none
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-ext-random
-
-To Opcache
-~~~~~~~~~~
-
-none
-
-New Constants
-~~~~~~~~~~~~~
-
-none
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-none
+8.4.
 
 Open Issues
 -----------
 
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+Make sure there are no open issues when the vote starts!
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Implement this RFC? (Yes/no, 2/3 approval required.)
 
-Voting Choices
-^^^^^^^^^^^^^^
+Patches and Tests
+-----------------
 
--  Yes
--  No
-
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+\* Proposed PR: https://github.com/php/php-src/pull/12788
 
 Implementation
 --------------
 
-WIP
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Original Authors: Max Semenik, maxsem.wiki@gmail.com
+:Original Status: Under discussion
+:Slug: not_serializable
+:Wiki URL: https://wiki.php.net/rfc/not_serializable
