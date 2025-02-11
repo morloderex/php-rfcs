@@ -1,0 +1,193 @@
+====== PHP RFC: using Statement ======
+  * Version: 0.9
+  * Date: 2013-02-24 (use today's date here)
+  * Author: Seifeddine Gmati azjezz@protonmail.com, Tim Düsterhus timwolla@php.net
+  * Status: Draft
+  * First Published at: http://wiki.php.net/rfc/optin_block_scoping
+
+===== Introduction =====
+
+This RFC proposes the introduction of a new language construct, the <php>using</php> statement. The <php>using</php> statement allows developers to define a block in which certain variables are in scope, and, upon block completion, are automatically unset—thereby triggering any object destructors and releasing resources.
+
+Resource management is a recurring challenge in PHP applications. Developers often need to ensure that resources (files, database connections, etc.) are properly disposed of, even in the event of exceptions. While PHP’s garbage collection and destructor mechanisms usually suffice, there are scenarios where immediate cleanup is desired. Similar language constructs in other ecosystems (such as Python’s ''with'', Hack’s ''using'', and C#’s ''using'') have proven their utility in writing cleaner, more maintainable code.
+
+===== Proposal =====
+
+The syntax for the `using` statement is defined as follows:
+
+<code>
+<using_statement> ::= "using" "(" <variable_declarations> ")" <statement>
+<variable_declarations> ::= <variable_declaration> { "," <variable_declarations> }
+<variable_declaration> ::= (<variable> "=" <expression>) | <variable>
+</code>
+
+==== Examples ====
+
+<PHP>
+using ($x = 10) {
+    echo "Using block with x: " . $x . "\n";
+}
+
+using ($a = "hello", $b = 20) {
+    echo "Using block with a: " . $a . ", b: " . $b . "\n";
+}
+
+using ($user = $this->getUser()) if ($user !== null) {
+    echo "Using block with user: " . $user->getName() . "\n";
+}
+
+using ($file = @fopen($path)) if ($file !== false) {
+    // ...
+}
+
+using ($file = @fopen($path))
+    fwrite($file, "hello");
+</PHP>
+
+
+Another example using a non-block statement:
+
+<PHP>
+<?php
+
+...
+
+final class SomeController extends Controller {
+  public function __invoke(Request $request): Response {
+    using ($user = $this->getUser()) if ($user !== null) {
+        $this->logger->debug("user {name} is fetching data...", ['name' => $user->name]);
+    } else {
+        $this->logger->debug("anonymous user is fetching data...");
+    }
+
+    assert(false === isset($user), "user is disposed of");
+
+    ...
+  }
+}
+</PHP>
+
+In these examples, the <php>using<(php> statement binds one or more variables to values or expressions, and then executes the subsequent statement (or block) with these variables in scope.
+
+==== Semantics ====
+
+A <php>using</php> statement such as:
+
+<PHP>
+using ($a = $b, $c) <statement>
+</PHP>
+
+is de-sugared at compile time to:
+
+<PHP>
+try {
+    $a = $b;
+    $c;
+    <statement>
+} finally {
+    unset($a, $c);
+}
+</PHP>
+
+This guarantees that, regardless of how the ''<statement>'' terminates (normally or via an exception), the declared variables are automatically <php>unset()</php>. Unsetting an object variable will trigger its <php>__destruct()</php> method, thereby releasing resources.
+
+More refined example:
+
+<PHP>
+<?php
+
+use Psl\File;
+
+using ($file = File\open_read_only($path)) {
+    $content = $file->readAll();
+}
+</PHP>
+
+is equivalent to:
+
+<PHP>
+use Psl\File;
+
+try {
+    $file = File\open_read_only($path);
+    $content = $file->readAll();
+} finally {
+    unset($file); // `__destruct` is called on the object
+}
+</PHP>
+
+==== Conclusion ====
+
+The <php>using</php> statement enhances PHP’s language constructs by providing an explicit and concise mechanism for resource cleanup. By de-sugaring into a try-finally block, the construct ensures that resources are consistently released, paving the way for safer and more robust code in PHP applications. Despite the current limitations compared to languages like C# or Hack, this proposal represents a significant step forward in PHP’s evolution.
+
+===== Backward Incompatible Changes =====
+
+The introduction of using introduces a new reserved word in PHP.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP 8.x (8.5)
+
+===== RFC Impact =====
+==== To SAPIs ====
+
+None.
+
+==== To Existing Extensions ====
+
+None.
+
+==== To Opcache ====
+
+TODO
+
+==== New Constants ====
+
+None.
+
+==== php.ini Defaults ====
+
+None.
+
+===== Open Issues =====
+
+None.
+
+===== Unaffected PHP Functionality =====
+List existing areas/features of PHP that will not be changed by the RFC.
+
+This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+
+===== Future Scope =====
+
+This RFC lays the foundation for explicit resource management in PHP. Future proposals may consider:
+
+  1. Introducing a Disposable interface to allow objects to implement custom cleanup logic.
+  2. Extending the using statement to support additional patterns beyond variable unsetting.
+
+===== Proposed Voting Choices =====
+Include these so readers know where you are heading and can discuss the proposed voting options.
+
+===== Patches and Tests =====
+
+TODO
+
+===== Implementation =====
+After the project is implemented, this section should contain 
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
+
+===== References =====
+
+The using statement is inspired by similar constructs in other programming languages. For further context and design rationale, refer to:
+
+  - [[https://docs.python.org/3/reference/compound_stmts.html#the-with-statement|Python’s with statement]]
+  - [[https://docs.hhvm.com/hack/statements/usingHack’s using statement]]
+  - [[https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/using|C#’s using statement]]
+
+
+===== Rejected Features =====
+
+None.
