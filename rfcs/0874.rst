@@ -1,302 +1,131 @@
-PDO Driver Specific Sub-classes
-===============================
+Multibyte For Trim Function Mb_trim, Mb_ltrim And Mb_rtrim
+==========================================================
 
 :PHP-RFC: 0874
-:Title: PDO Driver Specific Sub-classes
-:Author: Danack
-:Status: Accepted
-:Type: Unknown
-:Created: 2022-06-20
-:Version: 1.0
+:Title: Multibyte For Trim Function Mb_trim, Mb_ltrim And Mb_rtrim
+:Author: Yuya Hamada https://github.com/youkidearitai <youkidearitai@gmail.com>, based on 8ctopushttps://github.com/8ctopus <hello@octopuslabs.io>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-10-18
+:PHP-Version: 8.4
+:Version: 0.1.1
 
 Introduction
 ------------
 
-PDO is a generic database class. Some of the databases it supports have
-functionality that is specific to that database. For example, when
-connected to an SQLite database, the sqlite specific function
-PDO::sqliteCreateFunction is available.
+PHP does not have a multibyte equivalent of the trim function. It is
+possible to get close enough behavior using preg_replace("/^\s+|\s+$/u",
+'', $string), however adding a pre-built function to do this will
+improve the readability and clarity of PHP code. It will also
+standardize how it is done as it can be tricky. This feature would be of
+use to many PHP developers with varying levels of experience and would
+complete the mbstring extension.
 
-Having methods exist on a class depending on how the program was
-compiled and/or what database it is connecting to is quite surprising.
-It would make the code be easier to reason about if there were
-subclasses of the PDO class, specific to each database that has specific
-functionality available.
+One of use case is "trim Byte Order Mark". I think mb_ltrim would be
+work:
+
+::
+
+   mb_ltrim($string, "\u{FEFF}\u{FFFE}");
 
 Proposal
 --------
 
-The proposal has two parts:
+Add mb_trim() function:
 
--  Add new subclasses of PDO with driver specific methods.
--  Add PDO::connect to be able to create the specific subclasses.
+**Modified 2024-04-15** When $characters is null when default parameter,
+trim list below:
 
-Add new subclasses of PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~
+::
 
-All of the PDO extensions that are part of the PHP src repository will
-have subclasses created for them.
+   function mb_trim(string $string, string ?$characters = null): string
 
-Some of these subclasses will expose functionality that exists that is
-peculiar to that DB, and not present in the generic PDO class. e.g.
-PdoSqlite::createFunction() should be there rather than on the generic
-PDO class PDO::sqliteCreateFunction.
+::
 
-.. code:: php
+   function mb_ltrim(string $string, string ?$characters = null, ?string $encoding = null): string {}
 
-   class PdoDblib extends PDO
-   {
+::
 
-   }
+   function mb_rtrim(string $string, string ?$characters = null, ?string $encoding = null): string {}
 
-.. code:: php
+Here's the list of characters trimmed when default behaviors:
 
-   class PdoFirebird extends PDO
-   {
-    
-   }
+Same as trim:
 
-.. code:: php
+::
 
-   class PdoMySql extends PDO
-   {
-       public function getWarningCount(): int {}
-   }
+   U+0020 SPACE (also in Separator category)
+   U+0009 \t
+   U+000A \n
+   U+000B \v
+   U+000D \r
 
-.. code:: php
+not removed in trim(), probably it wasn't common enough, but ok for
+mb_trim
 
-   class PdoOci extends PDO
-   {
-     
-   }
+::
 
-.. code:: php
+   U+000C \f
 
-   class PdoOdbc extends PDO
-   {
+Removed in trim, but not included in regex \\s
 
-   }
+::
 
-.. code:: php
+   U+0000 \0
 
-   class PdoPgsql extends PDO
-   {
-       /**
-        * @var int
-        * @cname PDO_PGSQL_ATTR_DISABLE_PREPARES
-        */
-       public const ATTR_DISABLE_PREPARES = UNKNOWN;
+whole Separator Z category (20 codepoints) covered by regex \\s:
 
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_IDLE
-        */
-       public const TRANSACTION_IDLE = UNKNOWN;
+::
 
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_ACTIVE
-        */
-       public const TRANSACTION_ACTIVE = UNKNOWN;
+   U+0020 SPACE
+   U+00A0 NO-BREAK SPACE
+   U+1680 OGHAM SPACE MARK
+   U+2000 EN QUAD
+   U+2001 EM QUAD
+   U+2002 EN SPACE
+   U+2003 EM SPACE
+   U+2004 THREE-PER-EM SPACE
+   U+2005 FOUR-PER-EM SPACE
+   U+2006 SIX-PER-EM SPACE
+   U+2007 FIGURE SPACE
+   U+2008 PUNCTUATION SPACE
+   U+2009 THIN SPACE
+   U+200A HAIR SPACE
+   U+2028 LINE SEPARATOR
+   U+2029 PARAGRAPH SEPARATOR
+   U+202F NARROW NO-BREAK SPACE
+   U+205F MEDIUM MATHEMATICAL SPACE
+   U+3000 IDEOGRAPHIC SPACE
 
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INTRANS
-        */
-       public const TRANSACTION_INTRANS = UNKNOWN;
+Other symbols (included in regex \\s):
 
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_INERROR
-        */
-       public const TRANSACTION_INERROR = UNKNOWN;
+::
 
-       /**
-        * @var int
-        * @cname PGSQL_TRANSACTION_UNKNOWN
-        */
-       public const TRANSACTION_UNKNOWN = UNKNOWN;
-
-       public function escapeIdentifier(string $input): string {}
-
-       public function copyFromArray(string $tableName, array $rows, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyFromFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function copyToArray(string $tableName, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): array|false {}
-
-       public function copyToFile(string $tableName, string $filename, string $separator = "\t", string $nullAs = "\\\\N", ?string $fields = null): bool {}
-
-       public function lobCreate(): string|false {}
-
-       // Opens an existing large object stream.  Must be called inside a transaction.
-       /** @return resource|false */
-       public function lobOpen(string $oid, string $mode = "rb"){}
-
-       public function lobUnlink(string $oid): bool {}
-
-       public function getNotify(int $fetchMode = PDO::FETCH_USE_DEFAULT, int $timeoutMilliseconds = 0): array|false {}
-
-       public function getPid(): int {}
-   }
-
-.. code:: php
-
-   class PdoSqlite extends PDO
-   {
-       /**
-        * @var int
-        * @cname SQLITE_DETERMINISTIC
-        */
-       public const DETERMINISTIC = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_OPEN_FLAGS
-        */
-       public const ATTR_OPEN_FLAGS = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READONLY
-        */
-       public const OPEN_READONLY = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_READWRITE
-        */
-       public const OPEN_READWRITE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_OPEN_CREATE
-        */
-       public const OPEN_CREATE = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname SQLITE_ATTR_READONLY_STATEMENT
-        */
-       public const ATTR_READONLY_STATEMENT = UNKNOWN;
-
-       /**
-        * @var int
-        * @cname
-        */
-       public const ATTR_EXTENDED_RESULT_CODES = UNKNOWN;
+   U+0085 NEXT LINE (NEL)
+   U+180E MONGOLIAN VOWEL SEPARATOR
 
-       // Registers an aggregating User Defined Function for use in SQL statements
-       public function createAggregate(
-           string $name,
-           callable $step,
-           callable $finalize,
-           int $numArgs = -1
-       ): bool {}
+On the other hand, The ".." notation for $characters that was in the
+trim function was not supported. ex: \\u{0000}..\u{FFFF} Because the
+reason is below:
 
-       // Registers a User Defined Function for use as a collating function in SQL statements
-       public function createCollation(string $name, callable $callback): bool {}
+-  Unicode character is very wide
 
-       public function createFunction(
-           string $function_name,
-           callable $callback,
-           int $num_args = -1,
-           int $flags = 0
-       ): bool {}
+   -   Difficult to search
+   -  Difficult to store in memory
+   -  Mapping with other character codes may be incompatible
 
-   // Whether SQLITE_OMIT_LOAD_EXTENSION is defined or not depends on how
-   // SQLite was compiled: https://www.sqlite.org/compile.html
-   #ifndef SQLITE_OMIT_LOAD_EXTENSION
-       public function loadExtension(string $name): bool {}
-   #endif
-
-       public function openBlob(
-           string $table,
-           string $column,
-           int $rowid,
-           ?string $dbname = "main", //null,
-           int $flags = PdoSqlite::OPEN_READONLY
-       ): mixed /* resource|false */ {}
-   }
-
-Although there may be DB specific functionality that could be exposed
-for the other database types that PDO supports, this RFC does not intend
-to expose them.
-
-Add a way of creating them through PDO static factory method
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Add a static factory method to PDO called connect. During the connect
-process, the exact type of database being connected to will be checked,
-and if it is a DB that has a specific sub-class (i.e. all of those
-extension that ship with PHP core), return that sub-class instead of a
-generic PDO object
-
-.. code:: php
-
-   class PDO
-   {
-       public static function connect(string $dsn [, string $username [, string $password [, array $options ]]]) {
-
-           if (connecting to SQLite DB) {
-               return new PdoSqlite(...);
-           }
-
-
-           return new PDO(...);
-       }
-   }
-
-PDO::connect will return the appropriate sub-class when connecting to
-specific type of DB.
-
-Users will also be able to create the DB specific classes directly,
-through the appropriate constructor e.g.
-
-.. code:: php
-
-   $db = new PdoSqlite($dsn, $username, $password, $options);
-
-The code will throw an exception if the type of database being connected
-to isn't of the correct type for the class.
-
-Sqlite Extension directory ini setting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The Sqlite3 extension requires users to set an ini setting to allow
-SQLite extensions to be loaded, presumably from a desire to keep things
-'secure'. However, as this appears to only be a vulnerability if someone
-is able to upload and execute PHP code on a server, in which case the
-box is completely compromised any way, it doesn't seem to be necessary.
-
-Additionally, in the proposed PdoSqlite class this code:
-
-.. code:: c
-
-   sqlite3_db_config(db, SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION, 1);
-
-is used to temporarily enable extension loading, before loading the
-extension, which only enables it through the C api, whereas the Sqlite3
-extension uses the code:
-
-.. code:: c
-
-   sqlite3_enable_load_extension(sqlite_handle, 1);
-
-which affects both the C api and loading extensions through SQL code.
+      -  For example, to express Hiragana, UTF-8 uses [あ-ゞ], EUC-JP
+         [あ-ゝゞ], and Shift_JIS [あ-ん].
 
 Backward Incompatible Changes
 -----------------------------
 
-None known. It might be inconvenient for people who are extending PDO
-class directly, and would like to extend the specific types. They would
-need to write their own connect functions, that wrap and proxy those
-specific types.
+This could break a function existing in userland with the same name.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3
+next PHP 8.x
 
 RFC Impact
 ----------
@@ -304,90 +133,50 @@ RFC Impact
 To SAPIs
 ~~~~~~~~
 
-Describe the impact to CLI, Development web server, embedded PHP etc.
+To SAPIs Will add the aforementioned functions to all PHP environments.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Adds mb_trim(), mb_ltrim() and mb_rtrim() to the mbstring extension.
+
+To Opcache
+~~~~~~~~~~
+
+No effect.
+
+New Constants
+~~~~~~~~~~~~~
+
+No new constants.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+No changed php.ini settings.
 
 Open Issues
 -----------
 
-These are the known current issues.
-
-Unaffected PHP Functionality
-----------------------------
-
-Everything not PDO
-
-Frequently asked questions
---------------------------
-
-if someone does 'new PDO(...)' will they now get back 'PdoPgsql'
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-No.
+https://github.com/php/php-src/issues/9216
 
 Future Scope
 ------------
 
-When to deprecate old function on PDO
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The method PDO::sqliteCreateFunction and other driver specific methods
-should probably be deprecated and removed at 'some point'. Although this
-cleanup should happen, the position of this RFC is that it's very low
-priority, as that code has sat there for years not requiring much
-maintainance.
-
-Removing the methods that magically exist or not depending on the
-specific driver created would save some complication in the PDO code. So
-although there's no benefit in userland for deprecating the existing
-magic methods, there may be a complexity saving in maintenance.
-
-Choosing the version for them to be deprecated in can be left until the
-future.
-
-Quoting identifiers
-~~~~~~~~~~~~~~~~~~~
-
-During the discussion, a point was raised that currently there is no
-"escape identifier" method on the base PDO class. Postgres at least has
-a specific method for escaping identifiers as the rules for escaping
-those are different from escaping values. It sounds valuable to add an
-escape method to the base PDO class, but that needs to be done by
-someone familiar with all of the database drivers.
-
-SQLite constants
-~~~~~~~~~~~~~~~~
-
-There are SQLite constants that are not currently exposed in the SQLite3
-extension including:
-
--  SQLITE_DIRECTONLY
--  SQLITE_INNOCUOUS
--  SQLITE_SUBTYPE
-
-I don't intend to add these as I don't understand them.
-
-PdoSqlite aggregations, collations and functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The code for these functions has been copied from the Sqlite3 extension.
-Although SQLite allows creating these with different flags to indicate
-what character set data should be in, the implementation is hard-coded
-to use the SQLITE_UTF8 flag.
-
-It would be possible to expose, and allow users to set, the flags of
-SQLITE_UTF16, SQLITE_UTF16BE, SQLITE_UTF16LE, SQLITE_UTF16_ALIGNED, and
-SQLITE_UTF8, however what the API should look like for that is 'not
-obvious', aka I have no idea what it should be like, despite having
-thought about it for a few hours. So, I'm planning to leave it out of
-this RFC.
+This section details areas where the feature might be improved in
+future, but that are not currently proposed in this RFC.
 
 Proposed Voting Choices
 -----------------------
 
-Accept the RFC or not.
+Include these so readers know where you are heading and can discuss the
+proposed voting options.
 
-Question: PDO driver specific subclasses
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Voting
+------
+
+Question: Multibyte for trim function mb_trim, mb_ltrim and mb_rtrim
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -395,31 +184,10 @@ Voting Choices
 -  Yes
 -  No
 
-Voting closes at 2023-07-17T17:00:00Z
-
-Patches and Tests
------------------
-
-WIP code https://github.com/php/php-src/pull/8707
-
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
-
-References
-----------
-
-A proposal to add `sqlite openblob
-functionality </rfc/implement_sqlite_openblob_in_pdo>`__ previously
-failed to pass. The discussion gave the impression that the sub-classing
-`approach would be more
-acceptable <https://externals.io/message/100773#100813>`__.
+https://github.com/php/php-src/pull/12459
 
 Rejected Features
 -----------------
@@ -429,6 +197,6 @@ Keep this updated with features that were discussed on the mail lists.
 Additional Metadata
 -------------------
 
-:Original Authors: Danack
-:Slug: pdo_driver_specific_subclasses
-:Wiki URL: https://wiki.php.net/rfc/pdo_driver_specific_subclasses
+:Original Authors: Yuya Hamada (https://github.com/youkidearitai), youkidearitai@gmail.com based on 8ctopus(https://github.com/8ctopus), hello@octopuslabs.io
+:Slug: mb_trim
+:Wiki URL: https://wiki.php.net/rfc/mb_trim

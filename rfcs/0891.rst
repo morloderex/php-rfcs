@@ -1,99 +1,206 @@
-Structural Typing For Closures
-==============================
+Private Classes And Functions
+=============================
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
+:Title: Private Classes And Functions
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
+:Type: Standards Track
+:Created: 2024-12-11
+:PHP-Version: 8
 :Version: 1.0
-
-Introduction
-------------
-
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
+PHP has offered ``public``, ``protected`` and ``private`` visibility for
+methods, properties and constants for many years. Private and protected
+visibility allow abstracting away the inner workings of classes from the
+user. Minimizing the API surface clarifies how a library is supposed to
+be used, and dramatically decreases the risk of BC breaks when making
+changes to code the user should never interact with directly.
 
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
-
-Example
-~~~~~~~
+However, not only methods, properties and constants are routinely
+created for internal use only, but so are functions and entire classes.
+Currently, it is not possible to natively express this intention. All
+named classes and functions are accessible globally. This RFC proposes
+adding support for private classes and functions, which limits their
+usage to the current file or namespace block.
 
 .. code:: php
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
+   private function test() {
+       echo __FUNCTION__, "\n";
    }
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
+   private class Test {
+       public function __construct() {
+           echo __METHOD__, "\n";
+       }
    }
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+   test();
+   // test@/home/ilutov/Developer/php-src/test.php:1$0
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+   new Test();
+   // Test@/home/ilutov/Developer/php-src/test.php:5$1::__construct
 
-Backward Incompatible Changes
------------------------------
+Rationale
+---------
 
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
+As foreshadowed, one of the primary advantages of marking classes and
+functions of ``private`` is that they are removed from the public API,
+and prevent users from interacting with them in ways that are not
+intended by the library author. Today, such structures are commonly
+marked with a ``/** @internal */`` comment. Native support for
+``private`` would provide stronger guarantees that they are not used
+outside of their intended scope.
 
-Open Questions
---------------
+The other primary motivator is to avoid clashes for classes used within
+single files. A good use-case for these are temporary classes in tests.
 
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
+.. code:: php
 
-Future Scope
+   // ATest.php
+   namespace Tests;
+
+   private class DbMock { /* ... */ }
+   class ATest { /* ... */ }
+
+   // BTest.php
+   namespace Tests;
+
+   private class DbMock { /* ... */ }
+   class BTest { /* ... */ }
+
+We don't have to worry about disambiguation of the ``DbMock`` class
+name, as it is only used in the current file and thus cannot clash with
+other private (or even public, non-``use``\ d) classes.
+
+Somewhat less importantly: In PHP, classes are usually placed in
+separate files to play nice with autoloaders. Classes that are
+exclusively used within a single other file could be moved to said file
+without issues. However, this puts the class in a weird state where it
+may still be used within other files, but can't be autoloaded on its
+own. ``private`` classes will necessarily be placed in the file from
+which they are used; and given that they are not accessible in from
+files, autoloading becomes irrelevant.
+
+Semantics
+---------
+
+``private`` for classes and functions works similar to anonymous
+classes. Namely, the name of the structure is mangled by appending the
+file name, line number and incrementing id to the original name. Any
+usage of this name inside the current file is replaced with the mangled
+name through the same mechanism used by ``use [function] Foo as Bar;``.
+This avoids trivial usage of the structure outside of its intended
+scope, and avoids accidental naming conflicts for internal structures.
+
+.. code:: php
+
+   // ATest.php
+   private class DbMock {
+       // ...
+   }
+
+   // loosely:
+   class DbMock@/my/app/tests/ATest.php:1$0 {
+       // ...
+   }
+   use DbMock@/my/app/tests/ATest.php:1$0 as DbMock;
+
+This is entirely handled at compile time, and thus there is no runtime
+overhead to private classes or functions. Because this is a compile time
+concept, it is also circumventable. The same is already true for
+anonymous classes.
+
+.. code:: php
+
+   private class Test {}
+   class_alias(Test::class, 'Test');
+
+   // In some other file:
+
+   new Test();
+
+Technically, because ``use`` statements are restricted to the current
+namespace block, different namespace blocks may re-use the same private
+class name without clashing. Given that using different namespace blocks
+with the same namespace in the same file is pretty obscure, this is not
+particularly important for real code.
+
+.. code:: php
+
+   namespace Foo {
+       private class Bar {}
+       var_dump(new Bar());
+       // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:2$0)#1 (0) { }
+   }
+   namespace Foo {
+       private class Bar {}
+       var_dump(new Bar());
+       // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:7$1)#1 (0) { }
+   }
+
+Future scope
 ------------
 
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+Likely even more common than file-private classes and functions are
+structures that should be restricted to some namespace. Contrary to
+``private``, they should not do any name mangling and as such would
+require a runtime check, along with a way to specify *what* namespace
+they may be used in. As this is a more complex task, it should be
+handled in its own RFC.
 
-Proposed Voting Choices
------------------------
+It was suggested that nested classes could be an alternative to an
+explicit class visibility. However, it appears that nested classes could
+be useful even without being restricted to the surrounding class.
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+.. code:: php
+
+   namespace Ast;
+
+   class Node {
+       enum Kind {
+           case Identifier;
+           case Symbol;
+       }
+
+       public function __construct(
+           public Kind $kind,
+           public string $lexeme,
+       ) {}
+   }
+
+In this example, ``Ast\Node\Kind`` is closely tied to ``Ast\Node``, so
+it makes sense to declare it in the same file. However,
+``Ast\Node\Kind`` should still be usable outside of the ``Ast\Node``
+context, namely to actually instantiate and identify AST nodes.
+Combining nested classes with ``private`` visibility might be
+reasonable.
+
+Vote
+----
+
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
+
+As this is a language change, a 2/3 majority is required.
+
+Question: Add private classes and functions to PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Implementation: wip
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: private-classes-and-functions
+:Wiki URL: https://wiki.php.net/rfc/private-classes-and-functions
