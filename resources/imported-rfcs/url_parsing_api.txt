@@ -400,28 +400,11 @@ echo $url->resolve("/foo")->toString();                 //  https://example.com/
 
 This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())''.
 
-==== Accessors ====
+==== Component retrieval ====
 
-The individual URI components can be retrieved via getters, and immutable modification is possible via "wither" methods. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has to be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
+The individual URI components can be retrieved via getters. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has to be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
 
-For now, let's see a very basic example for modifying and retrieving the host URI component:
-
-<code php>
-$uri1 = new Uri\Rfc3986\Uri("https://example.com");
-$uri2 = $uri->withHost("test.com");
-
-echo $uri1->getHost();                             // example.com
-echo $uri2->getHost();                             // test.com
-</code>
-
-The above example demonstrates that withers create a new instance for each modification, leaving the original object intact. However, an exception is thrown if a modification resulted in an invalid URI. This way, URIs always stay valid:
-
-<code php>
-$uri = new Uri\Rfc3986\Uri("https://example.com");
-$uri->withHost("/");                               // Throws Uri\InvalidUriException
-</code>
-
-All the components - with the exception of the host - can be retrieved in two formats:
+All URI components - with the exception of the host - can be retrieved in two formats:
 
   * "raw" representation: it's how the URI component is natively represented without any post-processing. 
   * "decoded-normalized" representation: the URI is normalized (when applicable), and the component is percent-decoded.
@@ -525,6 +508,25 @@ echo $url->getPath();                            // /foo/bar/baz
 echo $url->getRawPath();                         // /foo%2Fbar
 </code>
 
+==== Component modification ====
+
+Immutable modification of the individual URI components is possible via "wither" methods. Let's see a very basic example first for modifying and retrieving the host URI component:
+
+<code php>
+$uri1 = new Uri\Rfc3986\Uri("https://example.com");
+$uri2 = $uri->withHost("test.com");
+
+echo $uri1->getHost();                             // example.com
+echo $uri2->getHost();                             // test.com
+</code>
+
+The above example demonstrates that withers create a new instance for each modification, leaving the original object intact. However, an exception is thrown if a modification resulted in an invalid URI. This way, URIs always stay valid:
+
+<code php>
+$uri = new Uri\Rfc3986\Uri("https://example.com");
+$uri->withHost("/");                               // Throws Uri\InvalidUriException
+</code>
+
 ==== Component recomposition ====
 
 Besides accessors, URI implementations contain various "''toString''" methods as well. They can be used for recomposing the URI components back to a string. Why such methods are necessary at all instead of simply returning the input URI string? It's because URI parsers may have applied some modifications to the input during parsing. This is specifically the case for the WHATWG specification, since it mandates the usage of quite some transformations.
@@ -603,6 +605,26 @@ $url->equals(new Uri\WhatWg\Url("https://example.com/"));     // throws TypeErro
 It should be noted that the ''equals()'' method could also accept URI strings. It was a deliberate decision not to allow such arguments, because it would be unclear how the comparison works in this case: Should the passed in string be also normalized, or exact string match should be performed? This is a question that don't have to be answered when only a URI object parameter type is supported.
 
 The same question - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
+
+==== Serialization ====
+
+Both built-in URI classes support serialization and deserialization - albeit a little bit differently than most classes usually do: the serialized form only includes the recomposed URI itself, but not the individual properties or URI components. This approach makes deserialization easier where regular URI string parsing is performed.
+
+<code PHP>
+$uri = new Uri\Rfc3986\Uri("https://example.com/foo/bar");
+echo serialize($uri);
+
+// O:15:"Uri\Rfc3986\Uri":1:{s:5:"__uri";s:27:"https://example.com/foo/bar";}
+</code>
+
+The same example with ''Uri\WhatWg\Url'':
+
+<code PHP>
+$url = new Uri\WhatWg\Url("https://example.com/foo/bar");
+echo serialize($url);
+
+// O:14:"Uri\WhatWg\Url":1:{s:5:"__uri";s:27:"https://example.com/foo/bar";}
+</code>
 
 ===== Plugability =====
 
