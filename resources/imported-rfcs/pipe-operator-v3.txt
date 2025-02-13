@@ -307,13 +307,57 @@ $profit = [1, 4, 5]
 
 That neatly encapsulates the entire logic flow of a process in a clear, compact, highly-testable set of operations.
 
+=== Pseudo-extension functions ===
+
+"Extension functions" are a feature of Kotlin and C# (and possibly other languages) that allow for a function to act as though it is a method of another object.  It has only public-read access, but has the ergonomics of a method.  While not a perfect substitute, pipes do offer similar capability with a little more work.
+
+For instance, we could easily make utility higher-order functions (functions that take or return other functions/callables) that will map or filter an array that is piped to them.  (A more robust version that also handles iterables is only slightly more work.)
+
+<code php>
+function amap(callable $c): \Closure
+{
+    return fn(array $a) => array_map($c, $a);
+}
+
+function afilter(callable $c): \Closure
+{
+    return fn(array $a) => array_filter($a, $c);
+}
+</code>
+
+That allows them to be used, via pipes, in a manner similar to "scalar methods."  To reuse the earlier example:
+
+<code php>
+$profit = [1, 4, 5] 
+    |> loadSeveral(...)
+    |> afilter(isOnSale(...))
+    |> amap(sellWidget(...))
+    |> array_sum(...);
+</code>
+
+Which is not far off from what it would look like with scalar methods, which still wouldn't work if any step along the way contained an object:
+
+<code php>
+$profit = [1, 4, 5] 
+    ->loadSeveral(...)
+    ->afilter(isOnSale(...))
+    ->amap(sellWidget(...))
+    ->sum(...);
+</code>
+
+But can work with //any// value type, object or scalar.  It also entirely removes the "does the subject come first or last" question: the subject is //piped//, and the arguments to the higher-order function are the modifiers.  It also eliminates the need to discuss which methods deserve to be "first class" operations that turn into methods.  Any function can be chained onto a value of any type.
+
+While I do not believe pipes can completely replace extension functions, they provide a reasonable emulation and most of the benefits, for trivial cost.
+
+This RFC does not propose any such higher-order functions for the PHP standard library, as most are quite easy to implement in user space.  However, such could be easily added in the future if desired for especially common cases.
+
 === Single-expression pipelines ===
 
 Of particular note, all of the above examples are a single expression.  That makes them trivial to use in places where only a single-expression is allowed, such as ''match()'' arms, short-get property hooks, short-closures, etc.  For example:
 
 <code php>
 
-$string = 'something goes HERE';
+$string = 'something GoesHERE';
 
 $newString = match ($format) {
     case 'snake_case' => $string
@@ -345,50 +389,6 @@ $loadSeveral = fn($id) => $id
       |> loadMany(...) 
       |> fn(array $records) => array_map(makeWidget(...), $records);
 </code>
-
-=== Pseudo-extension functions ===
-
-"Extension functions" are a feature of Kotlin and C# (and possibly other languages) that allow for a function to act as though it is a method of another object.  It has only public-read access, but has the ergonomics of a method.  While not a perfect substitute, pipes do offer similar capability with a little more work.
-
-For instance, we could easily make utility higher-order functions that will map or filter an array that is piped to them.  (A more robust version that also handles iterables is only slightly more work.)
-
-<code php>
-function amap(callable $c): \Closure
-{
-    return fn(array $a) => array_map($c, $a);
-}
-
-function afilter(callable $c): \Closure
-{
-    return fn(array $a) => array_filter($a, $c);
-}
-</code>
-
-That allows them to be used, via pipes, in a manner similar to "scalar methods."
-
-<code php>
-$result = $array 
-    |> afilter(is_even(...)) 
-    |> amap(some_transformation(...)) 
-    |> afilter(a_filter(...))
-    |> count(...);
-</code>
-
-Which is not far off from what it would look like with scalar methods:
-
-<code php>
-$result = $array 
-    ->filter(is_even(...)) 
-    ->map(some_transformation(...)) 
-    ->filter(a_filter(...))
-    ->count(...);
-</code>
-
-But can work with //any// value type, object or scalar.  It also entirely removes the "does the subject come first or last" question: the subject is //piped//, and the arguments the higher-order function are the modifiers.  It also eliminates the need to discuss which methods deserve to be "first class" operations that turn into methods.  Any function can be chained onto a value of any type.
-
-While I do not believe pipes can completely replace extension functions, they provide a reasonable emulation and most of the benefits, for trivial cost.
-
-This RFC does not propose any such higher-order functions for the PHP standard library, as most are quite easy to implement in user space.  However, such could be easily added in the future if desired for especially common cases.
 
 ==== Existing implementations ====
 
