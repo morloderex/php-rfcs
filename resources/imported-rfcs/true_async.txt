@@ -4,6 +4,7 @@
   * Author: Edmond [HT], edmondifthen@proton.me
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/true_async
+  * Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
 
 ===== Introduction =====
 For several years, **PHP** has been attempting to carve out a niche in the development of long-running applications, where concurrent code execution becomes particularly useful. Production-ready solutions such as **Swoole**, **AMPHP**, **ReactPHP**, and others have emerged.
@@ -12,8 +13,65 @@ However, **PHP** still does not provide a comprehensive implementation for writi
 
 The goal of this **RFC** is to establish a standard for writing concurrent code in PHP, as well as a C-API interface that would allow PHP to be extended at a low level using C, Rust, C++, and other languages. This would enable extensions to support **non-blocking I/O** without the need to override PHP functions or duplicate code.
 
+===== Goals =====
+
+The **True Async** project pursues the following goals and values:
+
+  * From a PHP developer's perspective, the **main value** of this implementation is that they DO NOT NEED to change existing code (or if changes are required, they should be minimal) to enable concurrency.
+
+  * Code that was originally written and intended to run outside of a Fiber must work **EXACTLY THE SAME** inside a Fiber without modifications.
+
+  * A PHP developer should not have to think about how Fibers switch and should not need to manage their switching—except in special cases where they consciously choose to intervene in this logic.
+
+  * If there is existing code or a familiar style, such as AMPHP interfaces, Go coroutines, Swoole API, and others, it is best to use what is most recognizable to a broad range of developers.
+
+  * The goal is to find a balance between flexibility and simplicity. On one hand, the implementation should allow leveraging existing solutions without requiring external libraries. On the other hand, it should avoid unnecessary complexity. Many design choices in this implementation are driven by the desire to free developers from concerns about compatibility with "external libraries" in favor of a standardized approach.
+
 ===== Proposal =====
-All the features and examples of the proposal.
+
+**True Async** explicitly defines two components:
+
+   * ''Scheduler'' – responsible for executing Fibers.
+   * ''Reactor'' – responsible for the Event Loop.
+
+
+In normal mode, code executes outside of a ''Fiber'', and no changes occur. When you call a blocking function such as ''sleep()'', ''shell_exec()'', or ''fread()'', it behaves as usual: execution halts until the operation is complete.
+
+However, once one or more ''Fibers'' are created using the API and the ''Scheduler'' is activated, the code begins executing concurrently.
+
+<code php>
+Async\run(function() {
+    echo "fiber 1: start\n";
+    sleep(1);
+    echo "fiber 1: end\n";
+});
+
+Async\run(function() {
+    echo "fiber 2: start\n";
+    sleep(1);
+    echo "fiber 2: end\n"
+});
+
+echo "start\n";
+Async\launchScheduler();
+echo "end\n";
+</code>
+
+Excepted output:
+<code>
+start
+fiber 1: start
+fiber 2: start
+fiber 1: end
+fiber 2: end
+end 
+</code>
+
+From a PHP developer's perspective, the code inside a Fiber is no different from the code outside of it. The behavior of the code inside a Fiber remains exactly the same as if it were written without Fibers. Moreover, a PHP developer does not need to make any extra effort to transfer control from one Fiber to another.
+
+===== Level 2 Headline =====
+
+
 
 To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain how the proposal brings substantial value to be considered
 for inclusion in one of the world's most popular programming languages.
