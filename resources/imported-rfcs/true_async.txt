@@ -3,8 +3,7 @@
   * Date: 2025-02-24
   * Author: Edmond [HT], edmondifthen@proton.me
   * Status: Draft
-  * First Published at: http://wiki.php.net/rfc/true_async
-  * Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
+  * First Published at: http://wiki.php.net/rfc/true_async  
 
 ===== Introduction =====
 For several years, **PHP** has been attempting to carve out a niche in the development of long-running applications, where concurrent code execution becomes particularly useful. Production-ready solutions such as **Swoole**, **AMPHP**, **ReactPHP**, and others have emerged.
@@ -26,6 +25,8 @@ The **True Async** project pursues the following goals and values:
   * If there is existing code or a familiar style, such as AMPHP interfaces, Go coroutines, Swoole API, and others, it is best to use what is most recognizable to a broad range of developers.
 
   * The goal is to find a balance between flexibility and simplicity. On one hand, the implementation should allow leveraging existing solutions without requiring external libraries. On the other hand, it should avoid unnecessary complexity. Many design choices in this implementation are driven by the desire to free developers from concerns about compatibility with "external libraries" in favor of a standardized approach.
+
+  * **True Async** aims to abstract away Event Loop management by providing an OOP interface that allows developers to focus on object lifecycle rather than resource management or implementation details. Memory management and the lifespan of objects such as ''Resume'', ''Notifier'', and ''Callback'' are key tools for hiding complexity, ensuring that developers do not need to worry about freeing resources manually.
 
 ===== Proposal =====
 
@@ -69,16 +70,137 @@ end
 
 From a PHP developer's perspective, the code inside a Fiber is no different from the code outside of it. The behavior of the code inside a Fiber remains exactly the same as if it were written without Fibers. Moreover, a PHP developer does not need to make any extra effort to transfer control from one Fiber to another.
 
-===== Level 2 Headline =====
+The ''sleep'' function itself does not perform any Fiber-switching. Instead, it creates a special ''Resume'' object responsible for resuming the Fiber and links it to a timer event. When the timer triggers, the ''Resume'' object updates its state, and the Fiber is placed in the queue to be executed later.
+
+A PHP developer **SHOULD NOT** make any assumptions about the order in which Fibers will be executed, as this order may change or be too complex to predict.
+
+==== Architecture ====
+
+=== Scheduler ===
 
 
+The **Scheduler** implements the main execution loop of the application, one of its steps being the execution of the **Reactor's** event loop.
 
-To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain how the proposal brings substantial value to be considered
-for inclusion in one of the world's most popular programming languages.
+Similar to **AMPHP** and **JavaScript**, the **Scheduler** defines two types of tasks:
 
-Remember that the RFC contents should be easily reusable in the PHP Documentation.
+  - **Microtasks (callbacks)**
+  - **Coroutines (Fibers)**
 
-If applicable, you may wish to use the language specification as a reference.
+From a PHP developer’s perspective, there is almost no difference between **microtasks** and **coroutines**, except for one key distinction:
+  * **Microtasks execute before any event loop callbacks**, including timers and I/O events. PHP developers can rely on this rule.
+
+The function ''Async\defer()'' is responsible for creating microtasks.
+
+=== Resume & Fiber Control ===
+
+The **Scheduler** introduces a special class called **Resume**, which provides an **OOP interface** for managing Fiber resumption.
+
+The **Resume** object answers two key questions:
+  - Under what conditions will a **Fiber** resume?
+  - What event is it waiting for?
+
+Using the function ''Async\wait(Resume)'', a developer can explicitly pause Fiber execution **until** the state of the **Resume** object changes.
+
+=== Reactor & Notifiers ===
+
+To change the **Resume** state, the system relies on **Notifiers**:
+
+  * **Notifier** follows the **Publisher pattern**.
+  * **Resume** acts as an **Observer**.
+
+A **Notifier** generates an event, and **Resume** processes it via a **callback** function, which can be defined by the developer.
+
+Each **Resume** object can have **one or multiple Notifiers**, each handled by its own unique **callback**. The event **callback** can:
+
+  - Set the **Resume** object to a **success** state, allowing the Fiber to continue execution.
+  - Set it to an **error** state.
+  - Leave the **Resume** state **unchanged**.
+
+This architecture allows for the description of **any waiting scenario** imaginable, making it highly flexible for asynchronous programming in PHP.
+
+===== Async API =====
+
+//At the current stage of development, the API may and will be changed in the future.//
+
+The basic API is inspired by **Swoole** and **AMPHP**. It consists of only a few functions, primarily focused on providing an interface for creating Fibers.
+
+Regular Fibers are created using two main methods:
+
+''run'' – creates a Fiber and does not return anything.
+''async'' – creates a Fiber and returns a ''FiberHandle'' object, which can be used later.
+
+<code php>
+
+namespace Async;
+
+/**
+ * Starts the Scheduler to manage Fibers.
+ * The Scheduler can only start in the main execution thread. Attempting to start it from a Fiber results in an error.
+ */
+function launchScheduler(): void {}
+
+/**
+ * Suspends the execution of a Fiber until the Resume object is resolved.
+ * If the Resume object is destructed for any reason, it automatically resumes the Fiber.
+ */
+function wait(?Resume $resume = null): void {}
+
+/**
+ * Create a new Fiber that will execute the specified task.
+ */
+function run(callable $task, mixed ... $args): void {}
+
+/**
+ * Creates a coroutine (Fiber) that will execute as soon as an opportunity arises.
+ */
+function async(callable $task, mixed ... $args): FiberHandle {}
+
+/**
+ * Creates a microtask that is guaranteed to execute before events are processed, and other Fibers are started,
+ * and immediately after the Scheduler takes control.
+ */
+function defer(callable $microtask): void {}
+
+/**
+ * Creates a callback microtask that will execute as soon
+ * as the specified time expires and the Scheduler takes control.
+ * Callback allows you to cancel the callback.
+ * The callback will also be immediately canceled
+ * if the Callback object is destroyed by the garbage collector or goes out of scope.
+ */
+function delay(int $timeout, callable|Callback $callback): void {}
+
+/**
+ * Creates a callback microtask that will execute at regular intervals
+ * as long as the specified time interval has not expired and the Scheduler takes control.
+ * Callback allows you to cancel the callback.
+ * The callback will also be immediately canceled
+ * if the CallbackInterface object is destroyed by the garbage collector or goes out of scope.
+ */
+function repeat(int $interval, Callback $callback): void {}
+
+/**
+ * Registers a callback that will be executed when the specified signal is received.
+ * Callback allows you to cancel the callback.
+ * The callback will also be immediately canceled
+ * if the Callback object is destroyed by the garbage collector or goes out of scope.
+ */
+function onSignal(int $sigNumber, Callback $callback): void {}
+
+/**
+ * Execute an external program.
+ */
+function exec(
+    string $command,
+    array|string &$output = null,
+    int &$result_code   = null,
+    int $timeout        = 0,
+    string $cwd         = null,
+    array $env          = null,
+    array $options      = null
+): string {}
+void {}
+</code>
 
 ===== Backward Incompatible Changes =====
 What breaks, and what is the justification for it?
@@ -131,11 +253,7 @@ Make it clear if the patch is intended to be the final patch, or is just a proto
 For changes affecting the core language, you should also provide a patch for the language specification.
 
 ===== Implementation =====
-After the project is implemented, this section should contain 
-  - the version(s) it was merged into
-  - a link to the git commit(s)
-  - a link to the PHP manual entry for the feature
-  - a link to the language specification section (if any)
+  * Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
 
 ===== References =====
 Links to external references, discussions or RFCs
