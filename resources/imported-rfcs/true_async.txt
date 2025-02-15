@@ -352,6 +352,145 @@ In other words, a general rule applies:
 In other words, the behavior of asynchronous code with ''await()'' is equivalent to how it would behave if the code were synchronous.
 
 === Additional Fiber API ===
+
+The **True Async** component adds important functions to **Fiber** to enable typical use cases.
+
+== Fiber::defer()/FiberHandle::defer() ==
+
+The ''defer'' method allows executing a callback function after the fiber has completed its work.  
+This function is **always** called, regardless of whether an exception was thrown or the fiber completed successfully.
+
+**Prototype:**  
+<code php>
+/**
+ * Define a callback to be executed when the fiber is terminated.
+ */
+public function defer(callable $callback): void {}
+
+/**
+ * Remove a previously defined defer handler.
+ */
+public function removeDeferHandler(callable $callable): void {}
+</code>
+
+Example: Using defer() in fibers
+
+<code php>
+Async\run(function() {
+
+    $fiber = Async\async(function() {
+        echo "Fiber started\n";
+        sleep(1);
+        throw new Exception("Something went wrong!");
+    });
+
+    $fiber->defer(function() {
+        echo "Deferred callback executed\n";
+    });
+
+    try {
+        Async\await($fiber);
+    } catch (Exception $e) {
+        echo "Caught exception: " . $e->getMessage() . "\n";
+    }
+
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+</code>
+
+**Expected output:**
+
+<code>
+Fiber started
+Caught exception: Something went wrong!
+Deferred callback executed
+Done!
+</code>
+
+== Fiber Context ==
+
+**Fiber Context** is an important tool that allows PHP code to associate data with a specific fiber.  
+For example, the context can act as a storage for request variables and be used in services instead of the ''$_GET/$_POST'' variables in **Long-Running** applications.
+
+The **Fiber Context** is implemented using a special object, which is returned by the ''getContext()'' function.
+
+**Prototype:**
+<code php>
+public function getContext(): FiberContext {}
+</code>
+
+**FiberContext class definition:**
+
+<code php>
+final class FiberContext
+{
+    public function get(string $key): mixed {}
+    public function has(string $key): bool {}
+    public function set(string $key, mixed $value): void {}
+    public function del(string $key): void {}
+
+    public function findObject(string $type): object|null {}
+    public function bindObject(object $object, string|null $type = null, bool $replace = false): void {}
+    public function unbindObject(string $type): void {}
+}
+</code>
+
+The design of **FiberContext** allows storing two types of keys:  
+  * **String keys**  
+  * **Keys based on data types**, where the data type is the name of a class or an interface.  
+
+Only **one unique key** can be defined in the **Fiber Context**.  
+This imposes certain limitations, so the code using this component must be carefully designed.
+
+A **class or interface name** serves as an excellent key that does not conflict with string keys.  
+This approach allows associating data of a specific type with a **Fiber** while ensuring that other code cannot accidentally overwrite it (except in the case of an error).  
+
+**FiberContext** is a suitable tool for frameworks and services that need to handle concurrency.  
+
+A **FiberContext** exists as long as the **Fiber** is running and is destroyed when the **Fiber** completes.
+
+Example: Using FiberContext for request storage
+
+<code php>
+
+function outRequestData(): void
+{
+    $context = \Fiber::getCurrent()->getContext();
+    echo "Request ID: " . $context->get("request_id") . "\n";
+    echo "Object: " . json_encode($context->findObject(stdClass::class)) . "\n";
+}
+
+Async\run(function() {
+
+    // Get the context for this fiber
+    $context = \Fiber::getCurrent()->getContext();
+
+    // Store request-related data in the fiber context
+    $context->set("request_id", uniqid());
+    $context->bindObject(stdClass::class, (object) array('foo' => 'bar'));
+
+    echo "Fiber started\n";
+    outRequestData();
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+</code>
+
+**Expected output:**
+
+<code>
+Fiber started
+Request ID: 65df9f7b8
+Object: {"foo":"bar"}
+Done!
+</code>
+
+
 === Cancellation operation === 
 === Graceful shutdown ===
 
