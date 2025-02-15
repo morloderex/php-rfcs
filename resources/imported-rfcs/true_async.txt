@@ -59,6 +59,7 @@ echo "end\n";
 </code>
 
 Excepted output:
+
 <code>
 start
 fiber 1: start
@@ -120,95 +121,77 @@ Each **Resume** object can have **one or multiple Notifiers**, each handled by i
 
 This architecture allows for the description of **any waiting scenario** imaginable, making it highly flexible for asynchronous programming in PHP.
 
-==== Async API ====
-
-=== Basic API ===
-
-//At the current stage of development, the API may and will be changed in the future.//
-
-The basic API is inspired by **Swoole** and **AMPHP**. It consists of only a few functions, primarily focused on providing an interface for creating Fibers.
-
-Regular Fibers are created using two main methods:
-
-''run'' – creates a Fiber and does not return anything.
-''async'' – creates a Fiber and returns a ''FiberHandle'' object, which can be used later.
-
-<code php>
-
-namespace Async;
-
-/**
- * Starts the Scheduler to manage Fibers.
- * The Scheduler can only start in the main execution thread. Attempting to start it from a Fiber results in an error.
- */
-function launchScheduler(): void {}
-
-/**
- * Suspends the execution of a Fiber until the Resume object is resolved.
- * If the Resume object is destructed for any reason, it automatically resumes the Fiber.
- */
-function wait(?Resume $resume = null): void {}
-
-/**
- * Create a new Fiber that will execute the specified task.
- */
-function run(callable $task, mixed ... $args): void {}
-
-/**
- * Creates a coroutine (Fiber) that will execute as soon as an opportunity arises.
- */
-function async(callable $task, mixed ... $args): FiberHandle {}
-
-/**
- * Creates a microtask that is guaranteed to execute before events are processed, and other Fibers are started,
- * and immediately after the Scheduler takes control.
- */
-function defer(callable $microtask): void {}
-
-/**
- * Creates a callback microtask that will execute as soon
- * as the specified time expires and the Scheduler takes control.
- * Callback allows you to cancel the callback.
- * The callback will also be immediately canceled
- * if the Callback object is destroyed by the garbage collector or goes out of scope.
- */
-function delay(int $timeout, callable|Callback $callback): void {}
-
-/**
- * Creates a callback microtask that will execute at regular intervals
- * as long as the specified time interval has not expired and the Scheduler takes control.
- * Callback allows you to cancel the callback.
- * The callback will also be immediately canceled
- * if the CallbackInterface object is destroyed by the garbage collector or goes out of scope.
- */
-function repeat(int $interval, Callback $callback): void {}
-
-/**
- * Registers a callback that will be executed when the specified signal is received.
- * Callback allows you to cancel the callback.
- * The callback will also be immediately canceled
- * if the Callback object is destroyed by the garbage collector or goes out of scope.
- */
-function onSignal(int $sigNumber, Callback $callback): void {}
-
-/**
- * Execute an external program.
- */
-function exec(
-    string $command,
-    array|string &$output = null,
-    int &$result_code   = null,
-    int $timeout        = 0,
-    string $cwd         = null,
-    array $env          = null,
-    array $options      = null
-): string {}
-void {}
-</code>
-
 ==== Fibers ====
 
 === Creating Fibers, FiberHandle ===
+
+New fibers are created using two functions, which are very similar to each other:
+  * ''Async\run()''
+  * ''Async\async()''
+
+The difference between them is that the function ''Async\async()'' returns a special object ''FiberHandle'', which is used to control the execution of the fiber.
+
+Example:
+<code php>
+Async\run(function() {
+    echo "async function 1\n";
+});
+
+Async\run(function() {
+    echo "async function 2\n";
+});
+
+echo "start\n";
+Async\launchScheduler();
+echo "end\n";
+</code>
+
+Output:
+
+<code>
+start
+async function 1
+async function 2
+end
+</code>
+
+When creating a fiber, you can define additional arguments that will be passed to the function. For example:
+
+== Passing Arguments to a Fiber ==
+
+When creating a fiber, you can define additional arguments that will be passed to the function. For example:
+
+<code php>
+
+$closure = function(int $id, int $delay) {
+    echo "fiber $id: start\n";
+    sleep($delay);
+    echo "fiber $id: end\n";
+};
+
+Async\run($closure, 1, 1);
+Async\run($closure, 2, 2);
+
+echo "start\n";
+Async\launchScheduler();
+echo "end\n";
+</code>
+
+Expected output:
+
+<code>
+start
+fiber 1: start
+fiber 2: start
+fiber 1: end
+fiber 2: end
+</code>
+
+<blockquote>
+**Note:** At the moment, it is not possible to pass references to values this way, so keep that in mind.  
+If you need to pass a reference to the called function, you can use a closure.
+</blockquote>
+
 === Additional Fiber API ===
 === Exceptions in Fibers ===
 === Cancellation operation === 
