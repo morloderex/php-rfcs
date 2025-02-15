@@ -507,7 +507,12 @@ Sometimes, it is necessary to cancel an operation for various reasons. However, 
   - If the fiber has already completed, nothing happens.
   - If the fiber is waiting for execution or events, the **Scheduler** places it in a queue with a special exception: ''Async\CancellationException()''.
 
-<blockquote>**ATTENTION**: A programmer **should not** attempt to suppress ''CancellationException'', as this may lead to a fatal error and disrupt the application's behavior.</blockquote>
+<blockquote>**ATTENTION**: A programmer **should not** attempt to suppress ''CancellationException'', as this may lead to a fatal error and disrupt the application's behavior.
+</blockquote>
+
+<blockquote>**ATTENTION**: A programmer must **never** attempt to create a new fiber while handling a ''CancellationException'',  
+as this behavior may trigger an exception during **Graceful Shutdown** mode.
+</blockquote>
 
 If a fiber does not handle ''CancellationException'' and it reaches the **Scheduler**, the **Scheduler** will process and suppress it.  
 Thus, an unhandled ''CancellationException'' **does not** terminate the application.  
@@ -544,8 +549,20 @@ Fiber was cancelled!
 Done!
 </code>
 
+=== Graceful Shutdown ===
 
-=== Graceful shutdown ===
+When an **unhandled exception** occurs in a **Fiber**, interrupting the main loop of the **Scheduler**, the **Graceful Shutdown** mode is initiated. Its goal is to safely terminate the application.
+
+Graceful Shutdown Flow:
+
+  - All fibers in the **Scheduler** resume execution with an exception: ''Async\CancellationException()''.  
+  - The **main loop** continues running, hoping that all fibers will safely complete.  
+      * Unordered List Item
+      * All resources will be released.  
+      * All handlers will be closed.  
+      * All microtasks will be executed.  
+  - Creating new fibers via ''Async\run()'' or ''Async\async()'' **throws an exception**.
+  - When fibers complete, the **Reactor event loop** releases handlers, and the **exception that caused the application to stop** is thrown at the **Scheduler** activation point.
 
 ==== Channels ====
 
