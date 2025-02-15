@@ -266,6 +266,90 @@ Caught exception: Something went wrong in the fiber!
 Done!
 </code>
 
+This behavior is logical because all fibers created by the **Async API** belong to the **Scheduler**, and therefore, unhandled exceptions also belong to the **Scheduler**.  
+
+However, this behavior can be changed if one fiber waits for the result of another fiber.  
+In this case, an exception in the second fiber will be thrown at the waiting point.  
+
+Here is an example: exception thrown at the waiting point
+
+<code php>
+Async\run(function() {
+
+    $fiber = Async\async(function() {
+        throw new Exception("Error in the inner fiber!");
+    });
+
+    try {
+        // Awaiting the result of another fiber
+        $result = Async\await($fiber);
+        echo "Fiber result: " . $result . "\n";
+    } catch (Exception $e) {
+        echo "Caught exception inside the fiber: " . $e->getMessage() . "\n";
+    }
+
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+</code>
+
+**Expected output:**
+<code>
+Caught exception inside the fiber: Error in the inner fiber!
+Done!
+</code>
+
+**Note:** If multiple fibers await the result of another fiber, the behavior will remain the same:  
+each call to ''await()'' will receive the exception.
+
+Example: Multiple fibers awaiting the same fiber
+
+<code php>
+Async\run(function() {
+
+    $fiber = Async\async(function() {
+        throw new Exception("Error inside the fiber!");
+    });
+
+    // First fiber waiting for the result
+    Async\run(function() use ($fiber) {
+        try {
+            Async\await($fiber);
+        } catch (Exception $e) {
+            echo "Caught exception in fiber 1: " . $e->getMessage() . "\n";
+        }
+    });
+
+    // Second fiber also waiting for the same result
+    Async\run(function() use ($fiber) {
+        try {
+            Async\await($fiber);
+        } catch (Exception $e) {
+            echo "Caught exception in fiber 2: " . $e->getMessage() . "\n";
+        }
+    });
+
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+</code>
+
+**Expected output:**
+<code>
+Caught exception in fiber 1: Error inside the fiber!
+Caught exception in fiber 2: Error inside the fiber!
+Done!
+</code>
+
+In other words, a general rule applies:   
+
+<blockquote>if the ''await()'' function is called, the calling point will receive either the result of the function execution or the exception that was thrown in that function.</blockquote>
+
+In other words, the behavior of asynchronous code with ''await()'' is equivalent to how it would behave if the code were synchronous.
 
 === Additional Fiber API ===
 === Cancellation operation === 
