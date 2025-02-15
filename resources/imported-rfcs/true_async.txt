@@ -470,7 +470,7 @@ Async\run(function() {
 
     // Store request-related data in the fiber context
     $context->set("request_id", uniqid());
-    $context->bindObject(stdClass::class, (object) array('foo' => 'bar'));
+    $context->bindObject((object) array('foo' => 'bar'));
 
     echo "Fiber started\n";
     outRequestData();
@@ -491,7 +491,60 @@ Done!
 </code>
 
 
-=== Cancellation operation === 
+=== Cancellation Operation ===
+
+Sometimes, it is necessary to cancel an operation for various reasons. However, the code requesting cancellation does not know the current state of the operation.  
+
+**True Async** allows canceling a fiber from any state (except when the fiber is actively running):  
+  * If the fiber is in the execution queue
+  * If the fiber is waiting for I/O operations  
+
+**True Async** ensures that this operation is memory-safe.
+
+== Fiber Cancellation Rules ==
+
+  - If the fiber has not been started, it will not start.
+  - If the fiber has already completed, nothing happens.
+  - If the fiber is waiting for execution or events, the **Scheduler** places it in a queue with a special exception: ''Async\CancellationException()''.
+
+<blockquote>**ATTENTION**: A programmer **should not** attempt to suppress ''CancellationException'', as this may lead to a fatal error and disrupt the application's behavior.</blockquote>
+
+If a fiber does not handle ''CancellationException'' and it reaches the **Scheduler**, the **Scheduler** will process and suppress it.  
+Thus, an unhandled ''CancellationException'' **does not** terminate the application.  
+
+Example: Cancelling a Fiber
+
+<code php>
+Async\run(function() {
+
+    $fiber = Async\async(function() {
+        try {
+            echo "Fiber started\n";
+            sleep(2);
+            echo "Fiber completed\n";
+        } catch (Async\CancellationException $e) {
+            echo "Fiber was cancelled!\n";
+        }
+    });
+
+    // Cancel the fiber before it finishes
+    $fiber->cancel();
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+</code>
+
+**Expected output:**
+
+<code>
+Fiber started
+Fiber was cancelled!
+Done!
+</code>
+
+
 === Graceful shutdown ===
 
 ==== Channels ====
