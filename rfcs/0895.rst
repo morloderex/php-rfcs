@@ -1,250 +1,132 @@
-Treat Enum Instances As Values
-==============================
+Raising Zero To The Power Of Negative Number
+============================================
 
 :PHP-RFC: 0895
-:Title: Treat Enum Instances As Values
-:Author: Garet Claborn <garet@suiteux.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-04-28
-:Version: 0.1
+:Title: Raising Zero To The Power Of Negative Number
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2024-01-11
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-From the RFC template's opening quote, this RFC aims to be "pragmatic",
-"loosely typed" and cater to all camps observed in the debate (as found
-to date.)
+Raising a number to the power of a negative number is equivalent to
+taking the reciprocal of the number raised to the positive opposite of
+the power.
 
-This RFC proposes to allow the use of enum instances as array keys in
-PHP. More specifically, where errors are produces in any context where
-an enum instance is used without ->value or ->name, the engine should
-instead assume ->value.
+If we raise the number zero to the power of a negative number we end up
+with the one divided by zero, which gives an undefined result. Currently
+in PHP, such operation results in ``INF``, while explicit division by
+zero gives a ``DivisionByZeroError``.
 
-This change aims to enhance the usability and consistency of enums in
-PHP by treating enum instances as symbols of their respective values -
-especially in the context of array keys. This will allow large amounts
-of existing code in various C-style languages to be compatible with PHP
-usage without affecting current projects.
+.. code:: php
 
-Further, this proposal provides potential future RFC a path to enable
-array key type constraints in line with present == vs === semantics and
-ArrayAccess, without drastic engine overhauls.
+   var_dump(0 ** -1); //float(INF)
+   var_dump(0 ** -1.1); //float(INF)
+
+   var_dump(pow(0, -1)); //float(INF)
+   var_dump(pow(0, -1.1)); //float(INF)
+
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
 Proposal
 --------
 
-Given that enums already exist in PHP and enum cases are mapped to
-either ints or strings exclusively, we propose the following changes:
+The RFC proposes to change the behavior of this operation to match the
+division by zero operation. In the next minor version raising a number
+to the power of a negative number will throw a Deprecation, and in the
+major version, this operation will throw DivisionByZeroError.
 
-Enum instances should be allowed to be used as array keys without
-producing an error. When an enum instance is used as an array key, it
-should be treated as a symbol of its value. UnitEnum , not backed as an
-int or string, should treat value as an unsigned integer iterating from
-0, more specifically modeling the relationship of enumeration (as a
-mathematical construct) with the natural numbers.
+.. code:: php
 
-Example: Consider the following enum and array:
+   //PHP 8.4
+   var_dump(0 ** -1); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(0 ** -1.1); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(pow(0, -1)); //Deprecated: Zero raised to a negative power is deprecated
+   var_dump(pow(0, -1.1)); //Deprecated: Zero raised to a negative power is deprecated
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-::
+.. code:: php
 
-    enum Color: int {
-        case red = 1;
-        case green = 2;
-        case blue = 3;
-    }
+   //PHP 9.0
+   var_dump(0 ** -1); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(0 ** -1.1); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(pow(0, -1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+   var_dump(pow(0, -1.1)); //DivisionByZeroError: Zero cannot be raised to a negative power
+    
+   var_dump(1 / 0); //DivisionByZeroError: Division by zero
 
-::
+To provide a way to compute the numbers according to the IEEE 754 rules,
+the RFC proposes adding the function ``fpow`` similarly to the function
+``fdiv`` that exists for the division operation, and ``fmod`` for the
+module operation for floating numbers.
 
-    enum WeekDays: int {
-        case monday = 1;
-        case tuesday = 2;
-        case wednesday = 3;
-    }
+.. code:: php
 
-::
-
-    $palette = [
-        1 => 'Red',
-        2 => 'Green',
-        3 => 'Blue',
-    ];
-
-Currently, the following code produces an error:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // Error
-
-With this proposal, the code above should not produce an error and
-should work as expected:
-
-::
-
-    Color $red = Color::red;
-    $paint = $palette[$red];  // 'Red'
-
-Last on a more opinionated note; the author suggests that enum cases are
-userland symbols and should imply value. Just as there is no need in the
-following scenario:
-
-::
-
-    $a = 1;
-    $b = '2';
-
-::
-
-    $list = [
-      $a => 'some value',
-      $b => $some_value;
-    ];
-
-vs
-
-::
-
-    $list = [
-      $a->value => 'some value',
-      $b->value => $some_value;
-    ];
+   //PHP 8.4
+   var_dump(fpow(0, -1)); //float(INF)
+   var_dump(fpow(0, -1.1)); //float(INF)
 
 Backward Incompatible Changes
 -----------------------------
 
-There are no backward-incompatible changes introduced by this proposal.
+This change will break code including raising the zero number to a
+negative power. Such cases may keep their current behavior by using the
+new ``fpow`` function.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.y
+Deprecation Notice in the next minor PHP version 8.4.
 
-RFC Impact
-----------
+Function ``fpow`` in the next minor PHP version 8.4.
 
-To SAPIs
-~~~~~~~~
-
-None
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-None
-
-To Opcache
-~~~~~~~~~~
-
-Implementation being studied. None expected. Enums may not need some
-checks.
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-Could be a toggle if community desired
-
-Future Scope
-------------
-
-While this proposal originated in a issue with wide support, referenced
-below, we consider strongly the negative feedback which all surrounded
-adding greater type mechanics to keys.
-
-Presently there are many proposals in the history of PHP regarding
-object keys, direct overloading of the [ ] operators and a wide
-arrangement of considerations around typing. We propose that many of
-these wishes can be addressed with much less effort if we begin at the
-loose typing and iteratively add stronger typing.
-
-From present knowledge, the PHP internals teams have found methods of
-using specific classes of objects as keys but not a road to generic
-objects. If enum labels ever meet this criteria in their own right, as
-references to enum instances, such an implementation will take
-precedence over this RFC. Semantics would be the same in either case,
-however userland glue code can enable usage patterns which inform future
-development by enabling this present RFC.
-
-Future RFCs are recommended to enable
-
-::
-
-    Day::Monday == Color::Red  //true
-    Day::Monday === Color::Red //false
-
-Which could in turn allow
-
-::
-
-    class MyType implements ArrayAccess
-    //...
-    
-       public function offsetGet(Month $which){
-          //...
-       }
-    
-    //...
-    }
-    class YourType implements ArrayAccess
-    //...
-    
-       public function offsetGet(mixed $which){
-          //...
-       }
-    
-    //...
-    }
-
-Making the desirable
-
-::
-
-    $myobj = new MyType();
-    $yourobj = new YourType();
-    $x = $myobj[Color::Yellow];   // error
-    $y = $yourobj[Color::Yellow]; // fine
-
-Such a roadmap finally enables users to user to simply use match($this)
-and other userland syntactic sugar to simulate object keys. This gap can
-be further reduced and optimized from there.
+Throwing ``DivisionByZeroError`` in the next major PHP version: 9.0.
 
 Proposed Voting Choices
 -----------------------
 
-A two-thirds majority is required for this proposal to be accepted.
+As per the voting RFC, a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-Patches and Tests
------------------
+Voting started on 2024-04-05 and will end on 2024-04-20 00:00 GMT.
 
-Pending
+Question: RFC: Raising zero to the power of negative number
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Implementation
 --------------
 
-Author's org has committed work on this issue and having it implemented,
-assuming community is in favor and this is not trivial for an existing
-member. Any guidance from those who have worked previously with enums is
-appreciated.
+Commit:
+https://github.com/php/php-src/commit/23afe57f01e0915eef246eba60e60fda74fd2dcf
+PR: https://github.com/php/php-src/pull/13128
+
+The implementation is based on Ilija Tovilo's PoC:
+https://github.com/php/php-src/issues/8015#issuecomment-1193391843
 
 References
 ----------
 
-A robust discussion about further pros/cons/considerations at the
-original issue - https://github.com/php/php-src/issues/9208
-
-Mailing list introduction and opening RFC-
-https://news-web.php.net/php.internals/120117
-
-Mailing list post-RFC discussion: TBD
-
-Rejected Features
------------------
-
-None to date
+Issue GH-8015: https://github.com/php/php-src/issues/8015 RFC Division
+by zero: https://wiki.php.net/rfc/engine_warnings
 
 Additional Metadata
 -------------------
 
-:Original Authors: Garet Claborn, garet@suiteux.com
-:Slug: treat_enum_instances_as_values
-:Wiki URL: https://wiki.php.net/rfc/treat_enum_instances_as_values
+:Implementation: `see Implementation section </rfc/raising_zero_to_power_of_negative_number#Implementation>`__
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: raising_zero_to_power_of_negative_number
+:Wiki URL: https://wiki.php.net/rfc/raising_zero_to_power_of_negative_number
