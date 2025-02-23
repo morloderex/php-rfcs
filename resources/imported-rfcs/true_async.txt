@@ -555,6 +555,204 @@ Deadlocks are still possible due to:
   - **Issues within Reactor**,  
   - **Bugs in third-party extensions**.  
 
+==== Context ====
+
+A concurrent runtime allows handling requests using Fibers, where each Fiber can process its own request. In this case, storing request-associated data in global variables is no longer an option.
+
+The ''Context'' class is designed to solve this issue. It allows the storage of variables that are automatically inherited by ''Fibers'' and other components.
+
+<code php>
+final class Context
+{
+    /**
+     * Create a new current context.
+     * If the current context already exists, it will be replaced with the new one.
+     */
+    public static function newCurrent(): Context {}
+
+    /**
+     * Get the current context.
+     */
+    public static function current(bool $createIfNull = false): ?Context {}
+
+    /**
+     * Creates a new context, sets the current context as the parent for the new one,
+     * and sets the new context as the current one.
+     */
+    public static function overrideCurrent(bool $weakParent = false): Context {}
+
+    /**
+     * Return a current local context.
+     * The local context can be considered the execution context of a Fiber.
+     */
+    public static function local(): Context {}
+
+    /**
+     * Constructor for the Context class.
+     *
+     * @param Context|null $parent The parent context.
+     * @param bool $weakParent If true, the parent context is a weak reference.
+     */
+    public function __construct(?Context $parent = null, bool $weakParent = false) {}
+
+    /**
+     * Find a value by key in the current or parent context.
+     */
+    public function find(string|object $key): mixed {}
+
+    /**
+     * Get a value by key in the current context.
+     */
+    public function get(string|object $key): mixed {}
+
+    /**
+     * Check if a key exists in the current context.
+     */
+    public function has(string|object $key): bool {}
+
+    /**
+     * Find a value by key only in the local context.
+     */
+    public function findLocal(string|object $key): mixed {}
+
+    /**
+     * Get a value by key only in the local context.
+     */
+    public function getLocal(string|object $key): mixed {}
+
+    /**
+     * Check if a key exists in the local context.
+     */
+    public function hasLocal(string|object $key): bool {}
+
+    /**
+     * Set a value by key in the context.
+     *
+     * @param string|object $key   The key.
+     * @param mixed         $value The value.
+     * @param bool          $replace If true, replaces the existing value.
+     */
+    public function setKey(string|object $key, mixed $value, bool $replace = false): Context {}
+
+    /**
+     * Delete a value by key from the context.
+     */
+    public function delKey(string|object $key): Context {}
+
+    /**
+     * Get the parent context.
+     */
+    public function getParent(): ?Context {}
+
+    /**
+     * Check if the current context is empty.
+     */
+    public function isEmpty(): bool {}
+}
+</code>
+
+The `Context` class is a map-like data structure where keys can be either **objects** or **strings**. Object keys allow the creation of slots in `Context` that cannot be accessed from other areas of the application. This mechanism is similar to `Symbol` in JavaScript. 
+
+For key objects, a specialized ''Async\Key()'' object can be used, but this is not required.
+
+== Fiber Context Inheritance ==
+
+Each Fiber can have its own execution context, which is inherited from the Fiber that created it. This means that in the following code:
+
+<code php>
+Async\Context::current(true)->setKey('test-key', 'test-value');
+
+Async\run(function() {
+    $value = Async\Context::current()->get('test-key');
+    echo "async function 1: {$value}\n";
+
+    Async\run(function() {
+        $value = Async\Context::current()->get('test-key');
+        echo "async function 2: {$value}\n";
+    });
+});
+</code>
+
+''Fiber1'' will inherit the context from the previous execution scope. ''Fiber2'', which is created inside ''Fiber1'', will inherit the context that was current in ''Fiber1''.
+
+The following code demonstrates the mutable nature of `Context`:
+
+<code php>
+Async\Context::current(true)->setKey('test-key', 'test-value');
+
+Async\run(function() {
+    Async\Context::current()->setKey('test-key', 'test-value2', true);
+
+    Async\run(function() {
+        $value = Async\Context::current()->get('test-key');
+        echo "async function 3: {$value}\n";
+    });
+});
+
+Async\run(function() {
+    $value = Async\Context::current()->get('test-key');
+    echo "async function 2: {$value}\n";
+});
+</code>
+
+== Immutability vs Mutability ==
+
+In languages such as **Kotlin**, the ''Context'' component is an **immutable** structure because immutability helps prevent serious errors caused by unexpected modifications to context variables.
+
+However, in **True Async**, ''Context'' is designed to be used as a **shared memory space with private slots**, making immutability unnecessary. The ability to modify the context dynamically is essential for efficient and flexible execution flow management.
+
+That said, it is important to note that **using string-based keys is considered an anti-pattern** and is currently under review in this RFC. Object-based keys provide better encapsulation and prevent unintended access to context variables.
+
+== Context Overriding ==
+
+Sometimes, it is necessary to create a new context that inherits all variables from the previous one, but any changes to it do not affect the previous context. This approach is similar to how environment variables work in Unix-like/Windows operating systems. For this, you can use context overriding with the ''Async\Context::overrideCurrent()'' method.
+
+<code php>
+Async\Context::current(true)->setKey('test-key', 'test-value');
+
+Async\run(function() {
+    Async\Context::overrideCurrent()->setKey('test-key-2', 'test-value-2');
+
+    Async\run(function() {
+        $value = Async\Context::current()->get('test-key').' : '.Async\Context::current()->get('test-key-2');
+        echo "async function 3: {$value}\n";
+    });
+});
+</code>
+
+== Local Context ==
+
+While the current context creates a logical execution space defined by the programmer, there is another type of context associated with a non-concurrent section of code. This context is called the ''local context''. Typically, a local context is directly linked to a ''Fiber'' and is destroyed as soon as the ''Fiber'' completes execution.
+
+<code php>
+Async\Context::current(true)->setKey('test-key', 'test-value');
+
+Async\run(function() {
+    Async\Context::local()->setKey('test-key', 'test-value-local');
+    $value = Async\Context::local()->get('test-key');
+
+    echo "async function 1: {$value}\n";
+
+    Async\run(function() {
+        $value = Async\Context::local()->get('test-key');
+        echo "async function 3: {$value}\n";
+    });
+});
+
+Async\run(function() {
+    $value = Async\Context::local()->get('test-key');
+    echo "async function 2: {$value}\n";
+});
+
+--EXPECT--
+start
+async function 1: test-value-local
+async function 2: test-value
+async function 3: test-value
+end
+
+</code>
+
 ==== Futures ====
 
 Objects of the ''Future'' class are high-level patterns for handling deferred results. **True Async** inherits the semantics of the AMPHP project and defines two key classes:
