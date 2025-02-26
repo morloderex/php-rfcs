@@ -1451,6 +1451,90 @@ $timer = new Timer(2000, function (Timer $self) {
 
 ==== Pool ====
 
+The object pool is a necessary pattern for managing connections to services in a concurrent environment.
+For example, database connections cannot be used simultaneously in different Fibers
+because they might be in an incomplete state, and parallel use could cause operational issues.
+
+The ''Pool'' class organizes a storage of objects that can automatically return to the pool
+and remember which Fiber they are associated with.
+
+The ''Pool'' class implements the following flow:
+
+  - The ''borrow()'' method acquires an object from the pool (e.g., a database connection).
+  - The pool associates the object with the current Fiber.
+  - Once the object goes out of scope, the Fiber terminates, or the ''return()'' method is called,
+    the object is returned to the pool and becomes available for other Fibers.
+
+<code php>
+/**
+ * @template-covariant T
+ */
+class Pool
+{
+    protected callable   $factory;
+    protected int        $maxPoolSize;
+    protected int        $minPoolSize        = 0;
+    protected int        $timeout            = -1;
+    protected int        $delayPoolReduction = 0;
+
+    /**
+     * Pool constructor.
+     */
+    public function __construct(
+        callable    $factory,
+        int         $maxPoolSize,
+        int         $minPoolSize        = 0,
+        int         $timeout            = -1,
+        int         $delayPoolReduction = 0,
+    ) {}
+
+    /**
+     * Borrow an object from the pool.
+     * @return T|null
+     */
+    public function borrow(): object|null {}
+
+    /**
+     * Return an object to the pool.
+     * @param T $object
+     */
+    public function return(object $object): void {}
+
+    /**
+     * Rebuild pool state and free unused objects.
+     *
+     */
+    public function rebuild(): void {}
+
+    /**
+     * Get the maximum pool size.
+     *
+     */
+    public function getMaxPoolSize(): int {}
+
+    /**
+     * Get the minimum pool size.
+     *
+     */
+    public function getMinPoolSize(): int {}
+
+    /**
+     * Get the timeout for borrowing an object.
+     */
+    public function getMaxWaitTimeout(): int {}
+
+    /**
+     * Get used objects count.
+     */
+    public function getUsed(): int {}
+
+    /**
+     * Get the pool size.
+     */
+    public function getPoolSize(): int {}
+}
+</code>
+
 ==== Low-level API ====
 
 ==== Tools ====
@@ -1613,6 +1697,15 @@ After the project is implemented, this section should contain
 
 ===== References =====
 Links to external references, discussions or RFCs
+
+    * **First Discussion** - https://externals.io/message/126402
+
+The following can be considered as competing solutions to the current implementation:
+
+   * **Swoole** (https://github.com/swoole/swoole-src) – a C++ library that implements a full feature set for concurrent programming. The advantage and disadvantage of **Swoole** is that it is a standalone solution that does not directly affect the language itself.
+
+   * The **Swow** (https://github.com/swow/) project is a C library that provides a good lightweight API while not affecting the language itself and not requiring changes to PHP.
+
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
