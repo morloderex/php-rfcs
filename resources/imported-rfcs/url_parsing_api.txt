@@ -67,17 +67,25 @@ Normalization is an optional process supported by RFC 3986 for canonizing differ
 
 WHATWG doesn't have this concept, as all transformations are applied during parsing.
 
+==== Percent-encoding & decoding =====
+
+Encoding and decoding special characters is a crucial aspect of URI parsing. For this purpose, both RFC 3986 and WHATWG use [[https://en.wikipedia.org/wiki/Percent-encoding|percent-encoding]] (i.e. the ''%'' character is encoded as ''%25''). However, the two standards slightly differ in this regard:
+
+WHATWG associates a character set for each component, defining the characters that must be percent-encoded in the context of the given component. For example, the [[https://url.spec.whatwg.org/#query-percent-encode-set|''query percent-encode set'']] is associated with the query component, containing the "#" character (among others), while the ''path percent-encode set'' includes the "?" character in addition (among others). It's easy to see the pattern: if a character has special meaning **after** the given component, then it must be percent-encoded. That's why the ''userinfo percent-encode set'' has to also contain the "/" character (among others), but the ''query percent-encode set'' doesn't include it, since "/" characters don't have a special meaning after the path component.
+
+On the other hand, RFC 3986 specifies a set of reserved characters ("#", "?", "/", etc.) statically, without depending on context. This is necessary to do because RFC 3986 is a generic specification, upon which additional scheme-specific syntax can be built. That's why RFC 3986 strictly prohibits the percent-decoding of any reserved characters:
+
+<blockquote>Thus, characters in the reserved set are protected from normalization and are therefore safe to be used by scheme-specific and producer-specific algorithms for delimiting data subcomponents within a URI.</blockquote>
+
 ==== Equivalence ====
 
 Normalization and transformations during parsing are especially important when it comes to comparing URIs to each other because they reduce the likelihood of false positive results, as URI comparison is effectively checking whether two URIs represent the same resource.
 
-In practice, this means that two URIs are normalized (when possible) and then the components are recomposed. If the resulting URI strings are equal, then the 2 URIs are equal too. Usually, the fragment component is disregarded, since it refers to a secondary resource within the primary one.
+In practice, this means that two URIs are normalized (when applicable) and then the components are recomposed. If the resulting URI strings are equal, then the 2 URIs are equal too. Usually, the fragment component is disregarded, since it refers to a secondary resource within the primary one that is identified by the URI.
 
-==== Percent-encoding =====
+To complicate things, there is also a nuanced difference how the two specifications treat equivalence. RFC 3986 defines that "URIs that differ in the replacement of an unreserved character with its corresponding percent-encoded US-ASCII octet are equivalent", which effectively means that percent-encoded unreserved characters and their decoded form are equivalent (i.e. ''e'' is equivalent to ''%65'').
 
-Encoding and decoding special characters is a crucial aspect of URI parsing. For this purpose, both RFC 3986 and WHATWG use [[https://en.wikipedia.org/wiki/Percent-encoding|percent-encoding]] (i.e. the ''%'' character is encoded as ''%25''). However, the two standards differ significantly in this regard:
-
-RFC 3986 defines that "URIs that differ in the replacement of an unreserved character with its corresponding percent-encoded US-ASCII octet are equivalent", which means that percent-encoded characters and their decoded form are equivalent. On the contrary, WHATWG defines URL equivalence by the equality of the recomposed URL string, and never decodes percent-encoded characters, except in the host. This implies that percent-encoded characters are not equivalent to their decoded form (except in the host).
+On the contrary, WHATWG defines URL equivalence by the equality of the recomposed URL string, and never decodes percent-encoded characters, except in the host. This implies that percent-encoded characters are not equivalent to their percent-decoded form (except in the host).
 
 The difference between RFC 3986 and WHATWG comes from the fact that the point of view of a maintainer of the WHATWG specification is that [[https://github.com/whatwg/url/issues/606#issuecomment-926395864|webservers may legitimately choose to consider encoded and decoded paths distinct, and a standard cannot force them not to do so]]. This is a substantial BC break compared to RFC 3986, and it is actually a source of confusion among users of the WHATWG specification based on the large number of tickets related to this question.
 
@@ -617,17 +625,51 @@ This method is a shorthand for ''new get_class($uri)("/foo", $base->toString())'
 
 ==== Component retrieval ====
 
-The individual URI components can be retrieved via getters. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has to be available in multiple forms in order to best serve the vastly different needs users may have. In order to best understand why this is necessary, the [[https://wiki.php.net/rfc/url_parsing_api#percent_encoding|Percent-encoding]] and [[https://wiki.php.net/rfc/url_parsing_api#normalization|Normalization]] sections give a good introduction.
+The individual URI components can be retrieved via getters. While [[rfc:property-hooks|property hooks]] and/or [[rfc:asymmetric-visibility-v2|asymmetric visibility]] could be a modern replacement for getters, the RFC still chooses the more conservative getter-based approach because each URI component actually has to be available in multiple forms in order to best serve the vastly different needs users may have.
 
 All URI components - with the exception of the host - can be retrieved in two formats:
 
-  * "raw" representation: it's how the URI component is natively represented without any post-processing. 
-  * "decoded-normalized" representation: the URI is normalized (when applicable), and then the reserved characters **in the context of the given component** are percent-decoded. This means that only those reserved characters are percent-decoded that are not allowed in a component. This behavior is needed to be able to unambiguously retrieve components.
+  * **"raw" representation:** It's how components are natively represented by URI parsers without any post-processing after parsing.
+  * **"normalized-decoded" representation:** The URI is normalized (when applicable), and components are percent-decoded.
 
-Given the ''https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''https://apple:pass@example.com/foobar?abc=abc#abc''), let's see how the individual components can be represented in case of ''Uri\Rfc3986\Uri'':
+The "raw" representation is very straightforward and doesn't need much explanation: it reflects components the closest way to their origin. That's why this is mostly suitable for use-cases where one has to work with URIs opaquely - usually API clients or signers fall in this category that want to avoid introducing any unnecessary changes to URIs, in order to avoid causing subtle bugs.
+
+On the other hand, the "normalized-decoded" representation is useful in a whole lot of other cases, including application routers and HTTP cache implementations. This representation should be used when one wants to make sure that URI components are in their most canonical form. I.e. in case of application routers, all URIs that represent the same resource should be routed to the same controller action: both https://example.com/test and https://example.com/t%65st should trigger the same piece of code, otherwise the application may fail to serve some traffic using a slightly abnormal URI for any reason.
+
+The "normalized-decoded" form should do post-processing in such a way that the result can still be safely used for modification of the same component of another valid URI:
+
+<code PHP>
+$uri1 = new Uri\Rfc3986\Uri("HTTPS://example.com");
+$uri2 = new Uri\Rfc3986\Uri("http://test.com");
+
+// The scheme of $uri2 is successfully modified with the
+// "normalized-decoded" representation of the scheme of $uri1
+$uri2 = $uri2->withScheme($uri1->getScheme());
+</code>
+
+This attribute is important for usability - it would be inconvenient to always do additional checks when the "normalized-decoded" representation is used for building or modifying a URI.
+
+On the other hand, the "normalized-decoded" representation doesn't always guarantee equivalence with the "raw" representation of the same component of the same URI. According to the details outlined in the [[https://wiki.php.net/rfc/url_parsing_api#percent-encoding|Percent encoding]] section, the WHATWG specification considers the percent-encoded and decoded forms of the same string different everywhere besides the host component, that's why one shouldn't assume that the two representations are completely interchangeable in case of ''Uri\WhatWg\Url''.
+
+<code PHP>
+$url1 = new Uri\WhatWg\Url("https://example.com/t%65st");
+
+// the "normalized-decoded" representation of the path is retrieved, containing the "test" value
+$path = $url->getPath();
+
+// $url2 is constructed as https://example.com/test
+$url2 = $url1->withPath($path);
+
+// false, https://example.com/t%65st != https://example.com/test
+$uri1->equals($uri2);
+</code>
+
+''Uri\Rfc3986\Uri'' isn't subject to the above problem though, since its equivalence semantics are compatible with the "normalized-decoded" representation.
+
+Given the ''https://%61pple:p%61ss@ex%61mple.com:433/foob%61r?%61bc=%61bc#%61bc'' URI (the percent-encoded variant of ''https://apple:pass@example.com:433/foobar?abc=abc#abc''), let's see how the individual components can be represented in case of ''Uri\Rfc3986\Uri'':
 
 <code php>
-$uri = new Uri\Rfc3986\Uri("https://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+$uri = new Uri\Rfc3986\Uri("https://%61pple:p%61ss@ex%61mple.com:433/foob%61r?%61bc=%61bc#%61bc");
 
 echo $uri->getScheme();                          // https
 echo $uri->getRawScheme();                       // https
@@ -643,6 +685,8 @@ echo $uri->getRawPassword();                     // p%61ss
 
 echo $uri->getHost();                            // example.com
 echo $uri->getRawHost();                         // ex%61mple.com
+
+echo $url->getPort();                            // 433
 
 echo $uri->getPath();                            // /foobar
 echo $uri->getRawPath();                         // /foob%61r
@@ -672,9 +716,10 @@ echo $uri->getRawPath();                         // /foo/../bar/
 In case of ''Uri\Whatwg\Url'', we'll get the following results for the first example:
 
 <code php>
-$url = new Uri\Whatwg\Url("HTTPS://%61pple:p%61ss@ex%61mple.com/foob%61r?%61bc=%61bc#%61bc");
+$url = new Uri\Whatwg\Url("HTTPS://%61pple:p%61ss@ex%61mple.com:433/foob%61r?%61bc=%61bc#%61bc");
 
 echo $url->getScheme();                          // https
+echo $url->getRawScheme();                       // method does not exist, because Uri\WhatWg\Url always normalizes the scheme
 
 echo $url->getUser();                            // apple
 echo $url->getRawUser();                         // %61pple
@@ -684,7 +729,9 @@ echo $url->getRawPassword();                     // p%61ss
 
 echo $url->getHost();                            // example.com
 echo $url->getHostForDisplay();                  // example.com
-echo $url->getRawHost();                         // method does not exist, because WhatWgUrl always normalizes the scheme
+echo $url->getRawHost();                         // method does not exist, because Uri\WhatWg\Url always normalizes the host
+
+echo $url->getPort();                            // 433
 
 echo $url->getPath();                            // /foobar
 echo $url->getRawPath();                         // /foob%61r
@@ -696,7 +743,7 @@ echo $url->getFragment();                        // abc
 echo $url->getRawFragment();                     // %61bc
 </code>
 
-This script gave very similar results as the previous one did, except for the scheme and the host components. For one, ''Uri\Whatwg\Url'' automatically normalizes the scheme as lowercased, that's why it has no ''getRawScheme()'' method. For similar reasons, ''Uri\Whatwg\Url'' neither has a ''getRawHost()'' method because WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHostForDisplay()'' method comes handy to retrieve the host in a display-friendly format:
+This script gave very similar results as the previous one did, except for the scheme and the host components. For one, ''Uri\Whatwg\Url'' automatically normalizes the scheme as lowercased, that's why it has no ''getRawScheme()'' method. For similar reasons, ''Uri\Whatwg\Url'' neither has a ''getRawHost()'' method because WHATWG automatically percent-decodes the host during parsing, so there is no "raw" representation. On the other hand, the ''getHostForDisplay()'' method comes handy to retrieve the IDNA host that is best suitable for display:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://🐘.com");
@@ -704,7 +751,7 @@ echo $url->getHost();                              // xn--go8h.com
 echo $url->getHostForDisplay();                    // 🐘.com
 </code>
 
-There is one more edge-case which needs to be highlighted. This is related to percent-decoding of reserved characters:
+There is an more edge-case which needs to be highlighted with more examples: it's the percent-decoding of reserved characters.
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://example.com/foo/bar%2Fbaz");
@@ -713,7 +760,7 @@ echo $uri->getPath();                            // /foo/bar%2Fbaz
 echo $uri->getRawPath();                         // /foo/bar%2Fbaz
 </code>
 
-In the example above, the second path segment contains the ''%2F'' which is the percent-encoded form of the ''/''. But why does it have to be percent-encoded at all? It's because ''/'' is a [[https://datatracker.ietf.org/doc/html/rfc3986#section-2.2|reserved character]], and there is a semantical difference between ''/'' and ''%2F'' in the path: the former one separates the individual path segments, while ''%2F'' means that the respective ''/'' is part of a single segment (but using the percent-decoded form would be ambiguous). Therefore the example URI has two path segments: "foo" and "bar/baz".
+In the example above, the second path segment contains the ''%2F'' which is the percent-encoded form of the ''/'' character. But why does it have to be percent-encoded at all? It's because ''/'' is a [[https://datatracker.ietf.org/doc/html/rfc3986#section-2.2|reserved character]], and also there is a semantical difference between ''/'' and ''%2F'' in the path: the former one separates the individual path segments, while ''%2F'' means that the respective ''/'' is part of a single segment (but using the percent-decoded form would be ambiguous). Therefore the example URI has two path segments: "foo" and "bar/baz".
 
 Let's see the same example with WHATWG:
 
@@ -724,7 +771,7 @@ echo $url->getPath();                            // /foo/bar%2Fbaz
 echo $url->getRawPath();                         // /foo/bar%2Fbaz
 </code>
 
-Let's have a look at some other tricky examples with ''Uri\Rfc3986\Uri'' (but the same applies to ''Uri\WhatWg\Url''):
+Let's have a look at some other tricky examples with ''Uri\Rfc3986\Uri'':
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://[2001:0db8:0001:0000:0000:0ab9:C0A8:0102]/?foo=bar%26baz%3Dqux");
@@ -735,7 +782,7 @@ echo $url->getQuery();                          // foo=bar%26baz%3Dqux
 echo $url->getRawQuery();                       // foo=bar%26baz%3Dqux
 </code>
 
-What happens here? The host name is an IPv6 address that must be enclosed within a ''[]'' pair. The query string contains a "%26" (percent-encoded form of "&") and "%3Dq" (percent-encoded form of "=") that are both reserved characters within the query string. Therefore - similarly to the previous example - they are not percent-decoded even when the ''getQuery()'' method is used. Generally speaking, percent-encoded reserved characters are left untouched by the percent-decoding implementations during component retrieval.
+What happens here? The host name is an IPv6 address that must be enclosed within a ''[]'' pair. The query string contains a "%26" (percent-encoded form of "&") and "%3D" (percent-encoded form of "=") that are both reserved characters.
 
 ==== Component modification ====
 
@@ -756,7 +803,7 @@ $uri = new Uri\Rfc3986\Uri("https://example.com");
 $uri->withHost("/");                               // Throws Uri\InvalidUriException
 </code>
 
-It's also important to know how withers handle percent-encoding and reserved characters. WHATWG explicitly declares an algorithm for modifying the components, which is discussed in the https://url.spec.whatwg.org/#url-class section (listed below as "setters steps"). But generally speaking, withers expect URI components in an appropriately percent-encoded form:
+It's also important to know how withers handle percent-encoding and reserved characters. WHATWG explicitly declares an algorithm for modifying the components, which is discussed in the https://url.spec.whatwg.org/#url-class section (listed below as "setters steps"). But generally speaking, withers accept URI components in an appropriately percent-encoded form:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://example.com");
@@ -766,13 +813,13 @@ echo $url->getUser();                              // user:
 echo $url->getRawUser();                           // use%72%3A
 </code>
 
-As it can be seen above, not only reserved characters (":"), but unreserved ones ("r") can also be percent-encoded. Additionally, the WHATWG algorithm allows to automatically percent-encoded reserved characters ("?" and "#"):
+As it can be seen above, not only reserved characters (":"), but unreserved ones ("r") can also be percent-encoded. Additionally, the WHATWG algorithm allows to automatically percent-encode reserved characters ("?" and "#"):
 
 <code php>
 $url = new Uri\WhatWg\Url("https://example.com");
 $url = $url->withPath("/?#:");
 
-echo $url->getPath();                             // /?#:
+echo $url->getPath();                             // /%3F%23:
 echo $url->getRawPath();                          // /%3F%23:
 </code>
 
@@ -789,7 +836,11 @@ echo $url->getQuery();                             // foo
 echo $url->getFragment();                          // bar
 </code>
 
-The above example makes it clear that withers accept leading separator characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters.
+The above example makes it clear that withers optionally accept leading separator characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters. All this is possible to do because "?" is not reserved in the context of the query component, and neither "#" is reserved in the context of the fragment.
+
+Naturally, reserved characters are automatically percent-encoded by all withers (including withers of ''Uri\Rfc3986\Uri'') - the same way as it was described in the example for the ''Uri\WhatWg\Url::withPath()'' above.
+
+
 
 ==== Component recomposition ====
 
@@ -870,6 +921,18 @@ It should be noted that the ''equals()'' method could also accept URI strings. I
 
 The same question - combined with the fact that the construct is not supported in userland - led us not to overload the equality operator.
 
+==== Cloning ====
+
+Cloning of URIs is supported. Actually, withers also clone the object they are invoked on before actually performing component modification in order to guarantee immutability.
+
+<code PHP>
+$uri1 = new Uri\Rfc3986\Uri("https://example.com/foo/");
+$uri2 = clone $uri1;                                       // creates a new Uri instance
+
+$url1 = new Uri\WhatWg\Url("https://example.com/foo/");
+$url2 = clone $url1;                                       // creates a new Url instance
+</code>
+
 ==== Serialization ====
 
 Both built-in URI classes support serialization and deserialization - albeit a little bit differently than most classes usually do: the serialized form only includes the recomposed URI itself exposed as the ''%%__uri%%'' field, but the individual properties or URI components are not present. This approach makes deserialization easier that performs regular URI string parsing where URI components are not needed.
@@ -898,18 +961,6 @@ unserialize('O:15:"Uri\Rfc3986\Uri":1:{s:3:"uri";s:19:"https://example.com";}');
 
 // The following line throws Uri\UriOperationException because the __uri field has a wrong type
 unserialize('O:14:"Uri\WhatWg\Url":1:{s:5:"__uri";i:1;}');
-</code>
-
-==== Cloning ====
-
-Cloning of URIs is supported. Actually, withers also clone the object they are invoked on before actually performing component modification in order to guarantee immutability.
-
-<code PHP>
-$uri1 = new Uri\Rfc3986\Uri("https://example.com/foo/");
-$uri2 = clone $uri1;                                       // creates a new Uri instance
-
-$url1 = new Uri\WhatWg\Url("https://example.com/foo/");
-$url2 = clone $url1;                                       // creates a new Url instance
 </code>
 
 ==== Debugging ====
@@ -953,6 +1004,8 @@ The proposal adds 4 new exceptions that are triggered under the following circum
   * ''Uri\UninitializedUriException'': Any method call that tries to use the internally stored URI triggers this exception when a URI instance was created without actually invoking any of the following: the constructor, the ''parse()'' or the ''%%__unserialize()%%'' method. This can happen for example when the object is instantiated via ''ReflectionClass::newInstanceWithoutConstructor()'').
   * ''Uri\UriOperationException'': It's thrown when any operation involving URIs fails, specifically in the following scenarios: when cloning an URI (it may be possible by memory issues), or during deserialization (as discussed in the [[https://wiki.php.net/rfc/url_parsing_api#serialization|Serialization]] section). Theoretically, URI component reading may also trigger this exception, but in practice this can never happen with the built-in URI implementations, because they never fail.
   * ''Uri\InvalidUriException'': It's thrown when URI string parsing is unsuccessful in case of ''%%__construct()%%'', all wither methods, ''resolve()'', as well as during deserialization.
+
+All of them extend the forth exception, ''Uri\UriException''.
 
 ===== Plugability =====
 
@@ -1118,7 +1171,7 @@ The above example makes it clear that the builder pattern mostly shines when it 
 <code php>
 // Redirection of HTTP traffic to HTTPS by using the builder pattern
 
-$builder = Uri\Rfc3986\UriBuilder();
+$builder = new Uri\Rfc3986\UriBuilder();
 $builder->setScheme("https")
         ->setHost("example.com")
         ->setPath("/foo");
