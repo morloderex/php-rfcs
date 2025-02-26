@@ -41,7 +41,7 @@ Before discussing the proposal itself, we should also briefly touch the URI spec
 
 ==== WHATWG URL ====
 
-It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it regularly changes. One of its main differences compared to RFC 3986 is that it only deals with URLs, rather than (that have a scheme component (i.e. ''https'').
+It is a fairly new specification that is mostly relevant in the web browser context. It is a living specification, meaning it changes from time to time. One of its fundamental differences compared to RFC 3986 is that it only deals with URLs, rather than URIs.
 
 ===== Important concepts related to URIs =====
 
@@ -522,8 +522,8 @@ First and foremost, the new URI parsing API contains two URI implementations, ''
 
 Both built-in URI implementations are ''readonly'' classes, and support parsing URI strings via two methods:
 
-  * the constructor: It expects a required URI and an optional base URI parameter in order to support [[http://tools.ietf.org/html/rfc3986#section-5|reference resolution]]. In case of an invalid URI, a ''Uri\InvalidUriException'' is thrown.
-  * a ''parse()'' factory method: It expects the same parameters as the constructor does, but in case of an invalid URI, ''null'' is returned instead of throwing an exception. Using this method is recommended for validating URIs and/or parsing URIs from untrusted input.
+  * the constructor: It expects a URI, and optionally, a base URL in order to support [[http://tools.ietf.org/html/rfc3986#section-5|reference resolution]]. When parsing is unsuccessful, a ''Uri\InvalidUriException'' is thrown, containing errors.
+  * a ''parse()'' factory method: It expects the same parameters as the constructor does, but when parsing is unsuccessful, ''null'' is returned instead of throwing an exception. Using this method is recommended for validating URIs and/or parsing URIs from untrusted input.
 
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://example.com");          // An RFC 3986 URI instance is created
@@ -684,6 +684,7 @@ echo $url->getRawPassword();                     // p%61ss
 
 echo $url->getHost();                            // example.com
 echo $url->getHostForDisplay();                  // example.com
+echo $url->getRawHost();                         // method does not exist, because WhatWgUrl always normalizes the scheme
 
 echo $url->getPath();                            // /foobar
 echo $url->getRawPath();                         // /foob%61r
@@ -723,6 +724,19 @@ echo $url->getPath();                            // /foo/bar%2Fbaz
 echo $url->getRawPath();                         // /foo/bar%2Fbaz
 </code>
 
+Let's have a look at some other tricky examples with ''Uri\Rfc3986\Uri'' (but the same applies to ''Uri\WhatWg\Url''):
+
+<code php>
+$uri = new Uri\Rfc3986\Uri("https://[2001:0db8:0001:0000:0000:0ab9:C0A8:0102]/?foo=bar%26baz%3Dqux");
+
+echo $url->getHost();                           // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
+echo $url->getRawHost();                        // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
+echo $url->getQuery();                          // foo=bar%26baz%3Dqux
+echo $url->getRawQuery();                       // foo=bar%26baz%3Dqux
+</code>
+
+What happens here? The host name is an IPv6 address that must be enclosed within a ''[]'' pair. The query string contains a "%26" (percent-encoded form of "&") and "%3Dq" (percent-encoded form of "=") that are both reserved characters within the query string. Therefore - similarly to the previous example - they are not percent-decoded even when the ''getQuery()'' method is used. Generally speaking, percent-encoded reserved characters are left untouched by the percent-decoding implementations during component retrieval.
+
 ==== Component modification ====
 
 Immutable modification of the individual URI components is possible via "wither" methods. Let's see a very basic example first for modifying and retrieving the host URI component:
@@ -745,24 +759,37 @@ $uri->withHost("/");                               // Throws Uri\InvalidUriExcep
 It's also important to know how withers handle percent-encoding and reserved characters. WHATWG explicitly declares an algorithm for modifying the components, which is discussed in the https://url.spec.whatwg.org/#url-class section (listed below as "setters steps"). But generally speaking, withers expect URI components in an appropriately percent-encoded form:
 
 <code php>
-$uri = new Uri\WhatWg\Url("https://example.com");
-$uri = $uri->witUser("use%72%3A");                // percent-encoded form of "user:"
+$url = new Uri\WhatWg\Url("https://example.com");
+$url = $url->withUser("use%72%3A");                // percent-encoded form of "user:"
 
-echo $uri->getUser();                             // user:
-echo $uri->getRawUser();                          // use%72%3A
+echo $url->getUser();                              // user:
+echo $url->getRawUser();                           // use%72%3A
 </code>
 
 As it can be seen above, not only reserved characters (":"), but unreserved ones ("r") can also be percent-encoded. Additionally, the WHATWG algorithm allows to automatically percent-encoded reserved characters ("?" and "#"):
 
 <code php>
-$uri = new Uri\WhatWg\Url("https://example.com");
-$uri = $uri->withPath("/?#:");
+$url = new Uri\WhatWg\Url("https://example.com");
+$url = $url->withPath("/?#:");
 
-echo $uri->getPath();                             // /?#:
-echo $uri->getRawPath();                          // /%3F%23:
+echo $url->getPath();                             // /?#:
+echo $url->getRawPath();                          // /%3F%23:
 </code>
 
 The "?" and the "#" characters are reserved in the context of the path component, so they must be percent-encoded in order to be able to use them. On the other hand, while ":" is also reserved in some contexts, it's not reserved in this one, since it doesn't have any special meaning inside or after the path component, therefore there's no need to percent-encode it.
+
+Let's see another example about the query component:
+
+<code php>
+$url = new Uri\WhatWg\Url("https://example.com/");
+$url = $url->withQuery("?foo");
+$url = $url->withFragment("#bar");
+
+echo $url->getQuery();                             // foo
+echo $url->getFragment();                          // bar
+</code>
+
+The above example makes it clear that withers accept leading separator characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters.
 
 ==== Component recomposition ====
 
@@ -793,7 +820,7 @@ echo $uri->toNormalizedString();                   // https://example.com
 
 The ''Uri\Rfc3986\Uri::toString()'' returns the unnormalized URI string, while ''Uri\Rfc3986\Uri::toNormalizedString()'' does normalize its return value.
 
-Another example showcasing how ''Uri\Rfc3986\Uri'' deals with IDNA:
+Another example showcasing that ''Uri\Rfc3986\Uri'' doesn't support IDNA:
 
 <code php>
 $uri = Uri\Rfc3986\Uri::parse("https://你好你好.com");
@@ -921,7 +948,7 @@ Even though the example above uses ''Uri\Rfc3986\Uri'', ''Uri\WhatWg\Url'' behav
 
 ==== Exceptions ====
 
-The proposal adds 4 new exceptions that are triggered in the following circumstances:
+The proposal adds 4 new exceptions that are triggered under the following circumstances:
 
   * ''Uri\UninitializedUriException'': Any method call that tries to use the internally stored URI triggers this exception when a URI instance was created without actually invoking any of the following: the constructor, the ''parse()'' or the ''%%__unserialize()%%'' method. This can happen for example when the object is instantiated via ''ReflectionClass::newInstanceWithoutConstructor()'').
   * ''Uri\UriOperationException'': It's thrown when any operation involving URIs fails, specifically in the following scenarios: when cloning an URI (it may be possible by memory issues), or during deserialization (as discussed in the [[https://wiki.php.net/rfc/url_parsing_api#serialization|Serialization]] section). Theoretically, URI component reading may also trigger this exception, but in practice this can never happen with the built-in URI implementations, because they never fail.
@@ -991,11 +1018,11 @@ According to the rough benchmarks performed on a Linux instance in GitHub Action
   * ''Uri\Rfc3986\Uri'': ''0.000817 sec''
   * ''Uri\WhatWg\Url'': ''0.000917 sec''
 
-==== Discussion ====
+===== Discussion =====
 
 The following sections give some additional context and explanation for the questions that had to be answered during the discussion phase of the RFC.
 
-===== Naming considerations =====
+==== Naming considerations ====
 
 After multiple iterations, the RFC settled on using the ''Uri\Rfc3986\Uri'' and the ''Uri\WhatWg\Url'' class names at last. By having different subnamespaces for the two specifications, it became possible to group together all the WHATWG related classes (''Uri\WhatWg\WhatWgErrorType'', ''Uri\WhatWg\WhatWgError''). Additionally, the chosen class names (''Uri'' and ''Url'') try to disambiguate how the two specifications actually work:
 
@@ -1004,7 +1031,7 @@ After multiple iterations, the RFC settled on using the ''Uri\Rfc3986\Uri'' and 
 
 The additional benefit of using different class names is that there is no clash when both classes are imported into the same PHP file.
 
-===== Why a common URI interface is not supported? =====
+==== Why a common URI interface is not supported? ====
 
 [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seemed a good candidate for adoption at the first glance. However, the current RFC didn't pursue to reuse it for the following reasons:
 
@@ -1013,7 +1040,7 @@ The additional benefit of using different class names is that there is no clash 
 
 As an alternative, the RFC attempted to define a new common URI interface (called ''Uri\Uri''), but it turned out late in the RFC process that the RFC 3986 and WHATWG specifications have so many smaller or bigger differences between them that a common URI interface is not really feasible to define.
 
-===== Why the "user:password" format of the "User Information" component of RFC 3986 is supported? =====
+==== Why the "user:password" format of the "User Information" component of RFC 3986 is supported? ====
 
 [[https://datatracker.ietf.org/doc/html/rfc3986#section-3.2.1|RFC 3986 states the following]] when discussing the format of the "userinfo" component:
 
@@ -1048,7 +1075,7 @@ $uri = $uri->withUserInfo($username, "new_password");
 
 That's why the current RFC doesn't try to follow the solution chosen by PSR-7, but rather solves the problem with dealing passwords the other way around.
 
-===== Why Query Parameter Manipulation Is Not Supported? =====
+==== Why Query Parameter Manipulation Is Not Supported? ====
 
 It would be very useful for a URI implementation to support direct query parameter manipulation. Actually, the WHATWG specification contains a [[https://url.spec.whatwg.org/#urlsearchparams|URLSearchParams]] interface that could be used for the purpose. However, the position of this RFC is not to include this interface **yet** [[https://externals.io/message/123997#124077|for the following reasons]]:
 
@@ -1058,7 +1085,7 @@ It would be very useful for a URI implementation to support direct query paramet
 
 For all these reasons, the topic of query parameter manipulation should be discussed as a followup to the current RFC.
 
-===== How should URI modification work? =====
+==== How should URI modification work? ====
 
 Since URIs are [[https://martinfowler.com/bliki/ValueObject.html|value objects]] inherently, this RFC models them as immutable classes that support modification through withers. The usage of withers comes with some performance penalty - as a new instance is created for each modification -, but this is a necessity in order to hold identity constraints.
 
