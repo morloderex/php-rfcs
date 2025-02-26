@@ -1008,8 +1008,8 @@ indicating that the ''FutureState'' was created but not processed.
 A channel is a primitive for message exchange between ''Fibers''.
 Different languages have stricter or looser approaches to implementing channel APIs.
 Here, a combined design is proposed that supports two usage scenarios:
-  * one **producer**, multiple **consumers** (fan-out)
-  * an **undefined** scenario (implemented similarly to ''Go'')
+  * one **producer**, multiple **consumers** (One-to-Many (1P-NC) – Work Queue)
+  * an **undefined** scenario (Many-to-Many (NP-NC), implemented similarly to ''Go'')
 
 <code php>
 class Channel implements ChannelInterface
@@ -1068,12 +1068,12 @@ class Channel implements ChannelInterface
 }
 </code>
 
-=== One Producer, Multiple Consumers (fan-out) ===
+=== One Producer, Multiple Consumers (Work Queue) ===
 
 The basic scenario is when a channel has only one producer and can have one or more (usually just one) consumers.
 In most cases, this scenario is sufficient. It also promotes simple code organization, minimizing errors.
 
-**True Async** provides an explicit implementation of ''fan-out'' scenario by defining a channel owner.
+**True Async** provides an explicit implementation of ''Work Queue'' scenario by defining a channel owner.
 
 **Rules for the producer:**
   * When a channel is created, it automatically assigns the current ''Fiber'' as the owner.
@@ -1139,7 +1139,7 @@ A channel has several methods for closing:
   * ''finishConsuming''
 
 The ''finishProducing'' method provides an explicit semantic for stopping data production.
-It cannot be called from a ''Fiber'' that is not the owner if the channel was created in ''fan-out'' mode.
+It cannot be called from a ''Fiber'' that is not the owner if the channel was created in ''Work Queue'' mode.
 
 **It has the following effects:**
   * The channel is closed for writing; any attempt to send data will result in an exception.
@@ -1188,7 +1188,7 @@ Async\run(function() {
 });
 </code>
 
-If the channel is opened in ''fan-out'' mode, you can use the ''close()'' method in both cases because
+If the channel is opened in ''Work Queue'' mode, you can use the ''close()'' method in both cases because
 the channel can determine from which ''Fiber'' it was called.
 However, using explicit semantics helps to avoid mistakes.
 
@@ -1397,7 +1397,6 @@ final class Walker
 The ''Timer'' class provides a high-level API for creating a callback function that will trigger periodically at a specified interval.
 The callback function receives the ''Timer'' instance itself as an argument, allowing for dynamic control.
 
-=== Implementation ===
 <code php>
 class Timer
 {
@@ -1450,10 +1449,11 @@ $timer = new Timer(2000, function (Timer $self) {
 })->start();
 </code>
 
+==== Pool ====
+
 ==== Low-level API ====
 
 ==== Tools ====
-
 
 ==== Supported PHP Functions ====
 
@@ -1469,58 +1469,147 @@ The following list of PHP functions is supported by True Async, which modifies P
 
 By modifying two key PHP core functions, ''php_select''/''php_poll2'', which are emulated in the True Async library, all other functions that rely on them operate in a non-blocking mode. It is worth noting that the current implementation is not the most efficient in terms of performance, as the select/poll algorithm itself is outdated.
 
+==== Implementation Notes ====
+
+The Windows operating system has a well-known issue related to waiting for I/O events on descriptors of different types.
+In UNIX, any descriptor can be switched to non-blocking mode at any time, whereas in Windows,
+this is not possible.
+This and other peculiarities require significant modifications to functions like **fread**/**fwrite**
+to ensure consistent behavior across Windows and UNIX-like OS.
+
+**True Async** does not aim to solve this issue immediately, as the target OS for PHP remains UNIX-like systems.
+
+Additionally, it is possible to refactor I/O functions to make them as abstract as possible from a specific OS implementation.
+This would allow for more flexibility in bypassing limitations without changing the overall code structure.
+For example, functions like **php_select**/**php_poll2** could be replaced with a more general and convenient interface.
+
+Such changes may be implemented in the future.
+
 ===== Backward Incompatible Changes =====
-What breaks, and what is the justification for it?
+
+==== Fiber API issue ====
+
+Once the **Scheduler** is activated, explicitly using **Fiber** in the code may lead to unpredictable effects.
+This issue requires a solution.
+It might be reasonable to add an exception to **Fiber** methods to prevent users from using the
+**Fiber API** after asynchronous mode has been activated.
+
+==== Blocking/Non blocking issue ====
+
+Using sockets inside **Fiber** implicitly switches the socket to non-blocking mode.
+Attempting to use this socket in the main thread may lead to unpredictable behavior.
+
+To address this issue, additional logic should be added to the socket descriptors themselves,
+and careful consideration should be given to how the socket should behave outside the **Fiber** context.
 
 ===== Proposed PHP Version(s) =====
-List the proposed PHP versions that the feature will be included in.  Use relative versions such as "next PHP 8.x" or "next PHP 8.x.y".
+
+The proposed changes are intended for PHP 8.5 or later.
 
 ===== RFC Impact =====
 ==== To SAPIs ====
-Describe the impact to CLI, Development web server, embedded PHP etc.
+The **True Async** module activates the reactor within the context of ''php_request_startup\php_request_shutdown()''
+request processing.
+Therefore, APIs designed to create and destroy the context
+for each request will nullify the benefits of using the concurrent mode.
+As of now, only the **CLI** mode is suitable for these purposes.
+
+It is expected that **True Async** will enable the integration of built-in **web servers** into PHP,
+which will be embedded into the reactor’s event loop.
 
 ==== To Existing Extensions ====
-Will existing extensions be affected?
+  * PHP Socket Extension.
+  * Curl Extension.
+  * MySQL PDO Extension.
+  * Redis Extension.
 
 ==== To Opcache ====
-It is necessary to develop RFC's with opcache in mind, since opcache is a core extension distributed with PHP.
-
-Please explain how you have verified your RFC's compatibility with opcache.
+Does not affect.
 
 ==== New Constants ====
-Describe any new constants so they can be accurately and comprehensively explained in the PHP documentation.
+No new constants are introduced.
 
 ==== php.ini Defaults ====
-If there are any php.ini settings then list:
-  * hardcoded default values
-  * php.ini-development values
-  * php.ini-production values
+No changes are made to the default settings.
 
 ===== Open Issues =====
-Make sure there are no open issues when the vote starts!
+None.
 
 ===== Unaffected PHP Functionality =====
-List existing areas/features of PHP that will not be changed by the RFC.
-
-This helps avoid any ambiguity, shows that you have thought deeply about the RFC's impact, and helps reduces mail list noise.
+  * Fiber API.
+  * PHP Sockets.
+  * Proc Functions.
+  * Shell/Exec Functions.
+  * gethostbyname/gethostbyaddr/gethostname/gethostbynamel
 
 ===== Future Scope =====
-This section details areas where the feature might be improved in future, but that are not currently proposed in this RFC.
+
+This RFC provides for the subsequent expansion of functionality to achieve
+a complete toolkit for working with concurrent logic.
+It proposes development in two areas:
+  * **Changes to the language syntax**
+  * **Support for Pipe**
+  * **Development of new and revision of existing extensions**
+  * **Refactoring of input-output code** to improve performance and better integration with the Event Loop
+
+=== Changes to the Language Syntax ===
+
+It is proposed to introduce the **async/await** keywords as syntactic sugar
+instead of the corresponding function calls.
+This will make the code more compact and more understandable in comparison to other languages.
+
+The **async** keyword can also be used as a special attribute for functions
+to signal that a function may suspend a **Fiber**.
+It can be implemented as an `#[Async]` attribute or as a separate keyword.
+
+=== Integration with Pipe ===
+
+The chain of calls **Future/map/catch/finally** can rightfully be criticized for its monstrous complexity and difficulty of perception. **Pipe** can solve this problem and create a more intuitive and understandable interface for describing sequences of asynchronous function calls.
+
+=== Refactoring of the Input-Output Module ===
+
+Input-output modules such as **PHP Streams** can be redesigned with **asynchronous capabilities**
+in mind and better optimized for operation in this environment.
+
+=== Multithreading ===
+
+Whether PHP can be made truly **multithreaded** is a complex question, but it does not seem impossible.
+However, whether it is possible to provide at least **convenient interaction between threads** is a definitely solvable question.
+These aspects require evaluation and analysis in the future.
 
 ===== Proposed Voting Choices =====
-Include these so readers know where you are heading and can discuss the proposed voting options.
+Yes or no vote.  2/3 required to pass.
+
+<doodle title="Add the pipe operator?" auth="crell" voteType="single" closed="true">
+   * Yes
+   * No
+</doodle>
 
 ===== Patches and Tests =====
-Links to any external patches and tests go here.
 
-If there is no patch, make it clear who will create a patch, or whether a volunteer to help with implementation is needed.
+* Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
 
-Make it clear if the patch is intended to be the final patch, or is just a prototype.
+The code presented here is still under development.
+The majority of the RFC has been implemented in code.
+**Testing, edge case analysis, and overall evaluation of this RFC are still in progress.**
 
-For changes affecting the core language, you should also provide a patch for the language specification.
+I would be happy if someone would like to join me in this project!
+
+==== Current Roadmap ====
+
+  - **Implementation of missing functions** from the RFC (80% done).
+  - Testing the Build on Linux-Like Systems and Mac OS
+  - **Analysis of API semantic integrity** and usability evaluation.
+  - **Optimization of PHP function calls** and improvement of **WeakRef handling**.
+  - **Incorporating changes** based on discussions.
 
 ===== Implementation =====
-  * Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
+
+After the project is implemented, this section should contain
+  - the version(s) it was merged into
+  - a link to the git commit(s)
+  - a link to the PHP manual entry for the feature
+  - a link to the language specification section (if any)
 
 ===== References =====
 Links to external references, discussions or RFCs
