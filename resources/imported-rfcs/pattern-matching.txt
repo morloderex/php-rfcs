@@ -51,10 +51,11 @@ $result = match ($somevar) is {
 <code php>
 //// Structural patterns ////
 
-// Object patterns
-$p is Point{ x: 3 }; // Matches any Point whose $x property is 3.
-$p is Point{ x: 4|5 }; // Matches any Point whose $x property is 4 or 5.
-$p is Point{ y: 3 }|null;
+// Object Property patterns
+$p is Point&{ x: 3 }; // Matches any Point whose $x property is 3.
+$p is Point&{ x: 4|5 }; // Matches any Point whose $x property is 4 or 5.
+$p is Point&{ y: 3 }|null;
+$p is {foo: 'bar'}; // Matches any object of any kind with a foo property with value 'bar'.
 
 // Array sequence patterns
 $list is [1, 2, 3, 4];   // Exact match.
@@ -75,7 +76,7 @@ $assoc is ['b' => mixed, ...];
 $assoc is ['a' => string, 'b' => int|float, 'c' => 'foo'|'bar'];
 
 // Capturing values out of a pattern and binding them to variables if matched.
-$p is Point {x: 3, y: $y}; // If $p->x === 3, bind $p->y to $y and return true.
+$p is Point&{x: 3, y: $y}; // If $p->x === 3, bind $p->y to $y and return true.
 $assoc is ['a' => 'A', 'b' => $b];
 // If $assoc['a'] === 'A', bind $assoc['b'] to $b and return true.
 </code>
@@ -121,7 +122,7 @@ $foo is string;
 $foo is int|null;              // Combines 2 type patterns.
 $foo is 'a'|'b'|'c';           // Combines 3 literal patterns.
 $foo is Account&Authenticated; // Combines 2 type patterns.
-$foo is Point{x: 5, y: 3|4};   // An object pattern, with a compound sub pattern that combines two literal patterns.
+$foo is Point&{x: 5, y: 3|4};   // An object pattern, with a compound sub pattern that combines two literal patterns.
 </code>
 
 ==== Core patterns ====
@@ -140,7 +141,7 @@ $foo is int|string;
 $foo is User|(Account&Authenticated)
 </code>
 
-If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (And ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern, with the exception of ''never'' and ''void'', which could never match anything and so are excluded.
+If both <php>|</php> and <php>&</php> are used, patterns must be in Disjunctive Normal Form (an ORed list of ANDs), and each segment must be enclosed in parentheses.  These are the same rules that apply to compound types already.  The result is that any valid type syntax is also a valid pattern, with the exception of ''never'' and ''void'', which could never match anything and so are excluded.
 
 === Type pattern ===
 
@@ -178,7 +179,7 @@ $foo is "Aardvark"|"Bear"|null // Equivalent to $foo === "Aardvark" || $foo === 
  
 Type patterns are always evaluated in strict mode, so as to be consistent with <php>is_int()</php> and its siblings.
 
-In a sense, ''$foo is pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification in strict mode."  Should more complex type checks become allowed (such as type aliases, etc.) they will become valid in a pattern as well.  Note that, as shown in the 4th example above, an integer will pass a pattern match for type <php>float</php>.  That is consistent with how strict type declarations work today.
+In a sense, ''$foo is type-pattern'' is equivalent to "would $foo pass a type check if passed to a parameter with this type specification in strict mode."  Should more complex type checks become allowed (such as type aliases, etc.) they will become valid in a pattern as well.  Note that, as shown in the 4th example above, an integer will pass a pattern match for type <php>float</php>.  That is consistent with how strict type declarations work today.
 
 Any type may be used, with the exception of ''never'' and ''void'', which can only be used in a return type and would never match anything anyway.
 
@@ -249,7 +250,7 @@ These are where pattern matching really shines.  They are more involved/complex,
 
 === Object property pattern ===
 
-A pattern may also define a class and matches against scope-accessible properties of that object.  The properties must be get-accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
+A pattern may also match against scope-accessible properties of an object.  The properties must be get-accessible in the scope in which the pattern executes.  That is, a pattern evaluated outside the class may only match against public properties; a pattern inside the class may match against public, private, or protected; a pattern in a child class may match against protected properties of its parent but not private; etc.
 
 The "value" to match each property against is itself a pattern, so can leverage any of the above pattern combinations.
 
@@ -260,6 +261,8 @@ Note that matching against a property's value implies reading that property's va
   - If the property is undefined, an error will be thrown.
   - If the property is undefined but <php>__isset()</php> is defined and returns false, it will never match anything.
   - If the property is undefined but <php>__isset()</php> returns true or is not defined, then the return of invoking <php>__get()</php> will be used.  It will then be matched against the pattern the same as if it were a defined property value.
+
+Of note, while in most cases it will make sense to match against a class and property list, it is also possible to match against just a property list.  In that case, any object that has the specified scope-accessible properties will match, regardless of its type.  Matching both class and property list is a compound pattern, and works like any other compound pattern.
 
 <code php>
 class Point {
@@ -272,40 +275,62 @@ class Point {
 
 $p = new Point(3, 4, 5);
 
-$p is Point {x: 3};
+$p is Point&{x: 3};
 // Equivalent to:
 $p instanceof Point && $p->x === 3;
 
-$p is Point {y: 37, x: 2,};
+$p is Point&{y: 37, x: 2,};
 // Equivalent to:
 $p instanceof Point && $p->y === 37 && $p->x === 2;
 
 // A multi-segment pattern that includes an object pattern.
-$p is Point {x: 2}|null
+$p is Point&{x: 2}|null
 // Equivalent to:
 $p instanceof Point && $p->x === 2 || $p === null;
 
 // The $x property is matched against an ORed pattern.
-$p is Point { x: 2|3 }
+$p is Point&{ x: 2|3 }
 // Equivalent to
 $p instanceof Point && ($p->x === 2 || $p->x === 3)
 
 // x must be 3, and y must be defined and initialized but we don't care what it is.
-$p is Point{ x: 3, y: mixed }
-
-// The following is NOT allowed.
-$p is (Product|Point){ x: 3 }
+$p is Point&{ x: 3, y: mixed }
 
 // This is allowed, but will be interpreted like the second line.
 $p is Product|Point{ x: 3 };
 $p is (Product)|(Point{ x: 3 });
-
-// This is allowed, but has the same effect as the line after it
-$p is Point{}
-$p is Point
 </code>
 
-Properties may be listed in any order, but must be named.  A trailing comma is permitted.
+Properties may be listed in any order, but must be named, and at least one must be specified.  A trailing comma is permitted.
+
+== Implementation notes ==
+
+The reason to have properties separate from a class type check is primarily to avoid engine ambiguity.  While it would be nonsensical to do, the following code would be syntactically legal:
+
+<code php>
+class C {
+    public $prop = 42 is Foo{};
+}
+</code>
+
+But the parser could not tell which meaning is intended:
+
+  - make a public property named ''$prop'', with default value of "the result of ''42 is Foo''" (which would be false), and then has an  empty (and therefore invalid) property hook block
+  - make a public property named ''$prop'', with default value of "whatever the result of '42 is Foo {}''" (which would be false).
+
+That ambiguity cannot be easily resolved.  However, by splitting properties from the class type, we are able to disambiguate those two (otherwise pointless) use cases.
+
+<code php>
+class C {
+    // This means empty (invalid) hook block.
+    public $prop = 42 is Foo {};
+    
+    // This means a type and property check
+    public $prop = 42 is Foo&{}
+}
+</code>
+
+As a pleasant side effect, it also means it's trivial to match against an arbitrary object based on only its accessible properties.
 
 === Array structure pattern ===
 
@@ -438,7 +463,7 @@ if ($assoc is ['b' => 'B', ...]) {
   print "Yes";
 }
 // True.  Equivalent to:
-if (is_array($assoc) && && array_key_exists('b', $assoc)  && $assoc['b'] === 'B') {
+if (is_array($assoc) && array_key_exists('b', $assoc)  && $assoc['b'] === 'B') {
     print "Yes";
 }
 
@@ -478,7 +503,7 @@ $foo == ['b' => 2, 'a' => 1];
 $foo === ['b' => 2, 'a' => 1];
 
 // False, but no error.
-$foo is ['a' => 1, 'c' = 3, ...];
+$foo is ['a' => 1, 'c' => 3, ...];
 
 // Warning: $foo['c'] is not defined.
 if ($foo['a'] == 1, $foo['c'] == 3) { ... }
@@ -509,7 +534,7 @@ class Point {
 
 $p = new Point(3, 4, 5);
 
-if ($p is Point {x: 3, y: $y} ) {
+if ($p is Point&{x: 3, y: $y} ) {
     print "x is 3 and y is $y.";
 }
 // Equivalent to:
@@ -518,7 +543,7 @@ if ($p instanceof Point && $p->x === 3) {
     print "x is 3 and y is $y.";
 }
 
-if ($p is Point {z: $z, x: 3, y: $y} ) {
+if ($p is Point&{z: $z, x: 3, y: $y} ) {
   print "x is 3 and y is $y and z is $z.";
 }
 // Equivalent to:
@@ -527,6 +552,18 @@ if ($p instanceof Point && $p->x === 3) {
     $z = $p->z;
     print "x is 3 and y is $y and z is $z.";
 }
+
+if ($p is {z: $z, x: 3, y: $y} ) {
+  print "x is 3 and y is $y and z is $z.";
+}
+// Equivalent to:
+if (is_object($p) && $p->x === 3) {
+    $y = $p->y;
+    $z = $p->z;
+    print "x is 3 and y is $y and z is $z.";
+}
+
+
 </code>
 
 Array binding examples:
@@ -639,10 +676,10 @@ A pattern that includes variable binding may not be ORed with another pattern, a
 
 <code php>
 // NOT allowed, as its behavior is ambiguous.
-$p is Point { $x } | Circle { $radius }
+$p is Point&{ $x } | Circle&{ $radius }
 
 // But this is allowed.
-$p is Point { x: 3|5, y: $y }
+$p is Point&{ x: 3|5, y: $y }
 // Equivalent to 
 if ($p instanceof Point && ($p->x === 3 || $p->x === 5)) {
     $y = $p->y;
@@ -650,18 +687,18 @@ if ($p instanceof Point && ($p->x === 3 || $p->x === 5)) {
 }
 
 // This is also allowed:
-$p is Colorable&Point { x: 3|5, y: $y }
+$p is Colorable&Point&{ x: 3|5, y: $y }
 </code>
 
 For object patterns (only), if the variable name to extract to is the same as the name of the property, then the property name may be omitted.  That is, the following two examples are exactly equivalent:
 
 <code php>
-if ($p is Point {z: $z, x: 3, y: $y} ) {
+if ($p is Point&{z: $z, x: 3, y: $y} ) {
     print "x is 3 and y is $y and z is $z.";
 }
 
 // Shorthand
-if ($p is Point {$z, x: 3, $y} ) {
+if ($p is Point&{$z, x: 3, $y} ) {
     print "x is 3 and y is $y and z is $z.";
 }
 </code>
@@ -671,11 +708,11 @@ Variable binding is especially useful in ''match()'' statements, where there is 
 <code php>
 $result = match ($p) is {
   // These will match only some Point objects, depending on their property values.
-  Point{x: 3, y: 9, $z} => "x is 3, y is 9, z is $z",
-  Point{$z, $x, y: 4} => "x is $x, y is 4, z is $z",
-  Point{x: 5, $y} => "x is 5, y is $y, and z doesn't matter",
+  Point&{x: 3, y: 9, $z} => "x is 3, y is 9, z is $z",
+  Point&{$z, $x, y: 4} => "x is $x, y is 4, z is $z",
+  Point&{x: 5, $y} => "x is 5, y is $y, and z doesn't matter",
   // This will match any Point object.
-  Point{$x, $y, $z} => "x is $x, y is $y, z is $z",
+  Point&{$x, $y, $z} => "x is $x, y is $y, z is $z",
 };
 </code>
 
@@ -690,7 +727,7 @@ Because the proposed syntax supports full DNF pattern combinations, such behavio
 For example:
 
 <code php>
-if ($foo is Foo{a: ^$someA, b: $b & Point(x: 5, y: ^$someY) }) {
+if ($foo is Foo&{a: ^$someA, b: $b & Point&(x: 5, y: ^$someY) }) {
   print "x is 5, y is $someY, z is $b->z";
 }
 // Equivalent to:
@@ -708,7 +745,7 @@ if ($foo instanceof Foo
 In the above code, the pattern will match only if both ''$b'' and ''Point(x: 5, y: ^$someY)'' match $foo->b.  A binding variable will always match, so is always true.  The object pattern may or may not match, which is the desired behavior.
 
 <code php>
-if ($params is ['user' => $user & AuthenticatedUser{role: 'admin'}, ...]) {
+if ($params is ['user' => $user & AuthenticatedUser&{role: 'admin'}, ...]) {
     print "Congrats, $user->name, you can do admin things!"
 }
 // Equivalent to:
@@ -747,7 +784,7 @@ $foo is ^PHP_VERSION; // Equivalent to $foo === PHP_VERSION
 $foo is ^Errors::$notFound|^Errors::$invalid; // Equivalent to $foo === Errors::$notFound || $foo === Errors::$invalid
 
 // An object pattern with pinned variables.
-$p is Point {y: 37, x:^$x,};
+$p is Point&{y: 37, x:^$x,};
 // Equivalent to:
 $p instanceof Point && $p->y === 37 && $p->x === $x;
 
