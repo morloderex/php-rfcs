@@ -1,6 +1,6 @@
 ====== PHP RFC: True Async ======
-  * Version: 0.5
-  * Date: 2025-02-24
+  * Version: 0.7
+  * Date: 2025-03-01
   * Author: Edmond [HT], edmondifthen@proton.me
   * Status: Draft
   * First Published at: http://wiki.php.net/rfc/true_async
@@ -16,7 +16,7 @@ The goal of this **RFC** is to establish a standard for writing concurrent code 
 
 The **True Async** project pursues the following goals and values:
 
-  * From a PHP developer's perspective, the **main value** of this implementation is that they DO NOT NEED to change existing code (or if changes are required, they should be minimal) to enable concurrency.
+  * From a PHP developer's perspective, the **main value** of this implementation is that they DO NOT NEED to change existing code (or if changes are required, they should be minimal) to enable concurrency. Unlike explicit async models, this approach lets developers reuse existing synchronous code inside fibers without modification.
 
   * Code that was originally written and intended to run outside of a Fiber must work **EXACTLY THE SAME** inside a Fiber without modifications.
 
@@ -54,7 +54,8 @@ True Async implements an **implicit asynchronous model**. This solution has seve
    * ''Reactor'' – responsible for the Event Loop.
 
 
-In normal mode, code executes outside of a ''Fiber'', and no changes occur. When you call a blocking function such as ''sleep()'', ''shell_exec()'', or ''fread()'', it behaves as usual: execution halts until the operation is complete.
+In normal mode, code executes outside of a ''Fiber'' (Null-Fiber-Context), and no changes occur. When you call a
+blocking function such as ''sleep()'', ''shell_exec()'', or ''fread()'', it behaves as usual: execution halts until the operation is complete.
 
 However, once one or more ''Fibers'' are created using the API and the ''Scheduler'' is activated, the code begins executing concurrently.
 
@@ -99,7 +100,6 @@ A PHP developer **SHOULD NOT** make any assumptions about the order in which Fib
 
 === Scheduler ===
 
-
 The **Scheduler** implements the main execution loop of the application, one of its steps being the execution of the **Reactor's** event loop.
 
 Similar to **AMPHP** and **JavaScript**, the **Scheduler** defines two types of tasks:
@@ -114,11 +114,22 @@ The function ''Async\defer()'' is responsible for creating microtasks.
 
 === Activating the Scheduler ===
 
-The **Scheduler** is not activated //automatically//; it must be explicitly enabled. Until it is activated, PHP code behaves as before: calls to blocking functions will block the execution thread and will not switch the **Fiber** context. Thus, code written without the **Scheduler** component will function exactly the same way, without side effects. This ensures backward compatibility.
+The **Scheduler** is not activated //automatically//; it must be explicitly enabled.
+Until it is activated, PHP code behaves as before:
+calls to blocking functions will block the execution thread and will not switch the **Fiber** context.
+Thus, code written without the **Scheduler** component will function exactly the same way, without side effects.
+This ensures backward compatibility.
 
-The **Scheduler** can only be activated in the main **zero-Fiber** execution context. It cannot be activated inside a **Fiber**, as this will result in a fatal error.
+By default, a PHP script runs outside the Fiber context (Null-Fiber-Context).
+**True Async** uses this criterion to distinguish execution contexts. The **Null-Fiber** context is handed over to the
+''Scheduler'' component. This is one of the reasons why ''Scheduler'' activation is explicit, unlike implementations in other
+languages.
 
-Once the **Scheduler** is activated, it will take control of the **zero-Fiber** context, and execution within it will pause until all **Fibers**, all **microtasks**, and all **event loop** events have been processed.
+The **Scheduler** can only be activated in the **Null-Fiber** execution context. It cannot be activated inside a
+**Fiber**, as this will result in a fatal error.
+
+Once the **Scheduler** is activated, it will take control of the **Null-Fiber** context, and execution within it will
+pause until all **Fibers**, all **microtasks**, and all **event loop** events have been processed.
 
 The **Scheduler** is activated by calling:
 
@@ -126,7 +137,33 @@ The **Scheduler** is activated by calling:
 Async\launchScheduler();
 </code>
 
-At the point where **Async\launchScheduler();** is called, all unhandled exceptions from **Fiber** will also be generated. Therefore, you can use **try-catch** to handle such errors and take additional actions if necessary.
+At the point where **Async\launchScheduler();** is called, all unhandled exceptions from **Fiber** will also be generated.
+Therefore, you can use **try-catch** to handle such errors and take additional actions if necessary.
+
+**Restarting the Scheduler**
+
+''True Async'' prohibits initializing the ''Scheduler'' twice.
+This is not because such initialization is technically impossible, but to avoid logical uncertainty.
+A PHP application should terminate execution as soon as possible after the ''Scheduler'' has completed its work.
+
+This is crucial because the process may handle an OS signal that imposes a time limit on execution (for example, as Windows does).
+
+== Explicit activation of the Scheduler ==
+
+Explicit activation of the Scheduler has both drawbacks and advantages.
+
+//Disadvantages://
+  * PHP is a high-level language, but activating the component looks like a low-level operation. (Although Fiber is also a low-level component, it exists in the language)
+  * Code in the ''Null-Fiber'' context cannot use concurrency.
+  * ''Scheduler'' can be activated multiple times because it is just a function.
+
+//Advantages://
+  * Code written without using the ''Scheduler'' should not experience any side effects.
+  * Existence of a responsibility point for exception handling.
+  * Explicit application initialization flow.
+
+On the other hand, there are no serious technical obstacles to running the main PHP code directly in a ''Fiber'' environment.
+This behavior can be defined in ''php.ini'' or set via a startup option.
 
 === Resume & Fiber Control ===
 
@@ -204,7 +241,8 @@ New fibers are created using two functions, which are very similar to each other
   * ''Async\run()''
   * ''Async\async()''
 
-The difference between them is that the function ''Async\async()'' returns a special object ''FiberHandle'', which is used to control the execution of the fiber.
+The difference between them is that the function ''Async\async()'' returns a special object ''FiberHandle'',
+which is used to control the execution of the fiber.
 
 Example:
 <code php>
@@ -377,7 +415,7 @@ Done!
 </code>
 
 **Note:** If multiple fibers await the result of another fiber, the behavior will remain the same:
-each call to ''await()'' will receive the exception.
+each call to ''await()'' will receive that exception.
 
 Example: Multiple fibers awaiting the same fiber
 
@@ -556,6 +594,14 @@ Graceful Shutdown Flow:
   - Creating new fibers via ''Async\run()'' or ''Async\async()'' **throws an exception**.
   - When fibers complete, the **Reactor event loop** releases handlers, and the **exception that caused the application to stop** is thrown at the **Scheduler** activation point.
 
+The **Graceful Shutdown** mode can also be triggered using the function:
+
+<code php>
+Async\gracefulShutdown(\Throwable|null $throwable = null): void {}
+</code>
+
+from anywhere in the application.
+
 === Deadlocks ===
 
 A situation may arise where there are no active ''Fibers'' in the execution queue and no active ''Notifiers'' in the event loop. This condition is called a ''Deadlock'', and it represents a serious logical error.
@@ -572,6 +618,63 @@ Deadlocks are still possible due to:
   - **Errors in True Async itself**,
   - **Issues within Reactor**,
   - **Bugs in third-party extensions**.
+
+==== Microtasks ====
+
+Microtasks are a special type of task that is executed before any other event loop callbacks, including timers and I/O events.
+
+To create a microtask, the following function is used:
+
+<code php>
+function defer(callable $microtask): void {}
+</code>
+
+The ''Scheduler'' executes microtasks inside a ''Fiber'',
+so the microtask code can call blocking operations.
+
+However, the nature of microtask execution imposes certain logical constraints:
+
+    * Creating microtasks within a microtask can lead to an infinite loop. The developer must be careful about this type of error. Currently, the ''Scheduler'' does not check for infinite loops, and it may not do so in the future.
+    * A microtask should not take too much time, as this increases the application's latency in responding to events.
+
+Example: Using defer() to create a microtask
+
+<code php>
+Async\run(function() {
+
+    echo "Fiber started\n";
+
+    Async\defer(function() {
+        echo "Microtask 1\n";
+
+        Async\defer(function() {
+            echo "Microtask 2\n";
+        });
+    });
+
+    echo "Fiber completed\n";
+});
+
+Async\run(function() {
+    echo "Another fiber\n";
+});
+
+Async\launchScheduler();
+
+echo "Done!\n";
+
+</code>
+
+**Expected output:**
+
+<code>
+Fiber started
+Fiber completed
+Microtask 1
+Microtask 2
+Another fiber
+Done!
+</code>
 
 ==== Context ====
 
@@ -771,6 +874,36 @@ end
 
 </code>
 
+== Microtask Context Inheritance ==
+
+Microtasks inherit the context from the ''Fiber'' that created them. This means that in the following code:
+
+<code php>
+Async\Context::current(true)->setKey('test-key', 'test-value');
+
+Async\defer(function() {
+    $value = Async\Context::current()->get('test-key');
+    echo "Microtask 1: {$value}\n";
+
+    Async\defer(function() {
+        $value = Async\Context::current()->get('test-key');
+        echo "Microtask 2: {$value}\n";
+    });
+});
+
+echo "start\n";
+Async\launchScheduler();
+echo "end\n";
+</code>
+
+''Microtask1'' will inherit the context from the previous execution scope. ''Microtask2'',
+which is created inside ''Microtask1'', will inherit the context that was current in ''Microtask1''.
+
+<blockquote>
+**Note:** During the execution of a ''microtask'', you should not rely on ''LocalContext'' because,
+unlike a ''Fiber'', a **microtask cannot own a local context**.
+</blockquote>
+
 ==== Futures ====
 
 Objects of the ''Future'' class are high-level patterns for handling deferred results. **True Async** inherits the semantics of the AMPHP project and defines two key classes:
@@ -813,7 +946,7 @@ final class FutureState extends Notifier
      */
     public function addCallback(Closure $callback): static {}
 
-    public function toString(): string {}
+    public function __debugInfo(): string {}
 }
 </code>
 
@@ -1399,16 +1532,16 @@ final class Walker
 }
 </code>
 
-==== Timer ====
+==== Interval ====
 
-The ''Timer'' class provides a high-level API for creating a callback function that will trigger periodically at a specified interval.
-The callback function receives the ''Timer'' instance itself as an argument, allowing for dynamic control.
+The ''Interval'' class provides a high-level API for creating a callback function that will trigger periodically at a specified interval.
+The callback function receives the ''Interval'' instance itself as an argument, allowing for dynamic control.
 
 <code php>
-class Timer
+final class Interval
 {
     /**
-     * Constructor to initialize the timer.
+     * Constructor to initialize the Interval.
      *
      * @param int $interval Interval in milliseconds.
      * @param callable $callback Function to execute, receiving the Timer instance.
@@ -1416,7 +1549,7 @@ class Timer
     public function __construct(int $interval, callable $callback) {}
 
     /**
-     * Starts the timer.
+     * Starts the Interval.
      *
      * @return void
      */
@@ -1430,7 +1563,7 @@ class Timer
     public function stop(): void {}
 
     /**
-     * Checks if the timer is currently running.
+     * Checks if the Interval is currently running.
      *
      * @return bool True if the timer is running, false otherwise.
      */
@@ -1447,16 +1580,107 @@ class Timer
 **Example:**
 
 <code php>
-$timer = new Timer(2000, function (Timer $self) {
+$timer = new Interval(2000, function (Interval $self) {
     echo "Tick at: " . date('H:i:s') . "\n";
     if (rand(1, 5) === 3) { // Random stop condition
         $self->stop();
-        echo "Timer stopped.\n";
+        echo "Interval stopped.\n";
     }
 })->start();
 </code>
 
+==== Shell command execution ====
+
+In addition to standard functions for launching processes and shell commands,
+such as: ''proc_open'', ''shell_exec'', ''exec'', ''passthru'',
+which do not block the application in ''Scheduler'' mode, **True Async**
+defines an additional function that returns a ''Future''.
+
+<code php>
+/**
+ * Execute an external program.
+ * @return Future<array{string, int}>
+ */
+function exec(
+    string|array $command,
+    int $timeout        = 0,
+    ?string $cwd        = null,
+    ?array $env         = null,
+    bool $returnAll     = false,
+): Future {}
+</code>
+
+The function ''exec'' returns a ''Future'' that will store the result of the command execution.
+The result is an array with two elements:
+  * the output of the command
+  * the exit code
+
+**Example:**
+<code php>
+Async\run(function() {
+    $result = Async\await(Async\exec('ls -la'));
+    echo $result[0];
+});
+</code>
+
+If the ''$returnAll'' parameter is set to ''true'', the function will return all output lines.
+Otherwise, only the last line will be returned.
+
+==== OS signal handling ====
+
+Function ''trapSignal'':
+
+<code php>
+Async\trapSignal(int|array $sigNumber, callable $callback): void {}
+</code>
+
+allows defining signal handlers that the OS sends to the application.
+
+Signals are a mechanism whose implementation depends on the operating system and the Reactor component implementation,
+which is not defined by **True Async**.
+
+**True Async** imposes the following requirements on the implementation:
+* The reactor should strive to support handling the application termination signal if the operating system is included in the list of supported ones.
+* The method ''getSupportedSignals'' must return a list of supported signals on the current platform.
+* An attempt to add a handler for an unsupported signal must throw an exception.
+
+The ''trapSignal'' method is intended for defining a global signal handler
+and can be set only once for a specific signal number (unlike the similar ''SignalHandle'' API).
+
+This means that ''trapSignal'' is not intended for "regular code" and should not be used "anywhere".
+
+The signal handler must be defined **before** starting the ''Scheduler'' and will be destroyed as soon as the
+''Scheduler'' stops running.
+
 ==== Low-level API ====
+
+<blockquote>
+**Point of Discussion**
+
+At the early stages of designing ''True Async'', an attempt was made to create a copy of the interface from ''Revolt''
+to provide developers with the highest possible level of control over the application.
+
+The main argument in favor of having a low-level API was as follows:
+If PHP includes such low-level objects as ''Fiber'' and sockets close to C-level implementations,
+it would be logical to provide an API for interacting with the ''Event Loop''.
+
+However, as the code was being developed and interfaces were defined, doubts arose.
+
+The main argument against this API: functions that inherently block the execution flow appear simpler,
+are more intuitive to use, and are safer. I came to the conclusion that, in the long run,
+sacrificing flexibility in favor of code safety is a reasonable trade-off.
+
+By hiding the ''Low-level API'' from the PHP-land, memory consumption could also be optimized,
+as objects like ''Notifier'' could be implemented without the need to inherit from ''zend_object''.
+
+On the other hand, the existence of this API makes the toolkit as comprehensive as possible.
+
+If a developer encounters a limitation of a high-level implementation,
+this API provides more flexibility in switching fibers,
+which can positively impact performance since the cost of invoking callback functions
+is lower than the cost of switching ''Fiber''.
+
+</blockquote>
 
 The low-level API for managing Fiber execution flow and handling I/O events mirrors the corresponding C-language API.
 It is built around the creation of a Fiber suspension point and conditions for resumption.
@@ -1551,7 +1775,7 @@ final class Resume
     /**
      * Returns a string representation of the `Resume` object that can be used for debugging purposes.
      */
-    public function toString(): string {}
+    public function __debugInfo(): string {}
 }
 </code>
 
@@ -1609,7 +1833,7 @@ it will halt the **Scheduler**, and consequently, the entire application thread.
 
 This imposes **increased testing requirements** and makes this API **unsafe** for inattentive use.
 
-==== Reactor Handlers ====
+=== Reactor Handlers ===
 
 The **Reactor** component defines **Notifier** subclasses that can be used within the **EventLoop**.
 
@@ -1817,7 +2041,7 @@ final class DnsInfoHandle extends Notifier
 
     private function __construct() {}
 
-    public function toString(): string {}
+    public function __debugInfo(): string {}
 }
 </code>
 
@@ -1825,8 +2049,8 @@ final class DnsInfoHandle extends Notifier
 
 ''FileSystemHandle'' allows tracking filesystem events, specifically two events:
 
-* **EVENT_RENAME** – triggered when a file is renamed
-* **EVENT_CHANGE** – triggered when a file is modified
+    * **EVENT_RENAME** – triggered when a file is renamed
+    * **EVENT_CHANGE** – triggered when a file is modified
 
 <code php>
 final class FileSystemHandle extends Notifier
@@ -1850,8 +2074,6 @@ final class FileSystemHandle extends Notifier
     public function stop(): void {}
 }
 </code>
-
-TODO: Need to add examples for all handles and add special classes for them.
 
 === Handling `Handle` with `Resume::when` ===
 
@@ -1902,7 +2124,7 @@ you can also retrieve information about **which events the Fiber is waiting for*
 The method **Resume::awaitedIn()** returns
 the **PHP file name and line number** where the **Fiber was suspended**.
 
-The **toString()** method, available for **Notifier** and **Resume** objects,
+The **__debugInfo()** method, available for **Notifier** and **Resume** objects,
 allows retrieving **string information**
 that can be used for **debugging** or **error output**.
 
@@ -1911,18 +2133,62 @@ that can be used for **debugging** or **error output**.
 The following list of PHP functions is supported by True Async,
 which modifies PHP Core functions as well as extension functions to implement non-blocking I/O.
 
-  * ''sleep'', ''usleep''
-  * Stream functions: ''file_get_contents'', ''stream_socket_accept'', etc (For Windows, a known limitation applies to file and pipe handles)
-  * Dns info functions like: ''gethostbyname''
-  * Exec functions like: ''exec'', ''shell_exec'', etc
-  * ''proc_close''
+  * ''sleep'', ''usleep'', ''time_nanosleep'', ''time_sleep_until''
+  * Stream functions: ''file_get_contents'', ''fopen'', ''fread'', ''fwrite'', ''fsockopen'', ''stream_socket_accept'', etc (For Windows, a known limitation applies to file and pipe handles)
+  * Dns info functions like: ''gethostbyname'', ''gethostbynamel'', ''gethostbyaddr''
+  * Exec functions: ''proc_close'', ''shell_exec'', ''exec'', ''passthru'' (Windows full support)
   * Sockets ext
   * Curl ext
+  * MySql Native Driver + PDO ext
+  * Redis ext
 
 By modifying two key PHP core functions, ''php_select''/''php_poll2'', which are emulated in the True Async library,
 all other functions that rely on them operate in a non-blocking mode.
 It is worth noting that the current implementation is not the most efficient in terms of performance,
 as the select/poll algorithm itself is outdated.
+
+==== Performance and Resilience ====
+
+The introduction of a **Scheduler** and the **Reactor** inevitably adds some overhead.
+Creating a ''Fiber'' is relatively cheap (much lighter than an OS thread),
+but it still requires allocating a stack and ''Fiber''/''Resume''/''Notifier'' objects.
+
+If a program launches thousands of small tasks, the overhead from ''Fiber'' switching, ''Resume'' allocation,
+and event dispatching through the ''Notifier'' can become noticeable.
+In the worst-case scenario, improper usage (e.g., an infinite stream of microtasks or thousands of timers per second)
+can lead to performance degradation.
+Additionally, ''Fiber'' context switching is slightly heavier than a function call but significantly lighter
+than a system context switch between threads.
+
+One of the drawbacks of the **True Async approach** is the use of ''zend_object'' for abstracting over the event loop.
+Removing these objects from PHP-land-level could help save some memory.
+
+**True Async** attempts to optimize Fiber usage in microtasks and concurrent iterators by creating new Fibers only when
+necessary. To achieve this, it employs an algorithm similar to the one used in **AMPHP**.
+
+**True Async** overrides core PHP functions such as `php_select`/`poll2`, which themselves have a negative impact on
+performance. Attempting to build a high-performance solution on top of such functions is inherently ineffective.
+However, this should not be considered a critical drawback, as PHP's goal is not to compete with C/C++.
+It is evident that the creation of high-performance servers and handlers should be entrusted to low-level languages.
+
+The implementation of the DNS resolution function ''network_get_host_by_name''
+that caches results in "memory" is potentially not
+the best solution and requires refactoring in the future.
+
+**True Async** does not provide PHP with multitasking, as this is a limitation of PHP's own. This fact
+imposes unavoidable constraints on concurrency usage that cannot be circumvented and MUST be considered by developers:
+
+    * A Fiber should execute for the minimal possible time between context switch points. Code that attempts to perform a million iterations in a loop without calling `Async\wait()` is meaningless.
+    * If an infinite loop or a stack overflow error occurs within a Fiber, it will be necessary to terminate at least the entire OS thread, which means all other Fibers will also be destroyed. From the user's perspective, this will result in the failure of multiple requests simultaneously. This drawback MUST be considered if you aim to build a highly reliable application.
+    * The built-in Web server, which delegates requests to Fibers, must be able to correctly determine the maximum number of requests that should be processed within a single OS thread.
+
+You should not avoid writing code within a single OS thread out of fear of failure.
+
+A possible solution to the above issues could be:
+    * A request retry mechanism (must be provided by the Web server component)
+    * Delegating heavy or risky tasks to separate processes/threads
+
+So the API for inter-thread (or inter-process) communication is a crucial topic for **True Async**.
 
 ==== Implementation Notes ====
 
@@ -1965,10 +2231,7 @@ The proposed changes are intended for PHP 8.5 or later.
 ===== RFC Impact =====
 ==== To SAPIs ====
 The **True Async** module activates the reactor within the context of ''php_request_startup\php_request_shutdown()''
-request processing.
-Therefore, APIs designed to create and destroy the context
-for each request will nullify the benefits of using the concurrent mode.
-As of now, only the **CLI** mode is suitable for these purposes.
+request processing. Therefore, using concurrency is reasonable only for long-life scenarios implemented via CLI.
 
 It is expected that **True Async** will enable the integration of built-in **web servers** into PHP,
 which will be embedded into the reactor’s event loop.
@@ -2022,8 +2285,7 @@ It can be implemented as an `#[Async]` attribute or as a separate keyword.
 
 === Integration with Pipe ===
 
-The chain of calls **Future/map/catch/finally** can rightfully be criticized for its monstrous complexity
-and difficulty of perception.
+The Future->map()->catch()->finally() call chain is rightly criticized for excessive complexity and difficulty of comprehension.
 **Pipe** (not UNIX-like-pipe) can solve this problem and create a more intuitive
 and understandable interface for describing sequences of asynchronous function calls.
 
