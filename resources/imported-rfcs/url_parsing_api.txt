@@ -79,7 +79,7 @@ WHATWG associates a character set for each component, defining the characters th
 
 Similarly, RFC 3986 [[https://datatracker.ietf.org/doc/html/rfc3986#appendix-A|assigns a list of allowed characters]] to each component. For example, the query component can contain unreserved and any percent-encoded characters, as well as some reserved characters that are categorized as "sub-delimiters" (i.e. "&", "!", "'"), and also some "generic delimiters" (":", and "@") that doesn't have any special meaning in the context of the path.
 
-These two approaches are very similar, however there is a key difference between them: WHATWG automatically tries to percent-encode the characters in the associated encoding character set when possible, and only emits a warning in the same time, while RFC 3986 rejects the invalid characters and stops parsing with a failure.
+These two approaches are very similar, however there is a key differences between them: WHATWG automatically tries to percent-encode characters in the associated encoding character set when possible, as well as any characters that are illegal in a URL (that are not "[[https://url.spec.whatwg.org/#url-units|URL units]]"), and only emits a warning in the same time, while RFC 3986 rejects invalid characters and stops parsing with a failure.
 
 RFC 3986 also specifies a set of reserved characters ("#", "?", "/", etc.) that must not be percent-decoded according to the following sentence in order to be safely used by scheme-specific syntaxes as delimiters:
 
@@ -786,13 +786,13 @@ Let's have a look at some other tricky example with ''Uri\Rfc3986\Uri'':
 <code php>
 $uri = new Uri\Rfc3986\Uri("https://[2001:0db8:0001:0000:0000:0ab9:C0A8:0102]/?foo=bar%26baz%3Dqux");
 
-echo $url->getHost();                           // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
-echo $url->getRawHost();                        // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
-echo $url->getQuery();                          // foo=bar%26baz%3Dqux
-echo $url->getRawQuery();                       // foo=bar%26baz%3Dqux
+echo $uri->getHost();                           // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
+echo $uri->getRawHost();                        // [2001:0db8:0001:0000:0000:0ab9:C0A8:0102]
+echo $uri->getQuery();                          // foo=bar%26baz%3Dqux
+echo $uri->getRawQuery();                       // foo=bar%26baz%3Dqux
 </code>
 
-What happens here? The host name is an IPv6 address that must be enclosed within a ''[]'' pair. The query string contains a "%26" (percent-encoded form of "&") and "%3D" (percent-encoded form of "=") that are both reserved characters, whose percent-decoding is disallowed by RFC 3986. WHATWG doesn't explicitly specify such thing. but the proposed implementation follows the behavior set by RFC 3986 for consistency.
+What happens here? The host name is an IPv6 address that must be enclosed within a ''[]'' pair. The query string contains a "%26" (percent-encoded form of "&") and "%3D" (percent-encoded form of "=") that are both reserved characters, whose percent-decoding is disallowed by RFC 3986. WHATWG doesn't explicitly specify such thing, but the proposed implementation follows the behavior set by RFC 3986 for consistency.
 
 ==== Component modification ====
 
@@ -825,7 +825,7 @@ echo $url->getRawUser();                           // use%72%3A
 
 As it can be seen above, not only reserved characters (":"), but unreserved ones ("r") can also be percent-encoded.
 
-Additionally, the WHATWG algorithm automatically percent-encodes characters that fall into the percent-encoding character set of the given component ("?" and "#" in the example below), as discussed in the [[https://wiki.php.net/rfc/url_parsing_api#percent-encoding_decoding|Percent-encoding & decoding section]]:
+Additionally, the WHATWG algorithm automatically percent-encodes characters that fall into the percent-encoding character set of the given component ("?" and "#" in the example below) as well as any invalid characters, as discussed in the [[https://wiki.php.net/rfc/url_parsing_api#percent-encoding_decoding|Percent-encoding & decoding section]]:
 
 <code php>
 $url = new Uri\WhatWg\Url("https://example.com");
@@ -846,19 +846,31 @@ echo $url->getQuery();                             // foo
 echo $url->getFragment();                          // bar
 </code>
 
-The above example makes it clear that withers optionally accept leading delimiter characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters. All this is possible to do because "?" doesn't have any special mean in the context of the query component, and neither "#" has in the context of the fragment.
+The above example makes it clear that withers optionally accept leading delimiter characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters. All this is possible to do because "?" doesn't have any special meaning in the context of the query component, and neither "#" has in the context of the fragment.
 
 The above examples defined how ''Uri\WhatWg\Url'' handles percent-encoding during component modification, but ''Uri\Rfc3986\Uri'' has not been discussed yet. It's because RFC 3986 doesn't have an explicitly specified algorithm for component modification. That's why the present RFC has to set the rules:
 
-In order to offer consistent behavior to ''Uri\WhatWg\Url'', withers of ''Uri\Rfc3986\Uri'' also percent-encode any reserved characters that are not explicitly allowed by the specification. Let's see what this means in practice through the following example:
+In order to offer consistent behavior with RFC 3986 parsing rules, withers of ''Uri\Rfc3986\Uri'' also only accepts properly formatted input, meaning characters that are not allowed to be present in a component must be percent-encoded. Let's see what this means in practice through the following example:
 
 <code PHP>
 $uri = new Uri\Rfc3986\Uri("https://example.com/");
-$uri = $uri->withQuery("a&#");
+$uri = $uri->withQuery("foo%5B%5D=%23");           // percent-encoded form of "foo[]=#"
 
-echo $url->getQuery();                             // a%26%23
-echo $url->getRawQuery();                          // a%26%23
+echo $uri->getQuery();                             // foo%5B%5D=%23
+echo $uri->getRawQuery();                          // foo%5B%5D=%23
 </code>
+
+Characters "[", "]", and "#" are disallowed in the query component, therefore they had to be percent-encoded. Since all of them are reserved, they cannot be normalized - and therefore percent-decoded -, so even the "normalized-decoded" representation of "[]" is "%5B%5D". This is also important to achieve the "roundtripable" data property.
+
+<code PHP>
+$url = new Uri\WhatWg\Url("https://example.com/");
+$url = $url->withQuery("foo%5B%5D=%23");           // percent-encoded form of "foo[]=#"
+
+echo $url->getQuery();                             // foo%5B%5D=%23
+echo $url->getRawQuery();                          // foo%5B%5D=%23
+</code>
+
+The same example for WHATWG gives the same result, but for different reasons. According to WHATWG, "[" and "]" are not allowed to be present in an URL (they are not [[https://url.spec.whatwg.org/#url-code-points|URL code points]]), that's why they shouldn't be percent-decoded either. Character "#" is in the query percent-encode set (in order to be able to distinguish the fragment component after the query), that's why it should also stay percent-encoded. All these rules make it possible to satisfy the "roundtripable" data property of the "normalized-decoded" representation for WHATWG.
 
 ==== Component recomposition ====
 
