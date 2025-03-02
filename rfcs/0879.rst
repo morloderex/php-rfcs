@@ -1,141 +1,118 @@
-Random Extension Improvement
-============================
+Add 4 New Rounding Modes To Round() Function
+============================================
 
 :PHP-RFC: 0879
-:Title: Random Extension Improvement
-:Author: Go Kudo <g-kudo@colopl.co.jp>, <zeriyoshi@gmail.com>
+:Title: Add 4 New Rounding Modes To Round() Function
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
 :Status: Implemented
 :Type: Standards Track
-:Created: 2022-06-16
-:PHP-Version: 8.2
-:Version: 1.5.4
+:Created: 2023-08-31
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-Several issues with `the "Random Extension 5.x"
-RFC </rfc/rng_extension>`__ were only raised after voting started (due
-to lack of proper discussion):
+The RFC proposes to add 4 new modes to the round() function.
 
-Engine implementations are not final
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-  `PHP_ROUND_CEILING <https://en.wikipedia.org/wiki/Rounding#Rounding_up>`__,
+-  `PHP_ROUND_FLOOR <https://en.wikipedia.org/wiki/Rounding#Rounding_down>`__,
+-  `PHP_ROUND_AWAY_FROM_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero>`__,
+-  `PHP_ROUND_TOWARD_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero>`__.
 
-The Random Extension has classes that are natively implemented as RNG
-engines, but they are not marked as ``final``. This allows classes to be
-created that inherit from native classes, but as stated in the previous
-RFC, user-implemented engines are inferior to native classes in terms of
-execution efficiency. This is true even for inheritance without method
-overrides, which often leads to confusion.
+..
 
-The extension already provides a ``Random\Engine`` interface with a
-single ``generate(): string`` method. Even if the native classes are
-made final, it is easy for the user to create an alternative class using
-delegates.
+   **Note:** The aforementioned have been transformed into an enum in a
+   `follow-up
+   RFC <https://wiki.php.net/rfc/correctly_name_the_rounding_mode_and_make_it_an_enum>`__.
 
-This is clearly an API design error, and the native implementations of
-the interface should be marked as final.
+Two first comments on the `documentation page of the
+round() <https://www.php.net/manual/en/function.round.php>`__ function
+are related to the missing modes of rounding. The first comment has an
+outstanding number of 309 votes.
 
-Random\SerializableEngine is not useful
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-This interface is a remnant from when the ``Serializable`` interface was
-still useful. This interface is no longer needed in PHP, as
-serializability is now determined by the existence of a magic method.
-
-For this reason, remove ``Random\SerializableEngine``.
-
-This means that an Engine that implements SerializableEngine will no
-longer implement it. However, serializability is determined by the
-implementation of the magic method in current PHP, so it has no effect.
-
-Random\Engine\CombinedLCG is low quality
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The newly added ``Random\Engine\CombinedLCG`` is only for use with PHP's
-``lcg_value()`` function. However, this algorithm is very classical and
-the quality of the output random numbers is at the lowest level.
-
-In order to preserve the implementation of the lcg_value() function, the
-internal implementation is retained, but the implementation as a class
-is being dropped to prevent users from unintentionally using it.
-
-There is no equivalent of array_rand()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-``array_rand()`` uses RNG internally, but there is no alternative method
-in ``Randomizer``. As per the previous RFC, this was the intent, but
-upon further investigation, array_rand() is used by many packages and
-should probably be drop-in replaceable.
-
-So add a method
-``Randomizer::pickArrayKeys(array $array, int $num): array``.
-
-It may look incompatible with
-``array_rand(array $array, int $num = 1): int|string|array``, but you
-can get completely consistent results by doing the following:
-
-.. code:: php
-
-   $array = ['foo', 'bar', 'baz'];
-
-   // Before:
-   mt_srand(1234, MT_RAND_PHP);
-   $single = array_rand($array); // (int) 0
-   $multiple = array_rand($array, 2); // (array) [1, 2]
-
-   // After:
-   $engine = new Random\Engine\Mt19937(1234, MT_RAND_PHP);
-   $randomizer = new Random\Randomizer($engine);
-   $single = $randomizer->pickArrayKeys($array, 1)[0]; // (int) 0
-    // or: [$single] = $randomizer->pickArrayKeys($array, 1);
-   $multiple = $randomizer->pickArrayKeys($array, 2); // (array) [1, 2]
-
-"string" means a binary
-~~~~~~~~~~~~~~~~~~~~~~~
-
-In PHP, "string" means a binary. This is often a problem when using
-multibyte characters. For example, ``str_shuffle()`` on a Japanese
-(UTF-8) string will give messed up results.
-
-Therefore, it may be better to change the alternative method of
-str_shuffle(), ``Randomizer::shuffleString()``, to
-``Randomizer::shuffleBytes()``. This is a more appropriate name.
-
-Engine classnames are not precise
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-To clearly identify the implemented algorithm, the PCG64 and
-MersenneTwister engines should be renamed to their canonical upstream
-name:
-
--  ``Random\Engine\PCG64`` → ``Random\Engine\PcgOneseq128XslRr64``
--  ``Random\Engine\MersenneTwister`` → ``Random\Engine\Mt19937``
-
-PCG is not so famous
-~~~~~~~~~~~~~~~~~~~~
-
-PCG is a very good algorithm, boasting great randomness and performance.
-However, I think its name recognition is in some ways inferior to
-Vigna's RNG, which started with Xorshift.
-
-Therefore, I reimplement Xoshiro256**, which was previously mentioned as
-a candidate, and create the class ``Random\Engine\Xoshiro256StarStar``.
-This will avoid the problem of using the old MT19937 since it is not
-familiar with PCG.
+Moreover, the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+already implements 4 new proposed modes known as ROUND_CEILING,
+ROUND_FLOOR, ROUND_DOWN, ROUND_UP.
 
 Proposal
 --------
 
-For each of these issues, we will create a ballot option and make a
-decision.
+Adding 4 new constants for the rounding modes of function round():
 
-.. _engine-implementations-are-not-final-1:
+-  PHP_ROUND_CEILING - rounds num to the nearest integer bigger than
+   num,
+-  PHP_ROUND_FLOOR - rounds num to the nearest integer lower than num,
+-  PHP_ROUND_AWAY_FROM_ZERO - rounds num away from zero,
+-  PHP_ROUND_TOWARD_ZERO - rounds num towards zero.
 
-Engine implementations are not final
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Creating two aliases of constants from Intl extension to have consistent
+naming for rounding modes:
 
-Question: Make all implemented engines final?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-  ROUND_TOWARD_ZERO (equivalent of PHP_ROUND_TOWARD_ZERO) alias of
+   `ROUND_DOWN <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-down>`__
+-  ROUND_AWAY_FROM_ZERO (equivalent of PHP_ROUND_AWAY_FROM_ZERO) alias
+   of
+   `ROUND_UP <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-up>`__
+
+Backward Incompatible Changes
+-----------------------------
+
+None
+
+Proposed PHP Versions
+---------------------
+
+8.4
+
+Questions
+---------
+
+Why not use functions ceil() and floor()?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The functions ceil() and floor() round numbers to the full integer,
+while the function round() rounds the number by given precision.
+Implementing new rounding modes we get equivalent of those functions
+using round() with 0 as precision.
+
+.. code:: php
+
+   ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
+   floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
+
+Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Such constants already exist in the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+and represent rounding modes 'away from zero' and 'toward zero'. However
+the names rounding up and down are ambiguous. They may be easily
+confused with the rounding ceiling/floor, while the terms away
+from/toward zero are distinct.
+
+Those constants would be deprecated and replaced with their
+corresponding aliases: ROUND_TOWARD_ZERO and ROUND_AWAY_FROM_ZERO.
+
+Why not the enum implementation for the rounding modes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+As this is extension of the existing modes we should add complementary
+modes to the existing constants instead implementing new Enum. This way
+enum is an addition to the new constants and is not included into this
+RFC.
+
+Proposed Voting Choices
+-----------------------
+
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2023-11-15 and will end on 2023-11-30 00:00 GMT.
+
+Question: Implement 4 new rounding modes to \`round()\` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -143,13 +120,13 @@ Voting Choices
 -  Yes
 -  No
 
-.. _randomserializableengine-is-not-useful-1:
+--------------
 
-Random\SerializableEngine is not useful
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If the first voting is not accepted the result of the second voting will
+be ignored.
 
-Question: Remove the SerializableEngine interface?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Create aliases for Intl extension constants ROUND_UP and ROUND_DOWN: ROUND_AWAY_FROM_ZERO and ROUND_TOWARD_ZERO
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
 
@@ -159,149 +136,26 @@ Voting Choices
 -  Yes
 -  No
 
-.. _randomenginecombinedlcg-is-low-quality-1:
+Implementation
+--------------
 
-Random\Engine\CombinedLCG is low quality
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Question: Remove the CombinedLCG class?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-2:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-.. _there-is-no-equivalent-of-array_rand-1:
-
-There is no equivalent of array_rand()
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Question: Add the pickArrayKeys() method to the Randomizer?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-3:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-.. _string-means-a-binary-1:
-
-"string" means a binary
-~~~~~~~~~~~~~~~~~~~~~~~
-
-Question: Rename Randomizer::shuffleString() to Randomizer::shuffleBytes()?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-4:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-.. _engine-classnames-are-not-precise-1:
-
-Engine classnames are not precise
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Question: Rename PCG64 and MersenneTwister?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-5:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-.. _pcg-is-not-so-famous-1:
-
-PCG is not so famous
-~~~~~~~~~~~~~~~~~~~~
-
-Question: Add the Xoshiro256StarStar engine and class?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-6:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
-
-Backward Incompatible Changes
------------------------------
-
-The following names have been reserved and will no longer be available:
-
--  Random\Engine\Mt19937
--  Random\Engine\PcgOneseq128XslRr64
--  Random\Engine\Xoshiro256StarStar
-
-The following class names will be made available again:
-
--  Random\Engine\CombinedLCG
--  Random\Engine\MersenneTwister
--  Random\Engine\PCG64
--  Random\SerializableEngine
-
-Proposed PHP Version(s)
------------------------
-
-8.2
-
-RFC Impact
-----------
-
-To SAPIs
-~~~~~~~~
-
-none
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-none
-
-To Opcache
-~~~~~~~~~~
-
-none
-
-New Constants
-~~~~~~~~~~~~~
-
-none
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-none
-
-Patches and Tests
------------------
-
--  https://github.com/php/php-src/pull/8094
+GitHub pull request: https://github.com/php/php-src/pull/12056
 
 References
 ----------
 
--  https://externals.io/message/117939
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:First Published At: http://wiki.php.net/rfc/rng_extension
-:Original Authors: Go Kudo g-kudo@colopl.co.jp zeriyoshi@gmail.com
-:Slug: random_extension_improvement
-:Wiki URL: https://wiki.php.net/rfc/random_extension_improvement
+:Implementation: https://github.com/php/php-src/pull/12056
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: new_rounding_modes_to_round_function
+:Wiki URL: https://wiki.php.net/rfc/new_rounding_modes_to_round_function
