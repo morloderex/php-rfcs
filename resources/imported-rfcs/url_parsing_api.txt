@@ -828,12 +828,15 @@ As it can be seen above, not only reserved characters (":"), but unreserved ones
 Additionally, the WHATWG algorithm automatically percent-encodes characters that fall into the percent-encoding character set of the given component ("?" and "#" in the example below) as well as any invalid characters, as discussed in the [[https://wiki.php.net/rfc/url_parsing_api#percent-encoding_decoding|Percent-encoding & decoding section]]:
 
 <code php>
-$url = new Uri\WhatWg\Url("https://example.com");
+$errors = [];
+$url = new Uri\WhatWg\Url("https://example.com", null);
 $url = $url->withPath("/?#:");
 
 echo $url->getPath();                             // /%3F%23:
 echo $url->getRawPath();                          // /%3F%23:
 </code>
+
+The wither invocation will trigger two [[https://url.spec.whatwg.org/#invalid-url-unit|Uri\WhatWg\WhatWgErrorType::InvalidUrlUnit]] validation errors which are not exposed for userland. Withers would need to have a ''$softErrors'' parameter similar to what the ''Uri\WhatWg\Url::%%__construct()%%'' has in order to be able to expose similar soft errors.
 
 Let's see another special case where the input contains delimiters:
 
@@ -848,9 +851,9 @@ echo $url->getFragment();                          // bar
 
 The above example makes it clear that withers optionally accept leading delimiter characters ("?" for the query, and "#" for the fragment), even if they are not returned by the relevant getters. All this is possible to do because "?" doesn't have any special meaning in the context of the query component, and neither "#" has in the context of the fragment.
 
-The above examples defined how ''Uri\WhatWg\Url'' handles percent-encoding during component modification, but ''Uri\Rfc3986\Uri'' has not been discussed yet. It's because RFC 3986 doesn't have an explicitly specified algorithm for component modification. That's why the present RFC has to set the rules:
+All the above examples defined how ''Uri\WhatWg\Url'' handles percent-encoding during component modification, but ''Uri\Rfc3986\Uri'' has not been discussed yet. It's because RFC 3986 doesn't have an explicitly specified algorithm for component modification. That's why the present RFC has to set the rules:
 
-In order to offer consistent behavior with RFC 3986 parsing rules, withers of ''Uri\Rfc3986\Uri'' also only accepts properly formatted input, meaning characters that are not allowed to be present in a component must be percent-encoded. Let's see what this means in practice through the following example:
+In order to offer consistent behavior with the parsing rules of RFC 3986, withers of ''Uri\Rfc3986\Uri'' also only accepts properly formatted input, meaning characters that are not allowed to be present in a component must be percent-encoded. Let's see what this means in practice through the following example:
 
 <code PHP>
 $uri = new Uri\Rfc3986\Uri("https://example.com/");
@@ -860,7 +863,7 @@ echo $uri->getQuery();                             // foo%5B%5D=%23
 echo $uri->getRawQuery();                          // foo%5B%5D=%23
 </code>
 
-Characters "[", "]", and "#" are disallowed in the query component, therefore they have to be percent-encoded. Since all of them are reserved characters, they cannot be normalized - and therefore percent-decoded -, so even the "normalized-decoded" representation of "[]" is "%5B%5D". This is also important to achieve the "roundtripable data" property.
+Characters "[", "]", and "#" are disallowed in the query component, therefore they have to be percent-encoded, otherwise a ''Uri\InvalidUriException'' will be thrown. Since the characters in question are reserved, they cannot be normalized - and therefore percent-decoded -, so even the "normalized-decoded" representation of "[]" is "%5B%5D". This is also important to achieve the "roundtripable data" property.
 
 <code PHP>
 $url = new Uri\WhatWg\Url("https://example.com/");
