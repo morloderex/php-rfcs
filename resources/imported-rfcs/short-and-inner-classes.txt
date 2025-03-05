@@ -8,25 +8,11 @@
 
 ===== Introduction =====
 
-PHP has steadily evolved to enhance developer productivity and expressiveness, introducing features such as typed properties, constructor property promotion, and first-class callable syntax. However, defining simple data structures and organizing classes remains verbose.
+This RFC proposes two significant enhancements to the language: **Short Class Syntax** and **Inner Classes**. These features aim to streamline class definitions, reduce boilerplate, and introduce a new level of encapsulation and organization within PHP applications.
 
-This RFC proposes two related enhancements to PHP:
+Short Class Syntax allows developers to define simple or data-oriented classes in a single line, leveraging constructor property promotion to enhance readability and maintainability. Inner Classes, on the other hand, enable the definition of within other classes, providing fine-grained visibility control and fostering better modularization.
 
-**Short class syntax**, allowing simple or data-oriented classes to be defined in a single line:
-
-<code php>
-class Point(int $x, int $y);
-</code>
-
-This syntax acts as a shorthand for defining classes with constructor property promotion, reducing boilerplate while maintaining clarity.
-
-**Inner classes**, enabling the definition of classes within other classes with visibility control:
-
-<code php>
-class Foo {
-    public class Bar(public string $message);
-}
-</code>
+By adopting these enhancements, PHP can offer developers more powerful tools to write clean, efficient, and well-structured code, ultimately improving the overall developer experience and code quality.
 
 ===== Proposal =====
 
@@ -40,7 +26,7 @@ The proposed syntax for defining a short class consists of the class keyword, fo
 class Point(int $x, int $y);
 
 // A readonly class with a parent class, interface, and traits
-readonly class Vector(int $x, int $y) extends BaseVector implements JsonSerializable use PointTrait, Evolvable;
+readonly class Vector(int $x, private int $y) extends BaseVector implements JsonSerializable use PointTrait, Evolvable;
 </code>
 
 This is equivalent to the following full class definition:
@@ -53,16 +39,11 @@ class Point {
 readonly public class Vector extends BaseVector implements JsonSerializable {
     use PointTrait, Evolvable;
     
-    public function __construct(public int $x, public int $y) {}
+    public function __construct(public int $x, private int $y) {}
 }
 </code>
 
-Properties inside parentheses are automatically declared as class properties and default to public unless explicitly specified:
-
-<code php>
-// declare $shapes as a private property
-class Geometry(private $shapes) use GeometryTrait;
-</code>
+Properties inside parentheses are automatically declared as class properties and default to public unless explicitly specified.
 
 === Default Values ===
 
@@ -74,7 +55,7 @@ class Point(int $x = 0, int $y = 0);
 
 === Inheritance and Behavior ===
 
-Short classes can extend other classes, implement interfaces, and use traits, but they cannot define additional methods. The parent class constructor is overridden and not automatically called.
+Short classes can extend other classes, implement interfaces, and use traits, but they cannot define additional methods except by using traits. If the parent class has a constructor, the constructor will be overridden and **not called**.
 
 <code php>
 class Point(int $x, int $y) extends BasePoint implements JsonSerializable use PointTrait, Evolvable;
@@ -82,10 +63,12 @@ class Point(int $x, int $y) extends BasePoint implements JsonSerializable use Po
 
 === Empty Classes ===
 
-Short classes may be empty:
+Short classes may be empty, in which case, the constructor is not overridden. This can be useful in some cases, such as when you want to define a simple exception:
 
 <code php>
-class Point() extends BasePoint use PointTrait;
+class HttpError() extends Exception;
+
+throw new HttpError('Not Found', 404);
 </code>
 
 === Attributes ===
@@ -111,16 +94,17 @@ abstract class Shape(float $area);
 
 === How it works ===
 
-Short classes are purely syntactic sugar and compile into standard class definitions.
+Short classes are purely syntactic sugar and compiled into standard class definitions during compile time.
 
 ==== Inner Classes ====
 
-Inner classes allow defining classes within other classes, following visibility rules:
+Inner classes allow defining classes within other classes, following standard visibility rules. This allows developers to declare a class as ''%%private%%'' or ''%%protected%%'' and restrict its usage to the outer class. Inner classes may only be nested one level deep, may not be a parent class, and may not be declared ''%%abstract%%'':
 
 <code php>
 class Outer {
-    class Inner(public string $message);
+    class Inner(public string $message); // using short syntax
     
+    // using traditional syntax
     private class PrivateInner {
         public function __construct(public string $message) {}
     }
@@ -137,38 +121,74 @@ $baz = new Outer::PrivateInner('Hello, world!');
 
 Inner classes support modifiers such as ''%%public%%'', ''%%protected%%'', ''%%private%%'', ''%%final%%'' and ''%%readonly%%''. When using these as modifiers on an inner class, there are some intuitive rules:
 
-  * ''%%public%%'', ''%%private%%'', and ''%%protected%%'' apply to the visibility of the inner class.
-  * ''%%final%%'', and ''%%readonly%%'' apply to the class itself.
-  * ''%%static%%'' is not allowed as a modifier since PHP does not support static classes.
-  * ''%%abstract%%'' is not allowed as an inner class cannot be parent classes.
+  * ''%%public%%'', ''%%private%%'', and ''%%protected%%'' apply to the **visibility** of the inner class.
+  * ''%%final%%'', and ''%%readonly%%'' apply **to the class itself**.
+  * ''%%static%%'' is **not allowed** as a modifier since PHP does not support static classes and isn’t a property.
+  * ''%%abstract%%'' is not allowed as an inner class **cannot** be parent classes.
 
 === Visibility Rules ===
 
-Private and protected inner classes are only instantiatable within their outer class (or subclasses for protected) and may not be used as type hints outside of their outer class.
+Private and protected inner classes are only instantiatable within their outer class (or subclasses for protected) and may not be used as //type hints// outside their outer class.
+
+For example, you may return a private inner class from any method inside that same inner class or the outer class, but you may not use it as a type hint in a function outside the outer class:
 
 <code php>
-class Outer {
-    private class PrivateInner(string $message);
-    
-    public function getInner(): self::PrivateInner {
-        return new self::PrivateInner('Hello, world!');
-    }
+class Box {
+  private class Point(int $x, int $y);
+  
+  private self::Point $center;
+  
+  public function __construct() {
+    $this->center = new self::Point(0, 0);
+  }
+  
+  public function getCenter(): self::Point {
+    return $this->center;
+  }
+  
+  public function setCenter(self::Point $center) {
+    $this->center = $center;
+  }
 }
 
-// using a private inner class from outside the outer class, as a type hint is forbidden
-function doSomething(Outer::PrivateInner $inner) {
-    echo $inner->message;
-}
-
-// this is ok:
-$inner = new Outer()->getInner();
-
-// but this is not:
-doSomething($inner);
-// Fatal error: Private inner class Outer::Inner cannot be used in the global scope
+$box = new Box();
+$center = $box->getCenter();
+$center->x = 10;
+$box->setCenter($center);
+var_dump($box);
 </code>
 
-Just like with other languages that support inner classes, it is better to return an interface or a base class from a method instead of exposing a private/protected class.
+Outputs:
+
+<code>
+object(Box)#1 (1) {
+  ["center":"Box":private]=>
+  object(Box::Point)#2 (2) {
+    ["x"]=>
+    int(10)
+    ["y"]=>
+    int(0)
+  }
+}
+</code>
+
+However, if we try to use it outside the outer class as a type hint:
+
+<code php>
+function mutateBox(Box::Point $point): Box::Point {
+    $point->x = 10;
+}
+
+$center = mutateBox($center);
+</code>
+
+We receive the following error:
+
+<code>
+PHP Fatal error:  Private inner class Box::Point cannot be used in the global scope
+</code>
+
+This gives a great deal of control to developers, preventing accidental misuse of inner classes. Developers may have the inner class implement an interface so that the programmer must code to the interface, allowing large projects to enforce a consistent API.
 
 === Inheritance ===
 
@@ -249,7 +269,9 @@ class Foo {
 
 ===== Backward Incompatible Changes =====
 
-This RFC introduces new syntax and behavior to PHP, which does not conflict with existing syntax. However, tooling utilizing AST or tokenization may need to be updated to support the new syntax.
+  * This RFC introduces new syntax and behavior to PHP, which does not conflict with existing syntax.
+  * Some error messages will be updated to reflect inner classes, and tests that depend on these error messages are likely to fail.
+  * Tooling using AST or tokenization may need to be updated to support the new syntax.
 
 ===== Proposed PHP Version(s) =====
 
@@ -267,7 +289,7 @@ Extensions accepting class names may need to be updated to support ''%%::%%'' in
 
 ==== To Opcache ====
 
-Most of the changes are in compilation and AST, so the impact to opcache is minimal.
+This change introduces a new opcode, AST, and other changes that affect opcache. These changes are included as part of the PR that implements this feature.
 
 ===== Open Issues =====
 
@@ -275,13 +297,15 @@ Pending discussion.
 
 ===== Unaffected PHP Functionality =====
 
-There should be no change to existing PHP functionality.
+There should be no change to any existing PHP syntax.
 
 ===== Future Scope =====
 
   * inner enums
 
 ===== Proposed Voting Choices =====
+
+As this is a significant change to the language, a 2/3 majority is required.
 
 
 ===== Patches and Tests =====
@@ -294,8 +318,9 @@ After the project is implemented, this section should contain - the version(s) i
 
 ===== References =====
 
-Links to external references, discussions or RFCs
+  * [[https://externals.io/message/125975#125977|email that inspired this RFC]]
+  * [[https://wiki.php.net/rfc/records|RFC: Records]]
 
 ===== Rejected Features =====
 
-Keep this updated with features that were discussed on the mail lists.
+  * "evolvable" syntax: A ->with() function built into short classes.
