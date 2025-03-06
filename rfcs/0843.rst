@@ -1,472 +1,311 @@
-Migrating To GitHub Issues
-==========================
+Deprecate Json_encode() On Classes Marked As Non-serializable
+=============================================================
 
 :PHP-RFC: 0843
-:Title: Migrating To GitHub Issues
-:Author: Nikita Popov <nikic@php.net>
-:Status: Active
-:Type: Process
-:Created: 2021-11-01
-:Version: 1.0
+:Title: Deprecate Json_encode() On Classes Marked As Non-serializable
+:Author: Philip Hofstetter <phofstetter@sensational.ch>
+:Status: Draft
+:Type: Unknown
+:Created: 2024-09-05
+:Version: 0.10
 
 Introduction
 ------------
 
-This RFC proposes to use GitHub Issues on the `PHP
-repository <https://github.com/php/php-src>`__ in place of our own
-`bugs.php.net <https://bugs.php.net/>`__ bug tracker.
+PHP internally marks some classes as not fit for serialization using a
+flag ``ZEND_ACC_NOT_SERIALIZABLE`` which prevents instances of such
+classes from being serialized using ``serialize()``.
 
-Currently GitHub issues are already used for `documentation
-issues <https://github.com/php/doc-en/issues>`__, as well as `website
-issues <https://github.com/php/web-php/issues>`__ on the respective
-repositories. This RFC expands usage to the PHP implementation itself.
+However, this flag is currently not respected by ``json_encode()`` which
+is another serialization method built into PHP and which has special
+support by the language for userland through
+`JsonSerializable <https://www.php.net/manual/en/class.jsonserializable.php>`__.
+``json_encode()`` will encode all instances of internal classes as
+``{}`` regardless of serializabiliy.
 
-Motivation
-----------
-
-The primary motivation for this change is that bugs.php.net has many
-known deficiencies and is not actively maintained. Some of the main
-problems are:
-
--  **Maintenance**: bugs.php.net is essentially unmaintained. Making it
-   fit for continued usage would require implementation effort beyond
-   simple cosmetic changes. It must be emphasized that this is not just
-   a matter of finding a motivated person to implement changes, it also
-   requires someone to review them and to perform any necessary
-   infrastructure updates, such as database migrations. There is
-   generally very little interest in these things and it can take a lot
-   of time to get things done.
--  **Stability**: For years now, bugs.php.net regularly hangs or slows
-   down to unusable levels. We "fix" this with a server restart, but
-   nobody has found the motivation to find out what the actual problem
-   is.
--  **Spam**: We receive a lot of link spam. While comments are nominally
-   captcha-protected, the captcha is very weak. On normal days, it is
-   necessary to delete a handful of spam comments. On bad days, a mass
-   deletion in the database is necessary. A better captcha and/or a ban
-   on links to domains other than php.net, github.com and 3v4l.org might
-   address this.
--  **Hostile comments**: Because there is no account requirement,
-   bugs.php.net has effectively no moderation capabilities and suffers
-   from hostile user comments. A particularly well-known quantity is
-   Reindl Harald, who regularly insults bug reporters in comments,
-   damaging the reputation of the PHP project.
--  **Impersonation**: Apart from ``@php.net`` accounts, bug reporters
-   and comments can specify an arbitrary email, ownership of which is
-   not validated. This makes it trivial to impersonate another person.
-   This capability is also used for hostile comments. On a related note,
-   reporters are sometimes unhappy with the fact that bugs.php.net
-   displays their email address in plain text.
--  **Accessibility**: Nowadays, most open-source projects manage issues
-   on GitHub and users will look there first. Submitting an issue on a
-   home-grown bugtracker comes with additional friction to learn a new
-   bug reporting workflow and its associated quirks (and bugs.php.net is
-   on the quirkier side there).
--  **Management of reported bugs**: For bug reporters without a php.net
-   account, managing their reported bugs is very inconvenient. Editing a
-   bug requires a per-bug password, and you can't easily track all the
-   bugs you have reported.
--  **Mentions**: It's not possible to mention another php.net team
-   member on bugs.php.net. The only way to ask someone's opinion on an
-   issue is to assign it to them, and there can only be one assignee.
--  **Moving issues**: We are currently in an in-between state where
-   implementation bugs are on bugs.php.net, while documentation bugs are
-   on GitHub. It is common that an issue originally reported as an
-   implementation bug turns out to be a documentation problem. We
-   currently cannot easily transfer such an issue to GitHub. It is
-   valuable to have the issues for all sub-projects on one platform to
-   allow this kind of seamless movement. (Of course, this problem did
-   not exist before documentation started using GitHub issues.)
--  **References**: We already host our source code repositories on
-   GitHub and make heavy use of pull requests there. Hosting issues on
-   the same platform makes it easier to cross-reference issues, pull
-   requests and commits. While commits closing a bug are automatically
-   linked from bugs.php.net, other references (e.g. from pull requests)
-   are not visible on bugs.php.net unless they are manually added.
--  **Labels**: Bugs only support specifying a single package, there is
-   no capability to apply multiple labels. For example, we have no way
-   to mark beginner-friendly issues (the "probably easy" label on
-   GitHub).
--  **Check boxes**: bugs.php.net does not support check boxes, or edits
-   to the bug description. This makes it impossible to use bugs.php.net
-   for tracking issues which consist of multiple sub-tasks.
+Especially for ``Generator`` this is harmful because converting a
+pre-computed ``array`` into a lazy iterator using ``Generator`` is a
+useful and relatively common refactoring which can otherwise be done
+transparently to a code-base. At that point it's inconvenient that
+``json_encode()`` silently encodes ``Generator`` instances as ``{}``,
+changing its shame and contents.
 
 Proposal
 --------
 
-The issue tracker on GitHub will be located on the `php/php-src
-repository <https://github.com/php/php-src>`__. The necessary
-configuration and actions for the setup described in the following are
-available in a `test
-repository <https://github.com/nikic/test-repo/tree/master/.github>`__.
+This RFC proposes to mark calling ``json_encode()`` on most instances of
+classes marked with ``ZEND_ACC_NOT_SERIALIZABLE`` as deprecated with the
+longer-term option of throwing an error in the next major version of PHP
+wich will follow the one this RFC is implemented in.
 
-Issue Creation Flow
-~~~~~~~~~~~~~~~~~~~
+The flag ``ZEND_ACC_NOT_SERIALIZABLE`` was intended to mark classes as
+non-serializable because they either represent a temporary local
+resource (like a file or database handle) which could not possibly be
+unserialized later on or because serializing them could have large
+side-effects (in case of ``Generator`` and ``Iterator``).
 
-Using a custom issue configuration, creating an issue will display three
-possible options:
+The same reasoning applies to ``json_encode()`` which right now doesn't
+invoke any of the side-effects (good) but also silently encodes any such
+object instance as ``{}``.
 
-.. image:: /rfc/bug_selection.png
-   :alt: Options when creating an issue
-   :width: 800px
+For temporary resources (file handles, etc.) this is potentially an
+acceptable behavior, albeit a bit inconsistent to how serialization is
+handled, but for ``Generator``, doing this silently is very inconvenient
+for a developer in the process of converting a code-base from pre-built
+arrays to generators for either performance or memory consumption
+reasons.
 
-Bug reports and feature requests are filed on GitHub with custom issue
-forms. Security issues point to bugs.php.net instead, because GitHub
-currently does not support private issue reports. Additionally, we could
-add a fourth option for general questions that points to our `support
-page <https://www.php.net/support.php>`__.
+This can be done mostly transparently to the rest of the code-base, but
+will require special handling for a potential ``json_encode()`` which
+will currently silently does the wrong thing and not just skip iterating
+the generator but will also silently change the shape of the output,
+potentially breaking API contracts without any notification to the user.
 
-If the "bug report" option is chosen, the following form is displayed:
+One exception to the rule is anonymous classes which are all marked as
+``ZEND_ACC_NOT_SERIALIZABLE`` because then unserializing, their
+definition will not be present, so they cannot possibly be unserialized
+again.
 
-.. image:: /rfc/bug_report_3.png
-   :alt: Bug report form
+In case of ``json_encode()`` though, where no generic unserialize
+operation is defined anyways, there's no reason for deprecating or
+forbidding to ``json_encode()`` anonymous classes, unless their parent
+class is marked as ``ZEND_ACC_NOT_SERIALIZABLE`` where the above
+reasoning applies again.
 
-It requires an issue title, description and PHP version, and optionally
-accepts the used operating system. The description suggests (but does
-not require) providing a script with actual and expected output.
-Additionally, the labels "bug" and "Status: Needs Triage" are
-automatically applied.
+Thus, this RFC proposes to continue to permit ``json_encode()`` on
+anonymous classes unless they extend a class marked as
+``ZEND_ACC_NOT_SERIALIZABLE``.
 
-The corresponding form for feature requests only accepts an issue title
-and description, as PHP version and operating system are usually not
-relevant in this case. The labels "feature" and "Status: Needs Triage"
-are automatically applied.
+Other options considered
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-Triage and Categorization
+This RFC proposes a solution that handles all classes block-listed for
+serialization to create a consistent behavior beteween the two
+built-into PHP serialization mechanisms.
+
+Other options considered concern themselves with handling just the
+``Generator`` case:
+
+#. Add a special case to deprecate/disallow JSON encoding of
+   ``Generator``, but otherwise not look at
+   ``ZEND_ACC_NOT_SERIALIZABLE``. This would be a proposed fallback
+   option if the backwards compatility concerns are too large to
+   consider. It would complicate the implementation consierably.
+#. Have ``json_encode()`` consume the generator and recurse as if it was
+   encoding an ``array``. While this would probably be the most
+   ergonomic solution for the refactoring case outlined above, given the
+   unforeseeable side-effects generator consumption can have, including
+   endless loops, this is a dangerous operations and whas thus discarded
+   as an option.
+#. Have ``json_encode()`` encode generators as ``[]``: This would help
+   the refactoring case by upholding possible API contracts and would
+   more cleanly match the shape of a generator (which is a list after
+   all), but it would also be lying to the calling code because the
+   generator likely won't be empty.
+
+Impacted internal classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Issues labeled with "Status: Needs Triage" should be reviewed by a
-member of the php-src team to check whether they are valid (at first
-glance) and properly categorize them. When the issue is triaged, the
-"Status: Needs Triage" label is removed and replaced by one or more
-categorization labels. There are three sets of these:
+At the time of writing this RFC, the following list of classes (and
+their subclasses) are affected by this RFC and calling ``json_encode()``
+on them will throw a deprecation warning in the future.
 
--  "Extension: ext_name" correspond to bundled PHP extensions. For most
-   extension-related issues, just adding the label for the corresponding
-   extension is sufficient, e.g. "Extension: curl" for curl-related
-   issues.
--  "SAPI: sapi_name" correspond to bundled SAPIs. These should be added
-   if the issue is directly related to the SAPI, e.g. "SAPI: fpm" should
-   be used for FPM-related bugs. It should not be added if the reporter
-   just happens to use this SAPI, but there is otherwise no direct
-   relation.
--  "Category: category_name" exists for categories that correspond
-   either to a subset of an extension (e.g. "Category: JIT") or
-   represent cross-cutting concerns (e.g. "Category: Build System").
-   These might be applied in addition to or in place of an extension
-   label.
+Most of them are currently json-encoded as ``{}``, no matter what they
+represent internally (some of these, like ``PDOStatement`` have public
+properties which are present in the output of ``json_encode()``).
 
-The full set of initially proposed labels is given in the following, but
-additional labels can easily be added after the fact:
+Some of those are containers of a sort, where this encoding is
+especially misleading (aside of ``Generator`` which was the motivator
+for this RFC, ``WeakMap`` stands out specifically)
 
--  Extension: bcmath
--  Extension: bz2
--  Extension: calendar
--  Extension: com_dotnet
--  Extension: ctype
--  Extension: curl
--  Extension: date
--  Extension: dba
--  Extension: dom
--  Extension: enchant
--  Extension: exif
--  Extension: ffi
--  Extension: fileinfo
--  Extension: filter
--  Extension: ftp
--  Extension: gd
--  Extension: gettext
--  Extension: gmp
--  Extension: hash
--  Extension: iconv
--  Extension: imap
--  Extension: intl
--  Extension: json
--  Extension: ldap
--  Extension: libxml
--  Extension: mbstring
--  Extension: mysqli
--  Extension: mysqlnd
--  Extension: oci8
--  Extension: odbc
--  Extension: opcache
--  Extension: openssl
--  Extension: pcntl
--  Extension: pcre
--  Extension: pdo (core)
--  Extension: pdo_dblib
--  Extension: pdo_firebird
--  Extension: pdo_mysql
--  Extension: pdo_oci
--  Extension: pdo_odbc
--  Extension: pdo_pgsql
--  Extension: pdo_sqlite
--  Extension: pgsql
--  Extension: phar
--  Extension: posix
--  Extension: pspell
--  Extension: readline
--  Extension: reflection
--  Extension: session
--  Extension: shmop
--  Extension: simplexml
--  Extension: snmp
--  Extension: soap
--  Extension: sockets
--  Extension: sodium
--  Extension: spl
--  Extension: sqlite3
--  Extension: standard
--  Extension: sysvmsg
--  Extension: sysvsem
--  Extension: sysvshm
--  Extension: tidy
--  Extension: tokenizer
--  Extension: xml
--  Extension: xmlreader
--  Extension: xmlwriter
--  Extension: xsl
--  Extension: zend_test
--  Extension: zip
--  Extension: zlib
+Backed by temporary resources
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--  SAPI: apache2handler
--  SAPI: cgi
--  SAPI: cli
--  SAPI: cli_server
--  SAPI: embed
--  SAPI: fpm
--  SAPI: fuzzer
--  SAPI: litespeed
--  SAPI: phpdbg
-
--  Category: Arrays
--  Category: Build System
--  Category: Engine
--  Category: Filesystem
--  Category: JIT
--  Category: Math
--  Category: Streams
--  Category: Strings
--  Category: Windows
-
-Members of the php-src team can adjust labels directly when submitting
-an issue, so they can bypass "Status: Needs Triage" and directly
-categorize the issue as appropriate.
-
-Issue Statuses and other labels
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-GitHub only supports "open" and "closed" issues, so additional status
-information is handled through a number of labels:
-
--  Status: Needs Triage. As discussed above, this is the starting state
-   for all new issues. The label is removed after triage by a team
-   member.
--  Status: Needs Feedback. This label can be placed if additional
-   feedback from the reporter has been requested. The label is
-   automatically removed if the issue reporter adds a comment. If no
-   comment is added within 14 days, the issue is automatically closed.
-   This functionality is implemented using `GitHub Actions
-   workflows <https://github.com/nikic/test-repo/tree/master/.github/workflows>`__.
--  Status: Verified. Indicates that a bug report has been reproduced and
-   confirmed to be an actual bug.
--  Status: Duplicate / Invalid / Won't Fix. These indicate that an issue
-   has been closed without fixing it, because it is a duplicate of
-   another issue, not a bug or will not be fixed/implemented.
-
-GitHub has `announced <https://github.com/github/roadmap/issues/289>`__
-that they will add support for indicating whether an issue has been
-closed because it has been fixed or because it is in some way invalid.
-Once this functionality is rolled out, the need for the last set of
-status labels may go away.
-
-Finally, the standard "good first issue" label can be used to indicate
-issues that are probably friendly to new contributors.
-
-Referencing issues
-~~~~~~~~~~~~~~~~~~
-
-Issues on GitHub can be referenced as ``#123`` in the same repository or
-``php/php-src#123`` from a different one. A problem with the ``#123``
-notation is that it creates an ambiguity between the issue's ID on
-GitHub and old issue IDs on bugs.php.net, which can and will clash. This
-is not a problem for references in comments (where it is understood that
-``#123`` always refers to a GitHub issue or pull request, and references
-to bugs.php.net should be made with an explicit link), but is a problem
-for commit messages: ``Fixes #123`` could refer to two different issues.
-
-For this reason, it it proposed that GitHub issues should be referenced
-using ``GH-123`` from commit messages, as well as the NEWS file, while
-bugs.php.net references should continue to use ``bug #123``.
-
-::
-
-   # NEWS file
-   - Core:
-     . Fixed GH-12345 (GitHub issue title). (Author)
-     . Fixed bug #12345 (bugs.php.net bug title). (Author)
-
-   # Commit messages
-   Fixed GH-12345: GitHub issue title
-   Fixed bug #12345: bugs.php.net bug title
-
-The use of "Closes GH-12345" is already standard practice to close the
-associated pull request when manually merging.
-
-A redirect from ``https://php.net/GH-12345`` to
-``https://github.com/php/php-src/issues/12345`` should be set up as
-well, to make it easier to look up issues by GitHub ID.
+-  AddressInfo
+-  CURLFile
+-  Collator
+-  CurlHandle
+-  CurlMultiHandle
+-  CurlShareHandle
+-  DOMXPath
+-  DOMXPath
+-  Dba\Connection
+-  DeflateContext
+-  Dom\Implementation
+-  Dom\NamespaceInfo
+-  Dom\TokenList
+-  Dom\XPath
+-  EnchantBroker
+-  EnchantDictionary
+-  FFI
+-  FFI\CData
+-  FFI\CType
+-  FTP\Connection
+-  GdFont
+-  GdImage
+-  InflateContext
+-  IntlBreakIterator
+-  IntlCalendar
+-  IntlCodePointBreakIterator
+-  IntlDateFormatter
+-  IntlDatePatternGenerator
+-  IntlIterator
+-  IntlPartsIterator
+-  IntlRuleBasedBreakIterator
+-  IntlTimeZone
+-  LDAP\Connection
+-  LDAP\Result
+-  LDAP\ResultEntry
+-  MessageFormatter
+-  NumberFormatter
+-  Odbc\Connection
+-  Odbc\Result
+-  OpenSSLAsymmetricKey
+-  OpenSSLCertificate
+-  OpenSSLCertificateSigningRequest
+-  PDO
+-  PDORow
+-  PDOStatement
+-  Pdo\Dblib
+-  Pdo\Firebird
+-  Pdo\Mysql
+-  Pdo\Odbc
+-  Pdo\Pgsql
+-  Pdo\Sqlite
+-  PgSql\Connection
+-  PgSql\Lob
+-  PgSql\Result
+-  Random\Engine\Secure
+-  ResourceBundle
+-  SQLite3
+-  SQLite3Result
+-  SQLite3Stmt
+-  Shmop
+-  SimpleXMLElement
+-  Soap\Sdl
+-  Soap\Url
+-  Socket
+-  SplFileInfo
+-  Spoofchecker
+-  SysvMessageQueue
+-  SysvSemaphore
+-  SysvSharedMemory
+-  Transliterator
+-  UConverter
+-  XMLParser
+-  finfo
+-  variant
 
 Other
-~~~~~
+^^^^^
 
-GitHub supports `saved
-replies <https://docs.github.com/en/github/writing-on-github/working-with-saved-replies/about-saved-replies>`__,
-which can be used to remember commonly used responses. Unfortunately,
-saved replies can only be configured per-user, it is not possible to
-specify a set of default responses for a repository. This may still be
-individually useful for people commonly performing triage.
+-  Closure
+-  Fiber
+-  Generator
+-  InternalIterator
+-  ReflectionAttribute
+-  ReflectionClass
+-  ReflectionClassConstant
+-  ReflectionConstant
+-  ReflectionExtension
+-  ReflectionFiber
+-  ReflectionFunctionAbstract
+-  ReflectionGenerator
+-  ReflectionParameter
+-  ReflectionProperty
+-  ReflectionReference
+-  ReflectionType
+-  ReflectionZendExtension
+-  SensitiveParameterValue
+-  WeakMap
+-  WeakReference
 
-GitHub also supports milestones, which we currently use to loosely track
-pull requests that should go into a certain PHP version. It would be
-possible to add all issues reported against a certain PHP version to the
-appropriate milestone, which would make the issues more reliably
-filterable by version. I do not propose to do this, because many issues
-are not version specific and their "affected version" is a moving target
-(usually lowest supported). However, release managers may find it useful
-to track issues relating to a new minor version in the pre-release
-phase.
+Backward Incompatible Changes
+-----------------------------
 
-Issues can be transferred to a different repository in the same
-organization, so it is possible to move issues between php/php-src and
-php/doc-en, if bugs or documentation problems are reported in the wrong
-place.
+Code which accidentally runs ``json_encode()`` over instances of classes
+marked as non-serializable or over larger structures which contain such
+instances will cause a deprecation warning to be thrown when before
+there wasn't.
 
-Migration of existing issues
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Given that the encoded output was mostly useless for any consumer of
+such JSON and given that producing the previous output manually is not
+hard, it's the belief of this RFC that the deprecation warning provides
+more value than the current behavior because current invocations of
+``json_encode()`` over unserialized classes is likely unintentional
+(given the current output of ``json_encode()``).
 
-Existing issues on bugs.php.net will not be migrated to GitHub issues
-under this proposal. While new (non-security) issues on bugs.php.net
-will not be accepted, commenting on old bugs will continue to be allowed
-for the time being, and bug reports should be made available in
-read-only form indefinitely.
+Proposed PHP Version(s)
+-----------------------
 
-If a bug is reported on GitHub issues which already has a report on
-bugs.php.net, then the bugs.php.net report should be closed as a
-duplicate of the GitHub issue and any valuable information from it
-briefly summarized there. Over time, bugs that still exist and are still
-relevant will converge to GitHub issues.
+PHP 8.5
 
-We do not attempt to perform a mass migration for two primary reasons:
-First, the vast majority of old bug reports are not relevant to active
-development. It is important that historical reports remain available,
-but importing a copy of them into GitHub is not particularly helpful,
-especially as references in commits and tests will use the bugs.php.net
-ID, not the GitHub issues ID. It might make some sense to import open
-bugs only, though even there a large fraction will not be relevant to
-active development.
+RFC Impact
+----------
 
-Second, there are large mismatches in capabilities and usage between
-bugs.php.net and GitHub issues, so that imported issues tend to have
-cluttered presentation and timelines. For example, this is how an
-imported issue in the Go repository looks like:
-https://github.com/golang/go/issues/1691
+To SAPIs
+~~~~~~~~
 
-bugs.php.net
-~~~~~~~~~~~~
+The deprecation warning will bre raised in all SAPIs
 
-Per the above, bugs.php.net will remain active for the following
-purposes:
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
 
--  Reporting of security issues against PHP.
--  Commenting/updating on existing issues.
+None
 
-However, the following will no longer be accepted:
+To Opcache
+~~~~~~~~~~
 
--  Reporting documentation problems. (Already disabled.)
--  Reporting of issues against PECL extensions. (Extensions should have
-   their own issue tracker. Most of them already track issues on GitHub,
-   not bugs.php.net.)
--  Reporting non-security issues against PHP.
+None
 
-It may be possible to migrate security issues to GitHub as well, by
-making of use of the `security
-advisories <https://docs.github.com/en/code-security/security-advisories/about-github-security-advisories>`__
-feature. However, larger changes to the handling of security issues
-should be decided within the security response group, and as such are
-considered out of scope of this proposal.
+Ran the included test-case in the PR with Opcache enabled and got the
+expected result.
 
-Alternatives
+New Constants
+~~~~~~~~~~~~~
+
+None
+
+Open Issues
+-----------
+
+None
+
+Unaffected PHP Functionality
+----------------------------
+
+Any other argument to ``json_encode()`` is unaffected
+
+Future Scope
 ------------
 
-The switch to GitHub issues has two primary disadvantages:
+In the next major version after this RFC passes, the deprecation warning
+can be changed to an ``Error``, though this will be part of a separate
+RFC.
 
--  It binds the PHP project more firmly to the GitHub platform. We
-   already host our repositories there and make use of pull requests,
-   but this would take additional functionality "out of our control". Of
-   course, that is also kind of the point: We are bad at maintaining
-   critical infrastructure ourselves and would rather someone else took
-   care of it. Someone for whom it is part of their core business,
-   rather than just a necessary annoyance.
--  GitHub issues is not a particularly sophisticated issue tracker
-   solution. While it offers many useful features that bugs.php.net does
-   not, it is also less customizable. For example, there is no support
-   for custom metadata on issues beyond standard features like labels or
-   milestones (though there probably `will
-   be <https://github.com/github/roadmap/issues/277>`__ in the future).
+Proposed Voting Choices
+-----------------------
 
-The three possibilities going forward are essentially:
+Should calling ``json_encode()`` on instances of classes marked with
+``ZEND_ACC_NOT_SERIALIZABLE`` be marked as deprecated? Yes, No?
 
--  Keep using bugs.php.net, but invest significant effort into improving
-   it. I expect that at a minimum we would have to require account
-   registration to use bugs.php.net (for reporting or commenting).
--  Migrate to GitHub issues as proposed by this RFC.
--  Migrate to a different issue tracking solution.
+Patches and Tests
+-----------------
 
-Of course, the suggestion to use GitHub issues in particular is not an
-accident:
+https://github.com/php/php-src/pull/15724
 
--  We already host repositories there and use pull requests (and use it
-   for documentation issues). Having everything on one platform allows
-   everything to integrate smoothly. Cross-references work everywhere
-   out of the box. Other platforms will likely not be able to offer the
-   same level of integration.
--  GitHub has become the industry standard for open-source projects.
-   Anyone with involvement in open-source is very likely to have an
-   account there and be familiar with the main workflows. Using a
-   different platform will likely require people to create a new
-   account, learn the quirks of yet another issue tracker and have one
-   more place to check for progress on reported issues.
+Implementation
+--------------
 
-The requirement for an alternative would be that a) it is hosted (i.e.
-the PHP project does not need to maintain infrastructure for it), b) has
-good GitHub integration and c) is "sufficiently better" than GitHub
-issues to make it worth using a separate product. As PHP does not have a
-particularly sophisticated issue tracking workflow, I'm doubtful that
-the tradeoff will be worthwhile. The biggest "advantage" of using a
-separate product is likely that it will make reporting bugs
-significantly harder for the casual user, which might make low-quality
-submissions less likely.
+References
+----------
 
-Vote
-----
-
-Voting started 2021-11-20 and ends on 2021-12-04.
-
-Question: Migrate from bugs.php.net to GitHub issues as proposed?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+https://github.com/php/php-src/pull/15724
 
 Additional Metadata
 -------------------
 
-:Original Authors: Nikita Popov nikic@php.net
-:Original Status: Accepted
-:Slug: github_issues
-:Wiki URL: https://wiki.php.net/rfc/github_issues
+:Original Authors: Philip Hofstetter, phofstetter@sensational.ch
+:Original Status: Under Discussion
+:Slug: deprecate-json_encode-nonserializable
+:Wiki URL: https://wiki.php.net/rfc/deprecate-json_encode-nonserializable

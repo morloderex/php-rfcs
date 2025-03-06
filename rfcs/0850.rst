@@ -1,116 +1,189 @@
-StreamWrapper Support For Glob()
-================================
+First Class Callables In Constant Expressions
+=============================================
 
 :PHP-RFC: 0850
-:Title: StreamWrapper Support For Glob()
-:Author: Timmy Almroth <timmy.almroth@gmail.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2022-08-15
+:Title: First Class Callables In Constant Expressions
+:Author: Tim Düsterhus <tim@tideways-gmbh.com>, Volker Dusch <volker@tideways-gmbh.com>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2025-01-07
+:PHP-Version: 8.5
 :Version: 1.0
-
-**Status: Aborted**
-
-**Comment: This RFC has been aborted as no convenient solution or
-workaround was found for Alpine platform. / Timmy**
 
 Introduction
 ------------
 
-``glob()`` is a function in PHP to list and filter files and/or folders
-using a globbing pattern. The current implementation of ``glob()`` is a
-thin wrapper for POSIX glob(3). While all the `Filesystem
-Functions <https://www.php.net/manual/en/ref.filesystem.php>`__ in PHP
-supports StreamWrappers, ``glob()`` does not.
+The `Support Closures in constant
+expressions </rfc/closures_in_const_expr>`__ RFC added support for
+Closures in constant expressions. The RFC left supporting “\ `First
+Class Callables </rfc/first_class_callable_syntax>`__\ ” (“FCC”), which
+can be considered syntax sugar for creating a Closure that just forwards
+any calls to the callable in question.
 
-Workarounds can be a struggle. Some projects may rely on regular
-expressions which are different from globbing. Some may attempt the use
-of fnmatch() which does not support all the features of glob() like
-brace expansions.
+Given that FCCs effectively act as syntax sugar, the same use cases as
+with Closures themselves also apply to this RFC. It is intended to round
+off the “Closures in constant expressions” RFC.
 
 Proposal
 --------
 
-Consistently implement StreamWrapper support for glob(). Example:
-``glob('vfs://*.ext')``
+This RFC proposes that it shall be legal to use the FCC syntax in
+constant expressions. The semantics match the existing semantics of FCCs
+and of constant expressions. Aside from the obvious, this means:
+
+-  If a referenced class does not yet exist, the autoloader is
+   triggered, as with ``new``-expressions in constant expressions.
+-  If a relative reference to a free-standing function is used in a
+   namespaced context, the function will first be looked up within the
+   namespace, falling back to the global namespace if it does not exist.
+
+Constraints
+~~~~~~~~~~~
+
+All the constraints imposed on FCCs outside of constant expressions
+naturally also apply to FCCs within constant expressions. Defining a FCC
+within a constant expression comes with the following additional
+constraints:
+
+-  Only references to free-standing functions and to static methods
+   (``::``) are supported.
+-  Only the standard ``function_name(...)`` or
+   ``ClassName::methodName(...)`` references are supported. The function
+   name must not be an expression (constant or otherwise).
+   ``[ClassName::class, 'methodName'](...)``, ``(Constant)(...)``, or
+   similar are not supported.
+-  Referencing methods that implicitly exist due to the existence of a
+   ``__callStatic()`` method on the referenced class are not supported.
+
+Scoping
+~~~~~~~
+
+As with other constant-expressions, FCC defined in constant expressions
+follow the expected scoping rules of the context they are placed in.
+This means that FCC in property default values *may* reference
+``private`` methods of the class where they are defined, similarly to
+how a FCC defined in the constructor and stored in a property may access
+those ``private`` methods. Likewise are FCC in attribute parameters
+allowed to access ``private`` methods of the surrounding class.
+
+Examples
+~~~~~~~~
+
+.. code:: php
+
+   <?php
+
+   #[Attribute(Attribute::TARGET_CLASS | Attribute::IS_REPEATABLE)]
+   class Attr {
+       public function __construct(public Closure $value) {}
+   }
+
+   #[Attr(self::myMethod(...))]
+   #[Attr(strrev(...))]
+   class C {
+       private static function myMethod(string $foo) {
+           return "XXX";
+       }
+   }
+
+   foreach ((new ReflectionClass(C::class))->getAttributes() as $reflectionAttribute) {
+       $closure = $reflectionAttribute->newInstance()->value;
+       var_dump($closure('abc'));
+   }
+
+   // Prints:
+   //
+   // string(3) "XXX"
+   // string(3) "cba"
 
 Backward Incompatible Changes
 -----------------------------
 
-Fully backwards compatibile
+None. Using first class callables within constant expressions previously
+resulted in a compile-time error. Closures can appear within constant
+expressions since the `Support Closures in constant
+expressions </rfc/closures_in_const_expr>`__ RFC.
+
+Nevertheless, as with every RFC that changes what previously was a
+compile-time error to be valid PHP code, this RFC requires changes to
+static analyzers and IDEs to correctly understand the semantics of the
+code and not erroneously report errors.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x
+Next 8.x (8.5).
 
 RFC Impact
 ----------
 
-The glob opendir implementation would be replaced with a wrapper
-supporting streams. It is possible to produce a fallback condition
-leaving local file system operations as is. But testing so far have not
-shown any performance anomalies or incompatibilities. So the intention
-is to also use the new wrapper for local filesystem operations.
+To SAPIs
+~~~~~~~~
 
-open_basedir check will be removed from result filtering in favour of
-the already new implemented one in wrapper's opendir.
+None.
 
-If a StreamWrapper supports listing contents, it will supported by
-glob(). There will be edge cases where a streamwrapper is not intended
-to or does not support listing contents of a resource, e.g. http:,
-data:, compress.zlib:. These cases are not unique to glob() as the same
-problemematics applies to scandir(). glob() returns an empty array for
-invalid paths today and will continue doing so for wrappers that can't
-be used to return a list of contents.
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
 
-Which streamwrapper that can be used with glob() is not a limitation of
-glob(), but the streamwrapper itself. PHP's current ftp streamwrapper
-might not support listing files in a directory, but a 3rd party wrapper
-for ftp might.
+None.
 
-A word of advice can be put in the documentation that clearifies how
-glob() will not work with these edge case wrappers. But again, this
-applies to the current implementation of scandir() also.
+To Opcache
+~~~~~~~~~~
+
+The current implementation uses a special AST structure to cache the
+resolved function for consistent behavior of the global function
+fallback. To correctly cache this AST structure, Opcache changes are
+required. The PR passes all tests both with and without JIT enabled.
+
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None.
+
+Open Issues
+-----------
+
+None.
 
 Unaffected PHP Functionality
 ----------------------------
 
-``glob()``, GlobalIterator and glob:\\\ for local filesystem will return
-the same results.
-
-Wrappers not intended to return a list of contents will continue
-returning an empty array as glob does today.
-
-Edit (Oct 2): As noted by @bukka; the use of GLOB_ALTDIRFUNC is a
-non-standard implementation that doesn't seem to be supported on Alpine.
-Meaning streamwrappers for glob() would remain unsupported on Alpine
-systems unless solved.
+Only constant expression are affected by this change, but Closures could
+already appear within them.
 
 Future Scope
 ------------
 
-There has been some ideas about the future of PHP glob() and the
-maintained win32 implementation. Whether it could be replaced by a
-unified standalone implementation, rather than a POSIX layer for the
-local file system and a separate win32 implementation.
+None.
 
 Proposed Voting Choices
 -----------------------
 
-Should we implement StreamWrapper support for PHP glob()?
+2/3 majority:
+
+Question: Support first class callables in constant expressions as proposed?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-A PoC has been produced in the Github Feature Request thread
-`#9224 <https://github.com/php/php-src/issues/9224>`__. Final patch will
-be produced by Github user @KapitanOczywisty if this RFC is approved.
+https://github.com/php/php-src/pull/17213
 
 Implementation
 --------------
 
-After the project is implemented, this section will contain
+After the project is implemented, this section should contain
 
 #. the version(s) it was merged into
 #. a link to the git commit(s)
@@ -120,13 +193,17 @@ After the project is implemented, this section will contain
 References
 ----------
 
-Github Feature Request
-`#9224 <https://github.com/php/php-src/issues/9224>`__
+#. `closures_in_const_expr </rfc/closures_in_const_expr>`__
+#. https://github.com/php/php-src/pull/17213
+
+Rejected Features
+-----------------
+
+n/a
 
 Additional Metadata
 -------------------
 
-:Original Authors: Timmy Almroth, timmy.almroth@gmail.com
-:Original Status: Under Discussion
-:Slug: glob_streamwrapper_support
-:Wiki URL: https://wiki.php.net/rfc/glob_streamwrapper_support
+:Original Authors: Tim Düsterhus (tim@tideways-gmbh.com), Volker Dusch (volker@tideways-gmbh.com)
+:Slug: fcc_in_const_expr
+:Wiki URL: https://wiki.php.net/rfc/fcc_in_const_expr
