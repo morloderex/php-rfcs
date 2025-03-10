@@ -1,0 +1,334 @@
+Inner Classes
+=============
+
+:PHP-RFC: 0904
+:Title: Inner Classes
+:Author: Rob Landers <rob@bottled.codes>
+:Status: Draft
+:Type: Unknown
+:Created: 2025-02-08
+:Version: 0.1
+
+Introduction
+------------
+
+This RFC proposes a significant enhancement to the language: **Inner
+Classes**. This feature aims to introduce a new level of encapsulation
+and organization within PHP applications.
+
+Inner Classes enable the definition of classes within other classes,
+providing fine-grained visibility control and fostering better
+modularization.
+
+By adopting these enhancements, PHP can offer developers more powerful
+tools to write clean, efficient, and well-structured code, ultimately
+improving the overall developer experience and code quality.
+
+Proposal
+--------
+
+Inner classes allow defining classes within other classes, following
+standard visibility rules. This allows developers to declare a class as
+``private`` or ``protected`` and restrict its usage to the outer class.
+Inner classes may only be nested one level deep, may not be a parent
+class, and may not be declared ``abstract``:
+
+.. code:: php
+
+   class Outer {
+       public class Inner {
+           public function __construct(public string $message) {}
+       }
+       
+       private class PrivateInner {
+           public function __construct(public string $message) {}
+       }
+   }
+
+   $foo = new Outer::Inner('Hello, world!');
+   echo $foo->message;
+   // outputs: Hello, world!
+   $baz = new Outer::PrivateInner('Hello, world!');
+   // Fatal error: Uncaught Error: Cannot access private inner class Outer::PrivateInner 
+
+Modifiers
+^^^^^^^^^
+
+Inner classes support modifiers such as ``public``, ``protected``,
+``private``, ``final`` and ``readonly``. When using these as modifiers
+on an inner class, there are some intuitive rules:
+
+-  ``public``, ``private``, and ``protected`` apply to the
+   **visibility** of the inner class.
+-  ``final``, and ``readonly`` apply **to the class itself**.
+-  ``static`` is **not allowed** as a modifier since PHP does not
+   support static classes and isn’t a property.
+-  ``abstract`` is not allowed as an inner class **cannot** be parent
+   classes.
+
+Visibility Rules
+^^^^^^^^^^^^^^^^
+
+Private and protected inner classes are only instantiatable within their
+outer class (or subclasses for protected) and may not be used as *type
+declarations* outside their outer class.
+
+For example, you may return a private inner class from any method inside
+that same inner class or the outer class, but you may not use it as a
+type declaration in a function outside the outer class:
+
+.. code:: php
+
+   class Box {
+     private class Point {
+       public function __construct(public int $x, public int $y) {}
+     }
+     
+     private self::Point $center;
+     
+     public function __construct() {
+       $this->center = new self::Point(0, 0);
+     }
+     
+     public function getCenter(): self::Point {
+       return $this->center;
+     }
+     
+     public function setCenter(self::Point $center) {
+       $this->center = $center;
+     }
+   }
+
+   $box = new Box();
+   $center = $box->getCenter();
+   $center->x = 10;
+   $box->setCenter($center);
+   var_dump($box);
+
+Outputs:
+
+::
+
+   object(Box)#1 (1) {
+     ["center":"Box":private]=>
+     object(Box::Point)#2 (2) {
+       ["x"]=>
+       int(10)
+       ["y"]=>
+       int(0)
+     }
+   }
+
+However, if we try to use it outside the outer class as a type
+declaration:
+
+.. code:: php
+
+   function mutateBox(Box::Point $point): Box::Point {
+       $point->x = 10;
+   }
+
+   $center = mutateBox($center);
+
+We receive the following error:
+
+::
+
+   PHP Fatal error:  Private inner class Box::Point cannot be used in the global scope
+
+This gives a great deal of control to developers, preventing accidental
+misuse of inner classes. Developers may have the inner class implement
+an interface so that the programmer must code to the interface, allowing
+large projects to enforce a consistent API.
+
+Inheritance
+^^^^^^^^^^^
+
+Inner classes have inheritance similar to static properties; this allows
+you to redefine an inner class in a subclass, allowing rich hierarchies.
+
+.. code:: php
+
+   readonly class Point(int $x, int $y);
+
+   class Geometry {
+       public array $points;
+       protected function __construct(Point ...$points) {
+           $this->points = $points;
+       }
+       
+       public class FromPoints extends Geometry {
+           public function __construct(Point ...$points) {
+               parent::__construct(...$points);
+           }
+       }
+       
+       public class FromCoordinates extends Geometry {
+           public function __construct(int ...$coordinates) {
+               $points = [];
+               for ($i = 0; $i < count($coordinates); $i += 2) {
+                   $points[] = new Point($coordinates[$i], $coordinates[$i + 1]);
+               }
+               parent::__construct(...$points);
+           }
+       }
+   }
+
+   class Triangle extends Geometry {
+       protected function __construct(public Point $p1, public Point $p2, public Point $p3) {
+           parent::__construct($p1, $p2, $p3);
+       }
+       
+       public class FromPoints extends Triangle {
+           public function __construct(Point $p1, Point $p2, Point $p3) {
+               parent::__construct($p1, $p2, $p3);
+           }
+       }
+       
+       public class FromCoordinates extends Triangle {
+           public function __construct(int $x1, int $y1, int $x2, int $y2, int $x3, int $y3) {
+               parent::__construct(new Point($x1, $y1), new Point($x2, $y2), new Point($x3, $y3));
+           }
+       }
+   }
+
+   $t = new Triangle::FromCoordinates(0, 0, 1, 1, 2, 2);
+
+   var_dump($t instanceof Triangle); // true
+   var_dump($t instanceof Geometry); // true
+   var_dump($t instanceof Triangle::FromCoordinates); // true
+
+However, no classes may not inherit from inner classes, but inner
+classes may inherit from other classes, including the outer class.
+
+It’s important to note that inheritance for inner classes does not
+violate the Liskov Substitution Principle (LSP). LSP states that objects
+of a superclass should be replaceable with objects of a subclass without
+affecting the correctness of the program.
+
+**Visibility Rules**: Private and protected inner classes are only
+instantiable within their outer class (or subclasses for protected) and
+cannot be used as type declarations outside their outer class. This
+encapsulation ensures that the inner class’s implementation details
+remain within their intended scope.
+
+**Inheritance**: Inner classes can inherit from other classes, including
+the outer class, but cannot be used as parent classes. This restriction
+is primarily about maintaining clear scope boundaries and encapsulation,
+rather than preventing LSP violations. Inner classes behave like any
+other class with respect to inheritance and polymorphism within their
+allowed scope.
+
+Names
+^^^^^
+
+Inner classes may not have any name that conflicts with a constant or
+static property of the same name.
+
+.. code:: php
+
+   class Foo {
+       const Bar = 'bar';
+       public class Bar {}
+       
+       // Fatal error: Uncaught Error: Cannot redeclare Foo::Bar
+   }
+
+   class Foo {
+       static $Bar = 'bar';
+       public class Bar {}
+       
+       // Fatal error: Uncaught Error: Cannot redeclare Foo::$Bar
+   }
+
+Backward Incompatible Changes
+-----------------------------
+
+-  This RFC introduces new syntax and behavior to PHP, which does not
+   conflict with existing syntax.
+-  Some error messages will be updated to reflect inner classes, and
+   tests that depend on these error messages are likely to fail.
+-  Tooling using AST or tokenization may need to be updated to support
+   the new syntax.
+
+Proposed PHP Version(s)
+-----------------------
+
+This RFC targets the next version of PHP.
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Extensions accepting class names may need to be updated to support
+``::`` in class names. None were discovered during testing, but it is
+possible there are extensions that may be affected.
+
+To Opcache
+~~~~~~~~~~
+
+This change introduces a new opcode, AST, and other changes that affect
+opcache. These changes are included as part of the PR that implements
+this feature.
+
+Open Issues
+-----------
+
+Pending discussion.
+
+Unaffected PHP Functionality
+----------------------------
+
+There should be no change to any existing PHP syntax.
+
+Future Scope
+------------
+
+TBD.
+
+Proposed Voting Choices
+-----------------------
+
+As this is a significant change to the language, a 2/3 majority is
+required.
+
+Patches and Tests
+-----------------
+
+A complete implementation is available `on
+GitHub <https://github.com/php/php-src/compare/master...bottledcode:php-src:rfc/short-class2?expand=1>`__.
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain - the
+version(s) it was merged into - a link to the git commit(s) - a link to
+the PHP manual entry for the feature - a link to the language
+specification section (if any)
+
+References
+----------
+
+-  `email that inspired this
+   RFC <https://externals.io/message/125975#125977>`__
+-  `RFC: Records <https://wiki.php.net/rfc/records>`__
+
+Rejected Features
+-----------------
+
+TBD
+
+Additional Metadata
+-------------------
+
+:Original Authors: Rob Landers, rob@bottled.codes
+:Original Status: Under Discussion (Accepted or Declined)
+:Slug: short-and-inner-classes
+:Wiki URL: https://wiki.php.net/rfc/short-and-inner-classes
