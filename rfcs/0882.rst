@@ -1,91 +1,129 @@
-Raw Identifiers
-===============
+#[NotSerializable]
+==================
 
 :PHP-RFC: 0882
-:Title: Raw Identifiers
-:Author: Michał Marcin Brzuchalski <brzuchal@php.net>
+:Title: #[NotSerializable]
+:Author: Max Semenik <maxsem.wiki@gmail.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-03-24
+:Created: 2023-11-26
 :Version: 1.0
 
 Introduction
 ------------
 
-Introduce syntax allowing symbol names to use reserved and semi-reserved
-ways with no risk of getting reserved in future PHP versions.
+Some classes aren't supposed to be serialized. Currently, while PHP
+internal classes have a nice way of preventing being
+serialized/unserialized, userspace doesn't. I'm proposing to make them
+equal.
+
+Compare the internals simply slapping
+``ce_flags |= ZEND_ACC_NOT_SERIALIZABLE`` to userspace having to do
+something like this:
+
+.. code:: php
+
+   class MyClass
+   {
+       public function __sleep() // Wait, what its signature is supposed to be? Does it matter?
+       {
+           throw new Exception('This class must not be serialized');
+       }
+       
+       public function __wakeup()
+       {
+           throw new Exception('This class must not be unserialized');
+       }
+   }
+
+Not only is this method bulky, it's also less readable. It also lacks a
+way to indicate the intention to various code analysers so that they
+could detect attempts to serialize such classes.
+
+Analysis
+--------
+
+As of the time I'm writing this, there are 94 uses of
+``@not-serializable`` in php-src. Examples include:
+
+-  Closures
+-  Various connections like ``PDO``, etc.
+-  Reflection
+
+What could userspace use this for?
+
+-  Wrappers for all the above. Imagine a PDO wrapper that creates
+   connections on demand. If the connection hasn't been established yet,
+   its serialization will succeed, which results in unpredictable
+   behavior.
+-  Secret information that shouldn't be accidentally exfiltrated by
+   being serialized.
+-  Security-sensitive classes that are unsafe to unserialize with
+   arbitrary data (`example in the
+   wild <https://github.com/wikimedia/mediawiki-libs-ScopedCallback/blob/master/src/ScopedCallback.php>`__).
 
 Proposal
 --------
 
-Reserved words being keywords in parser context cannot be used as symbol
-names, for eg. class/interface/trait/enum/function/const declarations.
-As PHP evolves more keywords are introduced and more words are forbidden
-to use in described symbol names. A new syntax fully BC would allow
-these words to be still used or just used by adding "\" prefix in front
-of a keyword name.
+Introduce a new attribute that would expose this functionality to
+userspace.
 
-This allows smoother migration of old code that for eg. uses "match" as
-a function name, as this has become a reserved word in recent PHP
-versions. There are and possibly will be new RFCs that may introduce
-more reserved words as new keywords, like the use of "is" in pattern
-matching, etc.
+.. code:: php
 
-This proposal's aim is to secure code maintained currently which may be
-broken in the future because of reserving more words and allow smooth
-migration path by just adding "\" in front of symbol names which might
-be automated to some degree.
+   #[NotSerializable]
+   class MyClass
+   {
+   }
+
+   serialize(new MyClass()); // Exception: Serialization of 'MyClass' is not allowed
+
+This change requires no changes to the engine whatsoever, all
+functionality is already present - it merely gets exposed to userspace.
 
 Backward Incompatible Changes
 -----------------------------
 
-None.
+The only breaking change is the addition of a new non-namespaced class.
 
 Proposed PHP Version(s)
 -----------------------
 
-8.2
+8.4.
 
-RFC Impact
-----------
+Open Issues
+-----------
 
-To SAPIs
-~~~~~~~~
-
-None.
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-None.
-
-To Opcache
-~~~~~~~~~~
-
-Unverified.
+Make sure there are no open issues when the vote starts!
 
 Proposed Voting Choices
 -----------------------
 
-Language change requires 2/3.
+Implement this RFC? (Yes/no, 2/3 approval required.)
 
 Patches and Tests
 -----------------
 
-TBD
+\* Proposed PR: https://github.com/php/php-src/pull/12788
 
 Implementation
 --------------
 
-References
-----------
+After the project is implemented, this section should contain
 
-\* `Raw identifiers in
-Rust <https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html>`__
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Michał Marcin Brzuchalski, brzuchal@php.net
-:Slug: raw-identifiers
-:Wiki URL: https://wiki.php.net/rfc/raw-identifiers
+:Original Authors: Max Semenik, maxsem.wiki@gmail.com
+:Original Status: Under discussion
+:Slug: not_serializable
+:Wiki URL: https://wiki.php.net/rfc/not_serializable
