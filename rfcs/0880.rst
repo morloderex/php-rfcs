@@ -1,133 +1,118 @@
-Random Migration
-================
+Add 4 New Rounding Modes To Round() Function
+============================================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2022-12-22
-:Version: 0.1
+:Title: Add 4 New Rounding Modes To Round() Function
+:Author: Jorg Sowa <jorg.sowa@gmail.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-08-31
+:PHP-Version: 8.4
+:Version: 1.0
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+The RFC proposes to add 4 new modes to the round() function.
+
+-  `PHP_ROUND_CEILING <https://en.wikipedia.org/wiki/Rounding#Rounding_up>`__,
+-  `PHP_ROUND_FLOOR <https://en.wikipedia.org/wiki/Rounding#Rounding_down>`__,
+-  `PHP_ROUND_AWAY_FROM_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_away_from_zero>`__,
+-  `PHP_ROUND_TOWARD_ZERO <https://en.wikipedia.org/wiki/Rounding#Rounding_toward_zero>`__.
+
+..
+
+   **Note:** The aforementioned have been transformed into an enum in a
+   `follow-up
+   RFC <https://wiki.php.net/rfc/correctly_name_the_rounding_mode_and_make_it_an_enum>`__.
+
+Two first comments on the `documentation page of the
+round() <https://www.php.net/manual/en/function.round.php>`__ function
+are related to the missing modes of rounding. The first comment has an
+outstanding number of 309 votes.
+
+Moreover, the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+already implements 4 new proposed modes known as ROUND_CEILING,
+ROUND_FLOOR, ROUND_DOWN, ROUND_UP.
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
+Adding 4 new constants for the rounding modes of function round():
 
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
+-  PHP_ROUND_CEILING - rounds num to the nearest integer bigger than
+   num,
+-  PHP_ROUND_FLOOR - rounds num to the nearest integer lower than num,
+-  PHP_ROUND_AWAY_FROM_ZERO - rounds num away from zero,
+-  PHP_ROUND_TOWARD_ZERO - rounds num towards zero.
 
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
+Creating two aliases of constants from Intl extension to have consistent
+naming for rounding modes:
 
-The following functions to deprecated:
-
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
-
-All of these functions have global scope issues described in the Random
-Extension RFC.
-
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
-
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
-
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
-
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
-
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
-
-.. code:: php
-
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
+-  ROUND_TOWARD_ZERO (equivalent of PHP_ROUND_TOWARD_ZERO) alias of
+   `ROUND_DOWN <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-down>`__
+-  ROUND_AWAY_FROM_ZERO (equivalent of PHP_ROUND_AWAY_FROM_ZERO) alias
+   of
+   `ROUND_UP <https://www.php.net/manual/en/class.numberformatter.php#numberformatter.constants.round-up>`__
 
 Backward Incompatible Changes
 -----------------------------
 
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
+None
 
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
+Proposed PHP Versions
+---------------------
 
-The following function names are no longer available:
+8.4
 
--  random_float()
+Questions
+---------
 
-Proposed PHP Version(s)
------------------------
+Why not use functions ceil() and floor()?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PHP 8.3 and next version
+The functions ceil() and floor() round numbers to the full integer,
+while the function round() rounds the number by given precision.
+Implementing new rounding modes we get equivalent of those functions
+using round() with 0 as precision.
 
-RFC Impact
-----------
+.. code:: php
 
-To SAPIs
-~~~~~~~~
+   ceil($number) === round($number, 0, PHP_ROUND_CEILING); //true
+   floor($number) === round($number, 0, PHP_ROUND_FLOOR); //true
 
-none
+Why not the names PHP_ROUND_UP and PHP_ROUND_DOWN?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+Such constants already exist in the
+`NumberFormatter <https://www.php.net/manual/en/class.numberformatter.php>`__
+and represent rounding modes 'away from zero' and 'toward zero'. However
+the names rounding up and down are ambiguous. They may be easily
+confused with the rounding ceiling/floor, while the terms away
+from/toward zero are distinct.
 
-ext-random
+Those constants would be deprecated and replaced with their
+corresponding aliases: ROUND_TOWARD_ZERO and ROUND_AWAY_FROM_ZERO.
 
-To Opcache
-~~~~~~~~~~
+Why not the enum implementation for the rounding modes?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-none
-
-New Constants
-~~~~~~~~~~~~~
-
-none
-
-php.ini Defaults
-~~~~~~~~~~~~~~~~
-
-none
-
-Open Issues
------------
-
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+As this is extension of the existing modes we should add complementary
+modes to the existing constants instead implementing new Enum. This way
+enum is an addition to the new constants and is not included into this
+RFC.
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
+
+Voting started on 2023-11-15 and will end on 2023-11-30 00:00 GMT.
+
+Question: Implement 4 new rounding modes to \`round()\` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -135,8 +120,13 @@ Voting Choices
 -  Yes
 -  No
 
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------
+
+If the first voting is not accepted the result of the second voting will
+be ignored.
+
+Question: Create aliases for Intl extension constants ROUND_UP and ROUND_DOWN: ROUND_AWAY_FROM_ZERO and ROUND_TOWARD_ZERO
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
 
@@ -149,11 +139,23 @@ Voting Choices
 Implementation
 --------------
 
-WIP
+GitHub pull request: https://github.com/php/php-src/pull/12056
+
+References
+----------
+
+Links to external references, discussions or RFCs
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Implementation: https://github.com/php/php-src/pull/12056
+:Original Authors: Jorg Sowa jorg.sowa@gmail.com
+:Original PHP Version: PHP 8.4
+:Slug: new_rounding_modes_to_round_function
+:Wiki URL: https://wiki.php.net/rfc/new_rounding_modes_to_round_function
