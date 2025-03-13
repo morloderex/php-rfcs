@@ -1,0 +1,482 @@
+Inner Classes
+=============
+
+:PHP-RFC: 0904
+:Title: Inner Classes
+:Author: Rob Landers <rob@bottled.codes>
+:Status: Draft
+:Type: Unknown
+:Created: 2025-02-08
+:Version: 0.1
+
+Introduction
+------------
+
+This RFC proposes a significant enhancement to the language: **Inner
+Classes**. Inner classes enable the definition of classes within other
+classes, introducing a new level of encapsulation and organization
+within PHP applications.
+
+Currently, many libraries implement "internal" classes by using a naming
+convention or an ``@internal`` annotation in the docblock. Inner classes
+enable libraries to define an internal class that cannot be used outside
+the class it is defined inside. This feature is not meant to be used as
+a "module" system, but rather as a way to encapsulate logic internal to
+a class, such as DTOs or helper classes.
+
+Proposal
+--------
+
+Inner classes allow defining classes within other classes, following
+standard visibility rules. This allows developers to declare a class as
+``private`` or ``protected`` and restrict its usage to the outer class.
+They are accessed via a new operator: ``:>`` which is a mixture of
+``->`` and ``::``.
+
+.. code:: php
+
+   class Outer {
+       public class Inner {
+           public function __construct(public string $message) {}
+       }
+       
+       private class PrivateInner {
+           public function __construct(public string $message) {}
+       }
+   }
+
+   $foo = new Outer:>Inner('Hello, world!');
+   echo $foo->message;
+   // outputs: Hello, world!
+   $baz = new Outer:>PrivateInner('Hello, world!');
+   // Fatal error: Class 'Outer:>PrivateInner' is private
+
+Modifiers
+~~~~~~~~~
+
+Inner classes support modifiers such as ``public``, ``protected``,
+``private``, ``final``, ``readonly``, and ``abstract``. When using these
+as modifiers on an inner class, there are some intuitive rules:
+
+-  ``public``, ``private``, and ``protected`` apply to the
+   **visibility** of the inner class.
+-  ``final``, ``readonly``, and ``abstract`` apply **to the inner class
+   itself**.
+-  ``static`` is **not allowed** as a modifier since PHP does not
+   support static classes and inner classes are not a property.
+
+If an inner class does not have any modifiers defined, it is assumed to
+be ``public`` by default.
+
+Binding
+~~~~~~~
+
+Inner classes are **strongly** bound to their outer class. This means
+that if you extend an outer class and want to "redefine" an inner class,
+the child’s inner class is distinct. The following example best shows
+this:
+
+.. code:: php
+
+   class Outer {
+       protected class Inner {}
+   }
+
+   class OuterV2 extends Outer {
+       protected class Inner {}
+   }
+
+In the above listing, ``OuterV2:>Inner`` is a distinct class from
+``Outer:>Inner``.
+
+static resolution
+^^^^^^^^^^^^^^^^^
+
+The ``static`` keyword is **not** supported to resolve inner classes.
+Attempting to do so results in an error, depending on where it is used:
+
+.. code:: php
+
+   class Outer {
+       class Inner {}
+       
+       // Fatal error: Cannot use the static modifier on a parameter
+       public function foo(static:>Inner $bar) {}
+       
+       // Parse error: syntax error, unexpected token ":>", expecting ";" or "{"
+       public function bar(): static:>Inner {}
+       
+       // Fatal error: Cannot use "static" as class name, as it is reserved 
+       class Baz extends static:>Inner {}
+       
+       public function foobar() {
+           return new static:>Inner(); // Fatal error: Cannot use the static modifier on an inner class
+       }
+   }
+
+This is to prevent casual LSP violations of inheritance and to maintain
+the strong binding of inner classes.
+
+parent resolution
+^^^^^^^^^^^^^^^^^
+
+The ``parent`` keyword is supported to resolve inner classes. Which
+parent it resolves to depends on the context:
+
+.. code:: php
+
+   class Foo {
+       class Bar {}
+   }
+
+   class Baz extends Foo {
+       // parent:>Bar resolves to Foo:>Bar
+       class Bar extends parent:>Bar {
+           // inside the class body, parent refers to Foo:>Bar
+           public function doSomething(): parent {} 
+       }
+   }
+
+``parent`` explicitly resolves to the parent class of the current class
+body it is written in and helps with writing more concise code.
+
+self resolution
+^^^^^^^^^^^^^^^
+
+The ``self`` keyword is supported to resolve inner classes. Which
+``self`` it resolves to depends on the context:
+
+.. code:: php
+
+   class Outer {
+     class Middle {
+       class Other {}
+     
+       // extends Outer:>Middle:>Other
+       class Inner extends self:>Other {
+           public function foo(): self {} // returns Outer:>Middle:>Inner
+       }
+     }
+   }
+
+``self`` explicitly resolves to the current class body it is written in,
+just like with ``parent``. On ``inner`` classes, ``self`` may be used as
+a standalone keyword to refer to the current outer class in ``extends``.
+
+.. code:: php
+
+   // this is currently an error
+   class Outer extends self {
+       // this extends Outer
+       class Inner extends self {}
+   }
+
+When using self inside a class body to refer to an inner class, if the
+inner class is not found in the current class, it will fail with an
+error.
+
+.. code:: php
+
+   class OuterParent {
+       class Inner {}
+       class Other {}
+   }
+
+   class MiddleChild extends OuterParent {
+       // Fatal Error: cannot find class MiddleChild:>InnerParent
+       class Inner extends self:>InnerParent {}
+   }
+
+   class OuterChild extends OuterParent {
+       class Inner {}
+       public function foo() {
+           $inner = new self:>Inner(); // resolves to OuterChild:>Inner
+           $inner = new parent:>Inner(); // resolves to OuterParent:>Inner
+           $inner = new self:>Other(); // Fatal Error: cannot find class OuterChild:>Other
+           $inner = new parent:>Other(); // resolves to OuterParent:>Other
+       }
+   }
+
+Dynamic resolution
+^^^^^^^^^^^^^^^^^^
+
+Just as with ``::``, developers may use variables to resolve inner
+classes, or refer to them by name directly via a string:
+
+.. code:: php
+
+   new $outer:>$inner
+
+   $dynamic = "Outer:>Inner";
+   new $dynamic();
+
+This provides flexibility and backwards compatibility for dynamic code
+that may not expect an inner class.
+
+Visibility Rules
+~~~~~~~~~~~~~~~~
+
+Instantiation
+^^^^^^^^^^^^^
+
+Private and protected inner classes are only instantiatable within their
+outer class (or subclasses for protected). Since inner classes are
+inside outer classes, they can instantiate other private, protected, or
+public classes of the outer class if it is visible to them.
+
+.. code:: php
+
+   class Outer {
+       private class Other {}
+       protected class Inner {
+           public function Foo() {
+               $bar = new self(); // allowed
+               $bar = new Outer:>Inner(); // allowed
+               $bar = new Outer:>Other(); // allowed
+           }
+       }
+   }
+
+   class SubOuter extends Outer {
+       public function Foo() {
+           $bar = new self:>Inner(); // allowed to access protected inner class
+           $bar = new self:>Other(); // Fatal error: Class 'Outer:>Other' is private
+       }
+   }
+
+Attempting to instantiate a private or protected inner class outside its
+outer class will result in a fatal error:
+
+.. code:: php
+
+   new Outer:>Inner(); // Fatal error: Class 'Outer:>Inner' is private
+
+Method return type and argument declarations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Inner classes may only be used as a return type or argument declarations
+for methods that have the same visibility or lesser. Thus returning a
+``protected`` class type from a ``public`` method is not allowed, but is
+allowed from a ``protected`` or ``private`` method.
+
+====================== ================= =======
+Inner Class Visibility Method Visibility Allowed
+====================== ================= =======
+``public``             ``public``        Yes
+``public``             ``protected``     Yes
+``public``             ``private``       Yes
+``protected``          ``public``        No
+``protected``          ``protected``     Yes
+``protected``          ``private``       Yes
+``private``            ``public``        No
+``private``            ``protected``     No
+``private``            ``private``       Yes
+====================== ================= =======
+
+Methods and functions outside the outer class are considered ``public``
+by default. Attempting to declare a return of a non-visible type will
+result in a ``TypeError``:
+
+.. code:: php
+
+   class Outer {
+       private class Inner {}
+       
+       public function getInner(): self:>Inner {
+           return new self:>Inner();
+       }
+   }
+
+   // Fatal error: Uncaught TypeError: Method getInner is public but returns a private class: Outer:>Inner
+   new Outer()->getInner();
+
+Properties
+^^^^^^^^^^
+
+The visibility of a type declaration on a property must also match the
+declared type. Thus, a public property cannot declare a private type.
+
+This gives a great deal of control to developers, preventing accidental
+misuse of inner classes. However, this **does not** preclude developers
+from returning a private/protected inner class, only from using them as
+a type declaration. The developer can use an interface or abstract class
+type declaration, or use a broader type such as ``object``, ``mixed``,
+or nothing at all:
+
+.. code:: php
+
+   class Outer {
+       private class Inner implements FooBar {}
+       
+       public function getInner(): FooBar {
+           return new self:>Inner(); // not an error
+       }
+   }
+
+Accessing outer classes
+^^^^^^^^^^^^^^^^^^^^^^^
+
+There is no direct access to outer class properties or methods, such as
+an ``outer`` keyword. While each class is distinct from the others,
+inner classes may access outer class private/protected methods and
+properties if given an instance, and outer classes may access
+private/protected methods of inner classes.
+
+.. code:: php
+
+   class Parser {
+       public class ParseError extends Exception {
+           private function __construct(Parser $parser) {
+               // we can access $parser->state here
+               parent::__construct(/* ... */);
+           }
+       }
+       
+       private class ParserState {}
+       
+       private self:>ParserState $state;
+       
+       private function throwParserError(): never {
+           throw new self:>ParseError($this);
+       }
+   }
+
+This is allowed because inner classes are strongly bound to their outer
+class, and inner classes are considered as members of their outer class.
+This allows for better encapsulation and organization of code,
+especially in the realm of helper classes and DTOs.
+
+Reflection
+~~~~~~~~~~
+
+Several new methods are added to ``ReflectionClass`` to help support
+inspection of inner classes:
+
+.. code:: php
+
+   $reflection = new ReflectionClass('\a\namespace\Outer:>Inner');
+
+   $reflection->isInnerClass(); // true
+   $reflection->isPublic() || $reflection->isProtected() || $reflection->isPrivate(); // true
+   $reflection->getName(); // \a\namespace\Outer:>Inner
+   $reflection->getShortName(); // Outer:>Inner
+
+When these methods are called on outer classes, ``isPublic`` is always
+``true`` and ``isInnerClass`` is always ``false``.
+
+Autoloading
+~~~~~~~~~~~
+
+Inner classes are never autoloaded, only their outermost class is
+autoloaded. If the outermost class does not exist, then their inner
+classes do not exist.
+
+Inner Class Features
+~~~~~~~~~~~~~~~~~~~~
+
+Inner classes support all features of regular classes, including:
+
+-  Properties: both static and instanced
+-  Methods: both static and instanced
+-  Property hooks
+-  Magic methods
+-  Traits
+-  Interfaces
+-  Abstract classes
+-  Final classes
+-  Readonly classes
+-  Class constants
+
+Backward Incompatible Changes
+-----------------------------
+
+-  This RFC introduces new syntax and behavior to PHP, which does not
+   conflict with existing syntax.
+-  Some error messages will be updated to reflect inner classes, and
+   tests that depend on these error messages are likely to fail.
+-  Tooling using AST or tokenization may need to be updated to support
+   the new syntax.
+
+Proposed PHP Version(s)
+-----------------------
+
+This RFC targets the next version of PHP.
+
+RFC Impact
+----------
+
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+Extensions accepting class names may need to be updated to support
+``:>`` in class names. None were discovered during testing, but it is
+possible there are unbundled extensions that may be affected.
+
+To Opcache
+~~~~~~~~~~
+
+This change introduces a new opcode, AST, and other changes that affect
+opcache. These changes are included as part of the PR that implements
+this feature.
+
+Open Issues
+-----------
+
+Pending discussion.
+
+Unaffected PHP Functionality
+----------------------------
+
+There should be no change to any existing PHP syntax.
+
+Future Scope
+------------
+
+-  Inner enums
+-  Inner interfaces
+-  Inner traits
+-  ``Outer`` keyword for easily accessing outer classes
+
+Proposed Voting Choices
+-----------------------
+
+As this is a significant change to the language, a 2/3 majority is
+required.
+
+Patches and Tests
+-----------------
+
+To be completed.
+
+Implementation
+--------------
+
+After the project is implemented, this section should contain - the
+version(s) it was merged into - a link to the git commit(s) - a link to
+the PHP manual entry for the feature - a link to the language
+specification section (if any)
+
+References
+----------
+
+-  `email that inspired this
+   RFC <https://externals.io/message/125975#125977>`__
+-  `RFC: Records <https://wiki.php.net/rfc/records>`__
+
+Rejected Features
+-----------------
+
+TBD
+
+Additional Metadata
+-------------------
+
+:Original Authors: Rob Landers, rob@bottled.codes
+:Original Status: Under Discussion (Accepted or Declined)
+:Slug: short-and-inner-classes
+:Wiki URL: https://wiki.php.net/rfc/short-and-inner-classes
