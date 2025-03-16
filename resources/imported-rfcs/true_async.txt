@@ -1,8 +1,9 @@
-====== PHP RFC: True Async ======
-  * Version: 0.7
-  * Date: 2025-03-01
+====== PHP True Async ======
+
+  * Version: 0.9
+  * Date: 2025-03-16
   * Author: Edmond [HT], edmondifthen@proton.me
-  * Status: Draft
+  * Status: Under discussion
   * First Published at: http://wiki.php.net/rfc/true_async
 
 ===== Introduction =====
@@ -18,577 +19,1340 @@ The **True Async** project pursues the following goals and values:
 
   * From a PHP developer's perspective, the **main value** of this implementation is that they DO NOT NEED to change existing code (or if changes are required, they should be minimal) to enable concurrency. Unlike explicit async models, this approach lets developers reuse existing synchronous code inside fibers without modification.
 
-  * Code that was originally written and intended to run outside of a Fiber must work **EXACTLY THE SAME** inside a Fiber without modifications.
+  * Code that was originally written and intended to run outside of a Coroutine must work **EXACTLY THE SAME** inside a Coroutine without modifications.
 
-  * A PHP developer should not have to think about how Fibers switch and should not need to manage their switching—except in special cases where they consciously choose to intervene in this logic.
+  * A PHP developer should not have to think about how Coroutine switch and should not need to manage their switching—except in special cases where they consciously choose to intervene in this logic.
 
   * If there is existing code or a familiar style, such as AMPHP interfaces, Go coroutines, Swoole API, and others, it is best to use what is most recognizable to a broad range of developers.
 
   * The goal is to find a balance between flexibility and simplicity. On one hand, the implementation should allow leveraging existing solutions without requiring external libraries. On the other hand, it should avoid unnecessary complexity. Many design choices in this implementation are driven by the desire to free developers from concerns about compatibility with "external libraries" in favor of a standardized approach.
 
-  * **True Async** aims to abstract away Event Loop management by providing an OOP interface that allows developers to focus on object lifecycle rather than resource management or implementation details. Memory management and the lifespan of objects such as ''Resume'', ''Notifier'', and ''Callback'' are key tools for hiding complexity, ensuring that developers do not need to worry about freeing resources manually.
-
 ===== Proposal =====
 
-==== Implicit Model ====
+==== Scheduler and Reactor ====
 
-There are two models for implementing asynchrony at the language abstraction level:
+The **Scheduler** and **Reactor** components should be described in a separate **RFC**,
+which should focus on the low-level implementation in **C** and define **API** contracts for PHP extensions.
+These components should be developed as extensions that may be included
+in the PHP standard library but can also be replaced with custom implementations.
 
-  - **Explicit Model**: Uses Promise/Future along with ''await'' and ''async''. The language explicitly defines which functions can be asynchronous. Asynchronous functions must return a promise-like result.
-  - **Implicit Model** or **Transparent Model** (as seen in ''Go'', ''Erlang'', or ''Elixir''): Functions are not explicitly marked as synchronous or asynchronous. Any function can be called asynchronously.
+<blockquote>
+⚠️ **Warning:** Users should not make assumptions about the execution order of coroutines unless
+this is a specific goal of a particular **Scheduler** implementation.
+</blockquote>
 
-^ Criteria           ^ Explicit Model                                              ^ Implicit Model                                      ^
-| Intent clarity     | Code clearly describes the programmer's intent.             | Allows writing most of the code in a synchronous style. |
-| Predictability     | The programmer always knows how a specific function behaves.| Requires extra effort to determine context switching.  |
-| Execution control  | Requires explicitly planning the execution flow.            | Can lead to errors and additional debugging effort.   |
+The **Reactor** is a component that implements the **Event Loop**.
+It may be exposed as a separate API in **PHP-land**,
+but its behavior is not defined within this **RFC**.
 
-True Async implements an **implicit asynchronous model**. This solution has several reasons:
+<blockquote>
+⚠️ **Notice:** The logic of **Scheduler** and **Reactor** **MUST NOT** contradict the logic of this RFC!
+These components **MUST** implement the contracts defined in this document.
+The **Scheduler** and **Reactor** **MAY** extend the behavior of this **RFC** by providing additional functionalities.
+</blockquote>
 
-  * **Minimizing changes** in the code and language syntax (there are no syntax changes in the current RFC).
-  * **Reusability** — the implicit model helps avoid rewriting code that was originally designed for sequential execution.
-  * Solutions like **Swoole** also provide an implicit model and have already proven themselves in practice.
+==== Possible Syntax ====
 
-**True Async** explicitly defines two components:
+In this **RFC**, you can see a potential new syntax for describing concurrency.
+This syntax is **NOT a mandatory** part of this **RFC** and may be adopted separately.
 
-   * ''Scheduler'' – responsible for executing Fibers.
-   * ''Reactor'' – responsible for the Event Loop.
+==== Limitations ====
 
+This **RFC** does not implement "colored functions"
+(see: http://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/).
+Instead, it provides **transparent concurrency**, allowing **any function** to be asynchronous.
 
-In normal mode, code executes outside of a ''Fiber'' (Null-Fiber-Context), and no changes occur. When you call a
-blocking function such as ''sleep()'', ''shell_exec()'', or ''fread()'', it behaves as usual: execution halts until the operation is complete.
+This **RFC** does not contradict a potential multitasking implementation
+where possible but does not assume its existence.
 
-However, once one or more ''Fibers'' are created using the API and the ''Scheduler'' is activated, the code begins executing concurrently.
+This **RFC** assumes the ability to create coroutines in other **Threads** using the **Scheduler API**
+or separate extensions but does not describe this capability.
 
-<code php>
-Async\run(function() {
-    echo "fiber 1: start\n";
-    sleep(1);
-    echo "fiber 1: end\n";
-});
+This **RFC** also assumes functionality expansion using **SharedMemory**,
+specifically designed shared memory objects, through a separate API that is not part of this **RFC**.
 
-Async\run(function() {
-    echo "fiber 2: start\n";
-    sleep(1);
-    echo "fiber 2: end\n"
-});
+This *RFC* is a core part of the **PHP TRUE ASYNC** contracts
+but assumes the development and approval of the following RFCs:
 
-echo "start\n";
-Async\launchScheduler();
-echo "end\n";
-</code>
+  - **True Async API** – a low-level API for PHP extensions
+  - **Scheduler/Reactor API** – additional API for managing coroutines and the event loop
+  - **Primitives:** ''Channel'', ''Future'', ''Iterator'', ''Interval''
+  - **Inter-thread communication / Shared Memory objects**
 
-Excepted output:
+==== Namespace ====
 
-<code>
-start
-fiber 1: start
-fiber 2: start
-fiber 1: end
-fiber 2: end
-end
-</code>
+All functions, classes, and constants defined in this **RFC** are located in the ''Async'' namespace.
+Extensions for **Scheduler/Reactor** are allowed to extend this namespace with functions and classes,
+provided that they are directly related to concurrency functionality.
 
-From a PHP developer's perspective, the code inside a Fiber is no different from the code outside of it. The behavior of the code inside a Fiber remains exactly the same as if it were written without Fibers. Moreover, a PHP developer does not need to make any extra effort to transfer control from one Fiber to another.
+==== Coroutine ====
 
-The ''sleep'' function itself does not perform any Fiber-switching. Instead, it creates a special ''Resume'' object responsible for resuming the Fiber and links it to a timer event. When the timer triggers, the ''Resume'' object updates its state, and the Fiber is placed in the queue to be executed later.
+<blockquote>
+A ''Coroutine'' is an ''execution container'', transparent to the code,
+that can be suspended on demand and resumed at any time.
+</blockquote>
 
-A PHP developer **SHOULD NOT** make any assumptions about the order in which Fibers will be executed, as this order may change or be too complex to predict.
-
-==== Architecture ====
-
-{{ :rfc:rfc:true_async:basic.svg |}}
-
-=== Scheduler ===
-
-The **Scheduler** implements the main execution loop of the application, one of its steps being the execution of the **Reactor's** event loop.
-
-Similar to **AMPHP** and **JavaScript**, the **Scheduler** defines two types of tasks:
-
-  - **Microtasks (callbacks)**
-  - **Coroutines (Fibers)**
-
-From a PHP developer’s perspective, there is almost no difference between **microtasks** and **coroutines**, except for one key distinction:
-  * **Microtasks execute before any event loop callbacks**, including timers and I/O events. PHP developers can rely on this rule.
-
-The function ''Async\defer()'' is responsible for creating microtasks.
-
-=== Activating the Scheduler ===
-
-The **Scheduler** is not activated //automatically//; it must be explicitly enabled.
-Until it is activated, PHP code behaves as before:
-calls to blocking functions will block the execution thread and will not switch the **Fiber** context.
-Thus, code written without the **Scheduler** component will function exactly the same way, without side effects.
-This ensures backward compatibility.
-
-By default, a PHP script runs outside the Fiber context (Null-Fiber-Context).
-**True Async** uses this criterion to distinguish execution contexts. The **Null-Fiber** context is handed over to the
-''Scheduler'' component. This is one of the reasons why ''Scheduler'' activation is explicit, unlike implementations in other
-languages.
-
-The **Scheduler** can only be activated in the **Null-Fiber** execution context. It cannot be activated inside a
-**Fiber**, as this will result in a fatal error.
-
-Once the **Scheduler** is activated, it will take control of the **Null-Fiber** context, and execution within it will
-pause until all **Fibers**, all **microtasks**, and all **event loop** events have been processed.
-
-The **Scheduler** is activated by calling:
+Any function can be executed as a coroutine without any changes to the code.
 
 <code php>
-Async\launchScheduler();
-</code>
+function example(string $name): void {
+    echo "Hello, $name!";
+}
 
-At the point where **Async\launchScheduler();** is called, all unhandled exceptions from **Fiber** will also be generated.
-Therefore, you can use **try-catch** to handle such errors and take additional actions if necessary.
+spawn(example(...), 'World');
 
-**Restarting the Scheduler**
+// With special syntax
 
-''True Async'' prohibits initializing the ''Scheduler'' twice.
-This is not because such initialization is technically impossible, but to avoid logical uncertainty.
-A PHP application should terminate execution as soon as possible after the ''Scheduler'' has completed its work.
+spawn example('World');
 
-This is crucial because the process may handle an OS signal that imposes a time limit on execution (for example, as Windows does).
+// Or the same with a closure
 
-== Explicit activation of the Scheduler ==
+$name = 'World';
 
-Explicit activation of the Scheduler has both drawbacks and advantages.
-
-//Disadvantages://
-  * PHP is a high-level language, but activating the component looks like a low-level operation. (Although Fiber is also a low-level component, it exists in the language)
-  * Code in the ''Null-Fiber'' context cannot use concurrency.
-  * ''Scheduler'' can be activated multiple times because it is just a function.
-
-//Advantages://
-  * Code written without using the ''Scheduler'' should not experience any side effects.
-  * Existence of a responsibility point for exception handling.
-  * Explicit application initialization flow.
-
-On the other hand, there are no serious technical obstacles to running the main PHP code directly in a ''Fiber'' environment.
-This behavior can be defined in ''php.ini'' or set via a startup option.
-
-=== Resume & Fiber Control ===
-
-The **Scheduler** introduces a special class called **Resume**, which provides an **OOP interface** for managing Fiber resumption.
-
-The **Resume** object answers two key questions:
-  - Under what conditions will a **Fiber** resume?
-  - What event is it waiting for?
-
-Using the function ''Async\wait(Resume)'', a developer can explicitly pause Fiber execution **until** the state of the **Resume** object changes.
-
-The **Resume** object provides methods that allow resuming the execution of a **Fiber**, specifically by enqueueing the **Fiber** for execution with either a result or an exception.
-
-Code that uses **Resume** cannot rely on when exactly the **Fiber** will resume execution.
-
-=== Reactor & Notifiers ===
-
-**Notifier** is a low-level object that provides an interface to events generated by the **Reactor**.
-
-A Notifier is an implementation of the **Publisher** pattern, and its task is to invoke callback functions when an event occurs.
-
-== Classification of Notifier Objects ==
-
-There are two major groups of **Notifier** objects:
-
-  * **Reactor Objects** - These encapsulate the implementation of **EventLoop** handles, such as:
-    * ''PollHandle'' (also child classes like: ''FileHandle'', ''SocketHandle'', ''PipeHandle'', ''TtyHandle'')
-    * ''TimerHandle''
-    * ''SignalHandle''
-    * ''ProcessHandle''
-    * ''DnsInfoHandle''
-    * ''FileSystemHandle''
-
-    These objects can be added to the event loop (**EventLoop**).
-
-  * **User-mode Objects** - These include:
-    * ''FiberHandle''
-    * ''FutureState''
-
-    These objects generate events outside the **EventLoop**.
-
-== Interaction between Notifier and Resume ==
-
-To change the **Resume** state, the system relies on **Notifiers**:
-
-  * **Notifier** follows the **Publisher pattern**.
-  * **Resume** acts as an **Observer**.
-
-A **Notifier** generates an event, and **Resume** processes it via a **callback** function, which can be defined by the developer.
-
-Each **Resume** object can have **one or multiple Notifiers**, each handled by its own unique **callback**. The event **callback** can:
-
-  - Set the **Resume** object to a **success** state, allowing the Fiber to continue execution.
-  - Set it to an **error** state.
-  - Leave the **Resume** state **unchanged**.
-
-This architecture allows for the description of **any waiting scenario** imaginable, making it highly flexible for asynchronous programming in PHP.
-
-{{ :rfc:true_async:resume_and_notifier.svg |}}
-
-The diagram demonstrates the interaction principle between different components. **Notifier** triggers a **Callback**, which changes the state of **Resume**. The **Resume** then places the **Fiber** into the execution queue.
-
-It can be seen that a single **Resume** can listen to multiple **Notifiers**, allowing different **Fibers** to wait for the same events and compete for execution.
-
-== Knowledge Distribution in Code (Responsibility Distribution) ==
-  - **Resume** does not know when its state will change, but it knows which **Fiber** it has suspended.
-  - **Notifier** does not know how it will modify the **Resume**, but it knows when an event occurs. It also knows who is listening to it, and this information can be retrieved at any time.
-  - **Callback** knows how it modifies the **Resume** when an event occurs, but it does not know when this will happen.
-
-==== Fibers ====
-
-=== Creating Fibers ===
-
-New fibers are created using two functions, which are very similar to each other:
-  * ''Async\run()''
-  * ''Async\async()''
-
-The difference between them is that the function ''Async\async()'' returns a special object ''FiberHandle'',
-which is used to control the execution of the fiber.
-
-Example:
-<code php>
-Async\run(function() {
-    echo "async function 1\n";
-});
-
-Async\run(function() {
-    echo "async function 2\n";
-});
-
-echo "start\n";
-Async\launchScheduler();
-echo "end\n";
-</code>
-
-Output:
-
-<code>
-start
-async function 1
-async function 2
-end
-</code>
-
-When creating a fiber, you can define additional arguments that will be passed to the function. For example:
-
-== Passing Arguments to a Fiber ==
-
-When creating a fiber, you can define additional arguments that will be passed to the function. For example:
-
-<code php>
-
-$closure = function(int $id, int $delay) {
-    echo "fiber $id: start\n";
-    sleep($delay);
-    echo "fiber $id: end\n";
+spawn function use($name): void {
+    echo "Hello, $name!";
 };
 
-Async\run($closure, 1, 1);
-Async\run($closure, 2, 2);
+// We can run as coroutine any valid function.
+spawn file_get_contents('file1.txt');
+spawn sleep(1);
+spawn strlen('Hello, World!');
+</code>
 
-echo "start\n";
-Async\launchScheduler();
-echo "end\n";
+The ''spawn'' function execute the ''example'' function in an asynchronous context.
+
+<code php>
+$coroutine = spawn(function(string $name): void {
+    echo "Hello, $name!";
+}, 'World');
+</code>
+
+The ''spawn'' function returns a ''Coroutine'' object
+that can be used to control the execution of the coroutine:
+
+<code php>
+$coroutine = spawn(function(string $name): void {
+    echo "Hello, $name!";
+}, 'World');
+
+$coroutine->cancel();
+</code>
+
+=== Possible Syntax ===
+
+The ''spawn'' function can be replaced using the ''spawn'' operator, which has two forms:
+
+  * Executing a known function
+
+<code php>
+function example(string $name): void {
+    echo "Hello, $name!";
+}
+
+spawn example('World');
+
+// Equivalent to
+\Async\spawn('example', 'World');
+</code>
+
+  * Executing a closure
+
+<code php>
+$name = 'World';
+
+spawn function use($name): void {
+    echo "Hello, $name!";
+};
+
+// Equivalent to
+\Async\spawn(function () use ($name): void {
+    echo "Hello, $name!";
+});
+</code>
+
+<blockquote>
+**Warning:** The ''spawn'' function does not allow passing reference data as parameters.
+This limitation can be overcome using the ''spawn'' operator.
+</blockquote>
+
+==== Suspension ====
+
+A coroutine can suspend itself at any time using the ''suspend'' function:
+
+<code php>
+function example(string $name): void {
+    echo "Hello, $name!";
+    suspend();
+    echo "Goodbye, $name!";
+}
+
+spawn example('World');
+spawn example('Universe');
 </code>
 
 Expected output:
 
 <code>
-start
-fiber 1: start
-fiber 2: start
-fiber 1: end
-fiber 2: end
-end
+Hello, World!
+Hello, Universe!
+Goodbye, World!
+Goodbye, Universe!
 </code>
 
-<blockquote>
-**Note:** At the moment, it is not possible to pass references to values this way, so keep that in mind.
-If you need to pass a reference to the called function, you can use a closure.
-</blockquote>
+The ''suspend'' function can be used only for the current coroutine.
 
-=== Await and FiberHandle ===
+The ''suspend'' function has no parameters and does not return any values,
+unlike the yield operator.
 
-The ''await()'' function allows execution to pause until another function completes its work and returns a result.
-
-**Prototype:**
-<code php>
-function await(callable|FiberHandle|\Fiber $awaitable, mixed ... $args): mixed {}
-</code>
-
-The ''$awaitable'' parameter can be a ''FiberHandle'' object returned by the ''Async\async()'' function.
-Otherwise, ''await()'' will be equivalent to calling:
+The ''suspend'' function can be used in any function and in any place
+including from the main execution flow:
 
 <code php>
-Async\await(Async\async(...));
+function example(string $name): void {
+    echo "Hello, $name!";
+    suspend();
+    echo "Goodbye, $name!";
+}
+
+$coroutine = spawn example('World');
+
+// suspend the main flow
+suspend();
+
+echo "Back to the main flow";
 </code>
 
-Example of using ''await()'' with FiberHandle:
-
-<code php>
-
-Async\run(function() {
-
-   $fiber = Async\async(function() {
-       sleep(1);
-       return "Fiber completed!";
-   });
-
-   // Execution is paused until the fiber completes
-   $result = Async\await($fiber);
-
-   echo $result . "\n";
-
-   echo "Done!\n";
-});
-</code>
-
-**Expected output:**
+Expected output:
 
 <code>
-Fiber completed!
-Done!
+Hello, World!
+Back to the main flow
+Goodbye, World!
 </code>
 
-=== Exceptions in Fibers ===
-
-If an exception is thrown inside a fiber and not handled, it will stop the Scheduler and be thrown at the point where ''Async\launchScheduler()'' is called.
-
-You can catch and handle this exception using a ''try-catch'' block around ''Async\launchScheduler()''.
+The suspend operator can be a throw point
+if someone resumes the coroutine externally with an exception.
 
 <code php>
-Async\run(function() {
+function example(string $name): void {
+    echo "Hello, $name!";
 
-    Async\run(function() {
-        throw new Exception("Something went wrong in the fiber!");
+    try {
+        suspend();
+    } catch (Exception $e) {
+        echo "Caught exception: ", $e->getMessage();
+    }
+
+    echo "Goodbye, $name!";
+}
+
+$coroutine = spawn example('World');
+
+// pass control to the coroutine
+suspend();
+
+$couroutine->cancel();
+</code>
+
+Expected output:
+
+<code>
+Hello, World!
+Caught exception: cancelled at ...
+Goodbye, World!
+</code>
+
+==== Input/Output Operations And Implicit Suspension ====
+
+I/O operations invoked within the coroutine's context transfer control implicitly:
+
+<code php>
+spawn function:void {
+    echo "Start reading file1.txt\n";
+    file_get_contents('file1.txt');
+    echo "End reading file1.txt\n";
+}
+spawn function:void {
+    echo "Start reading file2.txt\n";
+    file_get_contents('file2.txt');
+    echo "End readingfile2.txt\n";
+}
+
+echo "Main flow";
+</code>
+
+Expected output:
+
+<code>
+Start reading file1.txt
+Start reading file2.txt
+Main flow
+End reading file1.txt
+End reading file2.txt
+</code>
+
+Inside each coroutine, there is an illusion that all actions are executed sequentially,
+while in reality, operations occur asynchronously.
+
+==== Await ====
+
+The ''await'' function/operator is used to wait for the completion of another coroutine:
+
+<code php>
+// Prototype:
+namespace Async;
+function await(Awaitable $awaitable): mixed {}
+</code>
+
+<code php>
+spawn function {
+    echo "Start reading file1.txt\n";
+
+    $result = await spawn function:string {
+        return file_get_contents('file1.txt');
+    };
+
+    echo "End reading file1.txt\n";
+};
+
+spawn function {
+    echo "Sleep\n";
+    sleep(1);
+};
+</code>
+
+''await'' suspends the execution of the current coroutine until
+the awaited one returns a final result or completes with an exception.
+
+<blockquote>
+**Warning:** As a result of waiting for an object of the ''Scope'' class, ''NULL'' is returned.
+</blockquote>
+
+==== Edge Behavior ====
+
+The use of ''spawn''/''await''/''suspend'' is allowed in almost any part of a PHP program.
+This is possible because the PHP script entry point forms the **main execution thread**,
+which is also considered a coroutine.
+
+As a result, functions like ''suspend()'' and ''currentCoroutine()'' will behave the same way as in other cases.
+
+If only **one coroutine** exists in the system, calling ''suspend()'' will immediately return control.
+
+The ''register_shutdown_function'' handler operates in synchronous mode,
+after asynchronous handlers have already been destroyed.
+Therefore, the ''register_shutdown_function'' code should not use the concurrency API.
+The ''suspend()'' function will have no effect, and the ''spawn'' operation will not be executed at all.
+
+==== Lifetime limitation ====
+
+The lifecycle of a coroutine is the time limit within which the coroutine is allowed to execute.
+
+When using coroutines, three models of responsibility distribution regarding lifecycle arise:
+
+  * **No limitation**. Coroutines are not limited in their lifetime and run as long as needed.
+  * **Top-down limitation**: Parent coroutines limit the lifetime of their children
+  * **Bottom-up limitation**: Child coroutines extend the execution time of their parents
+
+These models do not contradict each other and can be implemented in a language in combination.
+Typically, one of these models is used by default, while the other two require explicit specification.
+
+For example, in Go, the unrestricted model applies.
+Coroutines are independent of each other,
+and if such a dependency needs to be established, the programmer must specify it explicitly.
+
+In languages like ''Kotlin'' and ''Swift'', the Bottom-up constraint is used by default and serves as a way to implement structured concurrency.
+
+In other languages, the ''Actor'' model assumes that the parent's lifetime restricts the lifetime of child Actors.
+
+^ Aspect ^ No Limitation ^ Bottom-up ^ Top-down ^
+| Execution Limit | No lifetime restriction; coroutines run independently | Parent coroutine waits until all child coroutines complete | Child coroutines cannot outlive their parent. |
+| Resource Management | Manual; programmer explicitly manages resources | Automatic; resources held until child coroutines finish | Automatic; parent controls resources and cancellation |
+| Completion Guarantee | No guarantee; programmer manually ensures coroutine completion | Guarantees completion of all child coroutines | Ensures that no child coroutine runs longer than the parent |
+| Nested Coroutines | Independent; nested coroutines may run unnoticed | Structured; nested coroutines explicitly affect parent's lifetime | Hierarchical; children cannot outlive parents |
+| Simplicity | Simple but requires careful manual synchronization | Clear structure, prevents accidental misuse | Easier to enforce controlled execution |
+| **Risk of Resource Leaks** | Higher; leaks can include hanging coroutines and owned scopes; leaks may reach global scope | Lower*; structured concurrency reduces leaks, parent ensures proper cleanup | Low: parent always has control over lifetime |
+| **Exception Propagation** | Exceptions may escape to global scope and remain unhandled | Exceptions propagate strictly along coroutine hierarchy | Exceptions are caught and handled within the parent scope |
+| **Deadlocks** | Lower: since coroutines are independent | Higher: Accidental use of an incorrect external dependency | Lower: Parent dictates child lifecycle, reducing accidental locks |
+| Explicitness | Programmer explicitly defines synchronization | Behavior inherently defined by model rules | Cancellation is explicit; parent enforces lifecycle |
+| Semantic Complexity | Minimal; fewer semantic constructs needed | May require additional semantic constructs for convenience | Slightly higher; requires explicit management of cancellations |
+| Use cases |  | Useful for ensuring all subtasks finish before proceeding | Useful for managing complex task hierarchies |
+
+Let's take a closer look at the differences between the models, their advantages and disadvantages, and use cases.
+
+=== No Limitation ===
+
+The main drawback of the **No Limitation** model is the need for manual resource management.
+However, this can also be considered an advantage, as it provides maximum control.
+
+=== Bottom-up ===
+
+The **Bottom-up** model leads to more ambiguous consequences.
+Intuitively, it seems that this model should prevent resource leaks,
+as it keeps parent coroutines alive, thereby preserving the code that awaits them.
+As a result, the code executed after waiting is more likely to clean up resources correctly.
+
+One could say that the **Bottom-up model** makes concurrent programming less concurrent.
+However, this advantage easily turns into a disadvantage because **Bottom-up** potentially retains more
+resources in memory than any other model.
+If a programmer spawns five tasks within a hierarchy, all five tasks will be retained in memory
+until their shared execution flow completes. But what if that never happens?
+
+The situation becomes even worse if the **Bottom-up** strategy is always used by default.
+When different programmers write coroutine hierarchy code across various projects and libraries,
+it can lead to complex, hard-to-detect bugs.
+This happens because different teams may make different assumptions,
+unaware of how exactly their code might be used at higher or lower levels of the hierarchy.
+All of this makes the Bottom-up model more dangerous than useful in team-based development.
+
+However, the **Bottom-up** model has an advantage in another scenario —
+when a parent coroutine spawns child coroutines whose completion is critically important.
+
+Let's examine this case:
+
+<code php>
+function task(): void
+{
+    spawn importantTask();
+
+    spawn function {
+        sleep(1);
+        echo "Hello, PHP!";
+    };
+}
+
+spawn task();
+</code>
+
+In this example, the ''importantTask'' coroutine is critical for the parent coroutine. If the parent coroutine completes
+before the child coroutine, it may abandon the execution of importantTask, leading to data loss.
+
+This case is a positive aspect of the *Bottom-up* model and a negative aspect of the *Top-down* strategy.
+
+However, this seems to be the only significant drawback of the **Top-down** strategy.
+
+=== Top-down ===
+
+The **Top-down** model limits the lifetime of child coroutines to the lifetime of the parent.
+It implements structured concurrency but, unlike the **Bottom-up** model,
+aims to release resources as quickly as possible.
+
+<code php>
+function task(): void
+{
+    spawn(function() {
+        sleep(10);
+        echo "Hello, World!";
     });
 
+    await spawn(function() {
+        sleep(1);
+        echo "Hello, PHP!";
+    });
+}
+
+spawn task();
+</code>
+
+In the example above, the lifetime of the parent coroutine explicitly matches
+the second child coroutine since the parent explicitly waits for its completion.
+The line of code echo ''"Hello, World!"'' will never execute because
+the parent will be terminated earlier.
+
+To wait for direct descendants, the ''await children'' operator can be used:
+
+<code php>
+function task(): void
+{
+    spawn(function() {
+        sleep(10);
+        echo "Hello, World!";
+    });
+
+    spawn(function() {
+        sleep(1);
+        echo "Hello, PHP!";
+    });
+
+    // parent lifetime is limited by direct descendants
+    await children;
+}
+
+spawn task();
+</code>
+
+In this case, the **parent coroutine** will wait for the completion
+of the first and second child coroutines but not their descendants.
+This differs from the logic of the **Bottom-up** model,
+where all nested descendants affected the parent's lifetime.
+
+Example:
+
+<code php>
+function task(): void
+{
+    spawn function {
+        spawn function {
+            sleep(10); // <-- not affected to task lifetime
+
+            echo "This code will not be executed";
+        };
+
+        sleep(2); // <-- affected to task lifetime
+        echo "Hello, World!";
+    };
+
+    spawn function {
+        sleep(1);
+        echo "Hello, PHP!";
+    };
+
+    // parent lifetime is limited by direct descendants
+    await children;
+}
+
+spawn task();
+</code>
+
+The ''Scope'' primitive allows implementing **Bottom-Up** behavior within the **Top-Down** model.
+In the following example, the parent coroutine will wait for the completion of all child coroutines at every depth level.
+
+<code php>
+function task(): void
+{
+    $coroutineScope = new Scope();
+
+    $coroutineScope->spawn(function() {
+        sleep(10);
+        echo "Hello, World!";
+    });
+
+    $coroutineScope->spawn(function() {
+        sleep(1);
+        echo "Hello, PHP!";
+    });
+
+    // parent lifetime is extended to all descendants
+    await $coroutineScope;
+}
+</code>
+
+A drawback of the **Top-down** model, as well as the **Bottom-up** model,
+is the need for a special syntax to create a coroutine that will execute independently of the parent.
+
+For example:
+
+<code php>
+function task(): void
+{
+    globalScope()->spawn(function { // <-- create a coroutine in the global scope
+        sleep(10);
+        echo "Hello, World!";
+    });
+
+    spawn function {
+        sleep(1);
+        echo "Hello, PHP!";
+    };
+
+    spawn function {
+        echo "Hello, PHP2!";
+    };
+
+    // await only "Hello, PHP!" and "Hello, PHP2!"
+    await children;
+}
+
+spawn task();
+</code>
+
+=== Use Cases ===
+
+Let's briefly review typical use cases for each model:
+
+^ Use Case ^ No Limitation ^ Bottom-up ^ Top-down ^
+| Asynchronous tasks in UI | ± Allows independent execution | - May delay UI responsiveness | - May prematurely interrupt child tasks |
+| Data processing where tasks spawn subtasks | - Requires manual synchronization | + Ensures subtasks finish before proceeding | - Risk of losing subtasks and data |
+| **Long-running background tasks** | + Suitable for independent execution | + Guarantees complete execution | - Risks premature cancellation |
+| **Server request handling** | - Risk of resource leaks | - Can lead to high memory consumption | + Ensures resource cleanup |
+| Parallel execution of independent tasks | + Best for unrelated concurrent tasks | - Additional structure required | - Poor; risks unwanted task cancellations |
+| **Hierarchical task management** | - No built-in hierarchy | + Ensures the execution of child coroutines. | + Strongly hierarchical, controlled |
+| Actor-based concurrency | - Requires manual management | - Actors may unintentionally block parent | + Ideal for actor-based concurrency |
+
+To make a choice in favor of a particular model, we should consider the nature of **PHP** as a language
+designed for business logic, tolerant to errors, easy to use, and focused on BackEnd applications.
+
+Note that the **Top-down** model is best suited for frameworks because it allows **restricting**
+user code that is invoked lower in the hierarchy.
+
+At the same time, **Top-down** will complicate the code of libraries or framework components
+that are invoked lower in the hierarchy if they need to modify coroutine behavior.
+
+Such overhead is acceptable since frameworks and libraries typically take on **more** responsibility,
+implementing specific patterns or algorithms while hiding complexity behind contracts for the user.
+
+The **primary argument** for choosing the **Top-down** model is that it forces the programmer to extend
+the lifetime of coroutines when necessary, rather than restricting them as in the Bottom-up model,
+which leads to resource minimization.
+
+==== Structured concurrency ====
+
+Structural concurrency helps a programmer bind execution using code blocks organized in a hierarchy.
+Programming languages use two approaches:
+  * Coroutine functions themselves are structural elements.
+  * Additional syntactic blocks can complement control.
+
+When making a choice within PHP, we will follow the rule of minimizing syntax.
+
+This is why coroutine functions will be the primary and only syntactic blocks for structural concurrency,
+but not the only semantic tools.
+The order of coroutine execution forms a hierarchy that follows the rules of the Top-down strategy:
+
+<code php>
+function subsubtask(): void
+{
+    sleep(1);
+    echo "Subsubtask\n";
+}
+
+function subtask(): void
+{
+    echo "Subtask\n";
+    await spawn subsubtask();
+}
+
+function task(): void
+{
+    await spawn subtask();
+}
+
+spawn task();
+</code>
+
+Hierarchy of calls:
+
+<code>
+GLOBAL
+└── task()
+    └── subtask()
+        └── subsubtask()
+</code>
+
+Execution flow:
+1. ''task()'' is spawned.
+2. ''subtask()'' is spawned and awaited.
+    - Prints: **"Subtask"**
+3. ''subsubtask()'' is spawned and awaited inside ''subtask()''.
+    - Sleeps for 1 second.
+    - Prints: **"Subsubtask"**
+
+The lifetime of child coroutines cannot exceed the lifetime of their parent.
+In the example above, parents explicitly await the execution of child coroutines,
+so the total lifetime of ''task'' equals the execution time of ''subsubtask''.
+
+<code php>
+function mainTask(): void
+{
+    // watcher pattern
+    spawn function {
+        while (true) {
+            sleep(2);
+            echo "Cleanup: removing dead connections...\n";
+        }
+    };
+
+   while(...) {
+       echo "Worker: processing connection $i...\n";
+       ...
+       suspend();
+   }
+}
+
+spawn mainTask();
+</code>
+
+==== Coroutine Scope ====
+
+In **structural concurrency**, a **Scope** is a mechanism that ensures coroutines are properly managed
+within a defined execution context.
+It provides control over **lifetime, cancellation, and completion** of coroutines.
+
+Child coroutines inherit the parent's Scope:
+
+<code php>
+use Async\Scope;
+
+function task(): void
+{
+    $scope = new Scope();
+    $scope->set('connections', 0);
+
+    $scope->spawn(function() {
+        sleep(1);
+        echo currentScope()->get('connections')."\n";
+    });
+
+    $scope->spawn(function() {
+        sleep(2);
+        echo currentScope()->get('connections')."\n";
+    });
+
+    await $scope;
+}
+
+spawn task();
+</code>
+
+The ''Scope'' primitive can be used in an ''await'' expression,
+in which case the code will pause until all child tasks are completed.
+
+=== Coroutine Scope waiting ===
+
+The ''await'' operator can be used with a ''Scope'' object:
+
+<code php>
+function task(): void
+{
+    $scope = new Scope();
+
+    $scope->spawn(function() {
+        spawn function {
+            sleep(1);
+            echo "Task 1-1\n";
+        };
+
+        sleep(1);
+        echo "Task 1\n";
+    });
+
+    $scope->spawn(function() {
+        sleep(2);
+        echo "Task 2\n";
+    });
+
+    // wait for all child coroutines
+    await $scope;
+}
+
+spawn task();
+</code>
+
+If you need to wait only for direct descendants, use the method ''awaitDirectChildren'':
+
+<code php>
+$scope = new Scope();
+// create child coroutines
+$scope->awaitDirectChildren();
+</code>
+
+=== Scope cancellation ===
+
+The ''cancel'' method cancels all child coroutines:
+
+<code php>
+$scope = new Scope();
+$scope->spawn(function() {
+    sleep(1);
+    echo "Task 1\n";
+});
+
+$scope->spawn(function() {
+    sleep(2);
+    echo "Task 2\n";
+});
+
+$scope->cancel();
+</code>
+
+=== BoundedScope ===
+
+The ''BoundedScope'' class is designed to create explicit constraints
+that will be applied to all coroutines spawned within the specified Scope.
+
+^ Method ^ Description ^
+| withTimeout(int $milliseconds) | Creates a new scope with a specified timeout, automatically canceling coroutines when the time expires. |
+| spawnAndBound(callable $coroutine) | Spawns a coroutine and restricts the lifetime of the entire Scope to match the coroutine’s lifetime. |
+| boundedBy(mixed $constraint) | Limits the scope’s lifetime based on a **Cancellation token, Future, or another coroutine's lifetime**. |
+
+<code php>
+$scope = new BoundedScope();
+$scope->withTimeout(1000);
+
+$scope->spawnAndBound(function() {
+    sleep(2);
+    echo "Task 1\n";
+});
+
+await $scope;
+</code>
+
+=== Coroutine Scope Slots ===
+
+^ Method ^ Description ^
+| find(string\|object $key): mixed | Find a value by key in the current or parent Scope. |
+| get(string\|object $key): mixed | Get a value by key in the current Scope. |
+| has(string|object $key): bool | Check if a key exists in the current Scope. |
+| findLocal(string|object $key): mixed | Find a value by key only in the local Scope. |
+| getLocal(string|object $key): mixed | Get a value by key only in the local Scope. |
+| hasLocal(string|object $key): bool | Check if a key exists in the local Scope. |
+| set(string|object $key, mixed $value, bool $replace = false): self | Set a value by key in the Scope. |
+| unset(string|object $key): self | Delete a value by key from the Scope. |
+
+The ''Scope'' class provides a mechanism
+for storing data that is accessible to all child coroutines.
+
+Once all coroutines owning the Scope complete,
+or the Scope itself is terminated, all data in the slots will be released.
+
+This helps the programmer associate data with coroutines without writing explicit cleanup code.
+
+To ensure data encapsulation between different components,
+**Coroutine Scope Slots** provide the ability to associate data using **key objects**.
+An object instance is unique across the entire application,
+so code that does not have access to the object cannot read the data associated with it.
+
+This pattern is used in many programming languages and is represented in JavaScript by a special class, **Symbol**.
+
+<code php>
+$key = new Async\Key('pdo connection');
+
+if(currentScope()->has($key)) {
+    $pdo = currentScope()->get($key);
+} else {
+    $pdo = new PDO('sqlite::memory:');
+    currentScope()->set($key, new PDO('sqlite::memory:'));
+}
+</code>
+
+**Coroutine Scope Slots** can automatically dereference **WeakReference**.
+If you assign a **WeakReference** to a slot and then call ''find()'',
+you will receive the original object or ''NULL''.
+
+<code php>
+function task(): void
+{
+    // Should return the original object
+    $pdo = currentScope()->find('pdo');
+}
+
+$pdo = new PDO('sqlite::memory:');
+currentScope()->set('pdo', new WeakReference($pdo));
+
+spawn task();
+</code>
+
+=== Coroutine Scope Inheritance ===
+
+Scope primitives, like coroutines, can be structured into a hierarchy.
+To create a Scope object that inherits from another, use the static method ''inherit()''.
+
+<code php>
+$parentScope = new Scope();
+$parentScope->set('connections', 0);
+$parentScope->set('pdo', new PDO('sqlite::memory:'));
+$childScope = Scope::inherit($parentScope);
+$childScope->set('connections', 1);
+
+$childScope->spawn(function() {
+    echo "Child\n";
+    echo currentScope()->get('connections')."\n";
+});
+
+$parentScope->spawn(function() {
+    echo "Parent\n";
+    echo currentScope()->get('connections')."\n";
+});
+
+await $parentScope;
+</code>
+
+A child ''Scope'' overrides the parent's memory slots.
+If a slot with the same key is defined in the child ''Scope'',
+the ''get'' method will return the value from the child slot;
+otherwise, it will return the value from the parent.
+
+Waiting for a parent Scope extends to waiting for all child Scopes in the hierarchy.
+
+The restrictions of a parent ''Scope'' do not directly apply to child ''Scope'' instances.
+However, the lifetime of child ''Scope'' instances cannot exceed that of the parent.
+Therefore, if the parent is completed or canceled, the same will happen to all child ''Scope'' instances.
+
+<code php>
+$parentScope = new BoundScope();
+$parentScope->withTimeout(1000);
+$childScope = Scope::inherit($parentScope);
+
+$childScope->spawn(function() {
+    sleep(2);
+    echo "This code will not be executed";
+});
+
+await $parentScope;
+</code>
+
+=== Coroutine Scope Lifetime ===
+
+The lifetime of a ''Scope'' is determined by the lifetime of the PHP object ''$scope''.
+The lifetime of coroutines belonging to a ''Scope'' is restricted by the lifetime of that ''Scope''.
+This rule allows the creation of coroutine groups that can be tied to the lifetime of a service.
+
+Let's consider an example:
+
+<code php>
+final class SocketPoll
+{
+    private $serverSocket;
+    private Scope $scope;
+
+    public function __construct(string $host, int $port)
+    {
+        $this->serverSocket = stream_socket_server("tcp://$host:$port", $errno, $errstr);
+
+        if (!$this->serverSocket) {
+            throw new RuntimeException("Failed to create server socket: $errstr ($errno)");
+        }
+
+        $this->scope = new Scope();
+    }
+
+    public function __destruct()
+    {
+        $this->stop();
+    }
+
+    public function start(): void
+    {
+        $this->scope->spawn(function () {
+           try {
+              while (($clientSocket = stream_socket_accept($this->serverSocket, 0)) !== null) {
+                  $this->scope->spawn($this->handleConnection(...), $clientSocket);
+              }
+           } finally {
+               fclose($this->serverSocket);
+           }
+        });
+    }
+
+    private function handleConnection($clientSocket): void
+    {
+         try {
+             fwrite($clientSocket, "Hello! You're connected.\n");
+
+             while (!feof($clientSocket)) {
+                 $data = fread($clientSocket, 1024);
+                 if ($data === false || $data === '') {
+                     break;
+                 }
+
+                 fwrite($clientSocket, "Received: $data");
+             }
+         } finally {
+             fclose($clientSocket);
+         }
+    }
+
+    public function stop(): void
+    {
+        fclose($this->serverSocket);
+        $this->scope->cancel();
+    }
+}
+</code>
+
+The ''SocketPoll'' service creates a separate private ''Scope'' for all the coroutines it starts.
+This allows it to easily cancel the connection handling process,
+which will terminate both the coroutine waiting for new connections and all coroutines processing them.
+
+**Note:**
+This example contains a circular dependency between objects, which should be avoided in real-world development.
+
+Coroutines belonging to a ''Scope'' do not increase its reference count.
+This rule has several important consequences:
+
+<code php>
+function test(): void
+{
+    $scope = new Scope();
+
+    $scope->spawn(function() {
+        sleep(1);
+    });
+
+    $scope->spawn(function() {
+        sleep(2);
+    });
+
+    // No coroutine will ever be started.
+    unset($scope);
+}
+
+spawn test();
+</code>
+
+=== Coroutine local context ===
+
+While a ''Scope'' can serve as a shared context in the coroutine hierarchy,
+a coroutine's **local context** is a personal data store strictly tied to the coroutine's lifetime.
+The local context allows associating data slots that are automatically freed once the coroutine completes.
+
+The local coroutine context is accessible via the ''Async\localContext()'' function,
+which returns an ''Async\Context'' object.
+The ''Async\Context'' class provides the same methods for working with slots as the ''Scope'' class:
+
+<code php>
+function task(): void
+{
+    localContext()->set('data', 'This local data');
+
+    spawn function {
+         // No data will be found
+         echo localContext()->find('data')."\n";
+    };
+}
+</code>
+
+Using a coroutine's local context can be useful for associating objects with a coroutine that **MUST** be unique to each coroutine.
+For example, a database connection.
+
+<code php>
+<?php
+
+namespace Async;
+
+use PDO;
+use RuntimeException;
+
+class ConnectionProxy
+{
+    private PDO $connection;
+
+    public function __construct(PDO $connection)
+    {
+        $this->connection = $connection;
+    }
+
+    public function __destruct()
+    {
+        getGlobalConnectionPool()->releaseConnection($this->connection);
+    }
+}
+
+class ConnectionPool
+{
+    private array $pool = [];
+    private int $maxConnections = 10;
+
+    public function getConnection(): ConnectionProxy
+    {
+        if (!empty($this->pool)) {
+            return new ConnectionProxy(array_pop($this->pool));
+        }
+
+        if (count($this->pool) < $this->maxConnections) {
+            return new ConnectionProxy(PDO("mysql:host=localhost;dbname=test", "user", "password"));
+        }
+
+        throw new RuntimeException("No available database connections.");
+    }
+
+    public function releaseConnection(PDO $connection): void
+    {
+        $this->pool[] = $connection;
+    }
+}
+
+function getDb(): ConnectionProxy
+{
+    static $key = new Async\Key('db_connection');
+
+    $context = Async\localContext();
+
+    if ($context->has($key)) {
+        return $context->get($key);
+    }
+
+    $pool = getGlobalConnectionPool();
+    $connection = $pool->getConnection();
+
+    $context->set($key, $connection);
+
+    return $connection;
+}
+
+function getGlobalConnectionPool(): ConnectionPool
+{
+    static $pool = null;
+    if ($pool === null) {
+        $pool = new ConnectionPool();
+    }
+    return $pool;
+}
+
+function printUser(int $id): void
+{
+    $db = getDb();
+    $stmt = $db->query("SELECT * FROM users WHERE id = $id");
+    $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    print_r($users);
+}
+
+spawn printUser(1);
+spawn printUser(2);
+</code>
+
+==== Error Handling ====
+
+An uncaught exception in a coroutine follows this flow:
+
+1. If the coroutine is awaited using the ''await'' operator, the exception is propagated to the awaiting points. If multiple points are awaiting, each will receive the exception.
+2. The exception is passed to the ''Scope''.
+3. If the ''Scope'' has an exception handler defined, it will be invoked.
+4. If the ''Scope'' does not have an exception handler, the ''cancel()'' method is called, canceling all coroutines in this scope from top to bottom in the hierarchy, including all child scopes.
+5. If the ''Scope'' has responsibility points, i.e., the construction ''await $scope'', all responsibility points receive the exception.
+6. Otherwise, the exception is passed to the parent scope if it is defined.
+7. If there is no parent scope, the exception falls into ''globalScope'', where the same rules apply as for a regular scope.
+
+{{ :rfc:true_async:exception_flow.svg |}}
+
+If an exception reaches ''globalScope'' and is not handled in any way,
+it triggers **Graceful Shutdown Mode**, which will terminate the entire application.
+
+The ''BoundedScope'' class allows defining an exception handler that can prevent exception propagation.
+
+For this purpose, two methods are used:
+  - **''setExceptionHandler''** – triggers for any exceptions thrown within this **Scope**.
+  - **''setChildScopeExceptionHandler''** – triggers for exceptions from **child Scopes**.
+
+<code php>
+$scope = new BoundedScope();
+$scope->spawn(function() {
+  throw new Exception("Task 1");
+});
+
+$scope->setExceptionHandler(function (Async\Scope $scope, Async\Coroutine $coroutine, Throwable $e) {
+    echo "Caught exception: {$e->getMessage()}\n in coroutine: {$coroutine->getSpawnLocation()}\n";
+});
+
+Async\await($scope);
+</code>
+
+Using these handlers, you can implement the **Supervisor** pattern, i.e.,
+a **Scope** that will not be canceled when an exception occurs in coroutines.
+
+The **''setChildScopeExceptionHandler''** method allows handling exceptions only from **child Scopes**,
+which can be useful for implementing an algorithm where the **main Scope** runs core tasks,
+while **child Scopes** handle additional ones.
+
+<code php>
+final class Service
+{
+    private Scope $scope;
+
+    public function __construct()
+    {
+        $this->scope = new Scope();
+
+        $this->scope->setChildScopeExceptionHandler(
+        static function (Scope $scope, Coroutine $coroutine, \Throwable $exception): void {
+            echo "Occurred an exception: {$exception->getMessage()} in Coroutine {$coroutine->getSpawnLocation()}\n";
+        });
+    }
+
+    public function start(): void
+    {
+        $this->scope->spawn($this->run(...));
+    }
+
+    public function stop(): void
+    {
+        $this->scope->cancel();
+    }
+
+    private function run(): void
+    {
+        while (($socket = $this->service->receive()) !== null) {
+            Scope::inherit($this->scope)->spawn($this->handleRequest(...), $socket);
+        }
+    }
+}
+</code>
+
+{{ :rfc:true_async:supervisor.svg |}}
+
+=== Responsibility points ===
+
+A **responsibility point** is code that explicitly waits for the completion of a coroutine or a ''Scope'':
+
+<code php>
+$scope = new Scope();
+
+$scope->spawn(function() {
+  throw new Exception("Task 1");
 });
 
 try {
-    Async\launchScheduler();
-} catch (Exception $e) {
-    echo "Caught exception: " . $e->getMessage() . "\n";
+    await $scope;
+} catch (\Throwable $e) {
+     echo "Caught exception: {$e->getMessage()}\n";
+}
+</code>
+
+A **responsibility point** has a chance to receive
+not only the result of the coroutine execution but also an unhandled exception.
+
+=== Exception Handling ===
+
+The ''BoundedScope'' class provides a method for handling exceptions:
+
+<code php>
+$scope = new BoundedScope();
+
+$scope->spawn(function() {
+  throw new Exception("Task 1");
+});
+
+$scope->setExceptionHandler(function (Exception $e) {
+    echo "Caught exception: {$e->getMessage()}\n";
+});
+
+await $scope;
+</code>
+
+An exception handler has the right to suppress the exception.
+However, if the exception handler throws another exception,
+the exception propagation algorithm will continue.
+
+=== onExit ===
+
+The ''onExit'' method allows defining a callback function that will be invoked when a coroutine or scope completes.
+This method can be considered a direct analog of ''defer'' in Go.
+
+<code php>
+$scope = new Scope();
+
+$scope->spawn(function() {
+  throw new Exception("Task 1");
+});
+
+$scope->onExit(function () {
+    echo "Task 1 completed\n";
+});
+
+await $scope;
+</code>
+
+Or for coroutines:
+
+<code php>
+function task(): void
+{
+    onExit(function () {
+        echo "Task completed\n";
+    });
+
+    throw new Exception("Task 1");
 }
 
-echo "Done!\n";
+spawn task();
 </code>
 
-**Expected output:**
-<code>
-Caught exception: Something went wrong in the fiber!
-Done!
-</code>
-
-This behavior is logical because all fibers created by the **Async API** belong to the **Scheduler**, and therefore, unhandled exceptions also belong to the **Scheduler**.
-
-However, this behavior can be changed if one fiber waits for the result of another fiber.
-In this case, an exception in the second fiber will be thrown at the waiting point.
-
-Here is an example: exception thrown at the waiting point
+The ''onExit'' semantics are most commonly used to release resources,
+serving as a shorter alternative to ''try-finally'' blocks:
 
 <code php>
-Async\run(function() {
+function task(): void
+{
+    $file = fopen('file.txt', 'r');
+    onExit(fn() => fclose($file));
 
-    $fiber = Async\async(function() {
-        throw new Exception("Error in the inner fiber!");
-    });
+    throw new Exception("Task 1");
+}
 
-    try {
-        // Awaiting the result of another fiber
-        $result = Async\await($fiber);
-        echo "Fiber result: " . $result . "\n";
-    } catch (Exception $e) {
-        echo "Caught exception inside the fiber: " . $e->getMessage() . "\n";
-    }
-
-});
-
-Async\launchScheduler();
-
-echo "Done!\n";
+spawn task();
 </code>
 
-**Expected output:**
-<code>
-Caught exception inside the fiber: Error in the inner fiber!
-Done!
-</code>
+==== Cancellation ====
 
-**Note:** If multiple fibers await the result of another fiber, the behavior will remain the same:
-each call to ''await()'' will receive that exception.
-
-Example: Multiple fibers awaiting the same fiber
+The cancellation operation is available for coroutines and scopes
+using the ''cancel()'' method:
 
 <code php>
-Async\run(function() {
+function task(): void {}
 
-    $fiber = Async\async(function() {
-        throw new Exception("Error inside the fiber!");
-    });
+$coroutine = spawn task();
 
-    // First fiber waiting for the result
-    Async\run(function() use ($fiber) {
-        try {
-            Async\await($fiber);
-        } catch (Exception $e) {
-            echo "Caught exception in fiber 1: " . $e->getMessage() . "\n";
-        }
-    });
-
-    // Second fiber also waiting for the same result
-    Async\run(function() use ($fiber) {
-        try {
-            Async\await($fiber);
-        } catch (Exception $e) {
-            echo "Caught exception in fiber 2: " . $e->getMessage() . "\n";
-        }
-    });
-
-});
-
-Async\launchScheduler();
-
-echo "Done!\n";
+// cancel the coroutine
+$coroutine->cancel(new Async\CancellationException('Task was cancelled'));
 </code>
 
-**Expected output:**
-<code>
-Caught exception in fiber 1: Error inside the fiber!
-Caught exception in fiber 2: Error inside the fiber!
-Done!
-</code>
+The cancellation operation is implemented as follows:
 
-In other words, a general rule applies:
+1. If a coroutine has not started, it will never start.
+2. If a coroutine is suspended, its execution will resume with an exception.
+3. If a coroutine has already completed, nothing happens.
 
-<blockquote>if the ''await()'' function is called, the calling point will receive either the result of the function execution or the exception that was thrown in that function.</blockquote>
+The ''CancellationException'', if unhandled within a coroutine, is automatically suppressed after the coroutine completes.
 
-In other words, the behavior of asynchronous code with ''await()'' is equivalent to how it would behave if the code were synchronous.
-
-=== Additional Fiber API ===
-
-The **True Async** component adds important functions to **Fiber** to enable typical use cases.
-
-== FiberHandle::defer() ==
-
-The ''defer'' method allows executing a callback function after the fiber has completed its work.
-This function is **always** called, regardless of whether an exception was thrown or the fiber completed successfully.
-
-**Prototype:**
-<code php>
-/**
- * Define a callback to be executed when the fiber is terminated.
- */
-public function defer(callable $callback): void {}
-
-/**
- * Remove a previously defined defer handler.
- */
-public function removeDeferHandler(callable $callable): void {}
-</code>
-
-Example: Using defer() in fibers
-
-<code php>
-Async\run(function() {
-
-    $fiber = Async\async(function() {
-        echo "Fiber started\n";
-        sleep(1);
-        throw new Exception("Something went wrong!");
-    });
-
-    $fiber->defer(function() {
-        echo "Deferred callback executed\n";
-    });
-
-    try {
-        Async\await($fiber);
-    } catch (Exception $e) {
-        echo "Caught exception: " . $e->getMessage() . "\n";
-    }
-});
-
-Async\launchScheduler();
-
-echo "Done!\n";
-</code>
-
-**Expected output:**
-
-<code>
-Fiber started
-Caught exception: Something went wrong!
-Deferred callback executed
-Done!
-</code>
-
-=== Cancellation Operation ===
-
-Sometimes, it is necessary to cancel an operation for various reasons. However, the code requesting cancellation does not know the current state of the operation.
-
-**True Async** allows canceling a fiber from any state (except when the fiber is actively running):
-  * If the fiber is in the execution queue
-  * If the fiber is waiting for I/O operations
-
-**True Async** ensures that this operation is memory-safe.
-
-== Fiber Cancellation Rules ==
-
-  - If the fiber has not been started, it will not start.
-  - If the fiber has already completed, nothing happens.
-  - If the fiber is waiting for execution or events, the **Scheduler** places it in a queue with a special exception: ''Async\CancellationException()''.
-
-<blockquote>**ATTENTION**: A programmer **should not** attempt to suppress ''CancellationException'', as this may lead to a fatal error and disrupt the application's behavior.
+<blockquote>
+⚠️ **Warning:** You should not attempt to suppress ''CancellationException'' exception,
+as it may cause application malfunctions.
 </blockquote>
 
-If a fiber does not handle ''CancellationException'' and it reaches the **Scheduler**, the **Scheduler** will process and suppress it.
-Thus, an unhandled ''CancellationException'' **does not** terminate the application.
-
-Example: Cancelling a Fiber
-
 <code php>
-Async\run(function() {
+$scope = new Scope();
 
-    $fiber = Async\async(function() {
-        try {
-            echo "Fiber started\n";
-            sleep(2);
-            echo "Fiber completed\n";
-        } catch (Async\CancellationException $e) {
-            echo "Fiber was cancelled!\n";
-        }
-    });
-
-    // Cancel the fiber before it finishes
-    $fiber->cancel();
+$scope->spawn(function() {
+    sleep(1);
+    echo "Task 1\n";
 });
 
-Async\launchScheduler();
+$scope->spawn(function() {
+    sleep(2);
+    echo "Task 2\n";
+});
 
-echo "Done!\n";
+$scope->cancel(new Async\CancellationException('Task was cancelled'));
 </code>
 
-**Expected output:**
+Canceling a ''Scope'' triggers the cancellation of all coroutines
+within that ''Scope'' and all child ''Scopes'' in hierarchical order.
 
-<code>
-Fiber started
-Fiber was cancelled!
-Done!
-</code>
+=== CancellationException propagation ===
 
-=== Graceful Shutdown ===
+The ''CancellationException'' affects PHP standard library functions differently.
+If it is thrown inside one of these functions that previously did not throw exceptions,
+the PHP function will terminate with an error.
 
-When an **unhandled exception** occurs in a **Fiber**, interrupting the main loop of the **Scheduler**, the **Graceful Shutdown** mode is initiated. Its goal is to safely terminate the application.
+In other words, the ''cancel()'' mechanism does not alter the existing function contract.
+PHP standard library functions behave as if the operation had failed.
 
-Graceful Shutdown Flow:
+Additionally, the ''CancellationException'' will not appear in ''get_last_error()'',
+but it may trigger an ''E_WARNING'' to maintain compatibility with expected behavior
+for functions like ''fwrite'' (if such behavior is specified in the documentation).
 
-  - All fibers in the **Scheduler** resume execution with an exception: ''Async\CancellationException()''.
-  - The **main loop** continues running, hoping that all fibers will safely complete.
-      * All resources will be released.
-      * All handlers will be closed.
-      * All microtasks will be executed.
-  - Creating new fibers via ''Async\run()'' or ''Async\async()'' **throws an exception**.
-  - When fibers complete, the **Reactor event loop** releases handlers, and the **exception that caused the application to stop** is thrown at the **Scheduler** activation point.
+=== exit and die operators ===
+
+The ''exit''/''die'' operators called within a coroutine result in the immediate termination of the application.
+Unlike the ''cancel()'' operation, they do not allow for proper resource cleanup.
+
+==== Graceful Shutdown ====
+
+When an **unhandled exception** occurs in a **Coroutine**
+the **Graceful Shutdown** mode is initiated.
+Its goal is to safely terminate the application.
+
+**Graceful Shutdown** cancels all coroutines in ''globalScope'',
+then continues execution without restrictions, allowing the application to shut down naturally.
+**Graceful Shutdown** does not prevent the creation of new coroutines or close connection descriptors.
+However, if another unhandled exception is thrown during the **Graceful Shutdown** process,
+the second phase is triggered.
+
+**Second Phase of Graceful Shutdown**
+  - All **Event Loop descriptors** are closed.
+  - All **timers** are destroyed.
+  - Any remaining coroutines that were not yet canceled will be **forcibly canceled**.
+
+The further shutdown logic may depend on the specific implementation of the **Scheduler** component,
+which can be an external system and is beyond the scope of this **RFC**.
 
 The **Graceful Shutdown** mode can also be triggered using the function:
 
@@ -598,1645 +1362,58 @@ Async\gracefulShutdown(\Throwable|null $throwable = null): void {}
 
 from anywhere in the application.
 
-=== Deadlocks ===
-
-A situation may arise where there are no active ''Fibers'' in the execution queue and no active ''Notifiers'' in the event loop. This condition is called a ''Deadlock'', and it represents a serious logical error.
-
-When a ''Deadlock'' is detected, the ''Scheduler'' enters ''Graceful Shutdown'' mode and generates warnings containing information about which Fibers are in a waiting state and the exact lines of code where they were suspended.
-
-**True Async** aims to provide PHP developers with a component design that prevents reaching a **Deadlock** state.
-This is achieved through strict **semantic constraints** and **logic usage checks** for components.
-
-On the other hand, **True Async** offers "low-level" objects such as **Notifier**, which do not impose any restrictions on the developer's implementation.
-
-Deadlocks are still possible due to:
-  - The behavior of **C-code**,
-  - **Errors in True Async itself**,
-  - **Issues within Reactor**,
-  - **Bugs in third-party extensions**.
-
-==== Microtasks ====
-
-Microtasks are a special type of task that is executed before any other event loop callbacks, including timers and I/O events.
-
-To create a microtask, the following function is used:
-
-<code php>
-function defer(callable $microtask): void {}
-</code>
-
-The ''Scheduler'' executes microtasks inside a ''Fiber'',
-so the microtask code can call blocking operations.
-
-However, the nature of microtask execution imposes certain logical constraints:
-
-    * Creating microtasks within a microtask can lead to an infinite loop. The developer must be careful about this type of error. Currently, the ''Scheduler'' does not check for infinite loops, and it may not do so in the future.
-    * A microtask should not take too much time, as this increases the application's latency in responding to events.
-
-Example: Using defer() to create a microtask
-
-<code php>
-Async\run(function() {
-
-    echo "Fiber started\n";
-
-    Async\defer(function() {
-        echo "Microtask 1\n";
-
-        Async\defer(function() {
-            echo "Microtask 2\n";
-        });
-    });
-
-    echo "Fiber completed\n";
-});
-
-Async\run(function() {
-    echo "Another fiber\n";
-});
-
-Async\launchScheduler();
-
-echo "Done!\n";
-
-</code>
-
-**Expected output:**
-
-<code>
-Fiber started
-Fiber completed
-Microtask 1
-Microtask 2
-Another fiber
-Done!
-</code>
-
-==== Context ====
-
-A concurrent runtime allows handling requests using Fibers, where each Fiber can process its own request. In this case, storing request-associated data in global variables is no longer an option.
-
-The ''Context'' class is designed to solve this issue. It allows the storage of variables that are automatically inherited by ''Fibers'' and other components.
-
-<code php>
-final class Context
-{
-    /**
-     * Create a new current context.
-     * If the current context already exists, it will be replaced with the new one.
-     */
-    public static function newCurrent(): Context {}
-
-    /**
-     * Get the current context.
-     */
-    public static function current(bool $createIfNull = false): ?Context {}
-
-    /**
-     * Creates a new context, sets the current context as the parent for the new one,
-     * and sets the new context as the current one.
-     */
-    public static function overrideCurrent(bool $weakParent = false): Context {}
-
-    /**
-     * Return a current local context.
-     * The local context can be considered the execution context of a Fiber.
-     */
-    public static function local(): Context {}
-
-    /**
-     * Constructor for the Context class.
-     *
-     * @param Context|null $parent The parent context.
-     * @param bool $weakParent If true, the parent context is a weak reference.
-     */
-    public function __construct(?Context $parent = null, bool $weakParent = false) {}
-
-    /**
-     * Find a value by key in the current or parent context.
-     */
-    public function find(string|object $key): mixed {}
-
-    /**
-     * Get a value by key in the current context.
-     */
-    public function get(string|object $key): mixed {}
-
-    /**
-     * Check if a key exists in the current context.
-     */
-    public function has(string|object $key): bool {}
-
-    /**
-     * Find a value by key only in the local context.
-     */
-    public function findLocal(string|object $key): mixed {}
-
-    /**
-     * Get a value by key only in the local context.
-     */
-    public function getLocal(string|object $key): mixed {}
-
-    /**
-     * Check if a key exists in the local context.
-     */
-    public function hasLocal(string|object $key): bool {}
-
-    /**
-     * Set a value by key in the context.
-     *
-     * @param string|object $key   The key.
-     * @param mixed         $value The value.
-     * @param bool          $replace If true, replaces the existing value.
-     */
-    public function setKey(string|object $key, mixed $value, bool $replace = false): Context {}
-
-    /**
-     * Delete a value by key from the context.
-     */
-    public function delKey(string|object $key): Context {}
-
-    /**
-     * Get the parent context.
-     */
-    public function getParent(): ?Context {}
-
-    /**
-     * Check if the current context is empty.
-     */
-    public function isEmpty(): bool {}
-}
-</code>
-
-The ''Context'' class is a map-like data structure where keys can be either **objects** or **strings**. Object keys allow the creation of slots in ''Context'' that cannot be accessed from other areas of the application. This mechanism is similar to ''Symbol'' in JavaScript.
-
-For key objects, a specialized ''Async\Key()'' object can be used, but this is not required.
-
-== Fiber Context Inheritance ==
-
-Each Fiber can have its own execution context, which is inherited from the Fiber that created it. This means that in the following code:
-
-<code php>
-Async\Context::current(true)->setKey('test-key', 'test-value');
-
-Async\run(function() {
-    $value = Async\Context::current()->get('test-key');
-    echo "async function 1: {$value}\n";
-
-    Async\run(function() {
-        $value = Async\Context::current()->get('test-key');
-        echo "async function 2: {$value}\n";
-    });
-});
-</code>
-
-''Fiber1'' will inherit the context from the previous execution scope. ''Fiber2'', which is created inside ''Fiber1'', will inherit the context that was current in ''Fiber1''.
-
-The following code demonstrates the mutable nature of ''Context'':
-
-<code php>
-Async\Context::current(true)->setKey('test-key', 'test-value');
-
-Async\run(function() {
-    Async\Context::current()->setKey('test-key', 'test-value2', true);
-
-    Async\run(function() {
-        $value = Async\Context::current()->get('test-key');
-        echo "async function 3: {$value}\n";
-    });
-});
-
-Async\run(function() {
-    $value = Async\Context::current()->get('test-key');
-    echo "async function 2: {$value}\n";
-});
-</code>
-
-== Immutability vs Mutability ==
-
-In languages such as **Kotlin**, the ''Context'' component is an **immutable** structure because immutability helps prevent serious errors caused by unexpected modifications to context variables.
-
-However, in **True Async**, ''Context'' is designed to be used as a **shared memory space with private slots**, making immutability unnecessary. The ability to modify the context dynamically is essential for efficient and flexible execution flow management.
-
-That said, it is important to note that **using string-based keys is considered an anti-pattern** and is currently under review in this RFC. Object-based keys provide better encapsulation and prevent unintended access to context variables.
-
-== Context Overriding ==
-
-Sometimes, it is necessary to create a new context that inherits all variables from the previous one, but any changes to it do not affect the previous context. This approach is similar to how environment variables work in Unix-like/Windows operating systems. For this, you can use context overriding with the ''Async\Context::overrideCurrent()'' method.
-
-<code php>
-Async\Context::current(true)->setKey('test-key', 'test-value');
-
-Async\run(function() {
-    Async\Context::overrideCurrent()->setKey('test-key-2', 'test-value-2');
-
-    Async\run(function() {
-        $value = Async\Context::current()->get('test-key').' : '.Async\Context::current()->get('test-key-2');
-        echo "async function 3: {$value}\n";
-    });
-});
-</code>
-
-== Local Context ==
-
-While the current context creates a logical execution space defined by the programmer, there is another type of context associated with a non-concurrent section of code. This context is called the ''local context''. Typically, a local context is directly linked to a ''Fiber'' and is destroyed as soon as the ''Fiber'' completes execution.
-
-<code php>
-Async\Context::current(true)->setKey('test-key', 'test-value');
-
-Async\run(function() {
-    Async\Context::local()->setKey('test-key', 'test-value-local');
-    $value = Async\Context::local()->get('test-key');
-
-    echo "async function 1: {$value}\n";
-
-    Async\run(function() {
-        $value = Async\Context::local()->get('test-key');
-        echo "async function 3: {$value}\n";
-    });
-});
-
-Async\run(function() {
-    $value = Async\Context::local()->get('test-key');
-    echo "async function 2: {$value}\n";
-});
-
---EXPECT--
-start
-async function 1: test-value-local
-async function 2: test-value
-async function 3: test-value
-end
-
-</code>
-
-== Microtask Context Inheritance ==
-
-Microtasks inherit the context from the ''Fiber'' that created them. This means that in the following code:
-
-<code php>
-Async\Context::current(true)->setKey('test-key', 'test-value');
-
-Async\defer(function() {
-    $value = Async\Context::current()->get('test-key');
-    echo "Microtask 1: {$value}\n";
-
-    Async\defer(function() {
-        $value = Async\Context::current()->get('test-key');
-        echo "Microtask 2: {$value}\n";
-    });
-});
-
-echo "start\n";
-Async\launchScheduler();
-echo "end\n";
-</code>
-
-''Microtask1'' will inherit the context from the previous execution scope. ''Microtask2'',
-which is created inside ''Microtask1'', will inherit the context that was current in ''Microtask1''.
-
-<blockquote>
-**Note:** During the execution of a ''microtask'', you should not rely on ''LocalContext'' because,
-unlike a ''Fiber'', a **microtask cannot own a local context**.
-</blockquote>
-
-==== Futures ====
-
-Objects of the ''Future'' class are high-level patterns for handling deferred results. **True Async** inherits the semantics of the AMPHP project and defines two key classes:
-
-  * ''FutureState'' - a state that can be modified only once (Back-End class)
-  * ''Future'' - a class for reading the state from ''FutureState'' (Front-End class)
-
-<code php>
-final class FutureState extends Notifier
-{
-    public function __construct() {}
-
-    /**
-     * Completes the operation with a result value.
-     *
-     * @param T $result Result of the operation.
-     */
-    public function complete(mixed $result): void {}
-
-    /**
-     * Marks the operation as failed.
-     *
-     * @param \Throwable $throwable Throwable to indicate the error.
-     */
-    public function error(\Throwable $throwable): void {}
-
-    /**
-     * @return bool True if the operation has completed.
-     */
-    public function isComplete(): bool {}
-
-    /**
-     * Suppress the exception thrown to the loop error handler if and operation error is not handled by a callback.
-     */
-    public function ignore(): void {}
-
-    /**
-     * @param Closure $callback The callback to add.
-     * @return static
-     */
-    public function addCallback(Closure $callback): static {}
-
-    public function getInfo(): string {}
-}
-</code>
-
-<code php>
-/**
- * @template-covariant T
- */
-final class Future
-{
-    /**
-     * @template Tv
-     *
-     * @param Tv $value
-     *
-     * @return Future<Tv>
-     */
-    public static function complete(mixed $value = null): Future {}
-
-    /**
-     * @return Future<never>
-     */
-    public static function error(\Throwable $throwable): Future {}
-
-    /**
-     * param FutureState<T> $state
-     */
-    public function __construct(FutureState $state) {}
-
-    /**
-     * @return bool True if the operation has completed.
-     */
-    public function isComplete(): bool {}
-
-    /**
-     * Do not forward unhandled errors to the event loop handler.
-     *
-     * @return Future<T>
-     */
-    public function ignore(): Future {}
-
-    /**
-     * Attaches a callback that is invoked if this future completes.
-     * The returned future is completed with the return
-     * value of the callback, or errors with an exception thrown from the callback.
-     *
-     * @psalm-suppress InvalidTemplateParam
-     *
-     * @template Tr
-     *
-     * @param callable(T):Tr $map
-     *
-     * @return Future<Tr>
-     */
-    public function map(callable $map): Future {}
-
-    /**
-     * Attaches a callback that is invoked if this future errors.
-     * The returned future is completed with the return
-     * value of the callback, or errors with an exception thrown from the callback.
-     *
-     * @template Tr
-     *
-     * @param callable(\Throwable):Tr $catch
-     *
-     * @return Future<Tr>
-     */
-    public function catch(callable $catch): Future {}
-
-    /**
-     * Attaches a callback that is always invoked when the future is completed.
-     * The returned future resolves with the
-     * same value as this future once the callback has finished execution.
-     * If the callback throws, the returned future
-     * will error with the thrown exception.
-     *
-     * @param \Closure():void $finally
-     *
-     * @return Future<T>
-     */
-    public function finally(callable $finally): Future {}
-
-    /**
-     * Awaits the operation to complete.
-     *
-     * Throws an exception if the operation fails.
-     *
-     * @return T
-     */
-    public function await(?Notifier $cancellation = null): mixed {}
-}
-</code>
-
-The Future class can be explicitly created in PHP user-land.
-Such an object will act as a **DeferredFuture**, whose state is controlled by the code that owns ''FutureState''.
-
-=== Await Methods ===
-
-The following functions are used to wait for ''Futures'':
-
-<code php>
-/**
- * Unwraps the first completed future.
- *
- * @template T
- *
- * param iterable<Future<T>> $futures
- * param bool $ignoreErrors Optional flag to ignore errors.
- * param Notifier|null $cancellation Optional cancellation.
- *
- * @return T
- */
-function awaitFirst(iterable $futures, bool $ignoreErrors = false, ?Notifier $cancellation = null): mixed {};
-
-/**
- * Awaits the first N successfully completed futures.
- *
- * @template Tk of array-key
- * @template Tv
- *
- * param positive-int $count
- * param iterable<Tk, Future<Tv>> $futures
- * param bool $ignoreErrors Optional flag to ignore errors.
- * param Notifier|null $cancellation Optional cancellation.
- *
- * @return array{array<Tk, Tv>, array<Tk, \Throwable>}
- */
-function awaitAnyN(int $count, iterable $futures, bool $ignoreErrors = false, ?Notifier $cancellation = null):array{};
-
-/**
- * Awaits all futures to complete or error.
- *
- * This awaits all futures.
- *
- * @template Tk of array-key
- * @template Tv
- *
- * param iterable<Tk, Future<Tv>> $futures
- * param Notifier|null $cancellation Optional cancellation.
- *
- * @return array{array<Tk, Tv>, array<Tk, \Throwable>}
- */
-function awaitAll(iterable $futures, bool $ignoreErrors = false, ?Notifier $cancellation = null): array {};
-</code>
-
-The semantics and algorithm of these functions are similar to the corresponding functions in **AMPHP**.
-
-The ''await*'' function group can accept an iterator that will be iterated concurrently (see the ''Walker'' class).
-Thus, a ''Fiber'' will wait not only for the ''Futures'' generated by the iterator but also for
-the completion of the iteration itself, if it aligns with the conditions.
-
-Some ''Reactor'' and ''Scheduler'' objects have the method ''getFuture()'',
-for example, ''FiberHandle'', which allows retrieving a ''Future'' that will store the result of the ''Fiber'' execution.
-
-The functions ''awaitAnyN'' and ''awaitAll'' return a tuple with two elements:
-  * an array of **results**
-  * an array of **errors**.
-
-When calling these functions, it is convenient to use the destructuring assignment with ''list'' or ''[]''.
-
-**Example:**
-<code php>
-[$results, $errors] = awaitAll(...);
-</code>
-
-The function ''await*'' preserves both the order of elements from the original **iterator** and its **keys**,
-if the iterator defines them.
-However, the number of elements in the arrays does not necessarily match the total number of iterations,
-meaning that ''await*'' functions will not populate the array with null values.
-
-The ''$ignoreErrors'' option suppresses errors occurring in ''Future''.
-However, it does not suppress exceptions thrown by the iterator that generates the ''Future''.
-If the iterable ''$futures'' results in an exception,
-the exception will be thrown at the ''await'' call site.
-
-=== Methods ''map/catch/finally'' ===
-
-The core methods ''Future::map'', ''Future::catch'', and ''Future::finally'' allow for chaining processing steps.
-Unlike in other languages, they do not impose restrictions on function synchronicity.
-Each ''map/catch/finally'' handler executes in a separate ''Fiber''
-(from the programmer's perspective, this is how it should be thought of).
-This means that a handler can pause execution, and other objects in the chain will wait for it.
-
-=== Future Usage Control ===
-
-To prevent implicit errors due to unhandled ''FutureState'' results, ''True Async'' tracks whether a ''Future''
-object has been used in chains or within ''await*'' functions.
-If this does not occur, an exception is thrown in the destructor of ''FutureState'',
-indicating that the ''FutureState'' was created but not processed.
-
-==== Channels ====
-
-A channel is a primitive for message exchange between ''Fibers''.
-Different languages have stricter or looser approaches to implementing channel APIs.
-Here, a combined design is proposed that supports two usage scenarios:
-  * one **producer**, multiple **consumers** (One-to-Many (1P-NC) – Work Queue)
-  * an **general** scenario (Many-to-Many (NP-NC), implemented similarly to ''Go'')
-
-<code php>
-class Channel implements ChannelInterface
-{
-    public static function singleProducer(int $capacity = 1, ?\Fiber $owner = null, bool $expandable = false, bool $throwOnNull = false): Channel {}
-
-    public readonly ?\Fiber $owner = null;
-
-    public function __construct(int $capacity = 1, ?\Fiber $owner = null, bool $expandable = false, bool $throwOnNull = false) {}
-
-    public function send(mixed $data, int $timeout = 0, ?Notifier $cancellation = null, ?bool $waitOnFull = true): void {}
-
-    public function trySend(mixed $data): void {}
-
-    public function receive(int $timeout = 0, ?Notifier $cancellation = null): mixed {}
-
-    public function receiveOrNull(int $timeout = 0, ?Notifier $cancellation = null): mixed {}
-
-    public function tryReceive(): mixed {}
-
-    public function waitUntilWritable(int $timeout = 0, ?Notifier $cancellation = null): bool;
-
-    public function waitUntilReadable(int $timeout = 0, ?Notifier $cancellation = null): bool;
-
-    public function finishProducing(): void {}
-
-    public function finishConsuming(): void {}
-
-    public function discardData(): void {}
-
-    public function close(): void {}
-
-    public function isClosed(): bool {}
-
-    public function isFull(): bool {}
-
-    public function isEmpty(): bool {}
-
-    public function isNotEmpty(): bool {}
-
-    public function isProducingFinished(): bool {}
-
-    public function getCapacity(): int {}
-
-    public function getUsed(): int {}
-
-    public function getNotifier(): Notifier {}
-
-    public function current(): mixed {}
-
-    public function key(): mixed {}
-
-    public function next(): void {}
-
-    public function rewind(): void {}
-
-    public function valid(): bool {}
-
-    public function count(): int {}
-}
-</code>
-
-=== Single Producer, Multiple Consumers (Work Queue) ===
-
-The basic scenario is when a channel has only one producer and can have one or more (usually just one) consumers.
-In most cases, this scenario is sufficient. It also promotes simple code organization, minimizing errors.
-
-**True Async** provides an explicit implementation of ''Single Producer'' scenario by defining a channel owner.
-
-**Rules for the producer:**
-  * When a channel is created, it automatically assigns the current ''Fiber'' as the owner.
-  * Only the channel owner can send messages to it.
-  * Only the channel owner can close the channel for writing.
-  * Once the owner ''Fiber'' stops execution, the channel is automatically closed.
-
-**Rules for the consumer:**
-  * Only the channel consumer can read messages from it.
-  * If a channel no longer has any consumers, it will automatically close,
-  causing an exception in the producer's code when attempting to populate data.
-
-This logic helps prevent deadlocks and makes working with channels more predictable.
-
-**Example:**
-
-<code php>
-Async\run(function() {
-    $channel = Async\Channel::singleProducer();
-
-    Async\run(function(Async\Channel $channel) {
-        while (($data = $channel->receiveOrNull()) != null) {
-            echo "receive: $data\n";
-        }
-    }, $channel);
-
-    for ($i = 0; $i < 4; $i++) {
-        $channel->send("event data $i");
-    }
-});
-</code>
-
-In the example above, ''Fiber2'' enters a loop as long as there is data in the channel,
-while ''Fiber1'', which creates the channel, fills it with data.
-There is no explicit call to the ''close()''
-method in the code because the channel closes automatically once ''Fiber1'' stops execution.
-
-When the ''close()'' method is called by the producer, all consumers receive a ''NULL'' message with receiveOrNull or
-exception with receive. This behavior is consistent with the ''NULL'' semantics described below.
-
-=== NULL as an End-of-Data Indicator ===
-
-Using ''NULL'' semantics as an end-of-data indicator falls into the category of implicit semantics
-and can therefore be considered "bad practice."
-Throwing an exception when a channel is closed would be a more explicit behavior.
-''NULL'' creates ambiguity because a producer may send ''NULL'' as actual data.
-
-However, the **NULL-EOF** approach has the following advantages:
-
-  * Code using ''NULL'' is a common practice not only in channel programming but also in socket programming.
-  * Code with ''NULL'' appears semantically less complex and more concise.
-  * The ''NULL'' value in PHP signifies the absence of data, so this approach does not contradict the overall logic of the language.
-
-**True Async** implements both approaches:
-
-  * The ''Channel'' class contains the methods ''receive'' and ''receiveOrNull''.
-  * The ''receive'' method throws an exception when attempting to read from the channel if the channel has been closed and there is no data.
-  * The ''receiveOrNull'' method returns ''NULL''.
-  * The ''$throwOnNull'' option, available in the constructor, controls the behavior of the ''send'' method: if the option is enabled and an attempt is made to write a ''NULL'' value into the channel, the method will throw an exception.
-
-=== Channel Closing Methods ===
-
-A channel has several methods for closing:
-  * ''close''
-  * ''finishProducing''
-  * ''finishConsuming''
-
-The ''finishProducing'' method provides an explicit semantic for stopping data production.
-It cannot be called from a ''Fiber'' that is not the owner if the channel was created in ''Work Queue'' mode.
-
-**It has the following effects:**
-  * The channel is closed for writing; any attempt to send data will result in an exception.
-  * If there are no more messages left in the channel, it will be permanently closed immediately.
-  * All waiting consumer ''Fibers'' will wake up and resume execution.
-
-Calling ''finishConsuming()'' is a request to close the channel from the consumer's side.
-
-**It has the following effects:**
-  * If there was data in the channel, an exception will be thrown. To prevent this, use ''discardData()''.
-  * The channel will be closed for writing; any attempt by the producer to send new data will result in an exception.
-  * All other ''Fibers'' waiting on the channel will wake up.
-
-The ''finishConsuming()'' method is useful in scenarios
-where the provider continuously populates data,
-but the consumer knows when to stop processing.
-In such cases, it is assumed that the channel has only one consumer.
-
-<code php>
-Async\run(function() {
-    $channel = new Async\Channel();
-
-    Async\run(function() use($channel) {
-
-        $receiveLimit = 3;
-        $received = 0;
-
-        while (($data = $channel->receive()) != null) {
-            echo "receive: $data\n";
-            $received++;
-            if ($received >= $receiveLimit) {
-                $channel->finishConsuming();
-                break;
-            }
-        }
-    });
-
-    for ($i = 0; $i < 4; $i++) {
-        try {
-            $channel->send("event data $i");
-        } catch (Async\ChannelWasClosed $e) {
-            echo "producer catch 'channel closed'\n";
-            break;
-        }
-    }
-});
-</code>
-
-If the channel is opened in ''Work Queue'' mode, you can use the ''close()'' method in both cases because
-the channel can determine from which ''Fiber'' it was called.
-However, using explicit semantics helps to avoid mistakes.
-
-=== General Channel Mode ===
-
-The general mode of channel operation disables additional checks.
-In this mode, there is no distinction regarding which ''Fiber'' calls the functions,
-and there are no restrictions on ''send/receive'' operations.
-
-A channel can be created in general mode in two ways:
-1. Define the channel in the main execution thread (outside a ''Fiber'').
-2. Explicitly define the channel with the parameter ''owner = NULL''.
-
-<code php>
-$channel = new Async\Channel();
-
-Async\run(function() use($channel) {
-    while (($data = $channel->receive()) != null) {
-        echo "receive: $data\n";
-    }
-});
-
-Async\run(function() use($channel) {
-    while (($data = $channel->receive()) != null) {
-        echo "receive: $data\n";
-    }
-});
-
-Async\run(function() use($channel) {
-    for ($i = 1; $i <= 3; $i++) {
-        $channel->send("event data $i");
-    }
-});
-
-Async\run(function() use($channel) {
-    for ($i = 10; $i <= 13; $i++) {
-        $channel->send("event data $i");
-    }
-
-    $channel->close();
-});
-</code>
-
-=== Channel as an Iterator ===
-
-A channel implements the iterator interface, so you can use it as an iterator.
-
-**Example:**
-<code php>
-Async\run(function() {
-    $channel = new Async\Channel();
-
-    Async\run(function() use($channel) {
-        foreach($channel as $data) {
-            echo "receive: $data\n";
-        }
-    });
-
-    for ($i = 0; $i < 4; $i++) {
-        $channel->send("event data $i");
-    }
-});
-</code>
-
-=== Non-Blocking Methods ===
-
-In addition to the ''send/receive'' methods, which suspend the execution of a ''Fiber'',
-the channel also provides non-blocking methods: ''trySend'', ''tryReceive'',
-and auxiliary explicit blocking methods: ''waitUntilWritable'' and ''waitUntilReadable''.
-
-This group of methods helps implement more flexible and diverse data flow scenarios,
-taking into account buffering, for example:
-
-<code php>
-Async\run(function() {
-    $channel = new Async\Channel();
-
-    Async\run(function() use($channel) {
-        while ($channel->waitUntilReadable()) {
-            $data = $channel->tryReceive();
-            echo "receive: $data\n";
-        }
-    });
-
-    for ($i = 0; $i < 4; $i++) {
-        if(false === $channel->waitUntilWritable()) {
-            break;
-        }
-
-        echo "send: event data $i\n";
-        $data = $channel->trySend("event data $i");
-    }
-});
-</code>
-
-=== Buffering ===
-
-By default, a channel is created with only one data slot.
-This can be changed by explicitly specifying the ''$capacity'' parameter
-and defining the size of the circular buffer.
-
-For channels created within a single thread, the ''$expandable'' option is also available.
-In this case, the channel's buffer will grow indefinitely (until memory is exhausted) if necessary.
-For channels created between threads, resizing is not available.
-
-=== Multiple Channel I/O Waiting ===
-
-Channels do not implement the ''getFuture'' method because
-the ''Future'' pattern is not suitable for multiple state changes.
-However, a channel implements the ''getNotifier()'' method,
-which returns an object that can be used in the low-level ''Async\wait()'' interface (see **Low-level API** section).
-
-By combining ''Notifier'' objects from different channels with the low-level API,
-a programmer can create arbitrarily complex logic for interacting with multiple channels
-and any other ''Notifier'' objects (such as sockets, timers, I/O descriptors, OS signals, etc.).
-
-==== Walker ====
-
-The ''Walker'' class provides an interface for concurrent iteration over iterators.
-This means that each iteration step, if necessary, will be executed in a separate ''Fiber'' and will not block others.
-
-The class defines three main methods:
-  * ''iterate'' – iterates over an iterator and returns a ''Future''.
-  * ''walk'' – iterates over an iterator with a callback function.
-  * ''map'' – iterates over an iterator with a callback function and returns a ''Future''.
-
-**Examples:**
-<code php>
-
-Async\Walker::iterate(function() {
-    for ($i = 0; $i < 10; $i++) {
-        sleep($i);
-    }
-});
-
-Async\Walker::walk(["google.com", "php.net"], function(mixed $domain) {
-    echo file_get_contents("https://$domain")."\n";
-});
-
-$results = Async\await(Async\Walker::map(["google.com", "php.net"], function(mixed $domain) {
-    return file_get_contents("https://$domain")."\n";
-}));
-</code>
-
-All three methods are very similar.
-The difference between ''map'' and ''walk'' is that ''map'' explicitly captures the result of the callback function
-and forms a ''Future'' with the resulting array.
-
-<code php>
-final class Walker
-{
-    /**
-     * Iterates over the given iterable asynchronously
-     * and calls the given callback function for each element.
-     *
-     * @param iterable      $iterator       The iterable to walk over.
-     * @param callable      $function       The callback function to call for each element.
-     * @param mixed         $customData     Custom data to pass to the callback function.
-     * @param callable|null $defer          The callback function to call when the iteration is finished.
-     * @param int           $concurrency    The number of concurrent operations.
-     *
-     * @return Walker
-     */
-    public static function walk(
-        iterable $iterator,
-        callable $function,
-        mixed $customData = null,
-        ?callable $defer = null,
-        int $concurrency = 0
-    ): Walker {}
-
-    public static function map(
-        iterable $iterator,
-        callable $function,
-        mixed $customData = null,
-        ?callable $defer = null,
-        int $concurrency = 0
-    ): Future {}
-
-    /**
-     * Iterates over the given iterable asynchronously.
-     *
-     * param    iterable    $iterator       The iterable to iterate over.
-     * param    bool        $returnArray    Whether to return the result as an array.
-     * param    int         $concurrency    The number of concurrent operations.
-     *
-     * @return Future
-     */
-    public static function iterate(
-        \Iterator|\IteratorAggregate $iterator,
-        bool $returnArray = false,
-        int $concurrency = 0
-    ): Future {}
-
-    public readonly bool $isFinished = false;
-    private iterable $iterator;
-    private mixed $customData;
-    private mixed $defer;
-
-    public function getFuture(): Future {}
-}
-</code>
-
-==== Interval ====
-
-The ''Interval'' class provides a high-level API for creating a callback function that will trigger periodically at a specified interval.
-The callback function receives the ''Interval'' instance itself as an argument, allowing for dynamic control.
-
-<code php>
-final class Interval
-{
-    /**
-     * Constructor to initialize the Interval.
-     *
-     * @param int $interval Interval in milliseconds.
-     * @param callable $callback Function to execute, receiving the Timer instance.
-     */
-    public function __construct(int $interval, callable $callback) {}
-
-    /**
-     * Starts the Interval.
-     *
-     * @return void
-     */
-    public function start(): void {}
-
-    /**
-     * Stops the timer.
-     *
-     * @return void
-     */
-    public function stop(): void {}
-
-    /**
-     * Checks if the Interval is currently running.
-     *
-     * @return bool True if the timer is running, false otherwise.
-     */
-    public function isRunning(): bool {}
-
-    /**
-     * Gets the timer interval.
-     * @return int Interval in milliseconds.
-     */
-    public function getInterval(): int {}
-}
-</code>
-
-**Example:**
-
-<code php>
-$timer = new Interval(2000, function (Interval $self) {
-    echo "Tick at: " . date('H:i:s') . "\n";
-    if (rand(1, 5) === 3) { // Random stop condition
-        $self->stop();
-        echo "Interval stopped.\n";
-    }
-})->start();
-</code>
-
-==== Shell command execution ====
-
-In addition to standard functions for launching processes and shell commands,
-such as: ''proc_open'', ''shell_exec'', ''exec'', ''passthru'',
-which do not block the application in ''Scheduler'' mode, **True Async**
-defines an additional function that returns a ''Future''.
-
-<code php>
-/**
- * Execute an external program.
- * @return Future<array{string, int}>
- */
-function exec(
-    string|array $command,
-    int $timeout        = 0,
-    ?string $cwd        = null,
-    ?array $env         = null,
-    bool $returnAll     = false,
-): Future {}
-</code>
-
-The function ''exec'' returns a ''Future'' that will store the result of the command execution.
-The result is an array with two elements:
-  * the output of the command
-  * the exit code
-
-**Example:**
-<code php>
-Async\run(function() {
-    $result = Async\await(Async\exec('ls -la'));
-    echo $result[0];
-});
-</code>
-
-If the ''$returnAll'' parameter is set to ''true'', the function will return all output lines.
-Otherwise, only the last line will be returned.
-
-==== OS signal handling ====
-
-Function ''trapSignal'':
-
-<code php>
-Async\trapSignal(int|array $sigNumber, callable $callback): void {}
-</code>
-
-allows defining signal handlers that the OS sends to the application.
-
-Signals are a mechanism whose implementation depends on the operating system and the Reactor component implementation,
-which is not defined by **True Async**.
-
-**True Async** imposes the following requirements on the implementation:
-* The reactor should strive to support handling the application termination signal if the operating system is included in the list of supported ones.
-* The method ''getSupportedSignals'' must return a list of supported signals on the current platform.
-* An attempt to add a handler for an unsupported signal must throw an exception.
-
-The ''trapSignal'' method is intended for defining a global signal handler
-and can be set only once for a specific signal number (unlike the similar ''SignalHandle'' API).
-
-This means that ''trapSignal'' is not intended for "regular code" and should not be used "anywhere".
-
-The signal handler must be defined **before** starting the ''Scheduler'' and will be destroyed as soon as the
-''Scheduler'' stops running.
-
-==== Low-level API ====
-
-<blockquote>
-**Point of Discussion**
-
-At the early stages of designing ''True Async'', an attempt was made to create a copy of the interface from ''Revolt''
-to provide developers with the highest possible level of control over the application.
-
-The main argument in favor of having a low-level API was as follows:
-If PHP includes such low-level objects as ''Fiber'' and sockets close to C-level implementations,
-it would be logical to provide an API for interacting with the ''Event Loop''.
-
-However, as the code was being developed and interfaces were defined, doubts arose.
-
-The main argument against this API: functions that inherently block the execution flow appear simpler,
-are more intuitive to use, and are safer. I came to the conclusion that, in the long run,
-sacrificing flexibility in favor of code safety is a reasonable trade-off.
-
-By hiding the ''Low-level API'' from the PHP-land, memory consumption could also be optimized,
-as objects like ''Notifier'' could be implemented without the need to inherit from ''zend_object''.
-
-On the other hand, the existence of this API makes the toolkit as comprehensive as possible.
-
-If a developer encounters a limitation of a high-level implementation,
-this API provides more flexibility in switching fibers,
-which can positively impact performance since the cost of invoking callback functions
-is lower than the cost of switching ''Fiber''.
-
-</blockquote>
-
-The low-level API for managing Fiber execution flow and handling I/O events mirrors the corresponding C-language API.
-It is built around the creation of a Fiber suspension point and conditions for resumption.
-
-The **Resume** class represents a Fiber suspension point and connects the following information:
-  * In which location the Fiber was suspended
-  * What events it is waiting for
-  * What the conditions for resumption are
-  * What events occurred when the Fiber was resumed
-
-<blockquote>
-**Note:**
-The **Low-level API** is designed for **libraries and frameworks** and imposes **increased development requirements**.
-Code written using this API must be **tested for deadlocks** and ensure the **correct release of reactor descriptors**.
-</blockquote>
-
-<code php>
-final class Resume
-{
-    private mixed $result = null;
-
-    /**
-     * Predefined callback-behavior for the ''Resume'' object
-     * when the event is triggered, fiber resumes execution.
-     * If an error occurs, an exception is thrown.
-     */
-    const int RESOLVE   = 1;
-    /**
-     * Predefined callback-behavior for the ''Resume'' object
-     * when the event is triggered, fiber resumes execution with a cancellation exception.
-     * If an error occurs, an exception is thrown.
-     */
-    const int CANCEL    = 2;
-    /**
-     * Predefined callback-behavior for the ''Resume'' object
-     * when the event is triggered, fiber resumes execution with a timeout exception.
-     * If an error occurs, an exception is thrown.
-     * This callback can be used only with the ''TimerHandle'' object.
-     */
-    const int TIMEOUT   = 3;
-
-    /**
-     * Creates a new ''Resume'' object.
-     */
-    public function __construct() {}
-
-    /**
-     * Resumes the fiber with a value.
-     */
-    public function resume(mixed $value = null): void {}
-
-    /**
-     * Throws an exception into the fiber.
-     */
-    public function throw(?\Throwable $error = null): void {}
-
-    /**
-     * Determines if the ''Resume'' object is pending.
-     */
-    public function isPending(): bool {}
-
-    /**
-     * Determines if the ''Resume'' object has been resolved.
-     */
-    public function isResolved(): bool {}
-
-    /**
-     * Returns the Notifiers associated with the ''Resume'' object.
-     */
-    public function getNotifiers(): array {}
-
-    /**
-     * Returns the Notifiers that have been triggered.
-     */
-    public function getTriggeredNotifiers(): array {}
-
-    /**
-     * Add a Notifier to the `Resume` object with a callback.
-     */
-    public function when(Notifier $notifier, callable|int $callback = Resume::RESOLVE): static {}
-
-    /**
-     * Removes a Notifier from the `Resume` object.
-     */
-    public function removeNotifier(Notifier $notifier): static {}
-
-    /**
-     * Returns the last position: the file name and line number where the Resume object was used for awaiting.
-     */
-    public function awaitedIn(): string {}
-
-    /**
-     * Returns a string representation of the `Resume` object that can be used for debugging purposes.
-     */
-    public function getInfo(): string {}
-}
-</code>
-
-Resumption conditions for **Resume** are defined using a callback function with the following prototype:
-
-<code php>
-function(Async\Resume $resume, Async\Notifier $notifier, mixed $event, ?\Throwable $error = null): void {}
-</code>
-
-where:
-  * ''$resume'' - the current **Resume** object
-  * ''$notifier'' - the producer that generated the event (e.g., socket, file descriptor, etc.)
-  * ''$event'' - event information (event type depends on the source)
-  * ''$error'' - exception object, or ''NULL'' if no error occurred
-
-The event handler can decide:
-  * Whether to call ''Resume::resume()'' - to resume Fiber execution
-  * Whether to call ''Resume::throw()'' - to resume Fiber execution with an error
-  * Or do nothing
-
-Method ''Resume::when()'' associates a **Notifier** object with a **Resume** object and a **callback**.
-A single **Resume** object can be associated with multiple **Notifier** instances.
-Each **Notifier** can be handled by its own event handler.
-
-*Example:*
-<code php>
-$notifier = TimerHandle::newTimeout(1000);
-$resume = new Async\Resume();
-
-$resume->when($notifier, function(Async\Resume $resume, Async\Notifier $notifier, mixed $event, ?\Throwable $error = null) {
-    if ($error) {
-        $resume->throw($error);
-    } else {
-        $resume->resume();
-    }
-});
-
-Async\wait($resume);
-</code>
-
-The code above demonstrates behavior similar to the ''sleep(1)'' function.
-The **TimerHandle** object generates an event after a specified time interval.
-
-The ''$callback'' parameter of the ''when()'' method can also accept one of the predefined values:
-
-  * ''Resume::RESOLVE'' – on success, the fiber continues execution; on error, an exception is thrown.
-  * ''Resume::CANCEL'' – on success, the fiber resumes with a cancellation exception ''CancellationException''.
-  * ''Resume::TIMEOUT'' – on success, the fiber resumes execution with a timeout exception ''TimeoutException''.
-
-After the ''Resume'' object is created, the execution of the ''Fiber'' must be stopped using
-the ''Async\wait()'' function, which takes a ''Resume'' object as an argument.
-Calling this function will suspend the ''Fiber'' and resume it when the state of the ''Resume'' object changes.
-
-If the ''Resume'' object is resolved with an error, an exception passed to ''Resume::throw()''
-will be thrown at the point where ''Async\wait'' was called.
-
-After the waiting for the ''Resume'' object is completed, the ''Resume::getTriggeredNotifiers''
-method can be used to obtain a list of ''Notifiers'' objects that were involved during the ''Fiber'' idle time.
-This allows determining the reason for resumption or the result of a background operation.
-
-=== Callback Function Limitation ===
-
-The callback function is executed in the context of the **Scheduler**,
-so if the function uses an operation that blocks execution (e.g., **sleep**),
-it will halt the **Scheduler**, and consequently, the entire application thread.
-
-This imposes **increased testing requirements** and makes this API **unsafe** for inattentive use.
-
-=== Reactor Handlers ===
-
-The **Reactor** component defines **Notifier** subclasses that can be used within the **EventLoop**.
-
-=== PollHandle: File, Socket, and Pipes ===
-
-<code php>
-abstract class PollHandle extends Notifier
-{
-    public const int READABLE = 1;
-    public const int WRITABLE = 2;
-    public const int DISCONNECT = 4;
-    public const int PRIORITY = 8;
-
-    public readonly int $triggeredEvents = 0;
-
-    final private function __construct() {}
-
-    /**
-     * Return TRUE if the handle is listening for events in the reactor.
-     */
-    final public function isListening(): bool {}
-
-    /**
-     * Stop listening for events on the handle.
-     */
-    final public function stop(): void {}
-}
-</code>
-
-<code php>
-final class FileHandle extends PollHandle
-{
-    public static function fromResource(mixed $fd, int $actions = self::READABLE | self::WRITABLE): FileHandle {}
-}
-
-final class SocketHandle extends PollHandle
-{
-    public static function fromResource(mixed $resource, int $actions = self::READABLE | self::WRITABLE): SocketHandle {}
-    public static function fromSocket(mixed $socket, int $actions = self::READABLE | self::WRITABLE): SocketHandle {}
-}
-
-final class PipeHandle extends PollHandle
-{
-    public static function fromResource(mixed $resource, int $actions = self::READABLE | self::WRITABLE): PipeHandle {}
-}
-
-final class TtyHandle extends PollHandle
-{
-    public static function fromResource(mixed $resource, int $actions = self::READABLE | self::WRITABLE): TtyHandle {}
-}
-</code>
-
-The group of classes that inherit from **PollHandle** allows waiting for **I/O events**
-on input/output descriptors such as **files, sockets, TTYs, and pipes**.
-
-<blockquote>
-**Attention:** The **Windows** operating system does not allow the creation of a seamless
-API for all types of descriptors, so the use of **PollHandle** is **limited on Windows**.
-</blockquote>
-
-The **PollHandle** class group can be created from **PHP-resource handlers**,
-which are returned by functions such as ''fopen'', ''stream_socket_pair'', etc.
-
-<blockquote>
-**Attention:**
-At the moment of **handle creation**, the **blocking mode** is **automatically switched** from **blocking to
-non-blocking**.
-</blockquote>
-
-Using multiple ''PollHandle'' instances from the **same I/O descriptor**
-in the **event loop** may result in an **exception** (the implementation of this behavior depends on the **reactor**).
-The **developer** is responsible for ensuring that this rule is **not violated**.
-
-Using the **same PollHandle** in different **Fibers** is **allowed**.
-However, it is important to **consider the type of Handle**.
-For example, a scenario where **one Fiber only writes to a socket**
-and **another only reads from it** is valid **if it does not break the logic**.
-
-<blockquote>
-**Attention:**
-The ''PipeHandle'' class is not fully implemented in the current release.
-To ensure its full functionality, it is necessary to implement a STREAM with the ''pipe'' type.
-</blockquote>
-
-<blockquote>
-**Note:**
-Input/output events will not be processed earlier than:
-    * The scheduler gains control
-    * All microtasks are completed
-</blockquote>
-
-=== Timer Handle ===
-
-**TimerHandle** allows creating a notifier in the event loop that will trigger after a specified time interval.
-The ''TimerHandle'' will remain active as long as the ''Resume'' object is in a waiting state.
-Once ''Resume'' is resolved, the ''TimerHandle'' will be removed from the event loop.
-
-<code php>
-final class TimerHandle extends Notifier
-{
-    public readonly int $microseconds = 0;
-    public readonly bool $isPeriodic = false;
-
-    public static function newTimeout(int $microseconds): TimerHandle {}
-    public static function newInterval(int $microseconds): TimerHandle {}
-
-    public function isListening(): bool {}
-    public function stop(): void {}
-}
-</code>
-
-<blockquote>
-**Note** that ''TimerHandle'' is not a precise time measurement tool.
-The event will not occur earlier than:
-    * The scheduler gains control
-    * All microtasks are completed
-    * All input/output events are processed
-</blockquote>
-
-=== Signal Handle ===
-
-The **SignalHandle** class allows creating a notifier in the event loop that will trigger when a signal is received.
-
-<code php>
-final class SignalHandle extends Notifier
-{
-    public const int SIGHUP = 1;
-    public const int SIGINT = 2;
-    public const int SIGQUIT = 3;
-    public const int SIGILL = 4;
-    public const int SIGABRT_COMPAT = 6;
-    public const int SIGFPE = 8;
-    public const int SIGKILL = 9;
-    public const int SIGSEGV = 11;
-    public const int SIGTERM = 15;
-    public const int SIGBREAK = 21;
-    public const int SIGABRT = 22;
-    public const int SIGWINCH = 28;
-
-    public readonly int $sigNumber = 0;
-
-    public static function new(int $sigNumber): SignalHandle {}
-
-    public function isListening(): bool {}
-    public function stop(): void {}
-}
-</code>
-
-The final implementation of the signal handler depends on the ''Reactor'' implementation, which may change.
-**True Async** sets the following requirements for the ''Reactor'':
-
-    * Signals are numbered the same way as in Unix-like systems.
-    * If the operating system does not support signals, the ''Reactor'' may emulate this support. For example, as implemented by LibUv: https://docs.libuv.org/en/v1.x/signal.html
-    * A programmer implementing code for this handle must rely not only on this RFC but also on the documentation of the specific ''Reactor''.
-    * Support for the ''SIGINT'' signal must be implemented in the ''Reactor'' if the ''Reactor'' declares that it supports the specified OS.
-
-=== Thread Handle ===
-
-''ThreadHandle'' is designed for waiting for a ''Thread'' to complete.
-Its functionality exists only for use at the C-API level.
-A PHP developer may see this class in the list of awaited objects.
-
-Full support for ''ThreadHandle'' depends on the development of multithreading support in PHP.
-
-<code php>
-final class ThreadHandle extends Notifier
-{
-    public readonly int|null $tid = 0;
-
-    private function __construct() {}
-}
-</code>
-
-=== Process Handle ===
-
-''ProcessHandle'' is designed for waiting for a process to complete.
-Its functionality exists only for use at the C-API level.
-A PHP developer may see this class in the list of awaited objects.
-
-<code php>
-final class ProcessHandle extends Notifier
-{
-    public readonly int|null $pid = null;
-    public readonly int|null $exitCode = null;
-
-    private function __construct() {}
-}
-</code>
-
-=== DNS Handle ===
-
-''DnsInfoHandle'' is used in functions related to DNS services.
-In this RFC, it has a rather limited API, which may be expanded in the future.
-Almost any HTTP request executed inside a ''Fiber'' implicitly uses this class,
-and it can be observed using functions for inspecting the state of the ''Scheduler''.
-
-<code php>
-final class DnsInfoHandle extends Notifier
-{
-    public static function resolveHost(string $host): DnsInfoHandle {}
-    public static function resolveAddress(string $address): DnsInfoHandle {}
-
-    public readonly string|null $host = null;
-    public readonly string|null $address = null;
-
-    private function __construct() {}
-
-    public function getInfo(): string {}
-}
-</code>
-
-=== Filesystem Handle ===
-
-''FileSystemHandle'' allows tracking filesystem events, specifically two events:
-
-    * **EVENT_RENAME** – triggered when a file is renamed
-    * **EVENT_CHANGE** – triggered when a file is modified
-
-<code php>
-final class FileSystemHandle extends Notifier
-{
-    public const int EVENT_RENAME = 1;
-    public const int EVENT_CHANGE = 2;
-
-    public const int FLAG_NONE = 0;
-    public const int WATCH_ENTRY = 1;
-    public const int WATCH_RECURSIVE = 4;
-
-    public readonly int $triggeredEvents = 0;
-    public readonly string $path = '';
-    public readonly int $flags = 0;
-
-    public static function fromPath(string $path, int $flags): FileSystemHandle {}
-
-    private function __construct() {}
-
-    public function isListening(): bool {}
-    public function stop(): void {}
-}
-</code>
-
-=== Handling ''Handle'' with ''Resume::when'' ===
-
-When a ''Handle'' class is bound to a ''Resume'' object via ''Resume::when'',
-and the ''Resume'' object is passed to ''Async\wait()'',
-the waiting process begins, and the ''Handle'' enters the **event loop**.
-
-Once the waiting process completes, the ''Handle'' exits the event loop.
-
-A single ''Handle'' class can potentially belong to multiple ''Resume'' instances at the same time,
-meaning that **multiple Fibers** can wait on the **same Handle**.
-
-However, the validity of this operation depends on the **context**.
-For example, waiting on the **same socket** can lead to **unpredictable errors**
-if two **Fibers** attempt to **read or write** to it simultaneously.
-
-Ensuring the correctness of such operations is the responsibility of the **developer**.
+==== Deadlocks ====
+
+A situation may arise where there are no active **Coroutines** in the execution queue
+and no active handlers in the event loop.
+This condition is called a **Deadlock**, and it represents a serious logical error.
+
+When a **Deadlock** is detected, the application enters **Graceful Shutdown** mode
+and generates warnings containing information about which **Coroutines** are in a waiting state
+and the exact lines of code where they were suspended.
 
 ==== Tools ====
 
-Additional functions allow obtaining information about the **current state** of the **Scheduler**.
+The ''Coroutine'' class implements methods for inspecting the state of a coroutine.
 
-<code php>
-/**
- * Returns a list of all fibers registered in the Scheduler.
- *
- * @return \Fiber[]
- */
-function getFibers(): array {}
+^ Method ^ Description ^
+| **getSpawnFileAndLine():array** | Returns an array of two elements: the file name and the line number where the coroutine was spawned. |
+| **getSpawnLocation():string** | Returns a string representation of the location where the coroutine was spawned, typically in the format "file:line". |
+| **getSuspendFileAndLine():array** | Returns an array of two elements: the file name and the line number where the coroutine was last suspended. If the coroutine has not been suspended, it may return array |
+| **getSuspendLocation():string** | Returns a string representation of the location where the coroutine was last suspended, typically in the format "file:line". If the coroutine has not been suspended, it may return an empty string. |
+| **isSuspended():bool** | Returns true if the coroutine has been suspended. |
+| **isCancelled():bool** | Returns true if the coroutine has been cancelled, otherwise false. |
+| **getTrace():array** | Returns the stack trace of the coroutine. |
 
-/**
- * Returns a list of all Resume objects that have currently suspended Fibers.
- *
- * @return Resume[]
- */
-function getResumes(): array {}
-</code>
+The ''Coroutine::getAwaitingInfo()'' method returns an array with debugging information
+about what the coroutine is waiting for, if it is in a waiting state.
 
-The ''Async\getFibers()'' function returns a **list of all
-Fiber instances** in the system that **belong to the Scheduler**.
+The ''Async\getCoroutines()'' method returns an array of all coroutines in the application.
 
-The ''Async\getResumes()'' function returns a **list of all Resume objects**
-that have **currently suspended Fibers**.
+==== Prototypes ====
 
-Using the method **Resume::getNotifiers()**,
-you can also retrieve information about **which events the Fiber is waiting for**.
-
-The method **Resume::awaitedIn()** returns
-the **PHP file name and line number** where the **Fiber was suspended**.
-
-The **getInfo()** method, available for **Notifier** and **Resume** objects,
-allows retrieving **string information**
-that can be used for **debugging** or **error output**.
-
-==== Supported PHP Functions ====
-
-The following list of PHP functions is supported by True Async,
-which modifies PHP Core functions as well as extension functions to implement non-blocking I/O.
-
-  * ''sleep'', ''usleep'', ''time_nanosleep'', ''time_sleep_until''
-  * Stream functions: ''file_get_contents'', ''fopen'', ''fread'', ''fwrite'', ''fsockopen'', ''stream_socket_accept'', etc (For Windows, a known limitation applies to file and pipe handles)
-  * Dns info functions like: ''gethostbyname'', ''gethostbynamel'', ''gethostbyaddr''
-  * Exec functions: ''proc_close'', ''shell_exec'', ''exec'', ''passthru'' (Windows full support)
-  * Sockets ext
-  * Curl ext
-  * MySql Native Driver + PDO ext
-  * Redis ext
-
-By modifying two key PHP core functions, ''php_select''/''php_poll2'', which are emulated in the True Async library,
-all other functions that rely on them operate in a non-blocking mode.
-It is worth noting that the current implementation is not the most efficient in terms of performance,
-as the select/poll algorithm itself is outdated.
-
-==== Performance and Resilience ====
-
-The introduction of a **Scheduler** and the **Reactor** inevitably adds some overhead.
-Creating a ''Fiber'' is relatively cheap (much lighter than an OS thread),
-but it still requires allocating a stack and ''Fiber''/''Resume''/''Notifier'' objects.
-
-If a program launches thousands of small tasks, the overhead from ''Fiber'' switching, ''Resume'' allocation,
-and event dispatching through the ''Notifier'' can become noticeable.
-In the worst-case scenario, improper usage (e.g., an infinite stream of microtasks or thousands of timers per second)
-can lead to performance degradation.
-Additionally, ''Fiber'' context switching is slightly heavier than a function call but significantly lighter
-than a system context switch between threads.
-
-One of the drawbacks of the **True Async approach** is the use of ''zend_object'' for abstracting over the event loop.
-Removing these objects from PHP-land-level could help save some memory.
-
-**True Async** attempts to optimize Fiber usage in microtasks and concurrent iterators by creating new Fibers only when
-necessary. To achieve this, it employs an algorithm similar to the one used in **AMPHP**.
-
-**True Async** overrides core PHP functions such as ''php_select''/''poll2'', which themselves have a negative impact on
-performance. Attempting to build a high-performance solution on top of such functions is inherently ineffective.
-However, this should not be considered a critical drawback, as PHP's goal is not to compete with C/C++.
-It is evident that the creation of high-performance servers and handlers should be entrusted to low-level languages.
-
-The implementation of the DNS resolution function ''network_get_host_by_name''
-that caches results in "memory" is potentially not
-the best solution and requires refactoring in the future.
-
-**True Async** does not provide PHP with multitasking, as this is a limitation of PHP's own. This fact
-imposes unavoidable constraints on concurrency usage that cannot be circumvented and MUST be considered by developers:
-
-    * A Fiber should execute for the minimal possible time between context switch points. Code that attempts to perform a million iterations in a loop without calling ''Async\wait()'' is meaningless.
-    * If an infinite loop or a stack overflow error occurs within a Fiber, it will be necessary to terminate at least the entire OS thread, which means all other Fibers will also be destroyed. From the user's perspective, this will result in the failure of multiple requests simultaneously. This drawback MUST be considered if you aim to build a highly reliable application.
-    * The built-in Web server, which delegates requests to Fibers, must be able to correctly determine the maximum number of requests that should be processed within a single OS thread.
-
-You should not avoid writing code within a single OS thread out of fear of failure.
-
-A possible solution to the above issues could be:
-    * A request retry mechanism (must be provided by the Web server component)
-    * Delegating heavy or risky tasks to separate processes/threads
-
-So the API for inter-thread (or inter-process) communication is a crucial topic for **True Async**.
-
-==== Implementation Notes ====
-
-The Windows operating system has a well-known issue related to waiting for I/O events on descriptors of different types.
-In UNIX, any descriptor can be switched to non-blocking mode at any time, whereas in Windows,
-this is not possible.
-This and other peculiarities require significant modifications to functions like **fread**/**fwrite**
-to ensure consistent behavior across Windows and UNIX-like OS.
-
-**True Async** does not aim to solve this issue immediately, as the target OS for PHP remains UNIX-like systems.
-
-Additionally, it is possible to refactor I/O functions to make them as abstract as possible from a specific OS implementation.
-This would allow for more flexibility in bypassing limitations without changing the overall code structure.
-For example, functions like **php_select**/**php_poll2** could be replaced with a more general and convenient interface.
-
-Such changes may be implemented in the future.
+  * [Async functions](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/Async.php)
+  * [Coroutine](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/Coroutine.php)
+  * [Coroutine Context](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/Context.php)
+  * [Coroutine Scope](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/Scope.php)
+  * [Coroutine BoundedScope](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/BoundedScope.php)
+  * [Coroutine Key](https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples/Async/Key.php)
 
 ===== Backward Incompatible Changes =====
-None.
 
-==== Fiber API issue ====
+Simultaneous use of the **True Async API** and the **Fiber API** is not possible.
 
-Once the **Scheduler** is activated, explicitly using **Fiber** in the code may lead to unpredictable effects.
-This issue requires a solution.
-It might be reasonable to add an exception to **Fiber** methods to prevent users from using the
-**Fiber API** after asynchronous mode has been activated.
-
-==== Blocking/Non blocking issue ====
-
-Using sockets inside **Fiber** implicitly switches the socket to non-blocking mode.
-Attempting to use this socket in the main thread may lead to unpredictable behavior.
-
-To address this issue, additional logic should be added to the socket descriptors themselves,
-and careful consideration should be given to how the socket should behave outside the **Fiber** context.
+  - If ''new Fiber()'' is called first, the ''Async\spawn'' function will fail with an error.
+  - If ''Async\spawn'' is called first, any attempt to create a **Fiber** will result in an error.
 
 ===== Proposed PHP Version(s) =====
 
-The proposed changes are intended for PHP 8.5 or later.
+PHP 8.5 or later.
 
 ===== RFC Impact =====
+
 ==== To SAPIs ====
+
 The **True Async** module activates the reactor within the context of ''php_request_startup\php_request_shutdown()''
 request processing. Therefore, using concurrency is reasonable only for long-life scenarios implemented via CLI.
 
@@ -2244,24 +1421,29 @@ It is expected that **True Async** will enable the integration of built-in **web
 which will be embedded into the reactor’s event loop.
 
 ==== To Existing Extensions ====
+
   * PHP Socket Extension.
   * Curl Extension.
   * MySQL PDO Extension.
   * Redis Extension.
 
 ==== To Opcache ====
+
 Does not affect.
 
 ==== New Constants ====
+
 No new constants are introduced.
 
 ==== php.ini Defaults ====
+
 No changes are made to the default settings.
 
 ===== Open Issues =====
 None.
 
 ===== Unaffected PHP Functionality =====
+
   * Fiber API.
   * PHP Sockets.
   * Proc Functions.
@@ -2270,25 +1452,20 @@ None.
 
 ===== Future Scope =====
 
+This **RFC** assumes the subsequent development of additional RFCs:
+
+* An RFC for a low-level API for C interfaces, which will describe how
+PHP will allow extensions and standard library code to interact with the concurrent environment.
+* An RFC for a set of standard primitives, such as `Future`, `Channel`, etc.
+* And possibly others...
+
 This RFC provides for the subsequent expansion of functionality to achieve
 a complete toolkit for working with concurrent logic.
-It proposes development in two areas:
-  * **Changes to the language syntax**
+It proposes development in areas:
   * **Support for Pipe**
   * **Development of new and revision of existing extensions**
   * **Refactoring of input-output code** to improve performance and better integration with the Event Loop
   * Functions for **collecting metrics**
-  * **Multithreading** (?)
-
-=== Changes to the Language Syntax ===
-
-It is proposed to introduce the **async/await** keywords as syntactic sugar
-instead of the corresponding function calls.
-This will make the code more compact and more understandable in comparison to other languages.
-
-The **async** keyword can also be used as a special attribute for functions
-to signal that a function may suspend a **Fiber**.
-It can be implemented as an ''#[Async]'' attribute or as a separate keyword.
 
 === Integration with Pipe ===
 
@@ -2305,60 +1482,31 @@ It would also be appropriate to add support for ''pipe'' in such a way
 that it can be used regardless of the operating system using ''fopen()'' functions.
 This would make the API more consistent.
 
-=== Multithreading ===
-
-Whether PHP can be made truly **multithreaded** is a complex question, but it does not seem impossible.
-However, whether it is possible to provide at least **convenient interaction between threads** is a definitely solvable question.
-These aspects require evaluation and analysis in the future.
-
 ===== Proposed Voting Choices =====
 Yes or no vote.  2/3 required to pass.
 
-<doodle title="Accept the architecture proposed in the RFC as the base?" auth="crell" voteType="single" closed="true">
+<doodle title="Accept PHP syntax changes?" auth="crell" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
-<doodle title="Make the Low-level API (Async/wait + Resume) accessible from PHP?" auth="crell" voteType="single" closed="true">
-   * Yes
-   * No
-</doodle>
-
-<doodle title="Decompose this RFC into two: Low-level, High-level?" auth="crell" voteType="single" closed="true">
+<doodle title="Accept True Async RFC?" auth="crell" voteType="single" closed="true">
    * Yes
    * No
 </doodle>
 
 ===== Patches and Tests =====
 
-* Current codebase: https://github.com/EdmondDantes/php-src/tree/async/async
+* Proof of concept: https://github.com/EdmondDantes/php-src/tree/async/async
 
-The code presented here is still under development.
-The majority of the RFC has been implemented in code.
-**Testing, edge case analysis, and overall evaluation of this RFC are still in progress.**
-
+This code is an attempt to implement logic using Fiber. Most of it can be used to create the next version.
 I would be happy if someone would like to join me in this project!
-
-==== Current Roadmap ====
-
-  - **Implementation of missing functions** from the RFC (80% done).
-  - Testing the Build on Linux-Like Systems and Mac OS
-  - **Analysis of API semantic integrity** and usability evaluation.
-  - **Optimization of PHP function calls** and improvement of **WeakRef handling**.
-  - **Incorporating changes** based on discussions.
-
-===== Implementation =====
-
-After the project is implemented, this section should contain
-  - the version(s) it was merged into
-  - a link to the git commit(s)
-  - a link to the PHP manual entry for the feature
-  - a link to the language specification section (if any)
 
 ===== References =====
 Links to external references, discussions or RFCs
 
     * **First Discussion** - https://externals.io/message/126402
+    * **Second Discussion** - https://externals.io/message/126537
 
 The following can be considered as competing solutions to the current implementation:
 
@@ -2366,6 +1514,7 @@ The following can be considered as competing solutions to the current implementa
 
    * The **Swow** (https://github.com/swow/) project is a C library that provides a good lightweight API while not affecting the language itself and not requiring changes to PHP.
 
+   * Examples of code: https://github.com/EdmondDantes/php-true-async-rfc/tree/main/examples
 
 ===== Rejected Features =====
 Keep this updated with features that were discussed on the mail lists.
