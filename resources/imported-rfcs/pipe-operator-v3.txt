@@ -111,6 +111,23 @@ $res1 = 5 |> ($config['flag'] ? enabledFunc(...) : disabledFunc(...));
 
 The current implementation works entirely at the compiler level, and effectively transforms the first example above into the second at compile time.  The result is that pipe itself has virtually no runtime overhead.  (Any additional closures created by the user while writing a pipe will of course have their own overhead.)
 
+More precisely, the implementation contains 2 optimizations, for a function-style or method-style first-class-callable.  Those will be compiled down to direct calls, and therefore have no performance overhead.  An arbitrary expression will be evaluated and then executed, with no additional overhead.  However, that arbitrary expression may have additional logic in it to support a pipe that cannot be compiled away.  For example, an inline arrow function that simply forwards the call is not detectable, so the extra arrow function cannot be optimized away.
+
+That means the above example would more precisely compile to:
+
+<code php>
+$temp = "Hello World";
+$temp = htmlentities($temp);
+$temp = str_split($temp);
+$temp = fn($x) => array_map(strtoupper(...), $x)($temp);
+$temp = fn($x) => array_filter($x, fn($v) => $v != 'O')($temp);
+$result = $temp;
+</code>
+
+That gives a little overhead over making all calls directly, but only in some cases, and not dramatically so.
+
+Should the proposed follow-up RFC of [[rfc:partial_function_application|Partial Function Application RFC]] (see below) be approved, it would be logical and recommended for a similar optimization to be made when a PFA appears on the right-side of pipe.  That would eliminate most common uses of a wrapping closure as well.
+
 ==== Callable styles ====
 
 Pipe supports any callable syntax supported by PHP.  At present, the most common form is first-class-callables (eg, ''strlen(...)''), which dovetails with this syntax very cleanly.  Should further improvements be made in the future, such as a revised [[rfc:partial_function_application|Partial Function Application RFC]], it would be supported naturally.
@@ -410,9 +427,9 @@ pipe($someVal,
 // (Or worse if you need conditional stages.)
 </code>
 
-More elaborate implementations tend to involve magic methods (which are substantially slower than normal function/method calls) or multi-layer middlewares, which are severe overkill for sticking two functions together.
+Compared to the compiled version, this has two extra wrapping closures (for ''htmlentities()'' and ''str_split()'') that could not be compiled away, the call to ''pipe()'' itself, and a foreach loop inside pipe.  All of those are eliminated with a native operator.  As noted above, PFA would also allow eliminating the two manual closures via compiler optimization, something a user-space implementation would never be able to do.
 
-A native implementation eliminates all of those challenges.
+More elaborate implementations tend to involve magic methods (which are substantially slower than normal function/method calls) or multi-layer middlewares, which are severe overkill for sticking two functions together.
 
 Additionally, a native operator would make it much easier for static analysis tools to ensure compatible types.  The SA tools would know the input value's type, in most cases the callable type on the RHS, and could compare them directly without several layers of obfuscated user-space function calls between them.
 
@@ -422,7 +439,7 @@ This RFC is deliberately "step 1" of several closely related features to make co
 
 A [[rfc:function-composition|compose operator]] for closures (likely ''+'').  Where pipe executes immediately, compose creates a new callable (Closure) that composes two or more other Closures.  That allows a new operation to be defined simply and easily and then saved for later in a variable.  Because it is "just" an operator, it is compatible with all other language features.  That means, for example, conditionally building up a pipeline is just a matter of throwing ''if'' statements around as appropriate.  The author firmly believes that a compose operator is a necessary companion to pipe, and the functionality will be incomplete without it.  However, while pipe can be implemented trivially in the compile step, a compose operator will require non-trivial runtime work.  For that reason it has been split out to its own RFC.
 
-Generic partial function application.  While the prior RFC was declined due to its perceived use cases being insufficient to justify its complexity, there was clear interest in it, and it would vastly improve the usability of function composition.  If a less complex implementation can be found, it would most likely pass and complement this RFC well.
+General partial function application.  While the prior RFC was declined due to its perceived use cases being insufficient to justify its complexity, there was clear interest in it, and it would vastly improve the usability of function composition.  If a less complex implementation can be found, it would most likely pass and complement this RFC well.
 
 A ''%%__bind%%'' method or similar on objects, possibly with a dedicated operator of its own (such as ''>>='').  If implemented by an object on the left-hand side, the right-hand side would be passed to that method to invoke as it sees fit.  Such a feature would be sufficient to support arbitrary monadic behavior in PHP in a type-friendly way.
 
