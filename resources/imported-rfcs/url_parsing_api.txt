@@ -1131,26 +1131,6 @@ After multiple iterations, the RFC settled on using the ''Uri\Rfc3986\Uri'' and 
 
 The additional benefit of using different class names is that there is no clash when both classes are imported into the same PHP file.
 
-==== Why should the Uri\Rfc3986\Uri and the Uri\WghatWg\Url classes be final? ====
-
-The new API has to accommodate to three contradictory expectations:
-
-  * Security & Reliability: URI handling is a very complex topic, and generally, it's difficult to do right. Therefore the new API has to provide reliable behavior that offers the least amount of surprise. This is especially crucial because URI handling has severe impact on security, since there are multiple related vulnerabilities (i.e. parsing confusion).
-  * Extendability & Interoperability: URI handling is also a widespread problem people often face. As there may be vastly different use-cases, people need some way to customize the built-in features for their own purposes. On top of this, multiple libraries may need to work together on the same URI object. That's why interoperability is also an important factor.
-  * Evolvability: There are multiple planned features in [[https://wiki.php.net/rfc/url_parsing_api#future_scope|future scope]] that should be supported by introducing the least amount of breaking changes.
-
-Unfortunately, it's not easy to meet all expectations in the same time. On one hand, a customizable URI implementation allows bugs to be introduced (either accidentally or deliberately) that may result in issues with spec-compatibility. Additionally, it hinders evolvability, since internal methods added later may collide with methods added by userland implementations. On the other hand, a strictly locked implementation may make it difficult for the ecosystem to play together nicely, and do not encourage creativity of userland implementations.
-
-Let's list the possible solutions:
-
-  * Making the classes open for extension: This solution has acknowledged technical challenges ([[https://github.com/php/php-src/pull/14461#discussion_r1847316607]]), and it limits our possibilities of adding changes the most, but users can effectively add or modify any behavior that they need. Naturally, this also invites bugs or incompatibilities, but these bugs cannot be avoided entirely anyway.
-
-  * Making the classes final: By making the classes final, we effectively forbid any alternative implementations. For example, an [[https://wiki.php.net/rfc/url_parsing_api#plagability|ADA URL]] based URL class or any other userland implementation cannot be used instead of the current ''Uri\WhatWg\Url'' class. This way, we can eliminate some edge cases (handling of uninitialized state), new methods or optional parameters can be added to the built-in URI classes trivially without any BC breaks.
-
-  * Making the methods final: By making all URI methods final, we can guarantee that only new methods can be added, but the existing behavior cannot be modified. This has the same benefits as the above solution, but leaves a bit more degrees of freedom for userland implementations.
-
-  * Making the classes final, but adding a separate interface for each: The negative impacts of making the built-in classes final would be mitigated by adding one interface for each specification that could serve as common ground for interoperable implementations. On the other hand, it would be more difficult to add new methods to the built-in URI implementations as well as the interfaces, since it's considered a breaking change.
-
 ==== Why isn't a common URI interface supported? ====
 
 [[https://www.php-fig.org/psr/psr-7/#35-psrhttpmessageuriinterface|PSR-7 UriInterface]] is currently the de-facto interface for representing URIs in userland. That's why it seemed a good candidate for adoption at the first glance. However, the current RFC didn't pursue to reuse it for the following reasons:
@@ -1248,6 +1228,104 @@ $uri = $builder->build();                               // a new URI instance is
 
 Builder classes are not offered by the present RFC just yet. They definitely have their use-case, as they can help write more optimized code, but they are not essential at the get go. Therefore, this feature is one of the top candidates of a followup RFC.
 
+
+==== Why should the Uri\Rfc3986\Uri and the Uri\WhatWg\Url classes be final? ====
+
+The new API has to accommodate to three contradictory expectations:
+
+  * Security & Reliability: URI handling is a very complex topic, and generally, it's difficult to do right. Therefore the new API has to provide reliable behavior that offers the least amount of surprise. This is especially crucial because URI handling has severe impact on security, since there are multiple related vulnerabilities (i.e. parsing confusion).
+  * Extendability & Interoperability: URI handling is also a widespread problem people often face. As there may be vastly different use-cases, people need some way to customize the built-in features for their own purposes. On top of this, multiple libraries may need to work together on the same URI object. That's why interoperability is also an important factor.
+  * Evolvability: There are multiple planned features in [[https://wiki.php.net/rfc/url_parsing_api#future_scope|future scope]] that should be supported by introducing the least amount of breaking changes.
+
+Unfortunately, it's not easy to meet all expectations in the same time. On one hand, a customizable URI implementation allows bugs to be introduced (either accidentally or deliberately) that may result in issues with spec-compatibility. Additionally, it hinders evolvability, since internal methods added later may collide with methods added by userland implementations. On the other hand, a strictly locked implementation may make it difficult for the ecosystem to play together nicely, and do not encourage creativity of userland implementations.
+
+Let's list the possible solutions:
+
+  * Making the classes open for extension: This solution has acknowledged technical challenges ([[https://github.com/php/php-src/pull/14461#discussion_r1847316607]]), and it limits our possibilities of adding changes the most, but users can effectively add or modify any behavior they need. Naturally, this also invites bugs or incompatibilities, but these bugs usually cannot be avoided entirely anyway.
+
+  * Making the classes final: By making the built-in URI classes final, we effectively forbid any alternative implementations. For example, an [[https://wiki.php.net/rfc/url_parsing_api#plagability|ADA URL]] based URL class or any other userland implementation cannot be used instead of the current ''Uri\WhatWg\Url'' class. This way, we can eliminate some edge cases (i.e. handling of uninitialized state).
+
+  * Making the methods final: By making all URI methods final, we can guarantee that only new methods can be added, but the existing behavior cannot be modified. This has the same benefits as the above solution, but leaves a bit more degrees of freedom for userland implementations, as child classes could extend the parent classes with new methods. Consequtively, adding new methods to the parent classes (for example as the result a followup RFC) would be more difficult, since we should respect all child classes that possibly already implement the methods to be added.
+
+  * Making the classes final, but adding a separate interface for each: The negative impacts of making the built-in classes final would be mitigated by adding one interface for each specification that could serve as common ground for interoperable implementations. Just like the above solution, it would be more difficult to add new methods to the interfaces, since such changes would are considered backward incompatibility breaks.
+
+As it can be seen, each and every solution has multiple advantages and disadvantages. Let's see then how each approach would affect userland code:
+
+If we had 2 final built-in URI classes, userland code could primarily customize them via composition. When a custom URI implementation has to be passed to another library or project, then the built-in URI has to be extracted from the composing class, and the said library could either use the raw implementation, or recompose it as their own URI class. Let's see an example about a hypothetical use-case:
+
+<code PHP>
+class MyUri
+{
+    public function __construct(
+        private readonly Uri\Rfc3986\Uri $uri
+    ) {
+    }
+
+    /** Proxy the getHost() method of the built-in URI */
+    public function getHost(): ?string
+    {
+        return $this->uri->getHost();
+    }
+
+    /** Custom feature that is not yet supported by the built-in URI */
+    public function isIpv6Host(): bool
+    {
+        return str_starts_with($this->getHost(), "[");
+    }
+    
+    // ...
+
+    /** Support extraction of the built-in URI */
+    public function getUri(): Uri\Rfc3986\Uri
+    {
+        return $this->uri;
+    }
+}
+
+// Instantiate the custom URI implementation via composition
+// by passing the URI of the current request as input.
+$myUri = new MyUri(new Uri\Rfc3986\Uri("https://" . $_SERVER["HTTP_HOST"] . $_SERVER["REQUEST_URI"]));
+
+// Call a piece of 3rd party library code that needs a URI to be passed.
+// Let's extract the built-in URI class for this purpose.
+$libraryCode = new Foo();
+$libraryCode->doSomethingWithUri($myUri->getUri());
+
+// $libraryCode can use their own URI implementation if needed
+</code>
+
+As it can be seen, composition if a relatively expensive pattern to use, since it involves the instantiation of multiple classes,  and all the methods of the composed class have to be duplicated in order to be able to call them. That probably explains why Nikita [[https://github.com/php/php-src/pull/5168|was working on adding support of the "decorator" pattern]].
+
+Furthermore, interoperability between multiple libraries is automatically supported by the built-in classes. It's just inconvenient and wasteful to extract (and possibly recompose) a built-in class every time it has to be passed to a 3rd party library using a different abstraction. Of course, by having a PSR-7 like ''UriInterface'' in userland for both built-in URI implementations would improve the situation, but composition would still be always necessary to use with all its bells and whistles, as the built-in classes don't implement any interfaces.
+
+By also adding an interface for each built-in class, interoperability would become simpler and less wasteful. As the built-in URI implementations would implement their respective interface, it wouldn't matter what kind of implementation is passed to a function that expects an URI interface.
+
+<code PHP>
+/** A function expecting a UriInterface implementation */
+function doSomethingWithUri(Uri\Rfc3986\UriInterface $uri)
+{
+    // ...
+}
+
+// The built-in Uri class is passed to the function
+doSomethingWithUri(new Uri\Rfc3986\Uri("http://example.com"));
+
+// The custom Uri class is passed to the function
+doSomethingWithUri(new MyUri(new Uri\Rfc3986\Uri("http://example.com")"));
+</code>
+
+This way, composition would still be necessary to use for custom implementations, but at least it could be avoided for the native implementations.
+
+If we made it possible to extend the built-in classes, then URI customization would be much easier to do and resulted in a more optimized code, as the built-in classes could be substituted with their children.
+
+(Of course, people are not forced to use composition, they could just add their own ''UriHelper'' classes which could host the necessary static helper methods. Unless a popular ''UriHelper'' library emerges, everyone has to write their own custom code, which is a major regression.)
+
+Based on the above factors, the future plans, and the apparent resistance against opening the built-in classes for extension, and generally the unforseeable effects of the other choices, the current RFC chooses to make the built-in URI implementations ''final'' without adding any internal interfaces **for the time being**. This is the most restricting choice of all options, and is mostly chosen as a safety measure until the new API becomes mature enough and becomes tested in practice.
+
+The rationale behind this choice is that there are immediate plans to add new capabilities to the new API, so it's better not to provide an extension point for userland code in order to avoid negative consequences on any backward compatibility breaks introduced later on. Once the API settles, we can start to lift restrictions.
+
+Either providing two interfaces and final implementations (option 4), or going with non-final implementations containing final methods (option 3) could be a good choice in the future. However, given the heated discussion around the topic with totally opposing opinions, we should discuss the question on its own, not just as a 100th smaller detail of an enormous proposal. Choosing the most restrictive opinion can cut the debate short, and put the focus back on the great picture.
+
 ===== Examples in Other Languages =====
 
 ==== Go ====
@@ -1280,7 +1358,7 @@ A new parameter is added to ''SoapClient::__doRequest()''. When this method is o
 
 ===== Proposed PHP Version(s) =====
 
-The next minor PHP version (either PHP 8.5 or 9.0, whichever comes first).
+The next minor PHP version (PHP 8.5).
 
 ===== RFC Impact =====
 
@@ -1307,7 +1385,10 @@ None.
 
 ===== References =====
 
-Discussion thread: https://externals.io/message/123997
+  * Discussion thread: https://externals.io/message/123997
+  * RFC 3986: https://datatracker.ietf.org/doc/html/rfc3986
+  * RFC 3987: https://datatracker.ietf.org/doc/html/rfc3987
+  * WHATWG specification: https://url.spec.whatwg.org/
 
 ===== Vote =====
 
