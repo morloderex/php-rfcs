@@ -1,159 +1,206 @@
-Support Optional Suffix Parameter In Tempnam
-============================================
+Private Classes And Functions
+=============================
 
 :PHP-RFC: 0893
-:Title: Support Optional Suffix Parameter In Tempnam
-:Author: Athos Ribeiro <athoscribeiro@gmail.com>
+:Title: Private Classes And Functions
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
 :Status: Draft
-:Type: Unknown
-:Created: 2023-08-02
-:Version: 1.1
-
-Introduction
-------------
-
-The **tempnam** function allows users to optionally specify a **prefix**
-to be prepended to the generated filenames.
-
-It would be useful to allow users to also specify a **suffix** when
-generating temporary files. For instance, a suffix could provide even
-more semantic value or context for a user inspecting the generated
-files, and, in specific situations, could even provide more context for
-software processing such files.
+:Type: Standards Track
+:Created: 2024-12-11
+:PHP-Version: 8
+:Version: 1.0
 
 Proposal
 --------
 
-Add a new optional suffix parameter to the tempnam function, changing
-its signature from
+PHP has offered ``public``, ``protected`` and ``private`` visibility for
+methods, properties and constants for many years. Private and protected
+visibility allow abstracting away the inner workings of classes from the
+user. Minimizing the API surface clarifies how a library is supposed to
+be used, and dramatically decreases the risk of BC breaks when making
+changes to code the user should never interact with directly.
+
+However, not only methods, properties and constants are routinely
+created for internal use only, but so are functions and entire classes.
+Currently, it is not possible to natively express this intention. All
+named classes and functions are accessible globally. This RFC proposes
+adding support for private classes and functions, which limits their
+usage to the current file or namespace block.
 
 .. code:: php
 
-   tempnam(string $directory, string $prefix): string|false
+   private function test() {
+       echo __FUNCTION__, "\n";
+   }
 
-to
+   private class Test {
+       public function __construct() {
+           echo __METHOD__, "\n";
+       }
+   }
+
+   test();
+   // test@/home/ilutov/Developer/php-src/test.php:1$0
+
+   new Test();
+   // Test@/home/ilutov/Developer/php-src/test.php:5$1::__construct
+
+Rationale
+---------
+
+As foreshadowed, one of the primary advantages of marking classes and
+functions of ``private`` is that they are removed from the public API,
+and prevent users from interacting with them in ways that are not
+intended by the library author. Today, such structures are commonly
+marked with a ``/** @internal */`` comment. Native support for
+``private`` would provide stronger guarantees that they are not used
+outside of their intended scope.
+
+The other primary motivator is to avoid clashes for classes used within
+single files. A good use-case for these are temporary classes in tests.
 
 .. code:: php
 
-   tempnam(string $directory, string $prefix, string $suffix = ""): string|false
+   // ATest.php
+   namespace Tests;
 
-Example
-~~~~~~~
+   private class DbMock { /* ... */ }
+   class ATest { /* ... */ }
+
+   // BTest.php
+   namespace Tests;
+
+   private class DbMock { /* ... */ }
+   class BTest { /* ... */ }
+
+We don't have to worry about disambiguation of the ``DbMock`` class
+name, as it is only used in the current file and thus cannot clash with
+other private (or even public, non-``use``\ d) classes.
+
+Somewhat less importantly: In PHP, classes are usually placed in
+separate files to play nice with autoloaders. Classes that are
+exclusively used within a single other file could be moved to said file
+without issues. However, this puts the class in a weird state where it
+may still be used within other files, but can't be autoloaded on its
+own. ``private`` classes will necessarily be placed in the file from
+which they are used; and given that they are not accessible in from
+files, autoloading becomes irrelevant.
+
+Semantics
+---------
+
+``private`` for classes and functions works similar to anonymous
+classes. Namely, the name of the structure is mangled by appending the
+file name, line number and incrementing id to the original name. Any
+usage of this name inside the current file is replaced with the mangled
+name through the same mechanism used by ``use [function] Foo as Bar;``.
+This avoids trivial usage of the structure outside of its intended
+scope, and avoids accidental naming conflicts for internal structures.
 
 .. code:: php
 
-   tempnam("/tmp", "application-");
-   /* /tmp/application-xxxxxx */
+   // ATest.php
+   private class DbMock {
+       // ...
+   }
 
-   tempnam("/tmp", "", ".pdf");
-   /* /tmp/xxxxxx.pdf */
+   // loosely:
+   class DbMock@/my/app/tests/ATest.php:1$0 {
+       // ...
+   }
+   use DbMock@/my/app/tests/ATest.php:1$0 as DbMock;
 
-   tempnam("/tmp", "application-", ".pdf");
-   /* /tmp/application-xxxxxx.pdf */
+This is entirely handled at compile time, and thus there is no runtime
+overhead to private classes or functions. Because this is a compile time
+concept, it is also circumventable. The same is already true for
+anonymous classes.
 
-Backward Incompatible Changes
------------------------------
+.. code:: php
 
-None with exception of changing the signature of the internal
-php_do_open_temporary_file function, which is not exported.
+   private class Test {}
+   class_alias(Test::class, 'Test');
 
-Proposed PHP Version(s)
------------------------
+   // In some other file:
 
-next PHP 8.x.
+   new Test();
 
-RFC Impact
-----------
+Technically, because ``use`` statements are restricted to the current
+namespace block, different namespace blocks may re-use the same private
+class name without clashing. Given that using different namespace blocks
+with the same namespace in the same file is pretty obscure, this is not
+particularly important for real code.
 
-The suffix-parameter is optional. Thus it is transparent to any existing
-PHP-code in use.
+.. code:: php
 
-Only the internal API is affected because of the additional parameter
-which is added. Still, this only includes the addition of a new function
-(php_open_temporary_fd_ex2) and changing the signature of the
-php_do_open_temporary_file function, which is not exported.
+   namespace Foo {
+       private class Bar {}
+       var_dump(new Bar());
+       // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:2$0)#1 (0) { }
+   }
+   namespace Foo {
+       private class Bar {}
+       var_dump(new Bar());
+       // object(Foo\Bar@/home/ilutov/Developer/php-src/test.php:7$1)#1 (0) { }
+   }
 
-Open Issues
------------
-
-#. The **tempnam** **prefix** paramter is sanitized through the
-   **basename** function when path separators are present in the
-   provided string, using only the last part of the provided path. For
-   instance, **foo/bar** would become **bar**. We could not find the
-   historical reasons for the **prefix** parameter to behave as
-   described, but for consistency, we are currently using the same
-   approach for the new **suffix** parameter.
-#. Only the 63 first characters passed to the **prefix** paramter are
-   used. Although we could not find the historical reasons behind this
-   decision, we are currently replicating the behavior for the new
-   **suffix** parameter.
-#. **In windows systems**, none of the characters passed as a suffix
-   will be appended to the file name (i.e., **the suffix parameter will
-   be ignored**). This is due to the underlying function (and API) used
-   to generate temporary files, which do not provide means to set a
-   suffix. While we could provide a custom implementation (which could
-   be proposed in a future RFC to provide more consistency for tempnam),
-   the current windows API being used includes a .TMP extension to the
-   generated files, which AFAICT, does matter in windows systems. I also
-   found a related discussion in an old bug at
-   https://bugs.php.net/bug.php?id=44222.
-
-Unaffected PHP Functionality
-----------------------------
-
-All but tempnam and the internal php_do_open_temporary_file function.
-
-Future Scope
+Future scope
 ------------
 
-\* Re-work tempnam's windows implementation to match the default
-non-windows behaviors. \* Re-visit tempnam's implementation to verify
-the need to truncate the prefix/suffix params at 64 characters. \*
-Re-visit tempnam's implementation to verify the need to modify the
-prefix/suffix params thorugh the basename function.
+Likely even more common than file-private classes and functions are
+structures that should be restricted to some namespace. Contrary to
+``private``, they should not do any name mangling and as such would
+require a runtime check, along with a way to specify *what* namespace
+they may be used in. As this is a more complex task, it should be
+handled in its own RFC.
 
-Proposed Voting Choices
------------------------
+It was suggested that nested classes could be an alternative to an
+explicit class visibility. However, it appears that nested classes could
+be useful even without being restricted to the surrounding class.
 
-Accept this RFC and accept an optional **suffix** parameter in the
-**tempnam** function? Yes / No
+.. code:: php
 
-Patches and Tests
------------------
+   namespace Ast;
 
-The following is a candidate for this proposal, which includes the
-assumptions presented in the Open Issues section above.
+   class Node {
+       enum Kind {
+           case Identifier;
+           case Symbol;
+       }
 
-https://github.com/php/php-src/pull/11685
+       public function __construct(
+           public Kind $kind,
+           public string $lexeme,
+       ) {}
+   }
 
-Implementation
---------------
+In this example, ``Ast\Node\Kind`` is closely tied to ``Ast\Node``, so
+it makes sense to declare it in the same file. However,
+``Ast\Node\Kind`` should still be usable outside of the ``Ast\Node``
+context, namely to actually instantiate and identify AST nodes.
+Combining nested classes with ``private`` visibility might be
+reasonable.
 
-TBD
+Vote
+----
 
-References
-----------
+Voting starts xxxx-xx-xx and ends xxxx-xx-xx.
 
--  Original RFC by Stefan Neufeind:
-   https://wiki.php.net/rfc/tempnam-suffix
--  First discussion started by Stefan:
-   https://marc.info/?l=php-internals&m=138946779304541
--  First implementation proposal by Stefan:
-   https://github.com/php/php-src/pull/575
--  Old bug requesting related feature:
-   https://bugs.php.net/bug.php?id=37613
--  Old bug requesting related feature:
-   https://bugs.php.net/bug.php?id=43898
--  Current implementation proposal:
-   https://github.com/php/php-src/pull/11685
--  Old bug with discussion on differences in tempnam's windows
-   implementation: https://bugs.php.net/bug.php?id=44222
+As this is a language change, a 2/3 majority is required.
+
+Question: Add private classes and functions to PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Extra: , Based on work by Stefan Neufeind, neufeind@php.net at https://wiki.php.net/rfc/tempnam-suffix
-:Original Authors: Athos Ribeiro, athoscribeiro@gmail.com
-:Original Status: Under Discussion
-:Slug: tempnam-suffix-v2
-:Wiki URL: https://wiki.php.net/rfc/tempnam-suffix-v2
+:Implementation: wip
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: private-classes-and-functions
+:Wiki URL: https://wiki.php.net/rfc/private-classes-and-functions
