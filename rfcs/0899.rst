@@ -1,145 +1,191 @@
-Undefined Property Error Promotion
-==================================
+Release Cycle Update
+====================
 
 :PHP-RFC: 0899
-:Title: Undefined Property Error Promotion
-:Author: Mark Randall <marandall@php.net>
-:Status: Accepted
-:Type: Unknown
-:Created: 2022-04-04
-:Version: 1
+:Title: Release Cycle Update
+:Author: Jakub Zelenka <bukka@php.net>, Derick Rethans <derick@php.net>
+:Status: Active
+:Type: Process
+:Created: 2024-03-21
+:Version: 0.2
 
 Introduction
 ------------
 
-Undefined properties are those that have not yet been defined either by
-the presence of a property declaration, or by adding them to the
-properties hashmap through direct assignment, or by having them assigned
-by an internal function such as json_decode. Accessing an undefined
-property emits an E_WARNING "Undefined property <className>::$varName"
-and treats the value as if it were null, but does not otherwise interupt
-execution, allowing code execution to continue unabated, but potentially
-in an unintended state.
+The current release cycle has been introduced in 2010 by `release
+process RFC </rfc/releaseprocess>`__. This has been working mostly well,
+but there have been some minor issues. The length of cycle is often
+mentioned as being too short.
 
-Undefined properties previously triggered an E_NOTICE, however this was
-upgraded to E_WARNING as part of the PHP 8.0 Engine Warnings RFC:
-https://wiki.php.net/rfc/engine_warnings - By the time this RFC would
-come into effect, if passed, undefined properties would have emitted a
-warning for 5+ years.
+It is also quite risky to introduce more complex fixes later in the
+active support cycle as the security support does not allow fixing
+potential regressions. In addition, it is not exactly clear which
+features can be introduced during the beta period, Release Candidates,
+and Bug Fix releases.
+
+The number of pre-releases also seems unnecessarily long, especially
+during the Release Candidate stage, where there are few Release
+Candidate specific changes.
 
 Proposal
 --------
 
-This RFC proposes that accessing an undefined property is rendered
-illegal behaviour in the next major version of PHP, and will result in
-an error exception being thrown if it occurs.
+This RFC aims to address the above issues and proposes to introduce the
+following changes to the release cycle:
 
-For the purposes of this RFC, accessing an property means to use the
-property in such a way that the engine attempts to read its value for
-use in an expression, without accounting for the possibility of it being
-unset. These can be identified by the warning Undefined property
-<className>::$varName.
+Allow features that do not require an RFC in the beta period
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-isset / empty / null coalesce DO account for undefined properties and as
-such are not covered by this RFC.
+Feature freeze is supposed to happen when we start making beta releases,
+but this does not always happen.
 
-The presence of magical \`get\` will continue to work as it does now,
-and unknown properties will route to the magical \`get\` handler rather
-than cause an error (unless called within \`get\` on itself).
+Right now, at the end of the alpha period, all RFCs targeting that
+version must have voting finished, but the implementation is frequently
+necessarily done during the beta period.
 
-Considerations
---------------
+RFC implementations are often those that can have a major impact on API
+and ABI stability.
 
-PHP has traditionally been quite lax in its enforcement of accessing
-undefined values that are stored within various data structures.
+It therefore seems illogical to allow RFC-requiring features to be
+merged during the beta period, but not minor improvements that do not
+require an RFC, such as adding constant, parameters, config options, or
+even small functions or methods.
 
-There are 3 primary storage locations for values within PHP, these are:
+We propose to explicitly allow minor features, optimizations, and
+internal API / ABI changes, during the beta period.
 
-#. **Variables** (compiled variables) which are stored within the stack
-   frame.
-#. **Properties** which are stored within a zend_object instance within
-   the properties HashTable and the properties_table (which identifies
-   their location by their slot number sourced from the class entry).
-#. **Arrays** stored within the bucket.
+The recommendation is to not accept extensive refactoring, but this
+would not be a hard requirement, and Release Managers must approve any
+such small feature during the beta period, as is already the case.
 
-With the passing of the undefined variable error promotion RFC
-(https://wiki.php.net/rfc/undefined_variable_error_promotion) the first
-of these, variables, is scheduled for promotion to an error in PHP 9.0.
+A similar rule was in effect during the PHP 8.3 release cycle, and it
+worked well.
 
-The next natural target is properties, this is in line in line with
-additional changes targeted at PHP 9.0 that will promote **WRITING** to
-undefined properties to be an Error
-(https://wiki.php.net/rfc/deprecate_dynamic_properties) unless the
-#[AllowDynamicProperties] attribute is set upon the class definition
-(stdClass includes this capability as standard).
+Disallow New Features in Release Candidates and Bug Fix releases
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-It seems to be the natural progression that if writing to an undefined
-property will throw, reading from one should do likewise, to protect the
-user against unintended behaviour.
+Currently, we allow exceptions for small self-contained feature
+additions.
 
-However, there is a potential exception to this rule, and that is the
-presence of stdClass, which is intended to exclusively hold unknown (to
-the class entry) properties, often those sourced from casting an array
-to an object, or from an internal function decoding some other data such
-as json_decode when it encounters an object, without the assoc parameter
-set.
+This is often a source of confusion because it is hard to define what a
+"small self-contained feature" is. An example of such a small feature is
+the addition of a constant.
 
-While reading an undefined property on a user defined class will almost
-always be programmer error, historically it would not be entirely
-unexpected to see similar to the following code when dealing with json:
+The problem with allowing small features, is that it creates a precedent
+for other (larger) features to be included as well.
 
-.. code:: php
+It might be also hard for users to find if a feature is available, and
+they might have to add an explicit check in their code. This can also
+get confusing in UPGRADING and documentation.
 
-   if ($obj->name) { 
-     echo "Hello " . $obj->name;
-   }
+We propose to drop this small feature exception, and disallow any
+feature addition in Release Candidates, Bug Fix releases, and of course,
+Security releases.
 
-As this now emits an E_WARNING it should be very much discouraged, but
-will still execute without an error as $obj->name will, if undefined,
-evaluate to null.
+Reduce number of RCs to Four
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If this RFC were to pass, the developer would need to explicitly specify
-their intent to allow the possibility of accessing an undefined
-property, either via isset, empty or the null coalesce operator:
+The release cycle is too long, so we propose to reduce the number of RCs
+by 2, resulting in only 4 RCs if everything goes according to plan. This
+should be more than enough, and if there is any problem found,
+additional RCs can be created if needed. This reduces the release cycle
+by one month, allowing for this month to be used for normal development
+of the language.
 
-.. code:: php
+Extend Security Support by One Year
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   if (isset($obj->name)) { 
-     echo "Hello " . $obj->name;
-   }
+This change will extend release cycle to 4 years: 2 years of bug fixes,
+and 2 years of security fixes.
 
-To provide the most consistent handling, this RFC proposes that stdClass
-will also throw an error if an undefined property is accessed.
+The idea is that it will give users longer support with a relatively
+small effort, as it doesn't require that much time for RMs. Security
+releases are not that often and relatively easy.
 
-Backward Incompatible Changes
------------------------------
+The proposal does not include the updating of ABI incompatible versions
+of dependent libraries provided for Windows builds as this can add
+significantly more load.
 
-Accessing an undefined property in a manner that currently results in an
-"undefined property" warning will in future result in an Error exception
-being thrown.
+This means that Windows users should track security changes in dependant
+libraries, if they want to keep using PHP in its second year of security
+support. This is just for Windows as we don't build dependent libraries
+for Linux and other systems: this the job of distributions to handle.
+
+Allowing recent regression fixes during security support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This proposal is to allow fixes of regressions caused by other fixes
+merged to the supported branch in the last 12 months. The reasoning
+behind this is that more complex fixes will be possible later in the
+cycle. These fixes might potentially introduce regressions. If such a
+regression is found within a year, then it will be possible to apply a
+fix for that even if the branch allows only security fixes.
+
+Extend Releases Cycle to End of Year
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Right now, PHP comes out of normal or security release 2 or 3 years
+after the first GA release. This means that the date shifts around,
+which is hard to keep track of. We propose to align the end of bug fix
+and security releases with the end of the year, December 31st.
+
+If a GA was delayed until early in a new year due to issues found during
+the release candidate period, then the December 31st end date would not
+move a whole new year further.
+
+Revised Timeline
+----------------
+
+If all the proposals are accepted, the new cycle for PHP 8.4 will then
+look like the following, pushing the start from Jun 6th 2024, to July
+4th 2024:
+
+-  Jul 04 2024: Alpha 1
+-  Jul 18 2024: Alpha 2
+-  Aug 01 2024: Alpha 3
+-  Aug 13 2024: Feature freeze — All RFCs must have their voting
+   concluded, and \*should\* have been merged.
+-  Aug 15 2024: Beta 1
+-  Aug 29 2024: Beta 2
+-  Sep 10 2024: RFCs features, and features not requiring an RFC, must
+   be merged (the tagging date for the Sep 12 Beta 3 release) (with
+   approval of RM).
+-  Sep 12 2024: Beta 3
+-  Sep 24 2024: Branching of the PHP-8.4 release branch (not a new
+   thing)
+-  Sep 26 2024: RC 1 — No more new features may be introduced into the
+   8.4 release from now on.
+-  Oct 10 2024: RC 2
+-  Oct 24 2024: RC 3
+-  Nov 07 2024: RC 4
+-  Nov 21 2024: GA
+-  Dec 31 2026: End of Bug Fix Releases — Start of Security Releases
+-  Dec 31 2027: End of fixing regressions in Bug Fix releases — ABI
+   incompatible versions of dependent libraries on Windows will no
+   longer be updated.
+-  Dec 31 2028: End of Security Releases
 
 Proposed PHP Version(s)
 -----------------------
 
-This change is targeted for PHP 9.0.
+The changes will apply immediately on the all currently supported
+branches from PHP 8.2. It also means that PHP 8.1 would get an extra
+year of security fixes if the proposal is accepted.
 
-Although the target version is mandated by our traditional breaking
-changes policy, it is also the intent of this RFC to give multiple years
-of notice that this change will be coming, affording the greatest
-opportunity for developers to modify their code in anticipation of this
-change.
+Proposed Voting Choices
+-----------------------
 
-A minor change will be included in the next minor version to alter the
-existing warning message to indicate the warning will become an error in
-9.0.
+A normal 2/3rd majority vote for each of the proposed changed.
 
-Voting
-------
+If any of the proposed changes passes, the `Release Process policy
+document <https://github.com/php/policies/blob/main/release-process.rst>`__
+will be updated with any accepted changes, and currently operating
+rules.
 
-Voted started on 2022-04-22, ending 2022-05-05
+Voting runs until **Monday April 29th, at noon UTC**.
 
-Question: Promote Undefined Property Access to Throw an Error?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Allow features that do not require an RFC in the beta period
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -147,24 +193,93 @@ Voting Choices
 -  Yes
 -  No
 
-Meta vote:
+--------------
 
-Question: Main reason for voting against undefined_property_error_promotion if you did?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Question: Disallow New Features in Release Candidates and Bug Fix releases
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
 
--  Backwards compatibility breaks
--  Would be in favour, but not in 9.0
--  Do not like stdClass behaviour
--  Something else
+-  Yes
+-  No
+
+--------------
+
+Question: Reduce number of RCs to Four
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-2:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Question: Extend Security Support by One Year
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-3:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Question: Allowing recent regression fixes during security support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-4:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Question: Extend Releases Cycle to End of Year
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-5:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Patches and Tests
+-----------------
+
+The implementation of this RFC is a change to the
+https://github.com/php/policies/blob/main/release-process.rst document.
+
+References
+----------
+
+-  Original Release Process RFC: https://wiki.php.net/rfc/releaseprocess
+-  Existing Release Process Policy document:
+   https://github.com/php/policies/blob/main/release-process.rst
+
+Rejected Features
+-----------------
+
+Keep this updated with features that were discussed on the mail lists.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Mark Randall, marandall@php.net
-:Slug: undefined_property_error_promotion
-:Wiki URL: https://wiki.php.net/rfc/undefined_property_error_promotion
+:Original Authors: Jakub Zelenka bukka@php.net, Derick Rethans derick@php.net
+:Original Status: Voting
+:Slug: release_cycle_update
+:Wiki URL: https://wiki.php.net/rfc/release_cycle_update
