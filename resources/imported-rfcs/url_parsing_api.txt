@@ -1250,7 +1250,7 @@ Let's list the possible solutions:
 
 As it can be seen, each and every solution has multiple advantages and disadvantages. Let's see then how each approach would affect userland code:
 
-If we had 2 final built-in URI classes, userland code could primarily customize them via composition. When a custom URI implementation has to be passed to another library or project, then the built-in URI has to be extracted from the composing class, and the said library could either use the raw implementation, or recompose it as their own URI class. Let's see an example about a hypothetical use-case:
+If we had 2 final built-in URI classes, userland code could primarily customize them via composition. When a custom URI implementation is passed to a 3rd party library, then the built-in URI has to be extracted from the composing class, and the said library could either use the pure internal implementation, or recompose it as their own URI class. Let's see an example about a hypothetical use-case for composition:
 
 <code PHP>
 class MyUri
@@ -1285,7 +1285,7 @@ class MyUri
 // by passing the URI of the current request as input.
 $myUri = new MyUri(new Uri\Rfc3986\Uri("https://" . $_SERVER["HTTP_HOST"] . $_SERVER["REQUEST_URI"]));
 
-// Call a piece of 3rd party library code that needs a URI to be passed.
+// Call a 3rd party library that needs a URI to be passed.
 // Let's extract the built-in URI class for this purpose.
 $libraryCode = new Library1();
 $libraryCode->doSomethingWithUri($myUri->getUri());
@@ -1295,7 +1295,7 @@ $otherLibraryCode = new Library2();
 $libraryCode->doSomethingWithUri(new Library2Uri($myUri->getUri()));
 </code>
 
-As it can be seen, composition is a relatively expensive pattern to use, since it involves the instantiation of multiple classes,  and all the methods of the composed class have to be duplicated in order to be able to call them. That probably explains why Nikita [[https://github.com/php/php-src/pull/5168|was working on adding support of the "decorator" pattern]].
+As it can be seen, composition is a relatively expensive pattern to use, since it involves the instantiation of multiple classes,  and all the methods of the composed class have to be duplicated in order to be able to call them. That probably explains why Nikita [[https://github.com/php/php-src/pull/5168|was working on adding native support of the "decorator" pattern]].
 
 Furthermore, interoperability between multiple libraries is automatically supported by the built-in classes. It's just inconvenient and wasteful to extract (and possibly recompose) a built-in class every time it has to be passed to a 3rd party library using a different abstraction. Of course, by having a PSR-7 like ''UriInterface'' in userland for both built-in URI implementations would improve the situation, but composition would still be always necessary to use with all its bells and whistles, as the built-in classes don't implement any interfaces.
 
@@ -1312,20 +1312,23 @@ function doSomethingWithUri(Uri\Rfc3986\UriInterface $uri)
 doSomethingWithUri(new Uri\Rfc3986\Uri("http://example.com"));
 
 // The custom Uri class is passed to the function
-doSomethingWithUri(new MyUri(new Uri\Rfc3986\Uri("http://example.com")"));
+doSomethingWithUri(new MyUri(new Uri\Rfc3986\Uri("http://example.com")));
 </code>
 
 This way, composition would still be necessary to use for custom implementations, but at least it could be avoided for the native implementations.
 
-If we made it possible to extend the built-in classes, then URI customization would be much easier to do and resulted in a more optimized code, as the built-in classes could be substituted with their children.
+If we made it possible to extend the built-in classes, then URI customization would be much easier to do and resulted in a more optimized code, as the built-in classes could be substituted with their children. On the other hand, the implementation of the built-in classes is somewhat special, as it relies on some features that are not possible in userland code. This may potentially make child classes work unintuitively, or inconsistently with regular userland code.
+
+//Note: It should also be taken into account that ''Uri\Rfc3986\Uri'' implements the generic URI syntax upon which scheme-specific syntax can be built (probably one of the most well-known example is [[https://datatracker.ietf.org/doc/html/rfc4516|LDAP URIs]]). When designing an implementation for a scheme-specific URI syntax, it would seem very straightforward to extend ''Uri\Rfc3986\Uri'', and adapt it to the specific purpose. But this is a wrong choice based on the [[https://en.wikipedia.org/wiki/Liskov_substitution_principle|Liskov-Substitution Principle]], which states that a child class should be able to substitute its parent without breaking the program. Clearly, an implementation for a scheme-specific URI syntax is more specific than the generic one, so by definition, it's not applicable as a substitute. This attribute of ''Uri\Rfc3986\Uri'' is important to know when trying to customize its behavior.
+//
 
 (Of course, people are not forced to use composition, they could just add their own ''UriHelper'' classes which could host the necessary static helper methods. Unless a popular ''UriHelper'' library emerges, everyone has to write their own custom code, which is a major regression.)
 
 Based on the above factors, the future plans, and the apparent resistance against opening the built-in classes for extension, and generally the unforseeable effects of the other choices, the current RFC chooses to make the built-in URI implementations ''final'' without adding any internal interfaces **for the time being**. This is the most restricting choice of all options, and is mostly chosen as a safety measure until the new API becomes mature enough and becomes tested in practice.
 
-The rationale behind this choice is that there are immediate plans to add new capabilities to the new API, so it's better not to provide an extension point for userland code in order to avoid negative consequences on any backward compatibility breaks introduced later on. Once the API settles, we plan to lift these restrictions.
+The rationale behind this choice is that there are immediate plans to add new capabilities to the new API, so it's better not to provide an extension point for userland code in order to avoid negative consequences of any backward compatibility breaks introduced later on. **Once the API settles, we plan to lift these restrictions at some extent.**
 
-Either providing two interfaces and final implementations (option 4), or going with non-final implementations containing final methods (option 3) could be a good choice in the future, especially if we could also make composition [[https://github.com/php/php-src/pull/5168|more ergonomic to use]] in the meanwhile. However, given the heated discussion around the topic with totally opposing opinions, we should discuss the question on its own, not just as a 100th smaller detail of a huge proposal. Choosing the most restrictive opinion can cut the debate short, and put the focus back on the great picture for now.
+Possibly, providing two interfaces and final implementations (option 4) could be a good choice in the future, especially if we made composition [[https://github.com/php/php-src/pull/5168|more ergonomic to use]] in the meanwhile. However, given the heated discussion around the topic with totally opposing opinions, we should discuss the question on its own, not just a smaller detail of a huge proposal. Choosing the most restrictive opinion can cut the debate short, and put the focus back on the great picture for now.
 
 ===== Examples in Other Languages =====
 
