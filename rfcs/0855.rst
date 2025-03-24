@@ -1,257 +1,242 @@
-Interface Default Methods
-=========================
+Fix Up BCMath Number Class / Change GMP Bool Cast Behavior
+==========================================================
 
 :PHP-RFC: 0855
-:Title: Interface Default Methods
-:Author: Levi Morrison <levim@php.net>
-:Status: Declined
-:Type: Unknown
-:Created: 2022-06-27
-:Version: 2.0
+:Title: Fix Up BCMath Number Class / Change GMP Bool Cast Behavior
+:Author: Saki Takamachi <saki@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2024-06-30
+:PHP-Version: 8.4
+:Version: 1
 
 Introduction
 ------------
 
-Over time, authors sometimes want to add methods to an interface. Today,
-this causes large breakages to every implementor. This RFC proposes a
-way to reduce the scale of breakage.
+Regarding `RFC: Support object type in
+BCMath </rfc/support_object_type_in_bcmath>`__, I received several
+comments and suggestions, so I created this RFC to respond to them.
 
-Additionally, sometimes interfaces can implement some functionality of
-their interface in terms of other parts of their interface. For example,
-the interface ``Countable`` could implement ``function isEmpty(): bool``
-by using ``$this->count() == 0``. Today, traits are often used to
-accomplish this, but a default interface implementation could be used
-instead, and would be simpler. When interfaces are designed with this
-technique in mind, it can enable productivity of the interface over
-time.
-
-For example, see `Rust's Iterator
-trait <https://doc.rust-lang.org/std/iter/trait.Iterator.html>`__ which
-has more than 40 functions with default implementations and the
-implementor mostly needs to implement a single function,
-``next(): Option<T>``. These functions with default behaviors have been
-stabilized over time with little to no breakage in practice. For
-example, ``for_each`` was added in v1.21 and ``map_while`` was added in
-v1.57.
+Also, in those discussions, there were suggestions regarding the
+behavior of casting GMP classes to bool, and for procedural efficiency,
+I will combine these into one RFC. (Each vote will be taken separately.)
 
 Proposal
 --------
 
-Interface methods can now provide a method body. This implementation
-will be used if the implementer does not otherwise provide an
-implementation. Default implementations are available for both instance
-and static methods.
+This RFC makes several corrections and changes to the ``BcMath\Number``
+class and proposes to override the first RFC.
+
+It also proposes that when a GMP object is cast to bool, change it so
+that ``0`` is ``false`` and everything else is ``true``, like an int.
+
+Details of the proposal regarding BCMath are as follows:
+
+#. Casting a Number object to bool makes it ``false`` if it is ``0`` and
+   ``true`` otherwise.
+#. Of the six comparison methods ``comp()``, ``eq()``, ``gt()``,
+   ``gte()``, ``lt()``, ``lte()``, remove all except ``comp()``. Then
+   rename the ``comp()`` method to ``compare()``.
+#. Remove ``format()`` method.
+#. Remove rounding in calculations.
+#. Make it serializable.
+#. Fixed typo in stub.
+
+bool cast
+^^^^^^^^^
+
+Change both GMP and BCMath to behave like int.
+
+BCMath
+~~~~~~
+
+More information about comparison methods
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In fact, only the ``comp()`` method is needed to fulfill the
+functionality of the other five methods.
+
+Adding methods later is easy, but removing them always involves a BC
+Break. Providing 6 methods from the start is obviously overkill, so we
+will only provide ``comp()``.
+
+By the way, the reason ``comp()`` is needed, and why comparison
+operators are underpowered, is to specify the scale to use for the
+comparison.
+
+Currently, there is no other expression for comparison in PHP called
+"comp". The expression "cmp" is mainly used for functions, and the
+expression "compare" is used for class methods.
+
+e.g. https://www.php.net/manual/ja/splpriorityqueue.compare.php
+https://www.php.net/manual/ja/collator.compare.php
+
+Therefore, follow these conventions and rename ``comp()`` to
+``compare()``.
 
 .. code:: php
 
-   interface Example {
-     // Today, you cannot specify an implementation, only a
-     // signature.
-     function method1(): void;
+   public function compare(Number|string|int $num, ?int $scale = null): int {}
 
-     // With this RFC, you can provide an implementation:
-     function method2(): void {
-       echo __METHOD__, "\n";
-     } 
-   }
+Remove format method
+^^^^^^^^^^^^^^^^^^^^
 
-Interface methods can also now be ``private`` if they a have method
-body. The purpose here is to allow helper routines if the default
-implementations of the ``public`` methods need them.
+The optimal format varies greatly from country to country, and the
+signature proposed in the original RFC is insufficient. There are also
+opinions that such functionality should be implemented in Intl rather
+than BCMath.
 
-The methods with default implementations are inherited similarly to
-abstract base classes, as opposed to how traits behave. For instance, a
-private method on the interface is not accessible to the class which
-implements the interface; with a trait it would be.
+If released in a half-finished state, BC Break will become a problem
+later, so this feature will be removed. If this functionality is really
+needed for this class, we can always consider adding it again.
 
-Default Method Resolution
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Remove rounding in calculations
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Default methods for interfaces introduce a form of multiple inheritance.
-How is a method selected?
+The current specification does not allow calculations with operators to
+be used by users who do not want rounding. I also found it very
+inconvenient to have to specify an optional argument every time I
+perform a calculation using this method if I don't want rounding.
 
-Java's resolution algorithm looks like this:
-
-#. Class definitions always win. If a class, or a parent class, defines
-   a concrete method, then this will always win over all possible
-   default methods.
-#. More specific interfaces take priority over less specific ones. If
-   interfaces ``A`` and ``B`` exist and ``B`` extends ``A``, and both
-   have a default method for the same method, then when a class
-   implements B directly or indirectly the method from ``B`` will take
-   precedence over the method from ``A``.
-#. If the above rules fail, then the class needs to implement the method
-   itself, possibly delegating to one of the interfaces.
-
-This RFC proposes the same. However, rule 2 is only partially
-implemented at this time.
-
-Here's an example of a class delegating to another method:
+e.g.
 
 .. code:: php
 
-   interface Interface1 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
+   $ret = $num->div($num2, null, PHP_ROUND_TOWARD_ZERO);
 
-   interface Interface2 {
-       function method1() { echo __METHOD__ . "\n"; }
-   }
-
-   class Class1 implements Interface1, Interface2 {
-       function method1() {
-           Interface1::method1();
-       }
-   }
-
-   (new Class1())->method1(); // Interface1::method1
-
-Parent Scoping
-~~~~~~~~~~~~~~
-
-In interface default methods, you cannot use the ``parent::`` scoping
-mechanism. The following does not work:
+If the default behavior is "no rounding", i.e., truncation behavior like
+the existing BCMath functions, if you want to perform rounding, you can
+simply use the round() method.
 
 .. code:: php
 
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
+   $ret = $num->div($num2)->round(2);
 
-   interface Interface2 extends Interface1 {
-       function method1() { parent::method1(); }
-   }
+Based on the idea that we shouldn't provide an API that looks "rich"
+from the get-go, I suggest removing all of these roundings.
 
-The reason is that interfaces can extend multiple other interfaces e.g.
+In other words, the rounding mode during calculations will be fixed at
+truncation, and the user will not be able to change it. This applies to
+both operator and method calculations.
 
-.. code:: php
+If the user wants to do rounding, the ``round()`` method should be used.
 
-   interface Interface3 extends Interface1, Interface2 {}
+Make it serializable
+^^^^^^^^^^^^^^^^^^^^
 
-The name of the interface should be used instead:
+Being serializable is very important when using something like Redis, as
+this is expected to be used as a value object. This probably doesn't
+require an RFC on its own, but I mention it to keep things clear.
 
-.. code:: php
+Fixed typo in stub
+^^^^^^^^^^^^^^^^^^
 
-   interface Interface2 extends Interface1 {
-       function method1() { Interface1::method1(); }
-   }
-
-However, if a sub-class of the inheriting class calls
-``parent::method1()``, it will work:
-
-.. code:: php
-
-   interface Interface1 {
-       function method1() { echo __METHOD__, PHP_EOL; }
-   }
-
-   class Class1 implements Interface1 {
-       // Inherits Interface1::method1() here.
-   }
-
-   class Class2 extends Class1 {
-       function method1() { parent::method1(); }
-   }
-
-   (new Class2())->method1);
-   // output:
-   // Interface1::method1
-
-Cancelling Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-If an interface method extends a parent interface method which has a
-default, this prevents using the default method for classes which
-implement the child interface but do not directly implement the parent
-one:
+This probably doesn't require an RFC per se, but I'll make it explicit
+to keep things clear.
 
 .. code:: php
 
-   interface Interface1 {
-       function method1() { echo __METHOD__, "\n"; }
-   }
+   public function pow(Number|string|int $exponent, int $minScale, ?int $scale = null, int $roundingMode = PHP_ROUND_HALF_UP): Number {}
 
-   interface Interface2 extends Interface1 {
-       function method1();
-   }
+I forgot to delete ``int $minScale`` in this signature. Correctly, it
+should look like this:
 
-   /* Would be an error because method1 has not been implemented.
-   class Class1 implements Interface2 {
-       // error: method1 has not been implemented.
-   }
-    */
+.. code:: php
 
-   // This is subtly different, but valid:
-   class Class1 implements Interface1, Interface2 {}
-
-The behavior could go either way. I picked this behavior because if it's
-wrong, it's easier to correct than the other way around.
+   public function pow(Number|string|int $exponent, ?int $scale = null, int $roundingMode = PHP_ROUND_HALF_UP): Number {}
 
 Backward Incompatible Changes
 -----------------------------
 
-None, as long as you do not use the feature.
+BCMath: None.
 
-If you do use the feature:
-
--  Adding a default implementation to an existing interface method will
-   not break existing code, because every existing usage has a higher
-   priority than the default.
--  If you add a new method to an interface, there is a compatibility
-   break. The impact of the break is limited to places where the
-   implementor/inheritor of the interface has a method of the same name.
+GMP: Code like ``if ($gmp) {}`` will behave differently. However, due to
+the nature of GMP, such code is likely to be quite rare.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3.
+next PHP 8.x (8.4)
 
 RFC Impact
 ----------
 
-To Extensions
-~~~~~~~~~~~~~
+To SAPIs
+~~~~~~~~
 
-Modules can specify an interface implementation as well. These internal
-default methods should not be marked with ``ZEND_ACC_ABSTRACT`` and
-should be instead marked with ``ZEND_ACC_DEFAULT_METHOD``.
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+BCMath: only BCMath
+
+GMP: only GMP
 
 To Opcache
 ~~~~~~~~~~
 
-Opcache should also work with this feature. The proof of concept
-implementation has not triggered any issues so far in CI.
+None.
 
-To the Ecosystem
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
 ~~~~~~~~~~~~~~~~
 
-Previously, interface methods were not allowed to have method bodies.
-These tools such as parsers, code analyzers, etc will need to be
-updated.
+None.
 
 Open Issues
 -----------
 
-Make sure there are no open issues when the vote starts!
+None.
+
+Unaffected PHP Functionality
+----------------------------
+
+BCMath: nothing other than BCMath is affected.
+
+GMP: nothing other than GMP is affected.
 
 Future Scope
 ------------
 
-This feature may be used to enhance existing interfaces in PHP.
+BCMath: Methods removed in this RFC may be considered for implementation
+again in the future. However, there are no specific plans at this time.
 
--  ``Countable`` could add
-   ``function isEmpty(): bool { return $this->count() == 0; }``.
--  ``Iterator`` could add methods like ``map``, ``filter``, and
-   ``reduce`` which behave similarly to ``array_map``, ``array_filter``,
-   and ``array_reduce``.
+Proposed Voting Choices
+-----------------------
 
-Voting
-------
+As per the voting RFC a yes/no vote with a 2/3 majority is needed for
+this proposal to be accepted.
 
-The vote will be a simple yes/no vote on whether to include the feature.
+This RFC combines two RFCs into one for procedural efficiency, and the
+BCMath and GMP proposals will be voted on separately. This means that
+the two RFCs are completely independent and do not influence each
+other's voting results.
 
-Question: Interface Default Methods
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+These are not second-round votes, so each requires a two-thirds majority
+vote to pass.
+
+Voting ends on 2024-07-30 00:00:00 UTC.
+
+Question: Fix up BCMath Number Class
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Question: Change GMP bool cast behavior
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
 
 Voting Choices
 ^^^^^^^^^^^^^^
@@ -262,32 +247,29 @@ Voting Choices
 Patches and Tests
 -----------------
 
-Here is a work-in-progress pull request:
-https://github.com/php/php-src/pull/11467.
+None.
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+None.
 
 References
 ----------
 
-Links to external references, discussions or RFCs
+https://wiki.php.net/rfc/support_object_type_in_bcmath
+
+https://externals.io/message/123323
 
 Rejected Features
 -----------------
 
-Keep this updated with features that were discussed on the mail lists.
+Some methods will be removed, but since this class has not been released
+yet, essentially no functionality will be removed.
 
 Additional Metadata
 -------------------
 
-:Original Authors: Levi Morrison, levim@php.net
-:Slug: interface-default-methods
-:Wiki URL: https://wiki.php.net/rfc/interface-default-methods
+:Original Authors: Saki Takamachi (saki@php.net)
+:Slug: fix_up_bcmath_number_class
+:Wiki URL: https://wiki.php.net/rfc/fix_up_bcmath_number_class

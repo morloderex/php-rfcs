@@ -1,278 +1,500 @@
-Miscellaneous Variable Functions
-================================
+Improve Callbacks In Ext/dom And Ext/xsl
+========================================
 
 :PHP-RFC: 0866
-:Title: Miscellaneous Variable Functions
-:Author: Thomas Hruska <cubic@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-01-28
-:Version: 1
+:Title: Improve Callbacks In Ext/dom And Ext/xsl
+:Author: Niels Dossche <nielsdos@php.net>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2023-11-05
+:PHP-Version: 8.4
+:Version: 0.3
 
 Introduction
 ------------
 
-In general, PHP userland is not very good at or at least not consistent
-at exposing/accessing Zend engine internals. This occurs both at the
-userland function level and the documentation level. When someone goes
-to learn about PHP extension development for the first time, it takes a
-while to understand basic Zend engine concepts. The proposed functions
-in this RFC straddle the boundary between Zend engine and userland to
-expose more of the engine internals to userland devs perhaps looking to
-make the leap into extension development or just improving their
-understanding of how zvals function under the hood for writing more
-optimal software.
+The ``DOMXPath`` class allows developers to run XPath expression queries
+on HTML/XML documents. The ``XSLTProcessor`` class allows developers to
+perform XSL transformations on HTML/XML documents. Both of these
+internally use XPath expressions, and they support calling PHP functions
+inside those XPath expressions. However, there is an unfortunate
+limitation in that only callable strings are supported. This means that
+closures, first-class callables, and instance methods cannot be used.
+This proposal aims to improve the callback support such that any
+callable can be used.
+
+To better understand the proposal, I'll first give some background to
+demo the usage as it is today. Then I'll introduce the proposal itself.
+
+Background
+----------
+
+**Important:** in all examples in this RFC, I will use the following
+sample document to work with. I will not repeat this code snippet.
+
+.. code:: php
+
+   // Set up a sample document with links to cats and dogs
+   $doc = new DOMDocument;
+   $doc->loadXML(<<<XML
+   <animals>
+       <a box_preference="small" href="cat/jill">Jill</a>
+       <a box_preference="medium" href="cat/kes">Kes</a>
+       <a box_preference="medium" href="cat/minou">Minou</a>
+       <a box_preference="large" href="cat/tessa">Tessa</a>
+       <a href="dog/jack">Jack</a>
+   </animals>
+   XML);
+
+Let's take a look at how to use a callback with ``DOMXPath``. We have to
+use ``DOMXPath::registerPhpFunctions(string|array|null $restrict=null)``
+to register callbacks. Only thereafter we can use it in the evaluation.
+
+.. code:: php
+
+   function my_callback(string $href): bool {
+       return preg_match("/cat/", $href);
+   }
+
+   $xpath = new DOMXPath($doc);
+   // This is necessary to resolve the php name in the php:function expression down below.
+   $xpath->registerNamespace("php", "http://php.net/xpath");
+   // This registers the function "my_callback" with the XPath evaluator, such that my_callback can be called.
+   $xpath->registerPhpFunctions("my_callback");
+   // This selects all <a> tags where my_callback(their href attribute content) returns true.
+   $results = $xpath->evaluate("//a[php:function('my_callback', string(@href))]");
+   foreach ($results as $result) {
+       echo "Found ", $result->textContent, "\n";
+   }
+
+   /* This script outputs:
+   Found Jill
+   Found Kes
+   Found Minou
+   Found Tessa
+   */
+
+Note that this is only the simplest example. You can do much more
+complex actions with it, even with side-effects. Furthermore, I only
+showcased a single callback. It's possible to chain multiple callbacks.
+
+Registering multiple callbacks at once is possible too, in that case you
+have to pass an array to ``registerPhpFunctions``:
+
+.. code:: php
+
+   // Now my_first_callback and my_second_callback can be used within XPath
+   $xpath->registerPhpFunctions(["my_first_callback", "my_second_callback"]);
+
+   // registerPhpFunctions() is additive, so calling it again will make even more functions callable:
+   // now strtoupper() will also be callable.
+   $xpath->registerPhpFunctions("strtoupper");
+
+Finally, if the ``$restrict`` argument is null, then all global
+functions and static class methods will be callable.
+
+I won't repeat this for ``XSLTProcessor``, but it works the same way:
+``XSLTProcessor`` also has a ``registerPhpFunctions`` method that works
+exactly the same.
 
 Proposal
 --------
 
-Working implementations of all the items being proposed can be found at:
+Right now, it is impossible to call instance methods or closures. Based
+on feature request https://bugs.php.net/bug.php?id=38595, I propose the
+following API changes. These changes apply to *both* ``DOMXPath`` and
+``XSLTProcessor``.
 
-https://github.com/cubiclesoft/php-ext-qolfuncs
+Extending the array abilities of registerPhpFunctions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-refcount()
-~~~~~~~~~~
+If you pass an array, entries of the form ``$key => $value`` will be
+interpreted as "associate the callable $value with name $key". The key
+must be a string. Example:
 
-int refcount(mixed &$value)
+.. code:: php
 
-Returns the userland internal reference count of a zval.
+   $xpath->registerPhpFunctions(["function_name" => $callable]);
+   // Now you can use "php:function('function_name', ...)" in XPath expressions to call $callable.
 
--  $value - Any input variable to retrieve its refcount.
+``$callable`` can be any kind of callable, examples:
+``"MyClass::staticFunc"``, ``[$this, "instanceFunc"]``,
+``$object->foo(...)``,
+``fn ($argument1, $argument2, etc...) => whatever``, etc.
 
-Returns: An accurate userland perspective normalized reference count of
-a zval. Interned strings always return a refcount of 1.
+The behaviour of passing only a string value without a key will remain
+the same as before. And you can mix them with ``$key => $value``
+entries:
 
-This function returns the accurate userland-oriented reference count of
-a variable. Unlike debug_zval_dump(), it accomplishes this by passing
-the variable by reference instead of by value, correctly calculates the
-true reference count (reference refcount minus the Zend engine increment
-minus one + value refcount), and returns a straight integer value to the
-caller instead of a string. Note that the way Zend engine works is still
-likely to cause confusion with how users might expect to see a refcount
-value.
+.. code:: php
 
-Weak references do not solve all refcounting problems. When there is a
-balancing act to maintain, especially in flexible caching scenarios,
-weak references cannot be used.
+   $xpath->registerPhpFunctions([
+     "function_name" => $callable,
+     "var_dump"
+   ]);
+   // Now $callable can be called using "php:function('function_name', ...)"
+   // and var_dump using "php:function('var_dump', ...)".
 
-Target audience: All users who need to implement flexible caching
-mechanisms such as "When 10,000 rows have been loaded into a cache,
-attempt to prune the cache down to about 5,000 rows." Also useful for
-users to track down userland refcount-based memory consumption issues.
-Also useful for extension developers working with zval references.
+Whether the value is callable will now be checked during registration
+instead of during execution.
 
-Why it should be added to PHP: No reasonable built-in function exists to
-get just the refcount of a variable. debug_zval_dump() is insufficient,
-produces results that are incorrect, and doesn't always output the
-refcount. Some libraries depend on the incorrect behavior of
-debug_zval_dump() (mostly because there's no dedicated function for
-getting just the refcount), so changing the function isn't exactly a
-viable solution.
+Method signature
+~~~~~~~~~~~~~~~~
 
-is_interned_string()
-~~~~~~~~~~~~~~~~~~~~
+The method signature of ``registerPhpFunctions`` will remain the same,
+i.e. ``registerPhpFunctions(string|array|null $restrict=null)``. You
+might be wondering why I don't change the string type in that union to
+callable. There are two reasons:
 
-bool is_interned_string(mixed $value)
+#. callable|array is ambiguous: what does ``["foo", "bar"]`` mean? Does
+   this mean: register both "foo" and "bar" as functions? Or does this
+   mean: register foo::bar ?
+#. XPath expressions are written as strings, so we have to give a string
+   name to the callable.
 
-Finds whether the given variable is an interned (immutable) string.
+Additional registerPhpFunctionNS API
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
--  $value - Any input type to validate as an interned string.
+This section is based on the feature request:
+https://bugs.php.net/bug.php?id=49567.
 
-Returns: A boolean of true if the string is interned (immutable), false
-otherwise.
+We can go even further and *additionally* add an extra API:
+registerPhpFunctionNS.
 
-This function differentiates between the two internal types of strings
-in PHP core. Interned (immutable) strings have a refcount of 1 and are
-never garbage collected while other strings are refcounted and garbage
-collected.
+.. code:: php
 
-Target audience: Some userland developers looking to optimize string
-performance for specific scenarios. Those looking to learn more about
-the underlying engine before diving into extension development.
+   // Associate the prefix "example" with namespace URI "http://example.com"
+   $xpath->registerNamespace("example", "http://example.com");
+   // Register some functions with the "http://example.com" namespace.
+   $xpath->registerPhpFunctionNS("http://example.com", "first_function", $callable);
+   $xpath->registerPhpFunctionNS("http://example.com", "second_function", $another_callable);
+   // Now $callable can be called using "example:first_function(...)"
+   // and $another_callable using "example:second_function(...)".
 
-Why it should be added to PHP: Language completeness. Could also be
-useful for some userland devs for performance optimizations and learning
-more about how string zvals work. Also potentially useful for verifying
-serious bugs in extensions from userland where an extension accidentally
-modifies an interned string.
+As you can see in the example, this offers a namespace-aware API and a
+nicer syntax. The fact that the function names are now fully-qualified
+avoids naming clashes when multiple independent libraries or API users
+register callbacks.
 
-As a historical side note: This function would have been handy to have
-for debugging `str_splice() </rfc/working_with_substrings>`__. The code
-accidentally modified interned strings at an early point of development.
+The signature of this function is:
 
-is_reference()
-~~~~~~~~~~~~~~
+.. code:: php
 
-bool is_reference(mixed &$value)
+   function registerPhpFunctionNS(string $namespaceURI, string $name, callable $callable): void;
 
-Finds whether the type of a variable is a reference.
+Notice how the function name is in singular (function vs the plural
+functions). Unlike the ``registerPhpFunctions`` method, we don't allow
+``null`` or arrays. Passing ``null`` to ``registerPhpFunctions`` makes
+it possible to call all global functions, which I find dubious for a
+namespace-aware API. Furthermore, in that case it *cannot* determine at
+registration time whether the global function is callable (because we
+don't know yet what function will be called). I find this a footgun that
+I'd rather avoid for a new API.
 
--  $value - Any input variable to determine if it is a reference.
+Similarly, the array support for ``registerPhpFunctions`` is mostly a
+legacy relic from the past and gives conflicts with array-like
+callables. That is the reason that for ``registerPhpFunctions`` only
+string-like callables can be passed, and you have to wrap array-like
+callables. To avoid this mess, the new ``registerPhpFunctionNs`` API
+does not accept an array and consequently supports all kinds of
+callables directly without caveats.
 
-Returns: A boolean of true if the variable is a reference, false
-otherwise.
+Error conditions
+~~~~~~~~~~~~~~~~
 
-This function determines whether or not a variable is a reference.
+There will be new error conditions added to ``registerPhpFunctions`` as
+part of this RFC.
 
-The Zend engine VM only has two options for its opcodes for parameters:
-Coerce a variable to a reference OR coerce a variable to a value. There
-is no opcode for passing a variable to a function as-is. If there were
-such an opcode, the number of functions that would benefit would be very
-low. Fortunately, coercion to a reference is temporary during the
-function call and causes the refcount to be a minimum of two and is only
-higher if it is an actual reference variable. However, the resulting
-behavior is that this function operates on a by-design side effect of
-Zend engine. If Zend engine ever changes significantly in the distant
-future, this function could break in a way that won't necessarily be
-able to be fixed.
+In case the argument is a string:
 
-While this function is useful for tracking down/verifying bugs related
-to references in userland software, please take the above caveat into
-consideration when you vote.
+#. If the string is not a callable: argument type error
 
-Target audience: All users. While variable references generally enable
-faster application performance, lots of weird application bugs can crop
-up with references (e.g. forgetting to unset() before reusing a variable
-later).
+In case the argument is an array:
 
-Why it should be added to PHP: A useful debugging tool. Also, language
-completeness. However, it does rely on a side effect of how the engine
-functions.
+#. If the value of an array entry is not a callable: argument type error
+#. If there is no string key, and the value cannot be converted to a
+   string: whatever error ``zval_try_get_string`` gives. Example: if you
+   do ``registerPhpFunctions([ function() {...} ])``: this will throw a
+   "Object of class Closure could not be converted to string" error.
+#. If there is a string key that's empty: argument ``ValueError``
+#. If there are NUL bytes in the string: argument ``ValueError``
 
-is_equal_zval()
-~~~~~~~~~~~~~~~
+For ``registerPhpFunctionNS`` there are other error conditions. This
+list is shorter because the function is much simpler (i.e. no array
+handling):
 
-bool is_equal_zval(mixed &$value, mixed &$value2, [ bool $deref = true
-])
+#. The predefined php namespace for XPath is "http://php.net/xpath", and
+   for XSL it is "http://php.net/xsl". It will *not* be possible to
+   register functions under those namespaces respectively for XPath and
+   XSL. It will throw an argument ``ValueError``.
+#. Some characters for callbacks are invalid (e.g. you cannot use a
+   colon in the function name because a colon is used to separate
+   prefixes from names). It will throw an argument ``ValueError``.
 
-Compares two raw zvals for equality but does not compare data for
-equality.
+Exceptions vs warnings during execution
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
--  $value - Any input variable to determine if it has equality to
-   $value2.
--  $value2 - Any input variable to determine if it has equality to
-   $value.
--  $deref - Whether or not to compare data pointers (Default is true).
+Prior to PHP 8.0, the ``DOMXPath`` class threw warnings when invoking a
+"php:function(...)" in the following error conditions:
 
-Returns: A boolean of true if the zvals are pointing at the same
-reference variable (for references) or data pointer.
+#. The handler name is not a string
+#. The function callback could not be called because it isn't callable
+#. The function callback wasn't registered
+#. When trying to return an object from a callback to an XPath
+   expression that is not a DOM object. You can only return DOM objects
+   because they must have an XML representation.
 
-This function performs a low-level pointer zval equality comparison
-operation between $value and $value2. Handy for looking at complex zval
-mechanisms behind the scenes of PHP. Very different from the equality
-operator (===).
+In PHP 8.0, these were changed to throw exceptions instead of warnings
+(https://github.com/php/php-src/pull/5418). ``XSLTProcessor`` has the
+same error conditions, but still uses warnings to this day. As part of
+this proposal, the implementations will be unified and will therefore
+use exceptions instead of warnings.
 
-Target audience: Those looking to learn more about how zvals work under
-the hood, especially extension developers. Also maybe useful for some
-userland devs looking to optimize some code.
+Finally, both for ``DOMXPath`` and ``XSLTProcessor``, if you never
+called ``registerPhpFunctions`` it will throw a warning instead of
+throwing an exception. This is inconsistent because if you *did* call
+the function but did not register a function that you're trying to call
+you get an exception instead. I propose to make this an exception too
+such that it is consistent with the other error conditions.
 
-Why it should be added to PHP: Language completeness. Exposes some inner
-workings of zvals that are otherwise difficult to surface.
+Usage examples of the API improvement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Here are some simple, but somewhat realistic examples of how this API
+improvement can be used.
+
+Here's an example of ``DOMXPath`` with the new API:
+
+.. code:: php
+
+   class Collector {
+       function __construct(private string $regex, private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xpath = new DOMXPath($doc);
+           $xpath->registerNamespace("php", "http://php.net/xpath");
+
+           // This registers the callbacks
+           $xpath->registerPhpFunctions([
+               "filter" => $this->filter(...),
+               "check_box_preference" => fn (string $box) => in_array($box, $this->available_boxes),
+           ]);
+
+           $results = $xpath->evaluate(<<<X
+           //a
+           [php:function('filter', string(@href))]
+           [php:function('check_box_preference', string(@box_preference))]
+           X);
+           foreach ($results as $result) {
+               echo "Found ", $result->textContent, "\n";
+           }
+       }
+
+       function filter(string $href): bool {
+           return preg_match($this->regex, $href);
+       }
+   }
+
+   (new Collector("/cat/", ["medium", "large"]))->process($doc);
+
+As you can see, this allows the use of instance methods when you have to
+carry around state. It also allows the use of closures.
+
+And here's an example of using ``XSLTProcessor`` with the improved API:
+
+.. code:: php
+
+   <?php
+   class BoxCounter {
+       function __construct(private array $available_boxes) {}
+
+       function process(DOMDocument $doc) {
+           $xsl = new DOMDocument;
+           $xsl->loadXML(<<<XML
+           <?xml version="1.0" encoding="iso-8859-1"?>
+           <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+               xmlns:php="http://php.net/xsl">
+               <xsl:template match="//a">
+                   <xsl:if test="php:function('filter', string(@box_preference))">
+                       <xsl:value-of select="."/>
+                   </xsl:if>
+               </xsl:template>
+           </xsl:stylesheet>
+           XML);
+
+           $proc = new XSLTProcessor;
+           $proc->registerPHPFunctions(["filter" => $this->assignBox(...)]);
+           $proc->importStyleSheet($xsl);
+           echo $proc->transformToXML($doc);
+       }
+
+       function assignBox($size) {
+           if (!@$this->available_boxes[$size]) return false;
+           $this->available_boxes[$size]--;
+           return true;
+       }
+   }
+
+   (new BoxCounter(["medium" => 1, "large" => 3]))->process($doc);
+
+This is again an example of instance methods in use, but for XSL
+transformations this time, with a stateful function.
+
+Special cases
+~~~~~~~~~~~~~
+
+This section clarifies the behaviour of some special cases. These behave
+the same as in current PHP stable versions. These also apply to
+``registerPhpFunctionNS``.
+
+Duplicate registrations
+^^^^^^^^^^^^^^^^^^^^^^^
+
+When registering a callback with the same name twice, the last
+registration wins. This allows for overwriting registrations. For
+example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable1,
+   ]);
+
+   $xpath->registerPhpFunctions([
+     "foo" => $callable2,
+   ]);
+
+If you were to call foo, it will call $callable2 in this example.
+
+Empty array argument
+^^^^^^^^^^^^^^^^^^^^
+
+For example:
+
+.. code:: php
+
+   $xpath->registerPhpFunctions([]);
+
+In this case, no functions are registered.
 
 Backward Incompatible Changes
 -----------------------------
 
-Significant care was taken to not introduce any BC breaks. As such,
-there shouldn't be any BC breaks as a result of these additions and
-enhancements.
+Strictly speaking, as the callable validity is checked earlier (i.e.
+when calling ``registerPhpFunctions``), this has a subtle break. If the
+function is not declared yet at the time of calling
+``registerPhpFunctions``, then this will throw an error. Previously this
+was accepted as long as the function was declared by the time the
+callback was executed. I think however that this situation is
+sufficiently rare and easily avoidable.
 
-refcount(), is_interned_string(), is_reference(), and is_equal_zval()
-will no longer be available as global function names. May break existing
-userland software that defines global functions with these names.
-Searching GitHub for those function names turns up the following
-results:
-
--  refcount() - 311,681 results. Appears to mostly be output from
-   various test suites calling debug_zval_dump(), especially PHP's own
-   test suite. No apparent naming conflicts but with that many results,
-   it's hard to be certain.
--  is_interned_string() - 1 result. Just the test extension (qolfuncs).
-   No apparent naming conflicts.
--  is_reference() - 3,542 results. Appears to mostly be a variable name
-   in Phan. No apparent naming conflicts.
--  is_equal_zval() - 1 result. Just the test extension (qolfuncs). No
-   apparent naming conflicts.
+If the part of the proposal to *also* add ``registerPhpFunctionNS`` is
+accepted, then this could also be a BC break *if* user subclasses
+already define a ``registerPhpFunctionNS`` function with a different
+signature. GitHub search revealed no such cases however, and I also
+think that this method name is rare.
 
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x.
+Next PHP 8.x, that is 8.4 at the time of writing.
 
 RFC Impact
 ----------
 
-::
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
 
-     To SAPIs:  Will be applied to all PHP environments.
-     To Existing Extensions:  Additions and changes made to ext/standard and ext/hash in the existing .c and .h files.
-     To Opcache:  New global functions (refcount(), is_interned_string(), etc) to be added to the registered opcache function list like all the other registered global functions.
-     New Constants:  No new constants introduced.
-     php.ini Defaults:  No changes to php.ini introduced.
+This affects both the ext/dom and ext/xsl extension.
+Implementation-wise, the ext/dom extension will gain the shared code to
+deal with XPath callables because the result set handling (and therefore
+ext/xsl) already depends on DOM classes anyway.
 
 Open Issues
 -----------
 
-Issue 1 - Should the function name refcount() be changed to something
-else to avoid possible global namespace conflicts? 300,000+ results on
-GitHub is a lot.
+None.
 
-Issue 2 - How likely is it that Zend engine will change in such a way
-that is_reference() will break?
+Unaffected PHP Functionality
+----------------------------
 
-Issue 3 - Are there other bits of Zend engine functionality that could
-be exposed as part of this RFC (i.e. additional functions) to round out
-the RFC some more? Maybe something relevant from the bug tracker that
-comes up on occasion?
+Everything else.
 
 Future Scope
 ------------
 
-None at this time.
+None right now.
 
 Proposed Voting Choices
 -----------------------
 
-The vote will require 2/3 majority with a vote on a per-function basis.
+Two primary votes each requiring 2/3rd majority.
+
+Accept the proposed changes to registerPhpFunctions in ext/dom and
+ext/xsl?
+
+Question: Accept the proposed changes to registerPhpFunctions in ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+--------------
+
+Add registerPhpFunctionNS to ext/dom and ext/xsl?
+
+Question: Add registerPhpFunctionNS to ext/dom and ext/xsl?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-Working implementations of all the items being proposed can currently be
-found at:
-
-https://github.com/cubiclesoft/php-ext-qolfuncs
-
-This section will be updated to point to relevant pull request(s). Most
-of the development and testing is basically done at this point so
-turning the extension into a normal pull request should be reasonably
-straightforward.
+https://github.com/php/php-src/pull/12627
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
+Merged into PHP 8.4 in
+https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a.
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+Manual entry TBD
 
 References
 ----------
 
--  Implementation PR: TODO
--  Discussions on the php.internals mailing list:
-   https://externals.io/message/119238
--  Announcement thread: TODO
+#. Pre-RFC pitch: https://externals.io/message/121286
+#. Feature request: https://bugs.php.net/bug.php?id=38595
+#. Feature request: https://bugs.php.net/bug.php?id=49567
 
 Rejected Features
 -----------------
 
-None at this time.
+Keep this updated with features that were discussed on the mail lists.
+
+Changelog
+---------
+
+-  0.3: Changed registerPhpFunctionsNS -> registerPhpFunctionNS
+-  0.2: Added registerPhpFunctionsNS
+-  0.1.1: Clarify special cases (which are identical to how they are in
+   current PHP versions)
+-  0.1: Initial version under discussion
 
 Additional Metadata
 -------------------
 
-:Original Authors: Thomas Hruska, cubic@php.net
-:Slug: misc_variable_functions
-:Wiki URL: https://wiki.php.net/rfc/misc_variable_functions
+:Implementation: https://github.com/php/php-src/commit/90785dd865aa14005611107d566aa2a664572d8a
+:Original Authors: Niels Dossche, nielsdos@php.net
+:Slug: improve_callbacks_dom_and_xsl
+:Wiki URL: https://wiki.php.net/rfc/improve_callbacks_dom_and_xsl
