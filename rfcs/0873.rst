@@ -1,19 +1,415 @@
-No Title
-========
+Match Blocks
+============
 
 :PHP-RFC: 0873
-:Title: No Title
-:Author: Unknown
-:Status: Unknown
-:Type: Unknown
-:Created: 2023-08-19
+:Title: Match Blocks
+:Author: Ilija Tovilo <tovilo.ilija@gmail.com>
+:Status: Draft
+:Type: Standards Track
+:Created: 2023-08-24
+:PHP-Version: 8
 :Version: 1.0
 
-This RFC has moved to
-`access_scope_from_magic_accessors </rfc/access_scope_from_magic_accessors>`__
+Proposal
+--------
+
+The `match expression <https://wiki.php.net/rfc/match_expression_v2>`__
+was added to PHP 8.0 with the goal of being a safer and more useful
+alternative to the switch statement. In its current form, each match arm
+is limited to a single expression. Any arm that does not nicely fold
+into a singular expression prevents match from being used. This RFC
+proposes to lift this restriction and allow the placement of blocks at
+the match arm site.
+
+.. code:: php
+
+   // Before
+   switch (true) {
+       // InputParameter
+       case $entityExpr instanceof AST\InputParameter:
+           $dqlParamKey = $entityExpr->name;
+           $entitySql   = '?';
+           break;
+
+       // snip
+   };
+
+   // After
+   $entitySql = match (true) {
+       // InputParameter
+       $entityExpr instanceof AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
+
+       // snip
+   };
+
+Source: `doctrine/orm
+SqlWalker.php <https://github.com/doctrine/orm/blob/2f9e98754bb451107dcffbf0a9844b90dcdee992/lib/Doctrine/ORM/Query/SqlWalker.php#L2169-L2183>`__
+
+Semantics
+---------
+
+Return value
+~~~~~~~~~~~~
+
+Match blocks may have return values. Match will propagate the return
+value of the executed arm. The return value of the block is the last
+expression after an optional list of statements, preceded by a ``<-``
+symbol to denote the value flowing out of the block. If the match return
+value is used, each block is expected to return a value, unless it
+terminates early. If the match return value is not used, the returned
+value is simply discarded.
+
+.. code:: php
+
+   $result = match($foo) {
+       'bar' => {
+           $l = 1;
+           $r = 2;
+           <- $l + $r;
+       },
+       'baz' => {
+           throw new Exception();
+       },
+       'qux' => {
+           // Forgot to return something
+           // This will throw a MatchBlockNoValueError if executed
+       },
+   };
+
+Note that the return keyword is not reused in place of ``<-`` because it
+would be ambiguous whether the user meant to return from the match
+block, or return from the function. Similarly, yield can already refer
+to pausing a generator in this context.
+
+Control statements
+~~~~~~~~~~~~~~~~~~
+
+return, break, continue and goto statements out of the block are allowed
+*only* if the return value of match itself is not used.
+
+.. code:: php
+
+   match ($foo) {
+       'bar' => {
+           // Returning 'baz' from the *function* (not match)
+           // This is ok
+           return 'baz';
+       },
+   };
+
+   var_dump(match ($foo) {
+       'bar' => {
+           // Breaking out of match (like breaking out of switch, foreach, etc)
+           // This is **not** ok
+           break;
+       },
+   });
+
+   var_dump(match ($foo) {
+       'bar' => {
+           for ($i = 0; $i < 10; $i++) {
+               // Continuing the for loop inside the block
+               // This is ok, as the block itself is not escaped
+               continue;
+           }
+           <- 42;
+       },
+   });
+
+The rationale for this decision is twofold:
+
+-  It attempts to avoid confusing and potentially unsound control flow.
+   For example:
+
+.. code:: php
+
+   var_dump(match (1) {
+       1 => {
+           break;
+           <- 42;
+       },
+   });
+   // What is the return value of match? 
+   // A value was never returned, but the var_dump must receive a value nonetheless.
+
+-  There are technical challenges to correctly implementing control flow
+   that escapes mid-expression. For the interested, this is explained in
+   more detail under "Technical implications of control statements"
+   below. Disallowing escaping of the match block completely dodges this
+   problem.
+
+Scoping
+~~~~~~~
+
+Match blocks behave just like any other statement list in PHP in terms
+of scoping. That is, no new scope is created. All variables assigned
+inside the block are visible outside the block, within the same
+function.
+
+.. code:: php
+
+   match ($foo) {
+       'bar' => {
+           $bar = 'I can see this';
+       },
+   };
+   echo $bar; // I can see this
+
+Motivation
+----------
+
+The match expression has been introduced to address some shortcomings of
+switch statements, but currently fails to address approximately half of
+its use cases. Switch cases commonly contain more than one statement.
+`popular-package-analysis <https://github.com/nikic/popular-package-analysis>`__
+revealed that 3 507 of 6 012 switch statements contained at least one
+case with more than one statement (excluding breaks). Moreover, 29 690
+of 67 563 cases were multi-statement. Since match is limited to one
+expressions per arm, a single arm that does not nicely fold into a
+singular expression prevents match from being used entirely.
+
+It has previously been argued that limiting match arms to single
+expressions is beneficial for enforcing clean code. While keeping
+functions and consequently match arms short certainly has its merits, I
+personally find excessively small functions disorienting and hard to
+name well. Moreover, some statements (e.g. control statements) cannot be
+moved into separate functions.
+
+Additionally, the `pattern matching
+RFC <https://wiki.php.net/rfc/pattern-matching>`__ plans to further
+enhance match. Specifically, each match arm will be able to specify a
+pattern to match the value against, e.g. type checks. The Doctrine
+example from the introduction could become the following:
+
+.. code:: php
+
+   $entitySql = match ($entityExpr) {
+       // InputParameter
+       is AST\InputParameter => {
+           $dqlParamKey = $entityExpr->name;
+           <- '?';
+       },
+
+       // snip
+   };
+
+Why not language-level blocks?
+------------------------------
+
+Instead of just implementing blocks match, it has been suggested to
+implement blocks as a language-level concept. There are three evident
+use cases for block expressions.
+
+-  Match blocks
+-  Arrow function blocks
+-  Right-hand side of short-circuiting operators (``??=``, ``??``,
+   ``?:``, ``? :``)
+
+Return value semantics
+~~~~~~~~~~~~~~~~~~~~~~
+
+The optimal return value semantics for these three use cases are all
+slightly different.
+
+-  For match, whether the block should require returning a value depends
+   on whether the match itself returns a value.
+-  Arrow function blocks should never require a return value, as they
+   already provide ``return``. No return value should mean ``null``, to
+   stay consistent with other functions.
+-  For the remaining cases, a value should always be returned, unless
+   the block terminates.
+
+We could settle for a solution that works for all cases, namely
+returning ``null`` by default. Whether this solution is preferable is
+likely a matter of taste.
+
+.. code:: php
+
+   var_dump(match ('foo') {
+       'foo' => {
+           echo "foo branch reached\n";
+       },
+   });
+   // foo branch reached
+   // NULL
+
+   var_dump(fn () => {
+       <- 'foo';
+   }());
+   // string(3) "foo"
+
+It's also note that the general use of blocks is quite limited due to
+PHPs scoping rules. In other languages, blocks can be used to prevent
+pollution of the current scope.
+
+.. code:: rust
+
+   let foo = {
+       let tmp = tmp();
+       // ...
+       Foo { tmp }
+   };
+
+In this case, ``tmp`` resides in the isolated scope and is inaccessible
+outside of the block. However, given that PHP only has a single scope
+per function, there is no point in lexically nesting the temporary
+variables, other than potential visual benefits. The benefits are mainly
+limited to some of the short-circuiting operators (``??=``, ``??``,
+``?:``, ``? :``), as they may skip the execution of the block under
+certain conditions.
+
+.. code:: php
+
+   $foo ??= {
+       // This is only executed if $foo was null/undefined.
+       $tmp = tmp();
+       // ...
+       <- new Foo($tmp);
+   };
+
+Arrow function capturing
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Another issue is that blocks for arrow functions have previously
+beenrejected in two separate RFCs, for reasons that are not solved with
+this approach.
+
+-  https://wiki.php.net/rfc/short-functions
+-  https://wiki.php.net/rfc/auto-capture-closure
+
+It seems that most concerns for both of these RFCs were related to
+auto-capturing, which language-level blocks cannot properly address.
+
+Grammar ambiguity
+~~~~~~~~~~~~~~~~~
+
+Yet another issue is that ``{}`` is ambiguous (without arbitrary
+lookahead) in expression context, as it clashes with statement lists,
+i.e. the blocks you put after if statements, while loops, etc. An
+alternative syntax could use parentheses, although this introduces some
+inconsistency in the grammar.
+
+.. code:: php
+
+   var_dump(match ($value) {
+       'foo' => (
+           echo "foo branch reached\n";
+           'foo'
+       ),
+   });
+   // foo branch reached
+   // string(3) "foo"
+
+This works fine, but looks somewhat odd, given that we use ``{}`` in all
+other cases when wrapping statements into blocks.
+
+Technical implications of control statements
+--------------------------------------------
+
+PHPs VM is in three-address form. As opposed to most machines, PHP
+opcodes are destructive in that they consume their operands. A consumed
+operand may not be consumed again. Moreover, an unconsumed operand may
+result in a memory leak. Control statements in match expression blocks
+pose a problem when they skip over the consuming opcodes of temporary
+VARs.
+
+.. code:: php
+
+   new Foo() + match (1) {
+       1 => { return; },
+   };
+
+::
+
+   0000 V0 = NEW 0 string("Foo")
+   0001 DO_FCALL
+   0002 T2 = IS_IDENTICAL int(1) int(1)
+   0003 JMPNZ T2 0006
+   0004 JMP 0005
+   0005 MATCH_ERROR int(1)
+   0006 RETURN null
+   0007 MATCH_BLOCK_NO_VALUE_ERROR
+   0008 T3 = QM_ASSIGN null
+   0009 JMP 0010
+   0010 T4 = ADD V0 T3
+   0011 FREE T4
+   0012 RETURN int(1)
+
+The opcode 0006 (RETURN) is always executed, skipping the 0010 (ADD)
+instruction, not consuming V0 and thus leaking the Foo object. This
+problem may be avoided by emitting a FREE opcode before RETURN. The same
+issue can occur when breaking out of switch statements, continuing in
+loops, using goto, etc. This approach is implemented in `this
+PR <https://github.com/php/php-src/compare/master...iluuu1994:php-src:match-blocks-var-tracking>`__.
+However, it has proven to be quite complex for questionable benefit.
+
+Similarly, we run into an issue in this code.
+
+.. code:: php
+
+   foo()->bar(match (1) {
+       1 => { return; },
+   });
+
+::
+
+   0000 INIT_FCALL_BY_NAME 0 string("foo")
+   0001 V0 = DO_FCALL_BY_NAME
+   0002 INIT_METHOD_CALL 1 V0 string("bar")
+   0003 T1 = IS_IDENTICAL int(1) int(1)
+   0004 JMPNZ T1 0007
+   0005 JMP 0006
+   0006 MATCH_ERROR int(1)
+   0007 RETURN null
+   0008 MATCH_BLOCK_NO_VALUE_ERROR
+   0009 T2 = QM_ASSIGN null
+   0010 JMP 0011
+   0011 SEND_VAL_EX T2 1
+   0012 DO_FCALL
+   0013 RETURN int(1)
+
+The 0007 (RETURN) instruction skips over 0012 (DO_FCALL). However, the
+0002 (INIT_METHOD_CALL) instruction has already received V0 (foo()) and
+increased its refcount to make sure the value is not released before the
+method bar() is called on it. Given that 0012 (DO_FCALL) is never
+executed and thus foo() is never released, it leaks.
+
+Both of these issues arise because there are unfreed VARs at the time
+the escaping control statements in the match blocks are executed,
+skipping over their consuming opcodes. Disallowing the escaping of the
+match blocks when there are unconsumed VARs (i.e. when it is used within
+another expression) prevents skipping over their consuming opcodes, and
+thus circumvents the issue.
+
+Backwards incompatible changes
+------------------------------
+
+There are no backwards incompatible changes in this RFC.
+
+Vote
+----
+
+Voting starts ????-??-?? and ends ????-??-??.
+
+As this is a language change, a 2/3 majority is required.
+
+Question: Add support for blocks at match arms in PHP 8.x?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Slug: pass_scope_to_magic_accessors
-:Wiki URL: https://wiki.php.net/rfc/pass_scope_to_magic_accessors
+:Implementation: https://github.com/php/php-src/pull/11933
+:Original Authors: Ilija Tovilo, tovilo.ilija@gmail.com
+:Original PHP Version: PHP 8.x
+:Slug: match_blocks
+:Wiki URL: https://wiki.php.net/rfc/match_blocks

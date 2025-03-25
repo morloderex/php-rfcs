@@ -1,159 +1,220 @@
-Random Migration
-================
+Never Parameters (v2)
+=====================
 
 :PHP-RFC: 0880
-:Title: Random Migration
-:Author: Tim Düsterhus <timwolla@php.net>
+:Title: Never Parameters (v2)
+:Author: Daniel Scherzer <daniel.e.scherzer@gmail.com>
 :Status: Draft
 :Type: Unknown
-:Created: 2022-12-22
+:Created: 2025-03-10
 :Version: 0.1
+
+Currently, there is no way to specify a parameter with a `bottom
+type <https://en.wikipedia.org/wiki/Bottom_type>`__, indicating that a
+function has a parameter but not providing any guarantees on the types
+of values it accepts. This RFC proposes allowing the ``never`` type to
+be used on methods in places where methods are just declared to exist,
+like interfaces and abstract class methods.
 
 Introduction
 ------------
 
-While random number generation in PHP has been improved by a series of
-Random Extension RFCs, the old insecure methods remain, and need to be
-migrated to a more appropriate and usable form.
+For a use case, and the inspiration for this RFC, consider the case of
+the ``BackedEnum`` interface that was added in PHP 8.1. It is defined
+as:
+
+.. code:: php
+
+   interface BackedEnum extends UnitEnum {
+     public string $value;
+     
+     public static function from(int|string $value): static;
+     public static function tryFrom(int|string $value): ?static;
+   }
+
+However, this interface is incorrect from a type perspective. Backed
+enums are backed by string or by integers, and in either scenario, *all*
+cases of the enum have values of that type. For enums that are
+string-backed, the ``::from()`` and ``::tryFrom()`` methods should be
+typed with string parameters; for enums that are int-backed, the methods
+should be typed with integer parameters.
+
+But, since parameter types are contravariant, for enums to have the
+right signatures the base ``BackedEnum`` methods would need to have
+types that are more restrictive than either ``string`` or ``int`` -
+something like ``string&int``, or, since that is impossible (and just a
+confusing way of saying "absolutely no values"), what is proposed in
+this RFC:
+
+.. code:: php
+
+   interface BackedEnum extends UnitEnum {
+     public string $value;
+     
+     public static function from(never $value): static;
+     public static function tryFrom(never $value): ?static;
+   }
+
+That way, for enums that were backed by strings, the methods could be
+
+.. code:: php
+
+     public static function from(string $value): static;
+     public static function tryFrom(string $value): ?static;
+
+While, for enums backed by ints, the methods could be
+
+.. code:: php
+
+     public static function from(int $value): static;
+     public static function tryFrom(int $value): ?static;
+
+And, importantly, LSP is followed - since ``never`` is the bottom type,
+having a ``string`` or ``int`` parameter *widens* the acceptable types.
 
 Proposal
 --------
 
-We propose to deprecate some functions related to RNG in PHP 8.3 and to
-remove them in the next versions. For those functions for which no
-replacement is available, add a new one.
+``never`` can be used as a parameter type, subject to the following
+restrictions
 
-The functions to be deprecated, the reasons for their deprecation, and
-the functions to be replaced are as follows:
+-  it cannot be used in the declaration of any method that has an
+   implementation. Methods with ``never`` can **never** (pun intended)
+   be called, because there are no values that satisfy the type
+   constraint. Instead of delaying the error until runtime when the user
+   attempts to call the method, just require that the method not have a
+   body. In other words, this can be used in interfaces and in the
+   declaration of abstract methods in both traits and abstract classes.
+-  it cannot be used in non-class functions. This follows from the
+   restriction above - because non-class functions always have an
+   implementation, they cannot use ``never`` parameters, or they would
+   be unusable.
+-  it cannot be used in the ``set`` property hook. Because property hook
+   parameter types are contravariant with the type of the property
+   itself, the property hook parameter cannot be declared with a
+   narrower type than the property itself. At the moment, properties
+   cannot be declared to have ``never`` types, so using this in a
+   property hook would be impossible regardless, but it is worth
+   pointing out.
+-  it cannot be used for a parameter with a default. Because ``never``
+   does not accept any values, there is no possible default value that
+   would be accepted by the current validation that the default value be
+   legal, but it is worth pointing out.
 
-srand and rand functions
-^^^^^^^^^^^^^^^^^^^^^^^^
+Additionally, making use of this new feature, the definitions of the
+``BackedEnum::from()`` and ``BackedEnum::tryFrom()`` methods are updated
+to use ``never`` parameters, and for any individual backed enum, the
+signature documents that the method accepts only string parameters (or
+only int parameters).
 
-The following functions to deprecated:
+Differences from prior RFC
+--------------------------
 
--  srand()　-> \\Random\Randomizer
--  mt_srand() -> \\Random\Randomizer
--  rand() -> random_int()
--  mt_rand() -> random_int()
+In developing this RFC the author discovered a prior RFC,
+`never_for_parameter_types </rfc/never_for_parameter_types>`__, with a
+similar goal. Differences from that proposal include
 
-All of these functions have global scope issues described in the Random
-Extension RFC.
-
-The rand() and mt_srand() functions can be used without performing
-explicit seeding, but the seed value used in this case is not
-reproducible because it uses random_int() internally. \*1 In most cases,
-it is better to use random_int() directly. Also, srand() and mt_srand()
-are undesirable from a security standpoint because they use a
-low-quality linear congruence method to generate the seed value as a
-fallback \*2 if a secure seed value cannot be generated.
-
-If reproducibility is required, we should use \\Random\Randomizer, which
-does not have the global scope issue.
-
-#. https://github.com/php/php-src/blob/7f0b228f48ad29c13a84dc8c8bc050f34d3a855a/ext/random/engine_mt19937.c#L240
-#. https://github.com/php/php-src/blob/f9a1a903805a0c260c97bcc8bf2c14f2dd76ca76/ext/random/php_random.h#L67
-
-lcg_value() function
-^^^^^^^^^^^^^^^^^^^^
-
-This function generates random floating point numbers between 0.0 and
-1.0, but the algorithm used is the old linear congruence method and is
-of low quality.
-
-There is no suitable replacement for this function. Therefore, the
-random_float() function is added. This function has the following
-signature:
-
-.. code:: php
-
-   function random_float(float $min = 0.0, float $max = 1.0, \Random\IntervalBoundary $intervalBoundary = \Random\IntervalBoundary::ClosedClosed): float {}
+-  ``never`` parameters can only be used when on methods (not
+   free-standing functions)
+-  ``never`` parameters can only be used when a method has no body
+   associated with the declaration
+-  ``never`` parameters cannot have default values
+-  ``BackedEnum`` is updated as part of this proposal
 
 Backward Incompatible Changes
 -----------------------------
 
-The following functions are deprecated and will be removed in the next
-version of PHP 8.3.
+Anything previously relying on the exact type information for
+``BackedEnum::from()`` and ``BackedEnum::tryFrom()``, or the
+corresponding inherited methods on any backed enum, may need to be
+updated to account for the fact that the information is correct now.
 
--  srand()
--  rand()
--  mt_srand()
--  mt_rand()
-
-The following function names are no longer available:
-
--  random_float()
+As with all RFCs that make code that previously had a compile-time error
+become valid, this RFC requires updates to static analyzers and IDEs to
+understand the semantics of never parameters.
 
 Proposed PHP Version(s)
 -----------------------
 
-PHP 8.3 and next version
+Next version of PHP (PHP 8.5 or PHP 9.0)
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
-
-none
-
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
-
-ext-random
-
-To Opcache
-~~~~~~~~~~
-
-none
-
-New Constants
+To Reflection
 ~~~~~~~~~~~~~
 
-none
+Information about ``BackedEnum::from()``, ``BackedEnum::tryFrom()``, and
+the inherited versions thereof on individual backed enums will be
+updated.
 
-php.ini Defaults
-~~~~~~~~~~~~~~~~
+Any code that relied on the assumption that parameters did not have
+``never`` types will need to be updated to check the actual type.
 
-none
+Unaffected PHP Functionality
+----------------------------
 
-Open Issues
------------
+Since ``never`` was previously not allowed as a parameter, the behavior
+of existing legal code is unchanged.
 
-By eliminating rand() and mt_rand(), we lose the exception-free random
-number generation function. However, I do not believe such a situation
-can occur.
+Since PHP internal methods (in this case ``BackedEnum::from()`` and
+``BackedEnum::tryFrom()``) do their type checking manually in their
+implementations rather than having signatures enforced by the engine
+upon calling, the types of values allowed were already restricted based
+on the backing type of enums. Thus, the behavior of calling
+``BackedEnum::from()`` or ``BackedEnum::tryFrom()`` is unchanged.
+
+Future Scope
+------------
+
+Further work might include
+
+-  ``never``-typed properties, to indicate that a property exists but
+   subclasses are free to impose any restrictions desired on the type of
+   the parameter; this would also allow ``never``-typed property set
+   hooks
+-  Updating other existing core interfaces and abstract methods to use
+   ``never``-typed parameters; the case of ``ArrayAccess`` was heavily
+   discussed on the mailing list with regard to the previous RFC. This
+   RFC explicitly **does not** change any interface interface or
+   abstract class other than ``BackedEnum``
 
 Proposed Voting Choices
 -----------------------
 
-Question: Deprecate and remove these functions?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Add ``never``-typed parameters in the limited cases described above, and
+use them for backed enums?
 
-Voting Choices
-^^^^^^^^^^^^^^
+Patches and Tests
+-----------------
 
--  Yes
--  No
-
-Question: Add random_float() function?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _voting-choices-1:
-
-Voting Choices
-^^^^^^^^^^^^^^
-
--  Yes
--  No
+https://github.com/php/php-src/pull/18016
 
 Implementation
 --------------
 
-WIP
+After the project is implemented, this section should contain
+
+#. the version(s) it was merged into
+#. a link to the git commit(s)
+#. a link to the PHP manual entry for the feature
+#. a link to the language specification section (if any)
+
+References
+----------
+
+Links to external references, discussions or RFCs
+
+-  `never_for_parameter_types </rfc/never_for_parameter_types>`__ RFC
+-  Discussion from that RFC: https://externals.io/message/115712
+-  https://en.wikipedia.org/wiki/Bottom_type
+-  `property-hooks </rfc/property-hooks>`__ RFC
+-  `enumerations </rfc/enumerations>`__ RFC
 
 Additional Metadata
 -------------------
 
-:Original Authors: Tim Düsterhus, timwolla@php.net
-:Slug: random_migration
-:Wiki URL: https://wiki.php.net/rfc/random_migration
+:Original Authors: Daniel Scherzer, daniel.e.scherzer@gmail.com
+:Original Status: Under Discussion
+:Slug: never-parameters-v2
+:Wiki URL: https://wiki.php.net/rfc/never-parameters-v2
