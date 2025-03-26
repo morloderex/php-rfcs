@@ -1,342 +1,258 @@
-NameOf
-======
+A New JIT Implementation Based On IR Framework
+==============================================
 
 :PHP-RFC: 0869
-:Title: NameOf
-:Author: Robert Landers <landers.robert@gmail.com>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-05-07
+:Title: A New JIT Implementation Based On IR Framework
+:Author: Dmitry Stogov <dmitry@php.net>
+:Status: Accepted
+:Type: Standards Track
+:Created: 2023-09-20
+:PHP-Version: 8.4
 :Version: 1.0
 
 Introduction
 ------------
 
-Currently, it is possible to inspect virtually any aspect of running
-code, except there is no easy way to inspect the locally executing
-scope. For example, a developer can get the class of an object with
-``get_class()`` or the name with ``MyClass::class`` or
-``$myClass::class``. A developer can get the name of a parameter or
-property via reflection, however, when a developer needs to write a
-simple error message, that may be overkill, thus the variable name is
-usually hard-coded into the error message. This usually works fine until
-a developer refactors the code and forgets to change the name of the
-variable in the error message.
+The first version of JIT for PHP was released in PHP-8.0
+(https://wiki.php.net/rfc/jit). That time we took a quite simple
+approach. We are generating native code directly from Zend VM byte code.
+This approach allowed to deliver JIT in a quite short time, but it also
+created significant limitations in possible optimizations. Smart
+optimizations require a more formal and detailed **Intermediate
+Representation** (IR). The introduction of the AArch64 JIT back-end in
+PHP-8.1, made the maintenance of JIT a bit more complex, because now we
+often have to update assembler code in two back-ends.
 
-``nameof()`` allows developers to quickly and easily access the name of
-a variable in the current scope, in a way that keeps error messages
-consistent.
-
-This RFC proposes a global ``nameof()`` function that allows a developer
-to get the name of virtually any user-named variable, property, const,
-or member, quickly and easily:
-
-.. code:: PHP
-
-   echo nameof($variable); // variable
-   echo nameof($object->property); // property
-   echo nameof(Enum::Case); // Case
-   echo nameof(Object::Const); // Const
-   echo nameof(myFunction(...)); // myFunction
-   echo nameof(MY_CONSTANT); // MY_CONSTANT
-
-As named parameters become more prevalent, providing the end user with
-the name of the parameter is more important, in a way that it is easy to
-locate when refactoring, especially as part of a deprecation strategy:
-
-.. code:: PHP
-
-   function myAwesomeFunc(mixed $param1 = null, int $param2 = 0) {
-     // potentially many lines later...
-     if(is_called_with_deprecated_value($oldParam)) {
-       $logger->warn(nameof($oldParam) . ' is deprecated in the next version, please use ' . nameof($newParam);
-     }
-   }
-
-Further, using ``nameof()`` would allow simpler usage of attributes, by
-using the silence operator (see error checking):
-
-.. code:: PHP
-
-   // evaluates to #[EventHandler(callback: 'handler')]
-   #[EventHandler(callback: @nameof(Operator::handler))]
-   class Operator {
-     public function handler() {
-       // implementation
-     }
-   }
-
-It's important to note that some things have an ambiguous name that is a
-compile error:
-
-.. code:: PHP
-
-   echo nameof($a[$b]); // is it a or b? (can call nameof($a) or nameof($b) instead)
-   echo nameof($a === $b); // ??
-   echo nameof($a($b)); // same as array access
-   echo nameof($$a); // ask for $a or use the value of $a
-
-All of these will generate a compile error: "Cannot get the name of an
-ambiguous expression."
+A smarter JIT compiler with some Intermediate Representation was planned
+a long time. The real work was started in January 2022. This proposal is
+the result of these 1.75 years of work.
 
 Proposal
 --------
 
-The ``nameof()`` function is not necessarily a function in the
-traditional sense and can be used anywhere a string literal can be used
-(such as to define static constants, array keys, and attributes). This
-means that there is an 'identity' for every valid ``nameof()``:
+I propose a new JIT implementation that is based on a separately
+developed `IR Framework <https://github.com/dstogov/ir>`__.
 
-.. code:: PHP
+Instead of separate back-ends that generated x86 and AArch64 code, now
+we have a single back-end that constructs IR.
 
-   ${nameof($variable)} === $variable;
-   $object->{nameof($object->property)} === $object->property;
-   constant(Enum::class . '::' . nameof(Enum::Case)) === Enum::Case;
-   constant(Object::class . '::' . nameof(Object::Const)) === Object::Const;
-   (nameof(myFunction(...))() === myFunction();
-   constant(nameof(MY_CONSTANT)) === MY_CONSTANT;
+This IR is passed to the framework that performs: machine independent
+optimizations, register allocation, scheduling, and native code
+generation. The new back-end doesn't have to care about many old
+low-level details, e.g.: register assignment, different calling
+conventions, etc.
 
-There are a limited number of expressions that can resolve to a name
-using ``nameof()``:
+On the other hand, sometimes the construction of IR may be more complex
+because all the dependencies must be consistently reflected. This helps
+to find many errors during formal IR verification.
 
--  variables (but not variable-variables): ``nameof($var)`` resolves to
-   'var'
--  properties: ``nameof($this->prop)``, ``nameof($a?->prop)`` resolves
-   to 'prop'
--  first-class callables: ``nameof(strlen(...))`` resolves to 'strlen'
--  static properties and constants: ``nameof(A::Prop)`` resolves to
-   'Prop'
--  constants: ``nameof(MY_CONST)`` resolves to 'MY_CONST'
+The new JIT implementation will affect only a few core PHP developers
+who are involved in the JIT development or maintenance.
 
-When getting the name of constants and functions, the name will NOT be
-the full name, but the lexical name. This means that if the name is
-``use``'d, it will be that name. However, if the full name is used in
-the ``nameof()``, the full name is returned. It's probably easiest to
-show this with an example:
+JIT is a self-contained subsystem, and the changes in the implementation
+details (even big changes) don't affect others.
 
-.. code:: PHP
+The proposed `patch <https://github.com/php/php-src/pull/12079>`__ makes
+few changes outside **ext/opcache/jit**. It also very carefully adds new
+IR related code into **zend_jit.c** and **zend_jit_trace.c**, keeping
+the ability to work with old and new back-ends.
 
-   namespace Name {
-       const MY_CONST = true;
-       function namedFunction() {}
-   }
+At the current state the PR doesn't remove the sources of the old JIT
+implementation. It is possible to switch to the old implementation by
+configuring PHP with **--disable-opcache-jit-ir**.
 
-   namespace Other {
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction
-   }
+JIT is a quite complex subsystem. Its first implementation will likely
+have bugs, but I am confident that these can be addressed. We have more
+time to fix potential issues, the sooner this proposal passes, and the
+patch is merged.
 
-   namespace Using {
-       use const Name\MY_CONST as ;
-       use const Name\MY_CONST as ALIASED_CONST;
-       use function Name\namedFunction;
+The main goal of a separate IR Framework development is the
+collaboration with other compiler experts (sharing expertise,
+contribution, etc.). I'm doing my best to make the IR project
+interesting outside the PHP world and involve others. In case of
+success, this will reduce the PHP "bus-factor".
 
-       echo nameof(MY_CONST); // MY_CONST
-       echo nameof(\Name\MY_CONST); // \Name\MY_CONST
-       echo nameof(ALIASED_CONST); // ALIASED_CONST
-       echo nameof(namedFunction(...)); // namedFunction
-       echo nameof(\Name\namedFunction(...)); // \Name\namedFunction(...)
-   }
+The necessary part of the IR Framework is embedded into the PHP source
+tree, and won't introduce any new external dependencies.
 
-In other language implementations (such as C#), a full name usually
-isn't returned even if you pass one in. However, a 'full name' is rarely
-required and can often be constructed from parts, if required. However,
-as a convenience, in this implementation, if a 'full name' is requested
-entered, a full name is returned. This allows for the 'least surprises'
-since what you put in is what you get out.
-
-Additionally, consider traits and aliasing:
-
-.. code:: PHP
-
-   trait A {
-     public function example() {}
-   }
-
-   trait B {
-     public function example() {}
-   }
-
-   class C {
-     use A, B {
-       A::example insteadof B;
-       B::example as exampleB;
-     }
-   }
-
-   $a = new C();
-   echo nameof($a->exampleB(...)); // outputs: "exampleB"
-
-In the example above, if we were to return the 'full name' of
-``$a->exampleB(...)`` it would actually be 'B::example' but that isn't
-helpful in the context of class ``C``. By returning the lexical name,
-the developer gets the response they expect.
-
-Error Handling
---------------
-
-There are several ways to handle errors, each one has its own merits but
-ultimately will be left up as a secondary vote. It may not provide the
-**best** solution, but the author doesn't have a personal preference:
-
-1. No error handling
-
-In this case, there is no error handling. This would allow using
-``nameof`` on things that don't exist. For example, no error would be
-output if a developer references a static property on an instanced
-property:
-
-.. code:: PHP
-
-   class MyClass {
-     public string $var;
-   }
-   nameof(MyClass::var); // no error, returns 'var'
-   nameof($aVariable); // no error, returns 'aVariable'
-
-The downside is that PHP won't natively inform a developer that they've
-used something that doesn't exist. The main benefit of this approach is
-that it would allow the community to come up with its own rules via
-static analysis tools.
-
-2. Warnings
-
-In this case, PHP would output a warning: "nameof(<name>): does not
-exist." where <name> is the name the developer passed.
-
-Using a class name (or any other method that would normally trigger
-autoloading) that does not exist, will trigger autoloading and attempt
-to locate the class. If it is not found, a warning will be issued. If a
-variable does not exist in the current scope, a warning will be issued.
-If the referenced property/method/const cannot be located, a warning
-will be issued. If a function or constant cannot be located in the
-current scope, a warning will be issued.
-
-Warnings can be disabled via the 'silence operator' (``@``) to behave
-just like the first case. This is the best of both worlds, allowing
-developers to 'break the rules' to specify properties/functions without
-a reference to the object (``@nameof(Object::method(...))`` vs.
-``nameof($object->method)``) but would require assistance via static
-analysis tooling to catch mistakes.
-
-3. Exceptions
-
-An exception model was considered, however, the author believes that it
-would break the concept of "using ``nameof`` wherever a string could be
-used". For example, if a name cannot be located, an exception would be
-thrown. This would be true in the case of simply defining an attribute
-with a non-existent name:
-
-#[EventHandler(handler: nameof(I_DO_NOT_EXIST))]
-
-which is probably undesirable and nearly impossible to handle in a
-graceful way.
+The details of the IR framework are complex. This
+`presentation <https://www.researchgate.net/publication/374470404_IR_JIT_Framework_a_base_for_the_next_generation_JIT_for_PHP>`__
+explains design ideas and makes overview of the most important
+implementaion details.
 
 Backward Incompatible Changes
 -----------------------------
 
-There are no backward incompatible changes at this time except that
-\`nameof\` will become a reserved word.
-
-Future Scope
-------------
-
-This could be expanded in the future to allow classes and types. For
-example, ``nameof(int)`` or ``nameof(MyClass)`` but can already be
-supported via the silence operator.
+There are no BC breaks in regard to user land PHP code.
 
 Proposed PHP Version(s)
 -----------------------
 
--  8.3: release
--  8.2.x: ``nameof`` becomes a reserved word, emitting a notice
+next (master branch)
 
 RFC Impact
 ----------
 
-To SAPIs
-~~~~~~~~
+Performance
+~~~~~~~~~~~
 
-Should be none
+The current new PHP JIT implements exactly the same set of PHP related
+features and optimizations as the old one.
 
-To Existing Extensions
-~~~~~~~~~~~~~~~~~~~~~~
+Because the IR Framework provides more optimizations and has a smarter
+Register Allocator, the JIT produces a bit faster (5-10%) and smaller
+code.
 
-Will existing extensions be affected? No
+This is visible with **bench.php** and **micro_bench.php**. The speed of
+the real-life applications is not affected.
+
+The compilation speed of the Tracing JIT is almost the same. The
+compilation speed of the Function JIT is up to 4 times slower (tested on
+Wordpress).
+
+This is quite a good result for an Optimizing JIT compiler. In my tests,
+PHP with the new JIT may produce ~15MB of native code per second.
+
+Zend VM
+~~~~~~~
+
+On JIT supported platforms (x86, x86_64, AArch64), the HYBRID VM
+interpreter starts to save and restore all the persistent CPU registers
+at **execute_ex()** prologue and epilogue.
+
+This allows elimination of the similar save/restore code in each JIT-ed
+function or trace. CLANG and MSVC builds that use CALL VM are not
+impacted.
 
 To Opcache
 ~~~~~~~~~~
 
-Depends on error type vote.
+JIT is implemented as a part of Opcache, so the PR changes the build
+process for Opcache. No other changes are present.
 
-First case: compiled to a string literal.
+php.ini Defaults
+~~~~~~~~~~~~~~~~
 
-Second and third case: a new AST node (similar to isset) will need to be
-handled.
+The PR does not introduce new php.ini detectives or changes any default
+values.
+
+It adds few new IR related JIT debugging capabilities that may be
+enabled through **opcache.jit_debug** directive bits:
+
+-  0x01000000 - print the initial IR graph right after construction
+-  0x02000000 - print the final IR graph right before code emission
+-  0x04000000 - print Control Flow Graph
+-  0x08000000 - print information about Live Ranges and Allocated
+   Registers
+-  0x10000000 - print IR graph after Sparse Conditional Constants
+   Propagation pass
+-  0x20000000 - print IR graph after Global Code Motion and
+   linearization pass
+-  0x40000000 - print IR graph after Register Allocation pass
+-  0x80000000 - annotate IR graph with information about CFG, Registers
+   and Code Generation rules
+
+To SAPIs
+~~~~~~~~
+
+SAPIs are not affected.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+PHP extensions are not affected.
 
 New Constants
 ~~~~~~~~~~~~~
 
-None
+There are no new constants.
 
 Open Issues
 -----------
 
-- Should first-class callables be allowed? It's relatively easy to get
-the name of a first-class callable and only included for completeness.
+Should we keep the old implementation of the JIT for a while, or change
+the patch to replace it straight away?
 
 Unaffected PHP Functionality
 ----------------------------
 
-PHP will largely be unaffected by this change, except that a new global
-function is introduced.
-
-.. _future-scope-1:
+JIT is developed as a self-contained feature, and doesn't affect
+anything else directly.
 
 Future Scope
 ------------
 
-None.
+The usage of IR opens the door for more powerful optimizations. Some of
+these are going to be PHP independent (e.g.): the planned introduction
+of new loop optimization passes, improvement in LOAD/STORE motion and
+redundancy, improvements to the code generator.
+
+The other part is PHP specific (for example, we can extend CPU register
+usage for more instructions).
+
+It is also possible to support new JIT targets (e.g. RISCV), almost
+independently of PHP.
+
+Finally, we may try to completely avoid the manual IR construction in
+JIT. We may introduce a single formal specification for VM instructions
+in a C-like language, convert it to IR and then use partial evaluation
+to generate VM and JIT handlers (similar to Truffle).
 
 Proposed Voting Choices
 -----------------------
 
-This is a simple yes-or-no vote to include this feature. 2/3 majority
-required to pass.
+Voting opened 2023-10-06 and closes 2023-10-19.
 
-There is a subvote for the type of error checking to include. Majority
-wins.
+Question: Merge the new JIT implementation into PHP master?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
+
+Secondary vote: Should we keep the old JIT implementation for a while or
+remove it right after merge?
+
+Note, that old implementation is not going to be tested (by CI) and we
+can't guarantee its work anyway.
+
+Question: Remove the old JIT implementation right after merging the new one?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _voting-choices-1:
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-experimental implementation:
-https://github.com/php/php-src/pull/11172/files
+#. https://github.com/php/php-src/pull/12079
+#. All CI tests (including nightly workflow) passed:
+   https://github.com/dstogov/php-src/actions/runs/6123676012/job/16638279521
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
+::
 
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+    - merged into master via 25cb2a40d640b64f8881a894f2247d46a781ef75
+    - old JIT implementation is removed via be275433d936e41d95b2fd656464bcc4d7138b76
 
 References
 ----------
 
-Links to external references, discussions or RFCs
-
-Rejected Features
------------------
-
-Keep this updated with features that were discussed on the mail lists.
+https://github.com/dstogov/ir
 
 Additional Metadata
 -------------------
 
-:Original Authors: Robert Landers, landers.robert@gmail.com
-:Original Status: Under Discussion
-:Slug: nameof
-:Wiki URL: https://wiki.php.net/rfc/nameof
+:First Published At: http://wiki.php.net/rfc/php-ir
+:Original Authors: Dmitry Stogov, dmitry@php.net
+:Slug: jit-ir
+:Wiki URL: https://wiki.php.net/rfc/jit-ir
