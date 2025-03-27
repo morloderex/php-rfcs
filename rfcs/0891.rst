@@ -1,99 +1,194 @@
-Structural Typing For Closures
-==============================
+PHP.net Analytics Collection
+============================
 
 :PHP-RFC: 0891
-:Title: Structural Typing For Closures
-:Author: Larry Garfield <crell@php.net>, Nicolas Grekas <nicolasgrekas@php.net>
-:Status: Draft
-:Type: Unknown
-:Created: 2023-04-13
-:Version: 1.0
+:Title: PHP.net Analytics Collection
+:Author: Larry Garfield <larry@garfieldtech.com>, Roman Pronskiy <roman@pronskiy.com>
+:Status: Active
+:Type: Process
+:Created: 2024-10-28
+:Version: 0.9
 
 Introduction
 ------------
 
-This RFC proposes to introduce structural typing for closures when used
-with interfaces containing only an ``__invoke()`` method. This feature
-aims to simplify the interaction between closures and single-method
-interfaces, making it easier to work with them in a more consistent and
-expressive manner.
+The PHP.net website is a critical resource for PHP developers worldwide,
+providing documentation, news, and updates about the PHP language. It
+has millions of visits every year. At least, we're pretty sure it does,
+since currently PHP.net lacks any useful analytics beyond rudimentary
+server logs. That makes it difficult to determine where or how best to
+invest resources (whether volunteer or paid) in improving the PHP.net
+experience, particularly the documentation.
+
+Of particular interest, the PHP Foundation is looking into expanding its
+scope to fund improvements to the documentation. However, there are over
+17,000 documentation pages on php.net, and right now no one knows which
+ones are the most high-traffic and worth investing resources in. To know
+where to get the best "bang for the buck," both literally and
+figuratively, we need better data.
+
+This RFC proposes implementing a self-hosted analytics solution to
+gather valuable insights into how users interact with the site.
 
 Proposal
 --------
 
-Given an interface with only an ``__invoke()`` method, if a parameter,
-return, property, or instanceof operation is typed against that
-interface, and a closure is passed or returned as a value, the engine
-checks the signature of the closure to ensure it satisfies the contract
-defined by the interface. This check would also happen when using
-``is_subclass_of()`` and ``is_a()``.
+The Infrastructure Team, in cooperation with the Foundation, will
+install the `Matomo <https://matomo.org/>`__ analytics server on
+PHP-maintained hardware, and install a tracking code on PHP.net. The
+process is very similar to Google Analytics, but self-hosted.
 
-This would encourage developers to define more explicit and expressive
-type declarations, which can lead to better code maintainability and
-fewer runtime errors.
+Matomo will be configured to avoid saving any Personally Identifying
+Information (PII).
 
-Example
+The specific code to be placed on php.net can be previewed in `this
+commit <https://github.com/php/web-php/commit/aef3309d2508b1e1ca0db5c50c829dfdfa7ee24f>`__.
+
+Data access
+~~~~~~~~~~~
+
+The raw data collected by Matomo will be available only to the PHP
+Infrastructure Team, which may include staff from the PHP Foundation.
+
+Fully anonymized aggregate data (such as most-popular-pages, overall
+traffic rates, coarse-grained geographic information, etc.) will be made
+publicly available as feasible.
+
+Privacy
 ~~~~~~~
 
-.. code:: php
+To acknowledge the presence of an analytics service, the "Logfiles"
+section of the `PHP Privacy Policy <https://www.php.net/privacy>`__ page
+will be replaced with the following:
 
-   interface TwoInts
-   {
-       public function __invoke(int $a, int $b): int;
-   }
+    Analytics
 
-   function takeTwo(TwoInts $c)
-   {
-       // This is a TwoInts anon class object at this point
-       $c(1, 2);
-   }
+    PHP.net collects anonymous user statistics to help improve the site.
+    We do not collect any personally identifiable information, and you
+    may opt-out of analytics at any time. Collected analytics are used
+    exclusively by the PHP.net team and PHP Foundation to improve
+    PHP.net. The raw data is never shared with any third party, ever,
+    unless compelled by a valid court order.
 
-   // This works
-   takeTwo(fn(int $x, int $y): int => $x + $y);
+Why self-hosted?
+~~~~~~~~~~~~~~~~
 
-   // This throws a TypeError
-   bad(fn(int $x, float $y, string $z) => whatever);
+One of the chief concerns with any analytics system is tracking by third
+parties. While Google Analytics and similar services are most popular,
+many members of the PHP community are justifiably concerned about what
+such companies do with the data they collect. For that reason, we
+believe this is a case where self-hosting is the better option, even if
+it isn't as feature-rich as some third party services. Protecting the
+privacy of our users is of paramount importance.
 
-Backward Incompatible Changes
------------------------------
+Why Matomo?
+~~~~~~~~~~~
 
-The proposed change does not introduce any backward incompatibilities.
-Existing code will continue to work as it does currently. The structural
-typing of closures would be an optional feature that developers can
-choose to use when it makes sense for their specific use case.
+There are many self-hosted analytics packages available on the market.
+Matomo was selected for a number of reasons.
 
-Open Questions
---------------
+#. It is already in use on the `PHP
+   Foundation <https://thephp.foundation/>`__ website, so the team
+   already has familiarity with it
+#. It's Free Software (GPLv3)
+#. It's written primarily in PHP
+#. It has a long history on the market (the oldest commit is over 16
+   years ago) and is still in active development, so it should be
+   reliable for a long time to come
+#. Matomo supports `GDPR
+   compliance <https://matomo.org/gdpr-analytics/>`__, including
+   allowing users to opt-out of tracking entirely
 
--  What would be the performance impact of adding this feature to the
-   language, considering the engine would need to verify the closure
-   signatures at runtime? Could this be cached internally?
--  Should reflection/``class_implements()`` know something about this?
-   We think not at this point because those are defined in the context
-   of nominal typing only.
--  In order the achieve the required check, the engine would need to
-   autoload the interface/type at call time or when using
-   ``instanceof``. The engine might not be prepared for that.
+While there are no doubt other viable options on the market, the above
+points (particularly the team's familiarity with the tool already) make
+it the most straightforward option.
 
-Future Scope
-------------
+Why a JS tracker?
+~~~~~~~~~~~~~~~~~
 
--  Auto-cast closures to interfaces that have a single method that is
-   not necessarily named ``__invoke()``
--  Allow closures to declare the interface they implement as in e.g.
-   ``function () implements FooInterface {}``. See
-   https://wiki.php.net/rfc/allow-closures-to-declare-interfaces-they-implement
+Matomo has the ability to ingest server log files as an alternative to
+using a JS code. However, that would result in inadequate data for a
+number of reasons.
+
+#. Server logs are more locked down, and thus have a higher bus factor.
+#. Automatically ingesting logs, either from the server or our CDN
+   provider, adds more moving parts that can (and likely will) break
+   from time to time.
+#. Server logs ignore cached requests served by a CDN or other proxy.
+   Even using CDN logs would miss data cached by another proxy.
+
+A client-side tracker also provides far richer data, such as:
+
+#. Time-on-page
+#. Whether they read the whole page or just a part
+#. Whether they even saw comments
+#. What percentage of users get to the docs through direct links vs the
+   home page
+#. If users are hitting a single page per browser window or navigating
+   through the site, and if the latter, how?
+#. How much are users using the search function? Is it finding what they
+   want, or is it just a crutch?
+#. Do people use the translations alone, or do they use both the English
+   site and other languages in tandem?
+#. Does anyone use multiple translations?
+#. How many people are accessing the site from a desktop vs mobile?
+#. What speed connection do people have?
+#. How many people are using the `in-browser Wasm code
+   runner <https://github.com/php/web-php/pull/1097>`__ that is
+   currently being worked on?
+
+None of that information can be derived from server logs. All of it
+could be derived from a client-side tracker, without collecting any PII.
+
+Additionally, a client-side tracker is very common on other language
+sites. From our research:
+
+-  https://www.python.org –Plausible.io, Google analytics
+-  https://go.dev/ — Google Analytics
+-  https://www.rust-lang.org/ –N/A
+-  https://nodejs.org/ – Google Analytics
+-  https://www.typescriptlang.org/ – N/A
+-  https://kotlinlang.org/ – Google Analytics
+-  https://www.swift.org/ – Adobe Analytics
+-  https://www.ruby-lang.org/ – Google Analytics
+
+Being self-hosted, ours would be the least invasive and most private of
+the bunch.
+
+Aren't analytics trackers evil?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+No. Third-party trackers that uniquely identify individuals across
+multiple domains and make that data available to other third parties are
+evil. First-party analytics can provide valuable insights into how users
+use a website. The safety advantages of this approach are:
+
+#. No outside parties see the data, ever.
+#. No PII is collected, ever.
+#. We still get useful information about how people use php.net that
+   allow us to make it better
 
 Proposed Voting Choices
 -----------------------
 
-This RFC proposes a straight Yes/No vote. A two-thirds majority is
-required for acceptance.
+This is a simple yes-or-no vote to approve this service. 2/3 majority
+required to pass.
+
+Vote runs from 20 November to 4 December 2024.
+
+Question: Approve using Matomo for analytics?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Additional Metadata
 -------------------
 
-:Implementation: TBD
-:Original Authors: Larry Garfield crell@php.net, Nicolas Grekas nicolasgrekas@php.net
-:Slug: structural-typing-for-closures
-:Wiki URL: https://wiki.php.net/rfc/structural-typing-for-closures
+:Original Authors: Larry Garfield (larry@garfieldtech.com), Roman Pronskiy (roman@pronskiy.com)
+:Original Status: In Voting
+:Slug: phpnet-analytics
+:Wiki URL: https://wiki.php.net/rfc/phpnet-analytics
