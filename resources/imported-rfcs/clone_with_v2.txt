@@ -1,0 +1,153 @@
+====== PHP RFC: Your Title Here ======
+  * Version: 1.0
+  * Date: 2015-03-30
+  * Author: Volker Dusch (volker@tideways-gmbh.com), Tim Düsterhus (tim@tideways-gmbh.com)
+  * Status: Draft
+  * First Published at: https://wiki.php.net/rfc/clone_with_v2
+
+===== Introduction =====
+
+Both <php>readonly</php> properties and the <php>clone</php>ing of objects are commonplace in a lot of PHP application, but these two concepts don’t fully work together in all cases. 
+
+These RFC proposes to address this issue by allowing the <php>clone</php> language construct to work well with <php>readonly</php>.
+
+A common usage pattern for object cloning are “immutable value-objects” having <php>->withProperty</php> methods returning a new object with this property changed. This doesn’t work well with <php>readonly</php> properties at the moment.
+
+<PHP>
+<?php
+
+final readonly class Response {
+    public function __construct(
+        public int $statusCode,
+        public string $reasonPhrase,
+        // ...
+    ) {}
+
+    public function withStatus($code, $reasonPhrase = ''): Response
+    {
+        // Only works if all properties are assignable via __construct
+        $values = get_object_vars($this);
+        $values['statusCode'] = $code;
+        $values['reasonPhrase'] = $reasonPhrase;
+        return new self(
+            ...$values
+        );
+    }
+</PHP>
+
+
+To address this, we propose a hopefully, simple change that makes clone look and mostly behave like a regular function call, making it work with current PHP users' expectations regarding syntax and semantics while respecting visibility rules.
+
+<PHP>
+    public function withStatus($code, $reasonPhrase = ''): Response
+    {
+        return clone(
+            $this,
+            statusCode: $code,
+            reasonPhrase: $reasonPhrase,
+        );
+    }
+</PHP>
+
+===== Prior Works =====
+
+This change was proposed in https://wiki.php.net/rfc/clone_with and discussed https://externals.io/message/120048
+
+Máté, the original RFC author, dropped the RFC and had no objections to us proposing this continuation trying to address the same need.
+
+
+===== Proposal =====
+
+We propose to change <php>clone</php> from a standalone keyword to a language construct that optionally accepts parenthesis and a parameter list.
+
+For most end-user cases this would, in practice, mean that any instance of <php>clone $x</php> could also be written as if there would be <php>clone</php> function with the following signature:
+
+<PHP>
+function clone(object $object, mixed ...$updatedProperties): object {}
+</PHP>
+
+allowing for all the following syntax examples to be valid:
+
+<PHP>
+$y = clone $x;
+$y = clone($x);
+$y = clone($x, foo: $foo, bar: $bar);
+$y = clone($x, ...$array);
+$y = clone($x, ...[
+    "foo" => $foo,
+    "bar" => $bar,
+]);
+</PHP>
+
+==== Technical Details ====
+
+  * A magic <php>__clone</php> method will be called before the new properties are assigned.
+  * Assignment of new properties happens in parameter order. As a result, should there an error during the assignment, e.g. because of property hooks, the error will be raised for the first impacted property.
+  * Properties assignments are made just as a regular assignment would be. Meaning all regular PHP rules apply with only the readonly state being "unlocked".
+    - Visibility rules for property access are enforced
+    - Property hooks work as expected
+    - Dynamic properties respect <php>#[AllowDynamicProperties]</php>
+    - <php>__set</php> works as expected
+
+===== Backward Incompatible Changes =====
+
+No BC break is expected. The new syntax is optional and the old syntax will continue to work as before.
+
+===== Proposed PHP Version(s) =====
+
+Next PHP 8.x
+
+===== RFC Impact =====
+==== To SAPIs ====
+
+None
+
+==== To Existing Extensions ====
+
+None
+
+==== To Opcache ====
+
+TBD. Opcache adjustment can be made if needed.
+
+==== New Constants ====
+
+None
+
+==== php.ini Defaults ====
+
+None
+
+===== Open Issues =====
+
+None
+
+===== Unaffected PHP Functionality =====
+
+
+===== Future Scope =====
+
+None
+
+===== Proposed Voting Choices =====
+
+2/3 majority:
+
+Vote
+
+===== Patches and Tests =====
+
+TBD
+
+===== Implementation =====
+
+TBD
+
+===== References =====
+
+  * https://wiki.php.net/rfc/clone_with
+  * https://externals.io/message/120048
+
+===== Rejected Features =====
+
+This RFC explicitly rejects any BC impacting syntax choices like the proposed <php>with</php> keyword suggested previously, as we don't feel the scope of the feature warrants any BC impact.
