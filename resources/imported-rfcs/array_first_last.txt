@@ -6,17 +6,42 @@
   * First Published at: https://wiki.php.net/rfc/array_first_last
 
 ===== Introduction =====
-The elevator pitch for the RFC. The first paragraph of this section will be slightly larger to give it emphasis; please write a good introduction.
+
+In PHP 7.3, we got array_key_first() and array_key_last() to get the first and last keys from an array. What we don't have yet is a way to get the first and last values of an array. This is harder than you may think because the array keys are not necessarily integers, not necessarily starting with 0, etc... Existing "tricks" like reset() and end() are semantically the wrong approach because they modify the "internal iterator" of the array.
 
 ===== Proposal =====
-All the features and examples of the proposal.
 
-To [[http://news.php.net/php.internals/66051|paraphrase Zeev Suraski]], explain how the proposal brings substantial value to be considered
-for inclusion in one of the world's most popular programming languages.
+If the array value to be returned is a reference, it is dereferenced automatically.
 
-Remember that the RFC contents should be easily reusable in the PHP Documentation.
+==== Behaviour on empty arrays ====
 
-If applicable, you may wish to use the language specification as a reference.
+Should it throw on an empty array or should it return NULL?
+Theoretically NULL can be a valid value from an array, and therefore returning NULL does not allow distinguishing between an empty array and a NULL value. However, there are still strong arguments in favor of using NULL:
+
+  * Consistent with <code>$array[array_key_first($array)]</code>
+  * Consistent with common framework helpers like Arr::first()
+  * NULL is a rare legitimate value, so the potential for clashing is low
+  * Works nicely with "??" operator
+  * If it were to throw an exception instead, then you would need to check the size of the array upfront. Similarly, if NULL is a legit value then you can just check the array size upfront too.
+
+Another interesting idea is to add an optional "$default" argument (i.e. if provided return the default; otherwise throw). However, since PHP arrays are untyped it's often hard to define something meaningful as a sentinel value. There is also no precedent for this design choice for the array functions.
+
+==== Naming ====
+
+Why array_first/array_last instead of array_value_first/array_value_last?
+First, this is consistent with how (most) array functions are named: the ones that work on keys have "key" in the name, and the ones that work on values have "value" in the name. Think about array_find, array_find_key, etc.
+Second, the shorter name is less verbose and intuitively at least I understood this is about the value.
+
+==== Fibers ====
+
+In the [[discussion thread from 2023|https://externals.io/message/121313]] there was some confusion on how this interacted with Fibers. TL;DR: The concern was that if you have a call for array_key_first followed by array_first that the result could be inconsistent if a Fiber interrupted the execution. This is however based on the false premise that Fibers are threads, in fact they are not. This situation cannot happen.
+
+==== Why include this in the engine rather than userland? ====
+
+Three main reasons:
+  - Consistency with array_key_first()/array_key_last().
+  - The cost/maintenance burden is practically zero, the implementation is stupidly simple (just a few lines).
+  - Very fast implementation.
 
 ===== Backward Incompatible Changes =====
 
@@ -53,12 +78,12 @@ After the project is implemented, this section should contain
 
 ===== References =====
 
-TODO
+Current discussion: TODO
 
-===== Prior Work =====
+==== Prior Work ====
 
-* Proposal from 2023 discussing these new functions: https://externals.io/message/121313
-* RFC that introduced array_key_first() and array_key_last(): https://wiki.php.net/rfc/array_key_first_last
+  * Proposal from 2023 discussing these new functions: https://externals.io/message/121313
+  * RFC that introduced array_key_first() and array_key_last(): https://wiki.php.net/rfc/array_key_first_last
 
 ===== Rejected Features =====
 
