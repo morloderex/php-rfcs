@@ -1,156 +1,313 @@
-Collections
-===========
+Support Closures In Constant Expressions
+========================================
 
 :PHP-RFC: 0826
-:Title: Collections
-:Author: Derick Rethans <derick@php.net>
-:Status: Unknown
-:Type: Unknown
-:Created: 2023-04-24
-:Version: 0.1.0
+:Title: Support Closures In Constant Expressions
+:Author: Tim Düsterhus <tim@tideways-gmbh.com>, Volker Dusch <volker@tideways-gmbh.com>
+:Status: Implemented
+:Type: Standards Track
+:Created: 2024-10-24
+:PHP-Version: 8.5
+:Version: 1.0
 
 Introduction
 ------------
 
-This RFC suggests to introduce a new
+Several PHP constructs are limited to accept “constant expressions”
+only. These expressions may only contain a limited number of operations
+that can roughly be summarized as “immutable values”. Notably attribute
+parameters are a construct that only accepts constant expressions and
+Closures are not currently part of the set of allowed operations in
+constant expressions.
 
-Definitions
-~~~~~~~~~~~
+As Closures are effectively just PHP source code (or rather: PHP
+Opcodes) they are an immutable value (when limiting some of the
+features) and as such there is no fundamental reason why they should not
+be allowed within constant expressions. And indeed there are some use
+cases that would be enabled by allowing Closures to appear in constant
+expressions.
 
-======== ===================
-Term     Description
-======== ===================
-Biscuits Better than cookies
-======== ===================
+As an example, it would enable a userland definition of
+``array_filter()`` with the default filter callback that checks for
+emptiness, without needing to make the callback parameter nullable:
+
+.. code:: php
+
+   <?php
+
+   function my_array_filter(
+       array $array,
+       Closure $callback = static function ($item) { return !empty($item); },
+   ) {
+       $result = [];
+
+       foreach ($array as $item) {
+           if ($callback($item)) {
+               $result[] = $item;
+           }
+       }
+
+       return $result;
+   }
+
+   var_dump(my_array_filter([
+       0, 1, 2,
+       '', 'foo', 'bar',
+   ]));
+
+   ?>
 
 Proposal
 --------
 
-Basics
-~~~~~~
+This RFC proposes that it shall be legal to include Closures in constant
+expressions. This includes:
 
-Design Goals:
+-  Attribute parameters.
+-  Default values of properties and parameters.
+-  Constants and Class Constants.
 
-::
+Constraints
+~~~~~~~~~~~
 
-   * 
+If Closures are placed in constant expressions they are subject to the
+following constraints:
 
-Non Design Goals:
+-  They may not include variables from the surrounding scope using
+   ``use($foo, $bar)``, because except for constants and possibly for
+   default parameter values there is no surrounding scope. This also
+   means that short closures (arrow functions) are not supported,
+   because they perform implicit capturing. This constraint is
+   consistent with how variables may not be part of a constant
+   expression.
+-  They must be ``static`` (and thus they must not access ``$this``).
+   Semantically ``$this`` would only be well-defined for property
+   default values and possibly attribute parameters, but this would
+   require reevaluating the Closure for each object / attribute
+   instance, which would be different to existing constant expressions
+   which are only evaluated once. This constraint is consistent with how
+   ``new``-expressions may not be used in property default values.
 
-::
+Both of these constraints will be verified at compile time.
 
-   * 
+Scoping
+~~~~~~~
 
-Syntax
-~~~~~~
+As with other constant-expressions, Closures defined in constant
+expressions follow the expected scoping rules of the context they are
+placed in. This means that Closures in property default values *may*
+access ``private`` properties, methods, and class constants of the class
+where they are defined, similarly to how a Closure defined in the
+constructor and stored in a property may access those private members.
+Likewise are Closures in attribute parameters allowed to access private
+members of the surrounding class.
 
-::
+Closures in sub-expressions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-   collection Articles(int => Article)
-   {
+Closures behave like any other operation within a constant expression,
+thus they may be part of a sub-expression of another operation. While it
+is not particularly useful to use Closures as an operand to mathematical
+expressions, it will also not break anything.
+
+However the following operations are examples of how Closures can
+usefully be included in sub-expressions.
+
+Defining a list of Closures in a default parameter:
+
+.. code:: php
+
+   <?php
+
+   function foo(
+       string $input,
+       array $callbacks = [
+           static function ($value) {
+               return \strtoupper($value);
+           },
+           static function ($value) {
+               return \preg_replace('/[^A-Z]/', '', $value);
+           },
+       ]
+   ) {
+       foreach ($callbacks as $callback) {
+           $input = $callback($input);
+       }
+
+       return $input;
    }
 
-Is short hand for, but acts like ArrayAccess too:
+   var_dump(foo('Hello, World!')); // string(10) "HELLOWORLD"
 
-::
+Passing a Closure to a ``new``-expression:
 
-   class Articles
+.. code:: php
+
+   <?php
+
+   class MyObject
    {
-       private array $__collection_items;
+       public function __construct(private Closure $callback) {}
+   }
 
-       public function __construct()
-       {
-           $this->__collection_items = [];
-       }
+   const Foo = new MyObject(static function () {
+       return 'foo';
+   });
 
-       public function offsetExists(int $offset): bool
-       {
-           return array_key_exists($offset, $this->__collection_items);
-       }
+Use Cases
+---------
 
-       public function offsetGet(int $offset) : ?Article
-       {
-           return $this->offsetExists($offset) ? $this->__collection_items[$offset] : NULL;
-       }
+Custom field validation for an attribute-based object validation
+library:
 
-       public function offsetSet(int $offset, Article $item) : void
-       {
-           $this->__collection_items[$offset] = $item;
-       }
+.. code:: php
 
-       public function offsetUnset(int $offset): void
+   final class Locale
+   {
+       #[Validator\Custom(static function (string $languageCode): bool {
+           return \preg_match('/^[a-z][a-z]$/', $languageCode);
+       })]
+       public string $languageCode;
+   }
+
+Testcase generation for a testing library:
+
+.. code:: php
+
+   final class CalculatorTest
+   {
+       #[Test\CaseGenerator(static function (): iterable {
+           for ($i = -10; $i <= 10; $i++) {
+               yield [$i, $i, 0];
+               yield [$i, 0, $i];
+               yield [0, $i, ($i * -1)];
+           }
+       })]
+       public function testSubtraction(int $minuend, int $subtrahend, int $result)
        {
-           unset($this->__collection_items[$offset]);
+           \assert(Calculator::subtract($minuend, $subtrahend) === $result);
        }
    }
 
-Implementation Details
-----------------------
+Custom formatting for an attribute-based serialization library:
+
+.. code:: php
+
+   final class LogEntry
+   {
+        public string $message;
+        
+        #[Serialize\Custom(static function (string $severity): string {
+            return \strtoupper($severity);
+        })]
+        public string $severity;
+   }
 
 Backward Incompatible Changes
 -----------------------------
 
+None. Placing Closures into constant-expressions previously resulted in
+a compile-time error.
+
+Nevertheless, as with every RFC that changes what previously was a
+compile-time error to be valid PHP code, this RFC requires changes to
+static analyzers and IDEs to correctly understand the semantics of the
+code and not erroneously report errors.
+
 Proposed PHP Version(s)
 -----------------------
 
-Next PHP 8.x
+Next PHP 8.x (8.5).
 
 RFC Impact
 ----------
 
-There will be no impact to SAPIs, existing extensions, nor Opcache.
+To SAPIs
+~~~~~~~~
+
+None.
+
+To Existing Extensions
+~~~~~~~~~~~~~~~~~~~~~~
+
+None.
+
+To Opcache
+~~~~~~~~~~
+
+Opcache needs to be adjusted to correctly store Closures in constant
+expressions in SHM. The PoC PR includes the necessary Opcache changes
+and passes all tests with Opcache / JIT enabled.
+
+New Constants
+~~~~~~~~~~~~~
+
+None.
+
+php.ini Defaults
+~~~~~~~~~~~~~~~~
+
+None.
 
 Open Issues
 -----------
 
-Questions and Answers
----------------------
+n/a
 
-Why is this not a composer package?
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unaffected PHP Functionality
+----------------------------
+
+Only constant expression are affected by the change and only in a way
+that Closure objects may appear in places where they previously could
+not appear in (e.g. class constants).
 
 Future Scope
 ------------
 
+-  Support non-static Closures.
+-  Support first-class callables.
+-  Support variable capturing if/when variables may appear in constant
+   expressions.
+
 Proposed Voting Choices
 -----------------------
 
-Either "yes" or "no" on including the proposed class.
+Question: Support Closures in constant expressions as proposed?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Voting Choices
+^^^^^^^^^^^^^^
+
+-  Yes
+-  No
 
 Patches and Tests
 -----------------
 
-There is no patch yet.
+https://github.com/php/php-src/pull/16458
 
 Implementation
 --------------
 
-After the project is implemented, this section should contain
-
-#. the version(s) it was merged into
-#. a link to the git commit(s)
-#. a link to the PHP manual entry for the feature
-#. a link to the language specification section (if any)
+https://github.com/php/php-src/commit/f6a0bb4d0442d2780c61d32d01c117024eccab57
 
 References
 ----------
 
+-  https://github.com/php/php-src/pull/16458
+-  `RFC: New in initializers </rfc/new_in_initializers>`__
+-  https://github.com/php/php-src/issues/12139
+
 Rejected Features
 -----------------
 
-Nothing rejected yet.
-
-Changes
--------
-
-0.1.0 — 2023-04-24
-
--  Initial Draft
+n/a
 
 Additional Metadata
 -------------------
 
-:Original Authors: Derick Rethans derick@php.net
-:Original Status: Very Early Draft
-:Slug: collections
-:Wiki URL: https://wiki.php.net/rfc/collections
+:Implementation: https://github.com/php/php-src/commit/f6a0bb4d0442d2780c61d32d01c117024eccab57
+:Original Authors: Tim Düsterhus (tim@tideways-gmbh.com), Volker Dusch (volker@tideways-gmbh.com)
+:Original PHP Version: PHP 8.5
+:Slug: closures_in_const_expr
+:Wiki URL: https://wiki.php.net/rfc/closures_in_const_expr
